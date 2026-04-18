@@ -115,7 +115,7 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("warns when read tool has neither path nor file_path", async () => {
+  it("warns when read tool has no recognized path alias", async () => {
     const { ctx, warn } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
