@@ -33,6 +33,24 @@ export {
   wrapToolParamValidation,
 } from "./pi-tools.params.js";
 
+// Define types for better type safety
+interface BridgeWithReaddir extends SandboxFsBridge {
+  readdir?: (params: { filePath: string; cwd: string }) => Promise<unknown>;
+}
+
+interface ContentBlock {
+  type: string;
+  source?: {
+    type: string;
+    media_type?: string;
+    data?: string;
+  };
+  url?: string;
+  filename?: string;
+  mimeType?: string;
+  text?: string;
+}
+
 // Helper function to expand tilde to OS home directory
 function expandTildeToOsHome(filePath: string): string {
   const home = resolveOsHomeDir();
@@ -263,8 +281,9 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     stat: (filePath: string) => params.bridge.stat({ filePath, cwd: params.root }),
     readdir: async (filePath: string) => {
       // Attempt to use readdir if available on the bridge
-      if (typeof (params.bridge as any).readdir === 'function') {
-        return await (params.bridge as any).readdir({ filePath, cwd: params.root });
+      const bridgeWithReaddir = params.bridge as BridgeWithReaddir;
+      if (typeof bridgeWithReaddir.readdir === 'function') {
+        return await bridgeWithReaddir.readdir({ filePath, cwd: params.root });
       }
       // Throw an error instead of returning empty array
       // This ensures the base tool can provide meaningful error feedback
@@ -791,7 +810,6 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "op
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
 // WebM requires detection to determine if audio-only or video
 const WEBM_EXTENSION = "webm";
-const MAX_DIR_ENTRIES = 200;
 
 // Transform function for transports to use
 export function transformToolResultForTransport(result: AgentToolResult): AgentToolResult {
@@ -799,12 +817,12 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
     return result;
   }
 
-  const transformedContent = result.content.map((block: any) => {
+  const transformedContent = result.content.map((block: ContentBlock) => {
     // Transform image blocks - convert to text with just filename
     if (block.type === 'image' && block.source && block.source.type === 'base64') {
       return {
         type: 'text',
-        text: block.filename || 'image',
+        text: block.filename ?? 'image',
       };
     }
     
@@ -812,7 +830,7 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
     if (block.type === 'audio') {
       return {
         type: 'text',
-        text: block.filename || 'audio',
+        text: block.filename ?? 'audio',
       };
     }
     
@@ -820,7 +838,7 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
     if (block.type === 'video') {
       return {
         type: 'text',
-        text: block.filename || 'video',
+        text: block.filename ?? 'video',
       };
     }
     
@@ -829,7 +847,7 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
 
   return {
     ...result,
-    content: transformedContent as any,
+    content: transformedContent,
   };
 }
 
@@ -909,45 +927,41 @@ export function createOpenClawReadTool(
           const isAudioOnly = await isWebmAudioOnly(inputPath);
           
           if (isAudioOnly) {
+            const audioContent: ContentBlock = {
+              type: "audio",
+              url: mediaUrl,
+              filename: fileName,
+              mimeType: "audio/webm",
+            };
             result = {
               toolCallId,
-              content: [
-                {
-                  type: "audio",
-                  url: mediaUrl,
-                  filename: fileName,
-                  mimeType: "audio/webm",
-                } as any,
-              ],
+              content: [audioContent],
               details: { path: inputPath, size: fileSize, detectedAs: "audio" },
             } as AgentToolResult;
           } else {
+            const videoContent: ContentBlock = {
+              type: "video",
+              url: mediaUrl,
+              filename: fileName,
+              mimeType: "video/webm",
+            };
             result = {
               toolCallId,
-              content: [
-                {
-                  type: "video",
-                  url: mediaUrl,
-                  filename: fileName,
-                  mimeType: "video/webm",
-                } as any,
-              ],
+              content: [videoContent],
               details: { path: inputPath, size: fileSize, detectedAs: "video" },
             } as AgentToolResult;
           }
         } else if (AUDIO_EXTENSIONS.has(ext)) {
           const mimeType = getAudioMimeType(ext);
-
+          const audioContent: ContentBlock = {
+            type: "audio",
+            url: mediaUrl,
+            filename: fileName,
+            mimeType: mimeType,
+          };
           result = {
             toolCallId,
-            content: [
-              {
-                type: "audio",
-                url: mediaUrl,
-                filename: fileName,
-                mimeType: mimeType,
-              } as any,
-            ],
+            content: [audioContent],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         } else if (IMAGE_EXTENSIONS.has(ext)) {
@@ -1025,35 +1039,31 @@ export function createOpenClawReadTool(
               details: { path: inputPath, error: "Image sanitization failed" },
             } as AgentToolResult;
           } else {
+            const imageContent: ContentBlock = {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mimeType,
+                data: fileBuffer.toString("base64"),
+              },
+            };
             result = {
               toolCallId,
-              content: [
-                {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: mimeType,
-                    data: fileBuffer.toString("base64"),
-                  },
-                } as any,
-                { type: "text", text: `${fileName}` },
-              ],
+              content: [imageContent, { type: "text", text: fileName }],
               details: { path: inputPath, size: fileBuffer.length },
             } as AgentToolResult;
           }
         } else if (VIDEO_EXTENSIONS.has(ext)) {
           const mimeType = getVideoMimeType(ext);
-
+          const videoContent: ContentBlock = {
+            type: "video",
+            url: mediaUrl,
+            filename: fileName,
+            mimeType: mimeType,
+          };
           result = {
             toolCallId,
-            content: [
-              {
-                type: "video",
-                url: mediaUrl,
-                filename: fileName,
-                mimeType: mimeType,
-              } as any,
-            ],
+            content: [videoContent],
             details: { path: inputPath, size: fileSize },
           } as AgentToolResult;
         } else {

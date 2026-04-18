@@ -74,7 +74,7 @@ const DETAILS_STATE_KEY = "chat:details_state";
 function saveDetailsState(id: string, isOpen: boolean) {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) {return;}
+    if (!storage) {return;}  // Add braces
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
     state[id] = isOpen;
     storage.setItem(DETAILS_STATE_KEY, JSON.stringify(state));
@@ -84,7 +84,7 @@ function saveDetailsState(id: string, isOpen: boolean) {
 function getDetailsState(id: string): boolean {
   try {
     const storage = getSafeLocalStorage();
-    if (!storage) {return true;}
+    if (!storage) {return true;}  // Add braces
     const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
     if (state[id] === undefined) {return true;}
     return state[id] === true;
@@ -1496,15 +1496,7 @@ function renderGroupedMessage(
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageLabel =
-    singleToolCard && !markdown && !hasImages && !hasMedia
-      ? singleToolCard.outputText?.trim()
-        ? "Tool output"
-        : "Tool call"
-      : "Tool output";
-
   const hasActions = canCopyMarkdown || canExpand;
-  
   const styleString = storedSize?.width
     ? `width: ${storedSize.width}px;`
     : '';
