@@ -14,6 +14,7 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
@@ -190,6 +191,10 @@ function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
 
 function isRefreshTokenReused(raw: string): boolean {
   return /refresh_token_reused/i.test(raw);
+}
+
+function isAccountIdExtractionError(raw: string): boolean {
+  return /failed to extract accountid from token/i.test(raw);
 }
 
 function isInstructionsRequiredError(raw: string): boolean {
@@ -480,6 +485,17 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
+          if (
+            shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+              provider: model.provider,
+              useExplicitModels: useExplicit,
+              providerFilter: providers,
+              config: cfg,
+              env: process.env,
+            })
+          ) {
+            continue;
+          }
           if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
@@ -792,6 +808,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isAccountIdExtractionError(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex account id extraction)`);
               break;
             }
             if (
