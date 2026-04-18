@@ -24,6 +24,15 @@ describe("classifySystemdUnavailableDetail", () => {
     ).toBe("user_bus_unavailable");
   });
 
+  it("classifies WSL2 missing-D-Bus-socket as user_bus_unavailable, not missing_systemctl", () => {
+    // Regression: WSL2 user D-Bus socket missing reports "No such file or directory" which
+    // the isSystemctlMissing heuristic loosely matches. The user-bus classifier must win so
+    // users are not told that systemctl is unavailable when the binary is actually installed.
+    expect(
+      classifySystemdUnavailableDetail("Failed to connect to bus: No such file or directory"),
+    ).toBe("user_bus_unavailable");
+  });
+
   it("classifies generic systemd-unavailable details", () => {
     expect(
       classifySystemdUnavailableDetail("System has not been booted with systemd as init system"),

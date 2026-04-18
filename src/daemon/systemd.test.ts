@@ -844,6 +844,38 @@ describe("systemd service control", () => {
     ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
   });
 
+  it("reports a user-bus error (not 'systemctl not available') when WSL D-Bus socket is missing", async () => {
+    // Regression for #68380: WSL2's `Failed to connect to bus: No such file or directory`
+    // used to be misclassified as a missing-systemctl error because the `isSystemctlMissing`
+    // matcher loosely matched the "no such file or directory" substring. Ensure we now surface
+    // the bus failure verbatim instead of telling the user that systemctl is not installed.
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+        }),
+        "",
+        "",
+      );
+    });
+
+    const thrown = await stopSystemdService({
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      env: { USER: "", LOGNAME: "" },
+    }).then(
+      () => {
+        throw new Error("expected stopSystemdService to reject");
+      },
+      (err: unknown) => err,
+    );
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("Failed to connect to bus: No such file or directory");
+    expect(message).not.toContain("systemctl not available; systemd user services are required");
+  });
+
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {

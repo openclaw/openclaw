@@ -36,11 +36,16 @@ export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavai
   if (!normalized) {
     return null;
   }
-  if (isSystemctlMissingDetail(normalized)) {
-    return "missing_systemctl";
-  }
+  // Check user-bus failures before missing-systemctl because WSL2's
+  // `Failed to connect to bus: No such file or directory` shares the loose
+  // "no such file or directory" substring that isSystemctlMissingDetail uses;
+  // without this order a present-but-unreachable systemctl gets misreported
+  // as "systemctl not available".
   if (isSystemdUserBusUnavailableDetail(normalized)) {
     return "user_bus_unavailable";
+  }
+  if (isSystemctlMissingDetail(normalized)) {
+    return "missing_systemctl";
   }
   if (
     normalized.includes("systemctl --user unavailable") ||
