@@ -2008,7 +2008,13 @@ describe("runReplyAgent fallback reasoning tags", () => {
 });
 
 describe("runReplyAgent response usage footer", () => {
-  function createRun(params: { responseUsage: "tokens" | "full"; sessionKey: string }) {
+  function createRun(params: {
+    responseUsage: "tokens" | "full";
+    sessionKey: string;
+    resolvedVerboseLevel?: "off" | "on";
+    traceAuthorized?: boolean;
+    sessionEntryOverrides?: Partial<SessionEntry>;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -2022,6 +2028,7 @@ describe("runReplyAgent response usage footer", () => {
       sessionId: "session",
       updatedAt: Date.now(),
       responseUsage: params.responseUsage,
+      ...params.sessionEntryOverrides,
     };
 
     const followupRun = {
@@ -2038,10 +2045,11 @@ describe("runReplyAgent response usage footer", () => {
         workspaceDir: "/tmp",
         config: createCliBackendTestConfig(),
         skillsSnapshot: {},
+        traceAuthorized: params.traceAuthorized ?? false,
         provider: "anthropic",
         model: "claude",
         thinkLevel: "low",
-        verboseLevel: "off",
+        verboseLevel: params.resolvedVerboseLevel ?? "off",
         elevatedLevel: "off",
         bashElevated: {
           enabled: false,
@@ -2067,7 +2075,7 @@ describe("runReplyAgent response usage footer", () => {
       sessionEntry,
       sessionKey: params.sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      resolvedVerboseLevel: "off",
+      resolvedVerboseLevel: params.resolvedVerboseLevel ?? "off",
       isNewSession: false,
       blockStreamingEnabled: false,
       resolvedBlockStreamingBreak: "message_end",
@@ -2116,6 +2124,45 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain("Usage:");
     expect(text).toContain("cache 4 cached / 2 new");
     expect(text).not.toContain("· session ");
+  });
+
+  it("keeps the usage footer on the main reply before trailing plugin status payloads", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:whatsapp:dm:+1000";
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey,
+      resolvedVerboseLevel: "on",
+      sessionEntryOverrides: {
+        verboseLevel: "on",
+        pluginDebugEntries: [
+          {
+            pluginId: "active-memory",
+            lines: ["🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars"],
+          },
+        ],
+      },
+    });
+
+    expect(Array.isArray(res)).toBe(true);
+    expect((res as { text?: string }[]).map((payload) => payload.text)).toEqual([
+      expect.stringContaining("ok\nUsage:"),
+      "🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+    ]);
+    const firstPayload = (res as { text?: string }[])[0]?.text ?? "";
+    const secondPayload = (res as { text?: string }[])[1]?.text ?? "";
+    expect(firstPayload).toContain(`· session \`${sessionKey}\``);
+    expect(secondPayload).not.toContain("Usage:");
   });
 });
 

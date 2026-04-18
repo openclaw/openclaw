@@ -20,7 +20,6 @@ import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnosti
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { TurnSummaryBuilder } from "../../infra/turn-summary.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
-import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   estimateUsageCost,
@@ -1816,8 +1815,12 @@ export async function runReplyAgent(params: {
     if (prefixPayloads.length > 0) {
       finalPayloads = [...prefixPayloads, ...finalPayloads];
     }
+    if (responseUsageLine) {
+      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
     if (trailingPluginStatusPayload) {
       finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
+    }
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
