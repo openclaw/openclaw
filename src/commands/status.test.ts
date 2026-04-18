@@ -25,6 +25,7 @@ function createDefaultSessionStoreEntry() {
     cacheRead: 2_000,
     cacheWrite: 1_000,
     totalTokens: 5_000,
+    totalTokensFresh: true as boolean,
     contextTokens: 10_000,
     model: "pi:opus",
     sessionId: "abc123",
@@ -188,7 +189,11 @@ async function createStatusServiceSummary(
 }
 
 function createSessionStatusRows() {
-  const agents = mocks.listGatewayAgentsBasic().agents ?? [{ id: "main", name: "Main" }];
+  const agents = (mocks.listGatewayAgentsBasic().agents ?? [
+    { id: "main", name: "Main" },
+  ]) as Array<{
+    id: string;
+  }>;
   const byAgent = agents.map((agent: { id: string }) => {
     const path = mocks.resolveStorePath("sessions", { agentId: agent.id });
     const store = mocks.loadSessionStore(path) as Record<
@@ -198,7 +203,7 @@ function createSessionStatusRows() {
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const freshTotal =
-        typeof entry.totalTokens === "number" && entry.totalTokensFresh !== false
+        typeof entry.totalTokens === "number" && (entry.totalTokensFresh ?? true)
           ? entry.totalTokens
           : null;
       return {

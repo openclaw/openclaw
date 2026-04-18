@@ -311,15 +311,17 @@ describe("matrix thread bindings", () => {
       });
 
       await vi.advanceTimersByTimeAsync(61_000);
-      await Promise.resolve();
 
-      await vi.waitFor(async () => {
-        const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
-        expect(JSON.parse(persistedRaw)).toMatchObject({
-          version: 1,
-          bindings: [],
-        });
-      });
+      await vi.waitFor(
+        async () => {
+          const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
+          expect(JSON.parse(persistedRaw)).toMatchObject({
+            version: 1,
+            bindings: [],
+          });
+        },
+        { interval: 1, timeout: 100 },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -353,23 +355,22 @@ describe("matrix thread bindings", () => {
 
       renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
-      await Promise.resolve();
 
-      await vi.waitFor(() => {
-        expect(
-          logVerboseMessage.mock.calls.some(
-            ([message]) =>
-              typeof message === "string" &&
-              message.includes("failed auto-unbinding expired bindings"),
-          ),
-        ).toBe(true);
-      });
-
-      await vi.waitFor(() => {
-        expect(logVerboseMessage).toHaveBeenCalledWith(
-          expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
-        );
-      });
+      await vi.waitFor(
+        () => {
+          expect(
+            logVerboseMessage.mock.calls.some(
+              ([message]) =>
+                typeof message === "string" &&
+                message.includes("failed auto-unbinding expired bindings"),
+            ),
+          ).toBe(true);
+          expect(logVerboseMessage).toHaveBeenCalledWith(
+            expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
+          );
+        },
+        { interval: 1, timeout: 100 },
+      );
 
       expect(
         getSessionBindingService().resolveByConversation({
@@ -640,9 +641,12 @@ describe("matrix thread bindings", () => {
       expect(await readPersistedLastActivityAt(bindingsPath)).toBe(originalLastActivityAt);
 
       await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(async () => {
-        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
-      });
+      await vi.waitFor(
+        async () => {
+          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
+        },
+        { interval: 1, timeout: 100 },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -661,9 +665,12 @@ describe("matrix thread bindings", () => {
       vi.useRealTimers();
 
       const bindingsPath = resolveBindingsFilePath();
-      await vi.waitFor(async () => {
-        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
-      });
+      await vi.waitFor(
+        async () => {
+          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+        },
+        { interval: 1, timeout: 100 },
+      );
     } finally {
       vi.useRealTimers();
     }

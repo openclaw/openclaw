@@ -4,6 +4,11 @@
 id: channel-chat-baseline
 title: Channel baseline conversation
 surface: channel
+coverage:
+  primary:
+    - channels.group-messages
+  secondary:
+    - channels.qa-channel
 objective: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
 successCriteria:
   - Agent replies in the shared channel transcript.

@@ -4,6 +4,11 @@
 id: compaction-retry-mutating-tool
 title: Compaction retry after mutating tool
 surface: runtime
+coverage:
+  primary:
+    - runtime.compaction
+  secondary:
+    - runtime.retry-policy
 objective: Verify a real mutating tool step keeps replay-unsafety explicit instead of disappearing into a clean-looking success if the run compacts or retries.
 successCriteria:
   - Agent reads the seeded large context before it writes.
