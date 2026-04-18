@@ -13,69 +13,60 @@ import {
   resolveEnvApiKey,
 } from "./model-auth.js";
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    buildProviderMissingAuthMessageWithPlugin: (params: {
-      provider: string;
-      context: { listProfileIds: (providerId: string) => string[] };
-    }) => {
-      if (
-        params.provider === "openai" &&
-        params.context.listProfileIds("openai-codex").length > 0
-      ) {
-        return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
-      }
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: (params: {
+    provider: string;
+    context: { listProfileIds: (providerId: string) => string[] };
+  }) => {
+    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
+      return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
+    }
+    return undefined;
+  },
+  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
+  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderSyntheticAuthWithPlugin: (params: {
+    provider: string;
+    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+  }) => {
+    if (params.provider !== "ollama" && params.provider !== "demo-local") {
       return undefined;
-    },
-    formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
-    refreshProviderOAuthCredentialWithPlugin: async () => null,
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    resolveProviderSyntheticAuthWithPlugin: (params: {
-      provider: string;
-      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
-    }) => {
-      if (params.provider !== "ollama" && params.provider !== "demo-local") {
-        return undefined;
-      }
-      const providerConfig = params.context.providerConfig;
-      const hasMeaningfulOllamaConfig =
-        params.provider !== "ollama"
-          ? Boolean(providerConfig?.api?.trim()) ||
-            Boolean(providerConfig?.baseUrl?.trim()) ||
-            (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0)
-          : (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
-            Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
-            Boolean(
-              providerConfig?.baseUrl?.trim() &&
-              providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
-            );
-      if (!hasMeaningfulOllamaConfig) {
-        return undefined;
-      }
-      return {
-        apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
-        source: `models.providers.${params.provider} (synthetic local key)`,
-        mode: "api-key" as const,
-      };
-    },
-    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
-      provider: string;
-      context: { resolvedApiKey?: string };
-    }) => {
-      const expectedMarker =
-        params.provider === "ollama"
-          ? "ollama-local"
-          : params.provider === "demo-local"
-            ? "demo-local"
-            : undefined;
-      return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
-    },
-  };
-});
+    }
+    const providerConfig = params.context.providerConfig;
+    const hasMeaningfulOllamaConfig =
+      params.provider !== "ollama"
+        ? Boolean(providerConfig?.api?.trim()) ||
+          Boolean(providerConfig?.baseUrl?.trim()) ||
+          (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0)
+        : (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
+          Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
+          Boolean(
+            providerConfig?.baseUrl?.trim() &&
+            providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
+          );
+    if (!hasMeaningfulOllamaConfig) {
+      return undefined;
+    }
+    return {
+      apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key" as const,
+    };
+  },
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => {
+    const expectedMarker =
+      params.provider === "ollama"
+        ? "ollama-local"
+        : params.provider === "demo-local"
+          ? "demo-local"
+          : undefined;
+    return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
+  },
+}));
 
 vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,

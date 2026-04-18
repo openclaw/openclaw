@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -16,6 +16,10 @@ import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
+vi.mock("../infra/file-lock.js", () => ({
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
@@ -24,6 +28,18 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 const makeCfg = makeModelFallbackCfg;
 const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
   '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
+let authTempRoot = "";
+let authTempCounter = 0;
+
+beforeAll(async () => {
+  authTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-suite-"));
+});
+
+afterAll(async () => {
+  if (authTempRoot) {
+    await fs.rm(authTempRoot, { recursive: true, force: true });
+  }
+});
 
 function makeFallbacksOnlyCfg(): OpenClawConfig {
   return {
@@ -54,13 +70,15 @@ async function withTempAuthStore<T>(
   store: AuthProfileStore,
   run: (tempDir: string) => Promise<T>,
 ): Promise<T> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+  const tempDir = await makeAuthTempDir();
   saveAuthProfileStore(store, tempDir);
-  try {
-    return await run(tempDir);
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
+  return await run(tempDir);
+}
+
+async function makeAuthTempDir(): Promise<string> {
+  const tempDir = path.join(authTempRoot, `case-${++authTempCounter}`);
+  await fs.mkdir(tempDir, { recursive: true });
+  return tempDir;
 }
 
 async function runWithStoredAuth(params: {
@@ -1369,7 +1387,7 @@ describe("runWithModelFallback", () => {
       provider: string,
       reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing",
     ): Promise<{ store: AuthProfileStore; dir: string }> {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const tmpDir = await makeAuthTempDir();
       const now = Date.now();
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
@@ -1540,7 +1558,7 @@ describe("runWithModelFallback", () => {
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const tmpDir = await makeAuthTempDir();
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
