@@ -5,6 +5,12 @@ import type {
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
+import type {
+  ListSpeechVoices,
+  TextToSpeech,
+  TextToSpeechTelephony,
+} from "../../plugin-sdk/tts-runtime.types.js";
+import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
 
@@ -87,9 +93,9 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
+    textToSpeech: TextToSpeech;
+    textToSpeechTelephony: TextToSpeechTelephony;
+    listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
@@ -148,8 +154,8 @@ export type PluginRuntimeCore = {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
   tasks: {
-    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
-    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    runs: PluginRuntimeTaskRuns;
+    flows: PluginRuntimeTaskFlows;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
     flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };

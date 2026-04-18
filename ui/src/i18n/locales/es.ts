@@ -256,6 +256,17 @@ export const es: TranslationMap = {
       cost: "Costo",
       skills: "Skills",
       recentSessions: "Sesiones recientes",
+      modelAuth: "Autenticación del modelo",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} caducadas",
+      modelAuthExpiring: "{count} por caducar",
+      modelAuthProviders: "{count} proveedores",
+      modelAuthUsageLeft: "{pct}% restante",
+      modelAuthExpiresIn: "caduca {when}",
+      modelAuthAttentionExpiredTitle: "La autenticación del modelo ha caducado",
+      modelAuthAttentionExpiringTitle: "La autenticación del modelo caducará pronto",
+      modelAuthAttentionExpiredDesc: "{providers} — vuelve a autenticarte con openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Atención",
@@ -297,8 +308,10 @@ export const es: TranslationMap = {
     },
     scene: {
       backfill: "Rellenar",
+      dedupeDiary: "Diario de deduplicación",
       reset: "Restablecer",
       clearGrounded: "Borrar Grounded",
+      repairCache: "Reparar caché de sueños",
       working: "Trabajando…",
     },
     phase: {

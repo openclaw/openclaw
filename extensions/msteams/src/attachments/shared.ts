@@ -391,6 +391,19 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
+/**
+ * Logger surface for attachment download errors. Structured so callers can
+ * pass `MSTeamsMonitorLogger` directly without adapters. Optional `warn`/
+ * `error` methods prevent silent swallowing of fetch failures — see issue
+ * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
+ */
+export type MSTeamsAttachmentDownloadLogger = {
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -442,7 +455,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  */
 export async function resolveAndValidateIP(
   hostname: string,
-  resolveFn?: (hostname: string) => Promise<{ address: string }>,
+  resolveFn?: MSTeamsAttachmentResolveFn,
 ): Promise<string> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
@@ -479,10 +492,10 @@ export async function safeFetch(params: {
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const resolveFn = params.resolveFn;
+  const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
     typeof params.requestInit === "object" &&
@@ -566,7 +579,7 @@ export async function safeFetchWithPolicy(params: {
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,

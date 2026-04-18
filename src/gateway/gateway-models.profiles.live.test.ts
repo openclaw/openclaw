@@ -7,11 +7,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import {
-  type AuthProfileStore,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -24,6 +21,7 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
@@ -33,8 +31,8 @@ import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
-import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
-import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
+import { clearRuntimeConfigSnapshot, loadConfig } from "../config/io.js";
+import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -48,7 +46,7 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
-import { startGatewayServer } from "./server.js";
+import { startGatewayServer } from "./server.impl.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
@@ -540,6 +538,10 @@ function isRefreshTokenReused(error: string): boolean {
   return /refresh_token_reused/i.test(error);
 }
 
+function isAccountIdExtractionError(error: string): boolean {
+  return /failed to extract accountid from token/i.test(error);
+}
+
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
@@ -667,10 +669,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(2);
+    ).toBe(3);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(3);
+    ).toBe(4);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1230,10 +1232,10 @@ function buildLiveGatewayConfig(params: {
   };
 }
 
-function sanitizeAuthConfig(params: {
+async function sanitizeAuthConfig(params: {
   cfg: OpenClawConfig;
   agentDir: string;
-}): OpenClawConfig["auth"] | undefined {
+}): Promise<OpenClawConfig["auth"] | undefined> {
   const auth = params.cfg.auth;
   if (!auth) {
     return auth;
@@ -1363,7 +1365,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const agentDir = resolveOpenClawAgentDir();
   const sanitizedCfg: OpenClawConfig = {
     ...params.cfg,
-    auth: sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
+    auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
   };
   const nextCfg = buildLiveGatewayConfig({
     cfg: sanitizedCfg,
@@ -1382,6 +1384,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
   }
 
+  // Keep the broad live Docker suite on the impl entrypoint. The lazy public
+  // boundary (`./server.js`) is covered elsewhere, but under Vitest's live Docker
+  // worker this path can trip a Node module-status loader bug during startup.
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let client: GatewayClient | undefined;
   try {
@@ -1916,6 +1921,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
+          if (model.provider === "openai-codex" && isAccountIdExtractionError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (codex account id extraction)`);
+            break;
+          }
           if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
@@ -2043,7 +2053,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
         const wanted = filter
           ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
-          : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
+          : all.filter(
+              (m) =>
+                !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+                  provider: m.provider,
+                  useExplicitModels: useExplicit,
+                  providerFilter: PROVIDERS,
+                  config: cfg,
+                  env: process.env,
+                }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+            );
 
         const candidates: Array<Model<Api>> = [];
         const skipped: Array<{ model: string; error: string }> = [];

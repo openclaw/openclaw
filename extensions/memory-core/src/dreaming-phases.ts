@@ -6,6 +6,8 @@ import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memo
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  loadDreamingNarrativeTranscriptPathSetForAgent,
+  normalizeSessionTranscriptPathForComparison,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -688,13 +690,25 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
-  const sessionFiles: Array<{ agentId: string; absolutePath: string; sessionPath: string }> = [];
+  const sessionFiles: Array<{
+    agentId: string;
+    absolutePath: string;
+    generatedByDreamingNarrative: boolean;
+    sessionPath: string;
+  }> = [];
   for (const agentId of agentIds) {
     const files = await listSessionFilesForAgent(agentId);
+    const dreamingTranscriptPaths =
+      files.length > 0
+        ? loadDreamingNarrativeTranscriptPathSetForAgent(agentId)
+        : new Set<string>();
     for (const absolutePath of files) {
       sessionFiles.push({
         agentId,
         absolutePath,
+        generatedByDreamingNarrative: dreamingTranscriptPaths.has(
+          normalizeSessionTranscriptPathForComparison(absolutePath),
+        ),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -739,10 +753,7 @@ async function collectSessionIngestionBatches(params: {
       mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
       size: Math.floor(Math.max(0, stat.size)),
     };
-    const cursorAtEnd =
-      previous !== undefined &&
-      previous.lineCount > 0 &&
-      previous.lastContentLine >= previous.lineCount;
+    const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
     const unchanged =
       Boolean(previous) &&
       previous.mtimeMs === fingerprint.mtimeMs &&
@@ -754,8 +765,30 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const entry = await buildSessionEntry(file.absolutePath);
+    const entry = await buildSessionEntry(file.absolutePath, {
+      generatedByDreamingNarrative: file.generatedByDreamingNarrative,
+    });
     if (!entry) {
+      continue;
+    }
+    if (entry.generatedByDreamingNarrative) {
+      nextFiles[stateKey] = {
+        mtimeMs: fingerprint.mtimeMs,
+        size: fingerprint.size,
+        contentHash: entry.hash.trim(),
+        lineCount: entry.lineMap.length,
+        lastContentLine: entry.lineMap.length,
+      };
+      if (
+        !previous ||
+        previous.mtimeMs !== fingerprint.mtimeMs ||
+        previous.size !== fingerprint.size ||
+        previous.contentHash !== entry.hash.trim() ||
+        previous.lineCount !== entry.lineMap.length ||
+        previous.lastContentLine !== entry.lineMap.length
+      ) {
+        changed = true;
+      }
       continue;
     }
     const contentHash = entry.hash.trim();
@@ -937,6 +970,7 @@ async function ingestSessionTranscriptSignals(params: {
     timezone: params.timezone,
     state,
   });
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
@@ -944,7 +978,7 @@ async function ingestSessionTranscriptSignals(params: {
       results: batch.results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: batch.day,
+      dayBucket: ingestionDayBucket,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1096,6 +1130,7 @@ async function ingestDailyMemorySignals(params: {
     nowMs: params.nowMs,
     state,
   });
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
@@ -1103,7 +1138,7 @@ async function ingestDailyMemorySignals(params: {
       results: batch.results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: batch.day,
+      dayBucket: ingestionDayBucket,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1205,7 +1240,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
       results,
       signalType: "daily",
       dedupeByQueryPerDay: true,
-      dayBucket: entry.day,
+      dayBucket: formatMemoryDreamingDay(params.nowMs, params.timezone),
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -1221,7 +1256,13 @@ export async function seedHistoricalDailyMemorySignals(params: {
 }
 
 function entryAverageScore(entry: ShortTermRecallEntry): number {
-  return entry.recallCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / entry.recallCount)) : 0;
+  const signalCount = Math.max(
+    0,
+    Math.floor(entry.recallCount ?? 0) +
+      Math.floor(entry.dailyCount ?? 0) +
+      Math.floor(entry.groundedCount ?? 0),
+  );
+  return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
 function tokenizeSnippet(snippet: string): Set<string> {

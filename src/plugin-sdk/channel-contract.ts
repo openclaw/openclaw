@@ -35,3 +35,4 @@ export type {
   ChannelGatewayContext,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.adapters.js";
+export type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";

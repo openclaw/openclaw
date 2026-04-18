@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CronDeliveryMode } from "../types.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
@@ -36,7 +37,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   async function expectMessageToolDisabledForPlan(plan: {
     requested: boolean;
-    mode: "none" | "announce";
+    mode: CronDeliveryMode;
     channel?: string;
     to?: string;
   }) {
@@ -45,6 +46,19 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn(makeParams());
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
+  }
+
+  async function expectMessageToolEnabledForPlan(plan: {
+    requested: boolean;
+    mode: CronDeliveryMode;
+    channel?: string;
+    to?: string;
+  }) {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(plan);
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   }
 
   beforeEach(() => {
@@ -63,8 +77,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it('disables the message tool when delivery.mode is "none"', async () => {
-    await expectMessageToolDisabledForPlan({
+  it('keeps the message tool enabled when delivery.mode is "none"', async () => {
+    await expectMessageToolEnabledForPlan({
       requested: false,
       mode: "none",
     });
@@ -76,6 +90,14 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       mode: "announce",
       channel: "telegram",
       to: "123",
+    });
+  });
+
+  it("disables the message tool when webhook delivery is active", async () => {
+    await expectMessageToolDisabledForPlan({
+      requested: false,
+      mode: "webhook",
+      to: "https://example.invalid/cron",
     });
   });
 
@@ -163,5 +185,73 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         skipMessagingToolDelivery: true,
       }),
     );
+  });
+});
+
+describe("runCronIsolatedAgentTurn delivery instruction", () => {
+  let previousFastTestEnv: string | undefined;
+
+  beforeEach(() => {
+    previousFastTestEnv = clearFastTestEnv();
+    resetRunCronIsolatedAgentTurnHarness();
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "123",
+      accountId: undefined,
+      error: undefined,
+    });
+  });
+
+  afterEach(() => {
+    restoreFastTestEnv(previousFastTestEnv);
+  });
+
+  it("appends a plain-text delivery instruction to the prompt when delivery is requested", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).toContain("Return your response as plain text");
+    expect(prompt).toContain("it will be delivered automatically");
+  });
+
+  it("does not append a delivery instruction when delivery is not requested", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toContain("Return your response as plain text");
+    expect(prompt).not.toContain("it will be delivered automatically");
+  });
+
+  it("does not instruct the agent to summarize when delivery is requested", async () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/58535:
+    // "summary" caused LLMs to condense structured output and drop fields
+    // non-deterministically on every run.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toMatch(/\bsummary\b/i);
   });
 });

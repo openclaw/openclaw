@@ -1,6 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -39,5 +39,11 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /**
+   * Exact raw names of non-plugin OpenClaw tools registered for this run.
+   * When provided, MEDIA: passthrough requires an exact match instead of only
+   * a normalized-name collision with a trusted built-in.
+   */
+  builtinToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };

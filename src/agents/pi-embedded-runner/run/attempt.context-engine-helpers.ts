@@ -1,7 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { MemoryCitationsMode } from "../../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../../context-engine/types.js";
-import type { NormalizedUsage } from "../../usage.js";
+import type { BootstrapMode } from "../../bootstrap-mode.js";
+import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -18,6 +20,7 @@ export async function resolveAttemptBootstrapContext<
   contextInjectionMode: "always" | "continuation-skip";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
+  bootstrapMode?: BootstrapMode;
   sessionFile: string;
   hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<TContext>;
@@ -28,13 +31,15 @@ export async function resolveAttemptBootstrapContext<
   }
 > {
   const isContinuationTurn =
+    params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
   const shouldRecordCompletedBootstrapTurn =
     !isContinuationTurn &&
     params.bootstrapContextMode !== "lightweight" &&
-    params.bootstrapContextRunKind !== "heartbeat";
+    params.bootstrapContextRunKind !== "heartbeat" &&
+    params.bootstrapMode === "full";
 
   const context = isContinuationTurn
     ? ({ bootstrapFiles: [], contextFiles: [] } as unknown as TContext)
@@ -95,11 +100,66 @@ export function buildContextEnginePromptCacheInfo(params: {
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
-}): AgentMessage | undefined {
+}): AssistantMessage | undefined {
   return params.messagesSnapshot
     .slice(Math.max(0, params.prePromptMessageCount))
     .toReversed()
-    .find((message) => message.role === "assistant");
+    .find((message): message is AssistantMessage => message.role === "assistant");
+}
+
+function parsePromptCacheTouchTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+/** Resolve the effective prompt-cache touch timestamp for the current assistant turn. */
+export function resolvePromptCacheTouchTimestamp(params: {
+  lastCallUsage?: NormalizedUsage;
+  assistantTimestamp?: unknown;
+  fallbackLastCacheTouchAt?: number | null;
+}): number | null {
+  const hasCacheUsage =
+    typeof params.lastCallUsage?.cacheRead === "number" ||
+    typeof params.lastCallUsage?.cacheWrite === "number";
+  if (!hasCacheUsage) {
+    return params.fallbackLastCacheTouchAt ?? null;
+  }
+  return (
+    parsePromptCacheTouchTimestamp(params.assistantTimestamp) ??
+    params.fallbackLastCacheTouchAt ??
+    null
+  );
+}
+
+export function buildLoopPromptCacheInfo(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+  retention?: "none" | "short" | "long";
+  fallbackLastCacheTouchAt?: number | null;
+}): EmbeddedRunAttemptResult["promptCache"] {
+  const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+    messagesSnapshot: params.messagesSnapshot,
+    prePromptMessageCount: params.prePromptMessageCount,
+  });
+  const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+
+  return buildContextEnginePromptCacheInfo({
+    retention: params.retention,
+    lastCallUsage,
+    lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
+      lastCallUsage,
+      assistantTimestamp: currentAttemptAssistant?.timestamp,
+      fallbackLastCacheTouchAt: params.fallbackLastCacheTouchAt,
+    }),
+  });
 }
 
 export async function runAttemptContextEngineBootstrap(params: {

@@ -191,7 +191,7 @@ export function resetCompactHooksHarnessMocks(): void {
 
 export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
-  compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+  compactEmbeddedPiSession: typeof import("./compact.queued.js").compactEmbeddedPiSession;
   __testing: typeof import("./compact.js").__testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 }> {
@@ -570,13 +570,15 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveExecToolDefaults: vi.fn(() => undefined),
   }));
 
-  const [compactModule, transcriptEvents] = await Promise.all([
+  const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
     import("./compact.js"),
+    import("./compact.queued.js"),
     import("../../sessions/transcript-events.js"),
   ]);
 
   return {
     ...compactModule,
+    compactEmbeddedPiSession: compactQueuedModule.compactEmbeddedPiSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
   };
 }
