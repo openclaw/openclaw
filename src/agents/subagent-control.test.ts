@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import * as sessions from "../config/sessions.js";
+import * as sessionStore from "../config/sessions/store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   __testing,
@@ -18,6 +18,92 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("./run-wait.js", () => {
+  const readLatestAssistantReplySnapshot = async (params: {
+    sessionKey: string;
+    limit?: number;
+    callGateway?: (request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>;
+  }) => {
+    const history = await params.callGateway?.({
+      method: "chat.history",
+      params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+    });
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      if ((message as { role?: unknown }).role !== "assistant") {
+        continue;
+      }
+      const content = (message as { content?: unknown }).content;
+      const text = Array.isArray(content)
+        ? content
+            .map((block) =>
+              block &&
+              typeof block === "object" &&
+              typeof (block as { text?: unknown }).text === "string"
+                ? (block as { text: string }).text
+                : "",
+            )
+            .filter(Boolean)
+            .join("\n")
+        : typeof content === "string"
+          ? content
+          : "";
+      if (text.trim()) {
+        return { text, fingerprint: JSON.stringify(message) };
+      }
+    }
+    return {};
+  };
+
+  return {
+    readLatestAssistantReplySnapshot,
+    waitForAgentRunAndReadUpdatedAssistantReply: async (params: {
+      runId: string;
+      sessionKey: string;
+      timeoutMs: number;
+      limit?: number;
+      baseline?: { fingerprint?: string };
+      callGateway?: (request: CallGatewayOptions) => Promise<Record<string, unknown>>;
+    }) => {
+      const wait = await params.callGateway?.({
+        method: "agent.wait",
+        params: {
+          runId: params.runId,
+          timeoutMs: Math.max(1, Math.floor(params.timeoutMs)),
+        },
+        timeoutMs: Math.max(1, Math.floor(params.timeoutMs)) + 2000,
+      });
+      const status = wait?.status;
+      if (status === "timeout" || status === "pending" || status === "error") {
+        return { status, error: typeof wait?.error === "string" ? wait.error : undefined };
+      }
+      const latestReply = await readLatestAssistantReplySnapshot({
+        sessionKey: params.sessionKey,
+        limit: params.limit,
+        callGateway: params.callGateway as
+          | ((request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>)
+          | undefined,
+      });
+      return {
+        status: "ok",
+        replyText:
+          latestReply.text &&
+          (!params.baseline?.fingerprint || latestReply.fingerprint !== params.baseline.fingerprint)
+            ? latestReply.text
+            : undefined,
+      };
+    },
+  };
+});
 
 function setSubagentControlDepsForTest(
   overrides: Parameters<typeof __testing.setDepsForTest>[0] = {},
@@ -518,7 +604,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     const updateSessionStoreSpy = vi
-      .spyOn(sessions, "updateSessionStore")
+      .spyOn(sessionStore, "updateSessionStore")
       .mockRejectedValueOnce(new Error("session store unavailable"));
 
     try {

@@ -6,8 +6,9 @@ import {
   sortSubagentRuns,
   type SubagentTargetResolution,
 } from "../auto-reply/reply/subagents-utils.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { logVerbose } from "../globals.js";
