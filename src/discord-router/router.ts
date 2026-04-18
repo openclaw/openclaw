@@ -317,12 +317,33 @@ async function routeDM(params: {
       clearInterval(typingInterval);
     }
   } catch (err) {
-    runtime.error(`[router] error for ${discordUserId}: ${formatErrorMessage(err)}`);
-    await discordSend(
-      discordToken,
-      channelId,
-      "*Sorry, something went wrong processing your message.*",
-    ).catch(() => {});
+    const errMsg = formatErrorMessage(err);
+    runtime.error(`[router] error for ${discordUserId}: ${errMsg}`);
+
+    // Give specific error messages instead of generic "something went wrong"
+    const isConnectionRefused =
+      errMsg.includes("ECONNREFUSED") || errMsg.includes("connect ECONNREFUSED");
+    const isTimeout = errMsg.includes("timeout") || errMsg.includes("ETIMEDOUT");
+
+    if (isConnectionRefused) {
+      await discordSend(
+        discordToken,
+        channelId,
+        "*Your agent is not running. Please contact the admin to start your instance.*",
+      ).catch(() => {});
+    } else if (isTimeout) {
+      await discordSend(
+        discordToken,
+        channelId,
+        "*Your agent is taking too long to respond. Please try again later.*",
+      ).catch(() => {});
+    } else {
+      await discordSend(
+        discordToken,
+        channelId,
+        "*Something went wrong processing your message. Please try again.*",
+      ).catch(() => {});
+    }
   } finally {
     inflight.delete(discordUserId);
   }
