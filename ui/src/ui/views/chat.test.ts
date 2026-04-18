@@ -946,6 +946,31 @@ describe("chat view", () => {
     );
   });
 
+  it("skips non-image transcript media paths after history reload", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-document",
+        role: "user",
+        content: "",
+        MediaPath: "/tmp/openclaw/user-upload.pdf",
+        MediaType: "application/pdf",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+  });
+
   it("opens only safe assistant image URLs in a hardened new tab", () => {
     const container = document.createElement("div");
     const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
