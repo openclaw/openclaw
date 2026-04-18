@@ -558,4 +558,54 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(binding.authProfileId).toBe("openai-codex:bound");
   });
+
+  it("reuses the bound auth profile for app-server startup when params omit it", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      authProfileId: "openai-codex:bound",
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const seenAuthProfileIds: Array<string | undefined> = [];
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
+      seenAuthProfileIds.push(authProfileId);
+      return {
+        request: async (method: string) => {
+          if (method === "thread/resume") {
+            return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+          }
+          if (method === "turn/start") {
+            return { turn: { id: "turn-1", status: "inProgress" } };
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      } as never;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    delete params.authProfileId;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]));
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+
+    expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]);
+  });
 });
