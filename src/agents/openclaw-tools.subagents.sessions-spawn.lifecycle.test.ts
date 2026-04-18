@@ -592,6 +592,41 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     ).toBe("bot-alpha-room-a");
   });
 
+  it("sessions_spawn uses requester roles for role-scoped target-agent accounts", async () => {
+    expect(
+      await executeBoundAccountSpawn({
+        callId: "call-role-scoped-account",
+        agentId: "bot-alpha",
+        context: {
+          agentSessionKey: "main",
+          agentChannel: "discord",
+          agentAccountId: "bot-beta",
+          agentTo: "channel:ops",
+          agentGroupSpace: "guild-current",
+          agentMemberRoleIds: ["admin"],
+        },
+        bindings: [
+          {
+            type: "route",
+            agentId: "bot-alpha",
+            match: { channel: "discord", accountId: "bot-alpha-default" },
+          },
+          {
+            type: "route",
+            agentId: "bot-alpha",
+            match: {
+              channel: "discord",
+              guildId: "guild-current",
+              roles: ["admin"],
+              peer: { kind: "channel", id: "channel:ops" },
+              accountId: "bot-alpha-admin",
+            },
+          },
+        ],
+      }),
+    ).toBe("bot-alpha-admin");
+  });
+
   it("sessions_spawn strips channel-side prefixes from agentTo before bound-account lookup", async () => {
     const rawRoomId = "!exampleRoomId:example.org";
     // agentTo arrives in delivery-target format (room:<id>), while the binding

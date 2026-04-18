@@ -265,6 +265,26 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("peer-first");
   });
 
+  it("does not infer scoped bound accountId for peerless cron delivery", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [
+        {
+          agentId: AGENT_ID,
+          match: {
+            channel: "telegram",
+            guildId: "guild-1",
+            accountId: "tenant-account",
+          },
+        },
+      ],
+    });
+
+    const result = await resolveForAgent({ cfg });
+
+    expect(result.accountId).toBeUndefined();
+  });
+
   it("preserves session lastAccountId when present", async () => {
     setMainSessionEntry({
       sessionId: "sess-1",

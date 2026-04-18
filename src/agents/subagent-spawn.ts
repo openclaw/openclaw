@@ -114,6 +114,7 @@ export type SpawnSubagentContext = {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
+  agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
@@ -468,6 +469,7 @@ export async function spawnSubagentDirect(
     requesterTo: ctx.agentTo,
     requesterThreadId: ctx.agentThreadId,
     requesterGroupSpace: ctx.agentGroupSpace,
+    requesterMemberRoleIds: ctx.agentMemberRoleIds,
   });
   let childSessionOrigin = requesterOrigin;
   if (targetAgentId !== requesterAgentId) {

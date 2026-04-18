@@ -108,6 +108,8 @@ export type SpawnAcpContext = {
   agentGroupId?: string;
   /** Group space label (guild/team id) from the originating channel context. */
   agentGroupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  agentMemberRoleIds?: string[];
   sandboxed?: boolean;
 };
 
@@ -764,6 +766,7 @@ function resolveAcpSpawnRequesterState(params: {
       requesterTo: params.ctx.agentTo,
       requesterThreadId: params.ctx.agentThreadId,
       requesterGroupSpace: params.ctx.agentGroupSpace,
+      requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
   };
 }
