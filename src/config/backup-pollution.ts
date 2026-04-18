@@ -73,3 +73,14 @@ export function findRedactedSecretSites(parsed: unknown): string[] {
   walk(parsed, [], hits);
   return hits;
 }
+
+export function formatBackupRestoreRefusalWarning(
+  backupPath: string,
+  pollutedSites: string[],
+): string {
+  return (
+    `Refusing to restore config from backup ${backupPath}: backup contains ` +
+    `redacted-placeholder secret values at ${pollutedSites.join(", ")}. ` +
+    "Inspect the backup chain manually before recovery."
+  );
+}
