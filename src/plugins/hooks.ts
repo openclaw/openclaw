@@ -23,6 +23,9 @@ import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
+  PluginHookSessionsSendContext,
+  PluginHookSessionsSendEvent,
+  PluginHookSessionsSendResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -80,6 +83,9 @@ export type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
+  PluginHookSessionsSendContext,
+  PluginHookSessionsSendEvent,
+  PluginHookSessionsSendResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -730,6 +736,22 @@ export function createHookRunner(
   }
 
   /**
+   * Run sessions_send hook.
+   * Allows plugins to intercept delegated sessions_send dispatch before core handling.
+   * First handler returning { handled: true } wins.
+   */
+  async function runSessionsSend(
+    event: PluginHookSessionsSendEvent,
+    ctx: PluginHookSessionsSendContext,
+  ): Promise<PluginHookSessionsSendResult | undefined> {
+    return runClaimingHook<"sessions_send", PluginHookSessionsSendResult>(
+      "sessions_send",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1128,6 +1150,7 @@ export function createHookRunner(
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,
+    runSessionsSend,
     runMessageSending,
     runMessageSent,
     // Tool hooks
