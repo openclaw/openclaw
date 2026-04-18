@@ -7,7 +7,6 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
-- fix: redact credentials in browser.cdpUrl config paths (#67679). Thanks @Ziy1-Tan
 
 ### Fixes
 
