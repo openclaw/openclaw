@@ -86,6 +86,7 @@ export type PluginManifestRecord = {
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
   cliBackends: string[];
+  syntheticAuthRefs?: string[];
   commandAliases?: PluginManifestCommandAlias[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
@@ -328,6 +329,7 @@ function buildRecord(params: {
       : undefined,
     modelSupport: params.manifest.modelSupport,
     cliBackends: params.manifest.cliBackends ?? [],
+    syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     commandAliases: params.manifest.commandAliases,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
@@ -398,6 +400,7 @@ function buildBundleRecord(params: {
     channels: [],
     providers: [],
     cliBackends: [],
+    syntheticAuthRefs: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],
