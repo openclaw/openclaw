@@ -13,6 +13,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "`codex models` failed in this sandbox",
   "`codex models` could not be run in this sandbox.",
   "`codex models` is not runnable in this sandboxed session.",
+  "`codex models` didn’t return a plain list in this environment",
   "I couldn’t get a direct `codex models` CLI listing because the local sandbox blocked that command.",
   "I couldn’t list all installed/available Codex models from the local CLI because the sandboxed `codex` command failed to start in this environment.",
   "I couldn’t get `codex models` from the CLI because the sandbox blocks the namespace setup it needs",
@@ -21,6 +22,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available models in this session:",
   "Available models in this environment:",
   "Available models in this Codex environment:",
+  "Available models in this Codex install",
   "Available agent models:",
   "Visible options in this session:",
   "Current: `codex/",
@@ -83,18 +85,32 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
 
   const mentionsInteractiveSelection =
     normalized.includes("interactive model-selection prompt") ||
-    normalized.includes("interactive model selection prompt");
+    normalized.includes("interactive model selection prompt") ||
+    normalized.includes("interactive tui");
   const mentionsVisibleOptions =
     normalized.includes("visible options in this session:") ||
     normalized.includes("visible options:");
   const mentionsCurrentActiveModel =
     normalized.includes("current active model is `codex/") ||
     normalized.includes("current active model is codex/");
+  const mentionsCurrentSelectedModel =
+    normalized.includes("current selected model:") ||
+    normalized.includes("currently selected model:");
   const isInteractiveSelectionSummary =
     text.includes("`/codex models`") &&
     mentionsInteractiveSelection &&
     mentionsVisibleOptions &&
     mentionsCurrentActiveModel;
+  const isInteractiveTuiSummary =
+    mentionsCodexModelsCommand &&
+    mentionsInteractiveSelection &&
+    normalized.includes("plain list") &&
+    mentionsCurrentSelectedModel;
 
-  return isSandboxFallback || isSessionConfigFallback || isInteractiveSelectionSummary;
+  return (
+    isSandboxFallback ||
+    isSessionConfigFallback ||
+    isInteractiveSelectionSummary ||
+    isInteractiveTuiSummary
+  );
 }
