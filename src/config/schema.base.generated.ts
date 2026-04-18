@@ -5238,6 +5238,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
                       },
+                      workspaceMountPropagation: {
+                        type: "string",
+                        enum: ["rprivate", "rslave", "rshared"],
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -6571,6 +6575,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           title: "Agent Sandbox Docker Allow Container Namespace Join",
                           description:
                             "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
+                        },
+                        workspaceMountPropagation: {
+                          type: "string",
+                          enum: ["rprivate", "rslave", "rshared"],
                         },
                       },
                       additionalProperties: false,
