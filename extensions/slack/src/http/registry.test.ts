@@ -85,4 +85,26 @@ describe("registerSlackHttpHandler", () => {
       'slack: webhook path /slack/events already registered for account "duplicate"',
     );
   });
+
+  it("preserves the http routes registry across module reloads", async () => {
+    const handler = vi.fn();
+    unregisters.push(
+      registerSlackHttpHandler({
+        path: "/slack/reload-test",
+        handler,
+      }),
+    );
+
+    vi.resetModules();
+
+    const reloadedRegistry = await import("./registry.js");
+
+    const req = { url: "/slack/reload-test" } as IncomingMessage;
+    const res = {} as ServerResponse;
+
+    const handled = await reloadedRegistry.handleSlackHttpRequest(req, res);
+
+    expect(handled).toBe(true);
+    expect(handler).toHaveBeenCalledWith(req, res);
+  });
 });
