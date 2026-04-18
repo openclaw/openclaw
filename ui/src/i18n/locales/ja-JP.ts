@@ -260,6 +260,17 @@ export const ja_JP: TranslationMap = {
       cost: "コスト",
       skills: "Skills",
       recentSessions: "最近のセッション",
+      modelAuth: "モデル認証",
+      modelAuthOk: "{count} 件が正常",
+      modelAuthExpired: "{count} 件が期限切れ",
+      modelAuthExpiring: "{count} 件がまもなく期限切れ",
+      modelAuthProviders: "{count} 件のプロバイダー",
+      modelAuthUsageLeft: "残り {pct}%",
+      modelAuthExpiresIn: "{when} に期限切れ",
+      modelAuthAttentionExpiredTitle: "モデル認証の有効期限が切れています",
+      modelAuthAttentionExpiringTitle: "モデル認証の有効期限がまもなく切れます",
+      modelAuthAttentionExpiredDesc: "{providers} — openclaw models auth で再認証してください",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "注意",
@@ -301,8 +312,10 @@ export const ja_JP: TranslationMap = {
     },
     scene: {
       backfill: "バックフィル",
+      dedupeDiary: "重複排除日記",
       reset: "リセット",
       clearGrounded: "グラウンデッドをクリア",
+      repairCache: "Dream Cache を修復",
       working: "処理中…",
     },
     phase: {

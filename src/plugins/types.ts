@@ -1710,7 +1710,9 @@ export type OpenClawPluginCommandDefinition = {
    * `default` applies to all native providers unless a provider-specific
    * override exists.
    */
-  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
+  nativeProgressMessages?: Partial<Record<string, string>> & {
+    default?: string;
+  };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -1836,13 +1838,11 @@ export type OpenClawPluginDefinition = {
   reload?: OpenClawPluginReloadRegistration;
   nodeHostCommands?: OpenClawPluginNodeHostCommand[];
   securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
-  register?: (api: OpenClawPluginApi) => void | Promise<void>;
-  activate?: (api: OpenClawPluginApi) => void | Promise<void>;
+  register?: (api: OpenClawPluginApi) => void;
+  activate?: (api: OpenClawPluginApi) => void;
 };
 
-export type OpenClawPluginModule =
-  | OpenClawPluginDefinition
-  | ((api: OpenClawPluginApi) => void | Promise<void>);
+export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 

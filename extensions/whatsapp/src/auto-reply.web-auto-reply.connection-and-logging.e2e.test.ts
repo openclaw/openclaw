@@ -17,6 +17,7 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 
@@ -36,8 +37,12 @@ async function startWatchdogScenario(params: {
     watchdogCheckMs: 5,
   });
 
-  await Promise.resolve();
-  expect(scripted.getListenerCount()).toBe(1);
+  await vi.waitFor(
+    () => {
+      expect(scripted.getListenerCount()).toBe(1);
+    },
+    { timeout: 250, interval: 2 },
+  );
   await vi.waitFor(
     () => {
       expect(scripted.getOnMessage()).toBeTypeOf("function");
@@ -95,8 +100,12 @@ describe("web auto-reply connection", () => {
         reconnect: scenario.reconnect,
       });
 
-      await Promise.resolve();
-      expect(scripted.getListenerCount()).toBe(1);
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
 
       scripted.resolveClose(0);
       await vi.waitFor(
@@ -130,8 +139,12 @@ describe("web auto-reply connection", () => {
       reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
     });
 
-    await Promise.resolve();
-    expect(scripted.getListenerCount()).toBe(1);
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
     scripted.resolveClose(0, {
       status: 440,
       isLoggedOut: false,
@@ -227,6 +240,109 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            default: {
+              debounceMs: 250,
+            },
+            work: {
+              authDir: "/tmp/work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
+  });
+
+  it("matches per-account debounce overrides case-insensitively", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+              debounceMs: 250,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "Work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
+  });
+
+  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      messages: {
+        inbound: {
+          debounceMs: 250,
+        },
+      },
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    setRuntimeConfigSourceSnapshotMock(null);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

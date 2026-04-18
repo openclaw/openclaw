@@ -67,6 +67,24 @@ function loadSessionArchiveRuntime() {
   return sessionArchiveRuntimePromise;
 }
 
+function stripThreadIdFromDeliveryContext(
+  context: SessionEntry["deliveryContext"],
+): SessionEntry["deliveryContext"] {
+  if (!context || context.threadId == null || context.threadId === "") {
+    return context;
+  }
+  const { threadId: _threadId, ...rest } = context;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
+  if (!origin || origin.threadId == null || origin.threadId === "") {
+    return origin;
+  }
+  const { threadId: _threadId, ...rest } = origin;
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 function resolveExplicitSessionEndReason(
   matchedResetTriggerLower?: string,
 ): PluginHookSessionEndReason {
@@ -196,7 +214,9 @@ function resolveBoundConversationSessionKey(params: {
   } | null;
 }): string | undefined {
   const bindingContext =
-    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
+    params.bindingContext === undefined
+      ? resolveSessionConversationBindingContext(params.cfg, params.ctx)
+      : params.bindingContext;
   if (!bindingContext) {
     return undefined;
   }
@@ -221,7 +241,15 @@ export async function initSessionState(params: {
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
-  const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
+  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
+  // resets or conversation binding retargeting. These are automated system
+  // events, not user interactions that should affect session continuity.
+  // See #58409 for details on silent session reset bug.
+  const isSystemEvent =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  const conversationBindingContext = isSystemEvent
+    ? null
+    : resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const commandTargetSessionKey =
@@ -284,6 +312,7 @@ export async function initSessionState(params: {
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
+  let persistedTrace: string | undefined;
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
@@ -403,12 +432,7 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session resets.
-  // These are automated system events, not user interactions that should affect
-  // session continuity. Forcing freshEntry=true prevents accidental data loss.
-  // See #58409 for details on silent session reset bug.
-  const isSystemEvent =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  // Forcing freshEntry=true prevents accidental data loss on automated system events.
   const entryFreshness = entry
     ? isSystemEvent
       ? ({ fresh: true } satisfies SessionFreshness)
@@ -432,12 +456,18 @@ export async function initSessionState(params: {
     previousSessionId: previousSessionEntry?.sessionId,
   });
 
-  if (!isNewSession && freshEntry) {
+  const canReuseExistingEntry =
+    Boolean(entry?.sessionId) &&
+    typeof entry?.updatedAt === "number" &&
+    Number.isFinite(entry.updatedAt);
+
+  if (!isNewSession && freshEntry && canReuseExistingEntry) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
     persistedThinking = entry.thinkingLevel;
     persistedVerbose = entry.verboseLevel;
+    persistedTrace = entry.traceLevel;
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
@@ -457,6 +487,7 @@ export async function initSessionState(params: {
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
+      persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
@@ -482,39 +513,64 @@ export async function initSessionState(params: {
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
-  const lastChannelRaw = resolveLastChannelRaw({
-    originatingChannelRaw,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-    isInterSession,
-  });
-  const lastToRaw = resolveLastToRaw({
-    originatingChannelRaw,
-    originatingToRaw: ctx.OriginatingTo,
-    toRaw: ctx.To,
-    persistedLastTo: baseEntry?.lastTo,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-    isInterSession,
-  });
-  const lastAccountIdRaw = resolveSessionDefaultAccountId({
-    cfg,
-    channelRaw: lastChannelRaw,
-    accountIdRaw: ctx.AccountId,
-    persistedLastAccountId: baseEntry?.lastAccountId,
-  });
-  // Only fall back to persisted threadId for thread sessions.  Non-thread
+  // Automated heartbeat/cron/exec turns run inside the conversation session,
+  // but they must not rewrite the session's remembered external delivery route.
+  // Otherwise a heartbeat target like "group:..." or a synthetic sender like
+  // "heartbeat" leaks into the shared session and later user replies route to
+  // the wrong chat.
+  const lastChannelRaw = isSystemEvent
+    ? baseEntry?.lastChannel
+    : resolveLastChannelRaw({
+        originatingChannelRaw,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+        isInterSession,
+      });
+  const lastToRaw = isSystemEvent
+    ? baseEntry?.lastTo
+    : resolveLastToRaw({
+        originatingChannelRaw,
+        originatingToRaw: ctx.OriginatingTo,
+        toRaw: ctx.To,
+        persistedLastTo: baseEntry?.lastTo,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+        isInterSession,
+      });
+  const lastAccountIdRaw = isSystemEvent
+    ? baseEntry?.lastAccountId
+    : resolveSessionDefaultAccountId({
+        cfg,
+        channelRaw: lastChannelRaw,
+        accountIdRaw: ctx.AccountId,
+        persistedLastAccountId: baseEntry?.lastAccountId,
+      });
+  // Only fall back to persisted threadId for thread sessions. Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
-  const deliveryFields = normalizeSessionDeliveryFields({
-    deliveryContext: {
-      channel: lastChannelRaw,
-      to: lastToRaw,
-      accountId: lastAccountIdRaw,
-      threadId: lastThreadIdRaw,
-    },
-  });
+  const lastThreadIdRaw = isSystemEvent
+    ? baseEntry?.lastThreadId
+    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  const deliveryFields = isSystemEvent
+    ? normalizeSessionDeliveryFields({
+        channel: baseEntry?.channel,
+        lastChannel: baseEntry?.lastChannel,
+        lastTo: baseEntry?.lastTo,
+        lastAccountId: baseEntry?.lastAccountId,
+        lastThreadId:
+          baseEntry?.lastThreadId ??
+          baseEntry?.deliveryContext?.threadId ??
+          baseEntry?.origin?.threadId,
+        deliveryContext: baseEntry?.deliveryContext,
+      })
+    : normalizeSessionDeliveryFields({
+        deliveryContext: {
+          channel: lastChannelRaw,
+          to: lastToRaw,
+          accountId: lastAccountIdRaw,
+          threadId: lastThreadIdRaw,
+        },
+      });
   const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
@@ -528,6 +584,7 @@ export async function initSessionState(params: {
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
+    traceLevel: persistedTrace ?? baseEntry?.traceLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: baseEntry?.responseUsage,
@@ -561,6 +618,8 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
+    groupActivation: entry?.groupActivation,
+    groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
     deliveryContext: deliveryFields.deliveryContext,
     // Track originating channel for subagent announce routing.
     lastChannel,
@@ -573,9 +632,18 @@ export async function initSessionState(params: {
     sessionKey,
     existing: sessionEntry,
     groupResolution,
+    skipSystemEventOrigin: isSystemEvent,
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };
+  }
+  if (isSystemEvent && !isThread) {
+    sessionEntry = {
+      ...sessionEntry,
+      lastThreadId: undefined,
+      deliveryContext: stripThreadIdFromDeliveryContext(sessionEntry.deliveryContext),
+      origin: stripThreadIdFromOrigin(sessionEntry.origin),
+    };
   }
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";

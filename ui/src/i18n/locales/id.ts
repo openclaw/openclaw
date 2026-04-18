@@ -256,6 +256,17 @@ export const id: TranslationMap = {
       cost: "Biaya",
       skills: "Skills",
       recentSessions: "Sesi Terbaru",
+      modelAuth: "Autentikasi Model",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} kedaluwarsa",
+      modelAuthExpiring: "{count} akan kedaluwarsa",
+      modelAuthProviders: "{count} penyedia",
+      modelAuthUsageLeft: "{pct}% tersisa",
+      modelAuthExpiresIn: "kedaluwarsa {when}",
+      modelAuthAttentionExpiredTitle: "Autentikasi model kedaluwarsa",
+      modelAuthAttentionExpiringTitle: "Autentikasi model akan segera kedaluwarsa",
+      modelAuthAttentionExpiredDesc: "{providers} — autentikasi ulang dengan openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Perhatian",
@@ -297,8 +308,10 @@ export const id: TranslationMap = {
     },
     scene: {
       backfill: "Isi ulang",
+      dedupeDiary: "Buku Harian Dedupe",
       reset: "Setel ulang",
       clearGrounded: "Hapus yang Ditahankan",
+      repairCache: "Perbaiki Cache Mimpi",
       working: "Sedang bekerja…",
     },
     phase: {

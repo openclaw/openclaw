@@ -97,9 +97,33 @@ async function expectFirstHookDelivery(
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
   expect(firstBody.runId).toBeTruthy();
-  await waitForSystemEvent();
+  await waitForSystemEvent(5_000);
   drainSystemEvents(resolveMainKey());
   return firstBody;
+}
+
+async function expectHookAgentSessionRouting(params: {
+  port: number;
+  requestSessionKey: string;
+  expectedSessionKey: string;
+}) {
+  mockIsolatedRunOkOnce();
+
+  const resAgent = await postHook(params.port, "/hooks/agent", {
+    message: "Do it",
+    name: "Email",
+    agentId: "hooks",
+    sessionKey: params.requestSessionKey,
+  });
+  expect(resAgent.status).toBe(200);
+  await waitForSystemEvent();
+
+  const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+    | { sessionKey?: string; job?: { agentId?: string } }
+    | undefined;
+  expect(routedCall?.job?.agentId).toBe("hooks");
+  expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
+  drainSystemEvents(resolveMainKey());
 }
 
 describe("gateway server hooks", () => {
@@ -236,7 +260,9 @@ describe("gateway server hooks", () => {
         messages: [{ id: "msg-1", from: "Ada", subject: "Hello", snippet: "Hi", body: "Body" }],
       });
       expect(response.status).toBe(200);
-      await waitForSystemEvent();
+      await expect
+        .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
+        .toBe(1);
 
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sessionKey?: string;
@@ -264,7 +290,7 @@ describe("gateway server hooks", () => {
     await withGatewayServer(async ({ port }) => {
       const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
       expect(direct.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([
         expect.objectContaining({
           text: "Direct wake",
@@ -275,7 +301,7 @@ describe("gateway server hooks", () => {
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(5_000);
       expect(peekSystemEventEntries(resolveMainKey())).toEqual([
         expect.objectContaining({
           text: "Mapped wake: Email",
@@ -379,23 +405,11 @@ describe("gateway server hooks", () => {
     };
     setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOkOnce();
-
-      const resAgent = await postHook(port, "/hooks/agent", {
-        message: "Do it",
-        name: "Email",
-        agentId: "hooks",
-        sessionKey: "agent:hooks:slack:channel:c123",
+      await expectHookAgentSessionRouting({
+        port,
+        requestSessionKey: "agent:hooks:slack:channel:c123",
+        expectedSessionKey: "agent:hooks:slack:channel:c123",
       });
-      expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
-
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { agentId?: string } }
-        | undefined;
-      expect(routedCall?.job?.agentId).toBe("hooks");
-      expect(routedCall?.sessionKey).toBe("agent:hooks:slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
     });
   });
 
@@ -408,23 +422,11 @@ describe("gateway server hooks", () => {
     };
     setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOkOnce();
-
-      const resAgent = await postHook(port, "/hooks/agent", {
-        message: "Do it",
-        name: "Email",
-        agentId: "hooks",
-        sessionKey: "agent:main:slack:channel:c123",
+      await expectHookAgentSessionRouting({
+        port,
+        requestSessionKey: "agent:main:slack:channel:c123",
+        expectedSessionKey: "agent:hooks:slack:channel:c123",
       });
-      expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
-
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { agentId?: string } }
-        | undefined;
-      expect(routedCall?.job?.agentId).toBe("hooks");
-      expect(routedCall?.sessionKey).toBe("agent:hooks:slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
     });
   });
 
@@ -531,32 +533,43 @@ describe("gateway server hooks", () => {
 
   test("expires hook idempotency entries from first delivery time", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy.mockReturnValue(1_000_000);
 
     await withGatewayServer(async ({ port }) => {
       mockIsolatedRunOk();
-      const firstBody = await expectFirstHookDelivery(port, "fixed-window-idem");
 
-      nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS - 1);
+      const firstNowSpy = vi.spyOn(Date, "now");
+      firstNowSpy.mockReturnValue(1_000_000);
+      const first = await postAgentHookWithIdempotency(port, "fixed-window-idem");
+      firstNowSpy.mockRestore();
+
+      const firstBody = (await first.json()) as { runId?: string };
+      expect(firstBody.runId).toBeTruthy();
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const secondNowSpy = vi.spyOn(Date, "now");
+      secondNowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS - 1);
       const second = await postHook(
         port,
         "/hooks/agent",
         { message: "Do it", name: "Email" },
         { headers: { "Idempotency-Key": "fixed-window-idem" } },
       );
+      secondNowSpy.mockRestore();
       expect(second.status).toBe(200);
       const secondBody = (await second.json()) as { runId?: string };
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
-      nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS + 1);
+      const thirdNowSpy = vi.spyOn(Date, "now");
+      thirdNowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS + 1);
       const third = await postHook(
         port,
         "/hooks/agent",
         { message: "Do it", name: "Email" },
         { headers: { "Idempotency-Key": "fixed-window-idem" } },
       );
+      thirdNowSpy.mockRestore();
       expect(third.status).toBe(200);
       const thirdBody = (await third.json()) as { runId?: string };
       expect(thirdBody.runId).toBeTruthy();

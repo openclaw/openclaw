@@ -255,6 +255,17 @@ export const ko: TranslationMap = {
       cost: "비용",
       skills: "Skills",
       recentSessions: "최근 세션",
+      modelAuth: "모델 인증",
+      modelAuthOk: "{count}개 정상",
+      modelAuthExpired: "{count}개 만료됨",
+      modelAuthExpiring: "{count}개 곧 만료됨",
+      modelAuthProviders: "{count}개 제공업체",
+      modelAuthUsageLeft: "{pct}% 남음",
+      modelAuthExpiresIn: "{when} 후 만료",
+      modelAuthAttentionExpiredTitle: "모델 인증이 만료됨",
+      modelAuthAttentionExpiringTitle: "모델 인증이 곧 만료됨",
+      modelAuthAttentionExpiredDesc: "{providers} — openclaw models auth로 다시 인증하세요",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "주의",
@@ -296,8 +307,10 @@ export const ko: TranslationMap = {
     },
     scene: {
       backfill: "채우기",
+      dedupeDiary: "중복 제거 일지",
       reset: "재설정",
       clearGrounded: "근거 항목 지우기",
+      repairCache: "Dream Cache 복구",
       working: "작업 중…",
     },
     phase: {

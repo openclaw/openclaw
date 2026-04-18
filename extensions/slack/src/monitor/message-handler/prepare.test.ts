@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -11,30 +9,21 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
-import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+import {
+  createInboundSlackTestContext,
+  createSlackSessionStoreFixture,
+  createSlackTestAccount,
+} from "./prepare.test-helpers.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  function makeTmpStorePath() {
-    if (!fixtureRoot) {
-      throw new Error("fixtureRoot missing");
-    }
-    const dir = path.join(fixtureRoot, `case-${caseId++}`);
-    fs.mkdirSync(dir);
-    return { dir, storePath: path.join(dir, "sessions.json") };
-  }
+  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-thread-"));
+    storeFixture.setup();
   });
 
   afterAll(() => {
-    if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-      fixtureRoot = "";
-    }
+    storeFixture.cleanup();
   });
 
   const createInboundSlackCtx = createInboundSlackTestContext;
@@ -449,7 +438,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("marks first thread turn and injects thread history for a new thread session", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
@@ -490,7 +479,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
@@ -578,7 +567,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("creates thread session for top-level DM when replyToMode=all", async () => {
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
         session: { store: storePath },
@@ -653,6 +642,7 @@ describe("prepareSlackMessage sender prefix", () => {
       removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
       markMessageSeen: () => false,
+      releaseSeenMessage: () => {},
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,
@@ -713,27 +703,14 @@ describe("prepareSlackMessage sender prefix", () => {
 });
 
 describe("slack thread.requireExplicitMention", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  function makeTmpStorePath() {
-    if (!fixtureRoot) {
-      throw new Error("fixtureRoot missing");
-    }
-    const dir = path.join(fixtureRoot, `require-explicit-${caseId++}`);
-    fs.mkdirSync(dir);
-    return { dir, storePath: path.join(dir, "sessions.json") };
-  }
+  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-explicit-mention-");
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-explicit-mention-"));
+    storeFixture.setup();
   });
 
   afterAll(() => {
-    if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-      fixtureRoot = "";
-    }
+    storeFixture.cleanup();
   });
 
   function createCtxWithExplicitMention(requireExplicitMention: boolean) {
@@ -750,7 +727,7 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("drops thread reply without explicit mention when requireExplicitMention is true", async () => {
     const ctx = createCtxWithExplicitMention(true);
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/config-runtime"),
       "resolveStorePath",
@@ -777,7 +754,7 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("allows thread reply with explicit @mention when requireExplicitMention is true", async () => {
     const ctx = createCtxWithExplicitMention(true);
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/config-runtime"),
       "resolveStorePath",
@@ -804,7 +781,7 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("allows thread reply without explicit mention when requireExplicitMention is false (default)", async () => {
     const ctx = createCtxWithExplicitMention(false);
-    const { storePath } = makeTmpStorePath();
+    const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
       await import("openclaw/plugin-sdk/config-runtime"),
       "resolveStorePath",

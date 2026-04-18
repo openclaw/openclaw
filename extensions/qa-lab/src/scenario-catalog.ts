@@ -51,6 +51,48 @@ const qaScenarioExecutionSchema = z.object({
   config: qaScenarioConfigSchema.optional(),
 });
 
+const qaCoverageIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
+    message: "coverage ids must use lowercase dotted or dashed tokens",
+  });
+
+const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
+
+const qaScenarioCoverageSchema = z
+  .object({
+    primary: qaCoverageIdListSchema,
+    secondary: qaCoverageIdListSchema.optional(),
+  })
+  .superRefine((coverage, ctx) => {
+    const seen = new Set<string>();
+    const coverageEntries = [
+      ["primary", coverage.primary],
+      ["secondary", coverage.secondary],
+    ] as const;
+    for (const [intent, ids] of coverageEntries) {
+      if (!ids) {
+        continue;
+      }
+      for (const [index, id] of ids.entries()) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          continue;
+        }
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [intent, index],
+          message: `duplicate coverage id: ${id}`,
+        });
+      }
+    }
+  });
+
+const qaScenarioGatewayRuntimeSchema = z.object({
+  forwardHostHome: z.boolean().optional(),
+});
+
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(z.unknown()).optional(),
@@ -133,8 +175,18 @@ const qaSeedScenarioSchema = z.object({
   id: z.string().trim().min(1),
   title: z.string().trim().min(1),
   surface: z.string().trim().min(1),
+  category: z.string().trim().min(1).optional(),
+  coverage: qaScenarioCoverageSchema.optional(),
+  surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
+  risk: z.enum(["low", "medium", "high"]).optional(),
+  capabilities: z.array(z.string().trim().min(1)).optional(),
+  lane: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
+  riskLevel: z.string().trim().min(1).optional(),
   objective: z.string().trim().min(1),
   successCriteria: z.array(z.string().trim().min(1)).min(1),
+  plugins: z.array(z.string().trim().min(1)).optional(),
+  gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
+  gatewayRuntime: qaScenarioGatewayRuntimeSchema.optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),
@@ -218,14 +270,6 @@ function readTextFile(relativePath: string): string {
   return fs.readFileSync(resolved, "utf8");
 }
 
-function readDirEntries(relativePath: string): string[] {
-  const resolved = resolveRepoPath(relativePath, "directory");
-  if (!resolved) {
-    return [];
-  }
-  return fs.readdirSync(resolved);
-}
-
 function extractQaPackYaml(content: string) {
   const match = content.match(QA_PACK_FENCE_RE);
   if (!match?.[1]) {
@@ -278,7 +322,15 @@ export function readQaScenarioPackMarkdown(): string {
 export function readQaScenarioPack(): QaScenarioPack {
   const packMarkdown = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packMarkdown) {
-    throw new Error(`qa scenario pack not found: ${QA_SCENARIO_PACK_INDEX_PATH}`);
+    // The QA scenario pack is optional in npm distributions.  Return an empty
+    // pack so completion cache updates and other consumers don't crash when
+    // the qa/scenarios/ directory is not shipped with the package.
+    return {
+      version: 1,
+      agent: { identityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN },
+      kickoffTask: "QA scenarios not available in this distribution.",
+      scenarios: [],
+    };
   }
   const parsedPack = parseQaYamlWithContext(
     qaScenarioPackSchema,
@@ -309,6 +361,13 @@ export function readQaScenarioPack(): QaScenarioPack {
       } satisfies QaSeedScenarioWithSource;
     })(),
   );
+  const seenScenarioIds = new Set<string>();
+  for (const scenario of scenarios) {
+    if (seenScenarioIds.has(scenario.id)) {
+      throw new Error(`duplicate qa scenario id: ${scenario.id}`);
+    }
+    seenScenarioIds.add(scenario.id);
+  }
   return {
     ...parsedPack,
     scenarios,
@@ -316,10 +375,37 @@ export function readQaScenarioPack(): QaScenarioPack {
 }
 
 export function listQaScenarioMarkdownPaths(): string[] {
-  return readDirEntries(QA_SCENARIO_DIR_PATH)
-    .filter((entry) => entry.endsWith(".md") && entry !== "index.md")
-    .map((entry) => `${QA_SCENARIO_DIR_PATH}/${entry}`)
-    .toSorted();
+  const resolved = resolveRepoPath(QA_SCENARIO_DIR_PATH, "directory");
+  if (!resolved) {
+    return [];
+  }
+  return listQaScenarioMarkdownPathsInDirectory(resolved, QA_SCENARIO_DIR_PATH).toSorted();
+}
+
+function listQaScenarioMarkdownPathsInDirectory(
+  absoluteDir: string,
+  relativeDir: string,
+): string[] {
+  const paths: string[] = [];
+  const entries = fs
+    .readdirSync(absoluteDir, { withFileTypes: true })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
+    const relativePath = `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      paths.push(
+        ...listQaScenarioMarkdownPathsInDirectory(path.join(absoluteDir, entry.name), relativePath),
+      );
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md") {
+      paths.push(relativePath);
+    }
+  }
+  return paths;
 }
 
 export function readQaScenarioOverviewMarkdown(): string {
@@ -335,7 +421,7 @@ export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
   };
 }
 
-export function readQaScenarioById(id: string): QaSeedScenario {
+export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
   const scenario = readQaScenarioPack().scenarios.find((candidate) => candidate.id === id);
   if (!scenario) {
     throw new Error(`unknown qa scenario: ${id}`);
@@ -344,7 +430,7 @@ export function readQaScenarioById(id: string): QaSeedScenario {
 }
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
-  return readQaScenarioById(id).execution?.config;
+  return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {
