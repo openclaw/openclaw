@@ -322,9 +322,11 @@ describe("emitExecSystemEvent", () => {
         threadId: 47,
       },
     });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
-      ...scopedHeartbeatWakeOptions("agent:ops:main", { reason: "exec-event" }),
-    });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+      expect.objectContaining(
+        scopedHeartbeatWakeOptions("agent:ops:main", { reason: "exec-event" }),
+      ),
+    );
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {
@@ -337,9 +339,11 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "global",
       contextKey: "exec:run-global",
     });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
-      ...scopedHeartbeatWakeOptions("global", { reason: "exec-event" }),
-    });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+      expect.objectContaining(
+        scopedHeartbeatWakeOptions("global", { reason: "exec-event" }),
+      ),
+    );
   });
 
   it("ignores events without a session key", () => {

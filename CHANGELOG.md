@@ -2,33 +2,42 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
+## 2026.4.18
 
 ### Changes
 
+- Anthropic/models: add Claude Opus 4.7 `xhigh` reasoning effort support and keep it separate from adaptive thinking.
+- Control UI/settings: overhaul the settings and slash-command experience with faster presets, quick-create flows, and refreshed command discovery. (#67819) Thanks @BunsDev.
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
 
 ### Fixes
 
+- Codex/gateway: fix gateway crashes when the codex-acp subprocess terminates abruptly; pending requests now shut down gracefully instead of propagating an uncaught EPIPE through the gateway daemon and connected channels. Fixes #67886. (#67947) Thanks @openperf.
 - Agents/bootstrap: resolve bootstrap from workspace truth instead of stale session transcript markers, keep embedded bootstrap instructions on a hidden user-context prelude, suppress normal `/new` and `/reset` greetings while `BOOTSTRAP.md` is still pending, and make the embedded runner read the bootstrap ritual before replying normally.
+- Agents/bootstrap: dedupe repeated bootstrap-truncation warnings so startup logs stay actionable. (#67906) Thanks @rubencu.
 - WhatsApp/multi-account: centralize named-account inbound policy, isolate per-account group activation and scoped session keys, preserve legacy activation backfill, and keep `accounts.default` shared defaults aligned across runtime, setup, and compat migration paths. Thanks @mcaxtr.
 - Cron/delivery: clean up isolated sessions after direct deliveries when `deleteAfterRun` is enabled, covering structured and threaded branches that previously bypassed cleanup. (#67807) Thanks @MonkeyLeeT.
-- Gateway/hello-ok: always report negotiated auth metadata for successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810) Thanks @BunsDev.
+- Gateway/hello-ok: always report negotiated auth metadata and preserve scopes for reused device tokens on successful shared-auth handshakes, including control-ui bypass coverage when no device token is issued. (#67810, #68039) Thanks @BunsDev.
 - Onboarding/non-interactive: preserve existing gateway auth tokens during re-onboard so active local gateway clients are not disconnected by an implicit token rotation. (#67821) Thanks @BKF-Gitty.
 - OpenAI Codex/Responses: unify native Responses API capability detection so Codex OAuth requests emit the required `store: false` field on the native Responses path. (#67918) Thanks @obviyus.
 - WhatsApp/setup: guard personal-phone and allowlist prompt values so setup fails with clear validation errors instead of crashing on undefined prompt text. (#67895) Thanks @lawrence3699.
 - Models/config: preserve an existing `models.json` provider `baseUrl` during merge-mode regeneration so custom endpoints do not get reset on restart. (#67893) Thanks @lawrence3699.
+- Plugin SDK: preserve `secret-input-runtime` function exports in published builds so provider plugins can read SecretRef-backed setup inputs.
 - Plugins/discovery: reuse bundled and global plugin discovery results across workspace cache misses so Windows multi-workspace startup stops redoing the shared synchronous scan. (#67940) Thanks @obviyus.
+- Bundled plugins/install: keep staged bundled plugin runtime imports resolving through the packaged Plugin SDK while omitting checkout-only aliases from the dist inventory, so published installs do not fail on repo-local paths.
 - Plugins/webhooks: enforce synchronous plugin registration with full rollback of failed plugin side effects, and cache SecretRef-backed webhook auth per route so plugin startup and inbound webhook auth stay deterministic. (#67941) Thanks @obviyus.
 - Telegram/ACP bindings: drop persisted DM bindings that still point at missing or failed ACP sessions on restart, while preserving plugin-owned bindings and uncertain store reads. (#67822) Thanks @chinar-amrutkar.
 - Telegram/streaming: keep a transient preview on the same Telegram message when auto-compaction retries an in-flight answer, so streamed replies no longer appear duplicated after compaction. (#66939) Thanks @rubencu.
 - Memory/sqlite-vec: emit the degraded sqlite-vec warning once per degraded episode instead of repeating it for every file write, while preserving the latch across safe-reindex rollback and resetting it when vector state is genuinely rebuilt. (#67898) Thanks @rubencu.
+- Memory-core: preserve stored vector dimensions during read-only recovery so memory indexes do not lose vector metadata while repairing read-only state.
 - Reply/block streaming: preserve post-stream incomplete-turn error payloads after block streaming already emitted content, so users get the warning instead of silence. (#67991) Thanks @obviyus.
 - Telegram/streaming: clear the compaction replay guard after visible non-final boundaries so a post-tool assistant reply rotates to a fresh preview instead of editing the pre-compaction message. (#67993) Thanks @obviyus.
 - Matrix: fix `sessions_spawn --thread` subagent session spawning — thread binding creation, cleanup on session end, and completion-message delivery target resolution now work end-to-end. (#67643) Thanks @eejohnso-ops and @gumadeiras.
+- Slack/streaming: resolve native streaming recipient teams from the inbound user when available, with a monitor-team fallback, so DM and shared-workspace streams target the right recipient more reliably.
 - macOS/webchat: enable Undo and Redo in the composer text input by turning on the native `NSTextView` undo manager. (#34962) Thanks @tylerbittner.
 - macOS/remote SSH: require an already-trusted host key on the macOS remote command, gateway probe, port tunnel, and pairing probe paths by switching `StrictHostKeyChecking=accept-new` to `StrictHostKeyChecking=yes` and centralizing the shared SSH option fragments in `CommandResolver`, so first-time macOS remote connections no longer silently accept an unknown host key and must be trusted ahead of time via `~/.ssh/known_hosts`. (#68199)
 - CLI/configure: show the channel picker before probing statuses and let remove mode delete configured channel blocks directly from config. (#68007) Thanks @gumadeiras.
+- Control UI/settings: reset scroll position when switching settings pages and align details headers. (#68150) Thanks @BunsDev.
 - OpenAI Codex/OAuth: keep OpenClaw as the canonical owner for imported Codex CLI OAuth sessions, stop writing refreshed credentials back into `.codex`, and prefer fresher OpenClaw credentials over stale imported CLI state so refresh recovery stays stable. Thanks @vincentkoc.
 - OpenAI Codex/OAuth: treat the OpenAI TLS prerequisites probe as advisory instead of a hard blocker, so Codex sign-in can still proceed when the speculative Node/OpenSSL precheck fails but the real OAuth flow still works. Thanks @vincentkoc.
 - Models status/OAuth health: align OAuth health reporting with the same effective credential view runtime uses, so expired refreshable sessions stop showing healthy by default and fresher imported Codex CLI credentials surface correctly in `models status`, doctor, and gateway auth status. Thanks @vincentkoc.
@@ -43,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Failover/google: only treat `INTERNAL` status payloads as retryable timeouts when they also carry a `500` code, so malformed non-500 payloads do not enter the retry path. (#68238) Thanks @altaywtf and @Openbling.
 - Agents/tools: filter bundled MCP/LSP tools through the final owner-only and tool-policy pipeline after merging them into the effective tool list, so existing allowlists, deny rules, sandbox policy, subagent policy, and owner-only restrictions apply to bundled tools the same way they apply to core tools. (#68195)
 - Gateway/assistant media: require `operator.read` scope for assistant-media file and metadata requests on identity-bearing HTTP auth paths so callers without a read scope can no longer access assistant media. (#68175) Thanks @eleqtrizit.
+- Gateway/web: allow same-origin microphone access in the Permissions-Policy header so browser voice capture can work from the Control UI and webchat origin. (#68368)
 - Exec approvals/display: escape raw control characters (including newline and carriage return) in the shared and macOS approval-prompt command sanitizers, so trailing command payloads no longer render on hidden extra lines in the approval UI. (#68198)
 - Telegram/streaming: fence same-session stale preview and finalization work after aborts so Telegram no longer replays an older reply or flushes a hidden short preview after the abort confirmation lands. (#68100) Thanks @rubencu.
 - OpenAI Codex/OAuth + Pi: keep imported Codex CLI OAuth bootstrap, Pi auth export, and runtime overlay handling aligned so Codex sessions survive refresh and health checks without leaking transient CLI state into saved auth files. Thanks @vincentkoc.
@@ -162,6 +172,9 @@ Docs: https://docs.openclaw.ai
 - Node-host/tools.exec: let approval binding distinguish known native binaries from mutable shell payload files, while still fail-closing unknown or racy file probes so absolute-path node-host commands like `/usr/bin/whoami` no longer get rejected as unsafe interpreter/runtime commands. (#66731) Thanks @tmimmanuel.
 - Codex/gateway: fix gateway crash when the codex-acp subprocess terminates abruptly; an unhandled EPIPE on the child stdin stream now routes through graceful client shutdown, rejecting pending requests instead of propagating as an uncaught exception that crashes the entire gateway daemon and all connected channels. Fixes #67886. (#67947) thanks @openperf
 - Slack/streaming: resolve native streaming recipient teams from the inbound user when available, with a monitor-team fallback, so DM and shared-workspace streams target the right recipient more reliably.
+- OpenRouter/streaming: treat `reasoning_details.response.output_text` and `reasoning_details.response.text` as visible assistant output on OpenRouter-compatible completions streams, while keeping `reasoning.text` hidden and refusing to surface ambiguous bare `text` items by default so visible replies, thinking blocks, and tool calls can coexist in the same chunk. (#67410) Thanks @neeravmakwana.
+- Models/OpenRouter aliases: resolve `openrouter:auto` to the canonical `openrouter/auto` model and map `openrouter:free` to the first configured concrete `openrouter/...:free` model instead of mis-resolving these compatibility aliases under the default provider. (#57066) Thanks @sumiisiaran.
+- OpenRouter/Arcee: canonicalize stale OpenRouter `https://openrouter.ai/v1` base URLs during provider config normalization and runtime model/transport resolution, so fresh `models.json` writes and previously discovered rows self-heal back to `https://openrouter.ai/api/v1` instead of breaking OpenRouter-routed requests. (#67295) Thanks @achalkov.
 
 ## 2026.4.14
 

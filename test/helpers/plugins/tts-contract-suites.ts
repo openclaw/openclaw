@@ -4,15 +4,14 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../../src/plugins/types.js";
-import { resolveRelativeWorkspacePackagePublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { resolveWorkspacePackagePublicModuleUrl } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnv } from "../../../src/test-utils/env.js";
 import type { ResolvedTtsConfig } from "../../../src/tts/tts-types.js";
 
 type TtsRuntimeModule = typeof import("../../../src/tts/tts.js");
 type TtsCoreModule = typeof import("../../../src/tts/tts-core.js");
 
-const speechCoreRuntimeApiModuleId = resolveRelativeWorkspacePackagePublicModuleId({
-  fromModuleUrl: import.meta.url,
+const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
   packageName: "@openclaw/speech-core",
   artifactBasename: "runtime-api.js",
 });

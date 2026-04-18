@@ -13,7 +13,15 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  getFinishedSession,
+  markBackgrounded,
+  markExited,
+  resetProcessRegistryForTests,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -99,7 +107,6 @@ const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase 
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
 const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, shellEcho(message)]);
-const echoLines = (lines: string[]) => joinCommands(lines.map((line) => shellEcho(line)));
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -401,7 +408,7 @@ const readBackgroundLogSnapshot = async (
   lines: string[],
   options: ProcessLogWindow = {},
 ): Promise<ProcessLogSnapshot> => {
-  const { sessionId } = await runBackgroundCommandToCompletion(execTool, echoLines(lines));
+  const sessionId = seedFinishedLogSession(lines);
   const log = await readProcessLog(sessionId, options);
   return {
     text: readTextContent(log.content) ?? "",
@@ -409,6 +416,31 @@ const readBackgroundLogSnapshot = async (
     lines: readTrimmedLines(log.content),
     totalLines: readTotalLines(log.details),
   };
+};
+const seedFinishedLogSession = (lines: string[]) => {
+  const session: ProcessSession = {
+    id: `seeded-log-${nextCallId()}`,
+    command: "seeded log",
+    startedAt: Date.now(),
+    maxOutputChars: 100_000,
+    pendingMaxOutputChars: 100_000,
+    pendingStdout: [],
+    pendingStderr: [],
+    pendingStdoutChars: 0,
+    pendingStderrChars: 0,
+    totalOutputChars: 0,
+    aggregated: "",
+    tail: "",
+    exited: false,
+    truncated: false,
+    backgrounded: false,
+    cursorKeyMode: "unknown",
+  };
+  addSession(session);
+  appendOutput(session, "stdout", lines.join("\n"));
+  markBackgrounded(session);
+  markExited(session, 0, null, PROCESS_STATUS_COMPLETED);
+  return session.id;
 };
 const runLongLogExpectationCase = async ({
   options,
