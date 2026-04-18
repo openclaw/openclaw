@@ -274,6 +274,59 @@ describe("memory plugin state", () => {
     expect(getMemoryRuntime()).toBe(runtime);
   });
 
+  it("restoreMemoryPluginState preserves existing capability when cached snapshot lacks it", () => {
+    const runtime = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["capability prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      runtime,
+    });
+
+    // Snapshot taken BEFORE capability was registered (simulates plugin cache)
+    const snapshotWithoutCapability = {
+      capability: undefined,
+      corpusSupplements: [],
+      promptBuilder: undefined,
+      promptSupplements: [],
+      flushPlanResolver: undefined,
+      runtime: undefined,
+    };
+
+    restoreMemoryPluginState(snapshotWithoutCapability);
+
+    // Capability should be preserved, not overwritten with undefined
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "memory-core",
+    });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+  });
+
+  it("restoreMemoryPluginState overwrites capability when cached snapshot includes it", () => {
+    const runtimeA = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["old prompt"],
+      runtime: runtimeA,
+    });
+
+    const runtimeB = createMemoryRuntime();
+    registerMemoryCapability("memory-wiki", {
+      promptBuilder: () => ["new prompt"],
+      runtime: runtimeB,
+    });
+    const snapshot = createMemoryStateSnapshot();
+
+    // Reset and restore from snapshot that HAS capability
+    _resetMemoryPluginState();
+    restoreMemoryPluginState(snapshot);
+
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "memory-wiki",
+    });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["new prompt"]);
+  });
+
   it("clearMemoryPluginState resets both registries", () => {
     registerMemoryState({
       promptSection: ["stale section"],
