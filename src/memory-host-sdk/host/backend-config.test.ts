@@ -150,8 +150,8 @@ describe("resolveMemoryBackendConfig", () => {
     const devNames = resolveCollectionNamesForAgent(cfg, "dev");
     expect(mainNames.has("memory-dir-main")).toBe(true);
     expect(devNames.has("memory-dir-dev")).toBe(true);
-    expect(mainNames.has("workspace-main")).toBe(true);
-    expect(devNames.has("workspace-dev")).toBe(true);
+    expect(mainNames.has("workspace")).toBe(true);
+    expect(devNames.has("workspace")).toBe(true);
   });
 
   it("merges default and per-agent qmd extra collections", () => {
@@ -199,7 +199,7 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const names = resolveCollectionNamesForAgent(cfg, "main");
     expect(names.has("team-notes")).toBe(true);
-    expect(names.has("notes-main")).toBe(true);
+    expect(names.has("notes")).toBe(true);
   });
 
   it("preserves explicit custom collection names for paths outside the workspace", () => {
@@ -248,8 +248,7 @@ describe("resolveMemoryBackendConfig", () => {
         },
       } as OpenClawConfig;
       const names = resolveCollectionNamesForAgent(cfg, "main");
-      expect(names.has("workspace-main")).toBe(true);
-      expect(names.has("workspace")).toBe(false);
+      expect(names.has("workspace")).toBe(true);
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -280,8 +279,7 @@ describe("resolveMemoryBackendConfig", () => {
         },
       } as OpenClawConfig;
       const names = resolveCollectionNamesForAgent(cfg, "main");
-      expect(names.has("notes-main")).toBe(true);
-      expect(names.has("notes")).toBe(false);
+      expect(names.has("notes")).toBe(true);
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
