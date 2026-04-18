@@ -53,7 +53,7 @@ describe("shouldStartIMessageAccount", () => {
     expect(shouldStartIMessageAccount({ cfg, account: workAccount })).toBe(true);
   });
 
-  it("treats default as shadowed by a bare named account using the same watcher backend", () => {
+  it("keeps default enabled when the named account is bare and unconfigured", () => {
     const cfg = {
       channels: {
         imessage: {
@@ -69,7 +69,7 @@ describe("shouldStartIMessageAccount", () => {
     const workAccount = resolveIMessageAccount({ cfg, accountId: "work" });
 
     expect(workAccount.configured).toBe(false);
-    expect(shouldStartIMessageAccount({ cfg, account: defaultAccount })).toBe(false);
+    expect(shouldStartIMessageAccount({ cfg, account: defaultAccount })).toBe(true);
     expect(shouldStartIMessageAccount({ cfg, account: workAccount })).toBe(true);
   });
 

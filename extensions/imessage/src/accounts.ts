@@ -96,5 +96,10 @@ export function shouldStartIMessageAccount(params: {
   return !listIMessageAccountIds(params.cfg)
     .filter((accountId) => normalizeAccountId(accountId) !== DEFAULT_ACCOUNT_ID)
     .map((accountId) => resolveIMessageAccount({ cfg: params.cfg, accountId }))
-    .some((account) => account.enabled && resolveIMessageWatcherKey(account) === defaultWatcherKey);
+    .some(
+      (account) =>
+        account.enabled &&
+        account.configured &&
+        resolveIMessageWatcherKey(account) === defaultWatcherKey,
+    );
 }
