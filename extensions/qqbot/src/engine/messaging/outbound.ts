@@ -155,21 +155,20 @@ export interface MediaTargetContext {
   targetId: string;
   account: GatewayAccount;
   replyToId?: string;
-  logPrefix?: string;
 }
 
 /** Build a media target from a normal outbound context. */
-function buildMediaTarget(
-  ctx: { to: string; account: GatewayAccount; replyToId?: string | null },
-  logPrefix?: string,
-): MediaTargetContext {
+function buildMediaTarget(ctx: {
+  to: string;
+  account: GatewayAccount;
+  replyToId?: string | null;
+}): MediaTargetContext {
   const target = parseTarget(ctx.to);
   return {
     targetType: target.type,
     targetId: target.id,
     account: ctx.account,
     replyToId: ctx.replyToId ?? undefined,
-    logPrefix,
   };
 }
 
@@ -282,7 +281,6 @@ function resolveExistingPathWithinRoots(
 
 function resolveOutboundMediaPath(
   rawPath: string,
-  prefix: string,
   mediaKind: QQBotMediaKind,
   options: ResolveOutboundMediaPathOptions = {},
 ): ResolvedOutboundMediaPath {
@@ -313,7 +311,7 @@ function resolveOutboundMediaPath(
     }
   }
 
-  debugWarn(`${prefix} blocked local ${mediaKind} path outside QQ Bot media storage`);
+  debugWarn(`blocked local ${mediaKind} path outside QQ Bot media storage`);
   return {
     ok: false,
     error: `${qqBotMediaKindLabel[mediaKind]} path must be inside QQ Bot media storage`,
@@ -327,8 +325,7 @@ export async function sendPhoto(
   ctx: MediaTargetContext,
   imagePath: string,
 ): Promise<OutboundResult> {
-  const prefix = ctx.logPrefix ?? "[qqbot]";
-  const resolvedMediaPath = resolveOutboundMediaPath(imagePath, prefix, "image");
+  const resolvedMediaPath = resolveOutboundMediaPath(imagePath, "image");
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
@@ -339,8 +336,8 @@ export async function sendPhoto(
 
   // Force a local download before upload when direct URL upload is disabled.
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
-    debugLog(`${prefix} sendPhoto: urlDirectUpload=false, downloading URL first...`);
-    const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendPhoto");
+    debugLog(`sendPhoto: urlDirectUpload=false, downloading URL first...`);
+    const localFile = await downloadToFallbackDir(mediaPath, "sendPhoto");
     if (localFile) {
       return await sendPhoto(ctx, localFile);
     }
@@ -372,7 +369,7 @@ export async function sendPhoto(
       return { channel: "qqbot", error: `Unsupported image format: ${ext}` };
     }
     imageUrl = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
-    debugLog(`${prefix} sendPhoto: local → Base64 (${formatFileSize(fileBuffer.length)})`);
+    debugLog(`sendPhoto: local → Base64 (${formatFileSize(fileBuffer.length)})`);
   } else if (!isHttp && !isData) {
     return { channel: "qqbot", error: `Unsupported image source: ${mediaPath.slice(0, 50)}` };
   }
@@ -396,7 +393,7 @@ export async function sendPhoto(
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       }
-      debugLog(`${prefix} sendPhoto: channel does not support local/Base64 images`);
+      debugLog(`sendPhoto: channel does not support local/Base64 images`);
       return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
     }
   } catch (err) {
@@ -405,15 +402,15 @@ export async function sendPhoto(
     // Fall back to plugin-managed download + Base64 when QQ fails to fetch the URL directly.
     if (isHttp && !isData) {
       debugWarn(
-        `${prefix} sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
+        `sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
-      const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath, prefix);
+      const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath);
       if (retryResult) {
         return retryResult;
       }
     }
 
-    debugError(`${prefix} sendPhoto failed: ${msg}`);
+    debugError(`sendPhoto failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -422,20 +419,19 @@ export async function sendPhoto(
 async function downloadAndRetrySendPhoto(
   ctx: MediaTargetContext,
   httpUrl: string,
-  prefix: string,
 ): Promise<OutboundResult | null> {
   try {
     const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
     const localFile = await downloadFile(httpUrl, downloadDir);
     if (!localFile) {
-      debugError(`${prefix} sendPhoto fallback: download also failed for ${httpUrl.slice(0, 80)}`);
+      debugError(`sendPhoto fallback: download also failed for ${httpUrl.slice(0, 80)}`);
       return null;
     }
 
-    debugLog(`${prefix} sendPhoto fallback: downloaded → ${localFile}, retrying as Base64`);
+    debugLog(`sendPhoto fallback: downloaded → ${localFile}, retrying as Base64`);
     return await sendPhoto(ctx, localFile);
   } catch (err) {
-    debugError(`${prefix} sendPhoto fallback error:`, err);
+    debugError(`sendPhoto fallback error:`, err);
     return null;
   }
 }
@@ -451,8 +447,7 @@ export async function sendVoice(
   directUploadFormats?: string[],
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
-  const prefix = ctx.logPrefix ?? "[qqbot]";
-  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, prefix, "voice", {
+  const resolvedMediaPath = resolveOutboundMediaPath(voicePath, "voice", {
     allowMissingLocalPath: true,
   });
   if (!resolvedMediaPath.ok) {
@@ -473,33 +468,27 @@ export async function sendVoice(
           });
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
         } else {
-          debugLog(`${prefix} sendVoice: voice not supported in channel`);
+          debugLog(`sendVoice: voice not supported in channel`);
           return { channel: "qqbot", error: "Voice not supported in channel" };
         }
       } catch (err) {
         const msg = formatErrorMessage(err);
         debugWarn(
-          `${prefix} sendVoice: URL direct upload failed (${msg}), downloading locally and retrying...`,
+          `sendVoice: URL direct upload failed (${msg}), downloading locally and retrying...`,
         );
       }
     } else {
-      debugLog(`${prefix} sendVoice: urlDirectUpload=false, downloading URL first...`);
+      debugLog(`sendVoice: urlDirectUpload=false, downloading URL first...`);
     }
 
-    const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendVoice");
+    const localFile = await downloadToFallbackDir(mediaPath, "sendVoice");
     if (localFile) {
-      return await sendVoiceFromLocal(
-        ctx,
-        localFile,
-        directUploadFormats,
-        transcodeEnabled,
-        prefix,
-      );
+      return await sendVoiceFromLocal(ctx, localFile, directUploadFormats, transcodeEnabled);
     }
     return { channel: "qqbot", error: `Failed to download audio: ${mediaPath.slice(0, 80)}` };
   }
 
-  return await sendVoiceFromLocal(ctx, mediaPath, directUploadFormats, transcodeEnabled, prefix);
+  return await sendVoiceFromLocal(ctx, mediaPath, directUploadFormats, transcodeEnabled);
 }
 
 /** Send voice from a local file. */
@@ -508,7 +497,6 @@ async function sendVoiceFromLocal(
   mediaPath: string,
   directUploadFormats: string[] | undefined,
   transcodeEnabled: boolean,
-  prefix: string,
 ): Promise<OutboundResult> {
   // TTS can still be flushing the file to disk, so wait for a stable file first.
   const fileSize = await waitForFile(mediaPath);
@@ -519,7 +507,7 @@ async function sendVoiceFromLocal(
   // Re-check containment after the file appears to prevent symlink-race escapes.
   const safeMediaPath = resolveQQBotPayloadLocalFilePath(mediaPath);
   if (!safeMediaPath) {
-    debugWarn(`${prefix} sendVoice: blocked local voice path outside QQ Bot media storage`);
+    debugWarn(`sendVoice: blocked local voice path outside QQ Bot media storage`);
     return { channel: "qqbot", error: "Voice path must be inside QQ Bot media storage" };
   }
 
@@ -528,7 +516,7 @@ async function sendVoiceFromLocal(
   if (needsTranscode && !transcodeEnabled) {
     const ext = normalizeLowercaseStringOrEmpty(path.extname(safeMediaPath));
     debugLog(
-      `${prefix} sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
+      `sendVoice: transcode disabled, format ${ext} needs transcode, returning error for fallback`,
     );
     return {
       channel: "qqbot",
@@ -543,11 +531,9 @@ async function sendVoiceFromLocal(
     if (!uploadBase64) {
       const buf = await readFileAsync(safeMediaPath);
       uploadBase64 = buf.toString("base64");
-      debugLog(
-        `${prefix} sendVoice: SILK conversion failed, uploading raw (${formatFileSize(buf.length)})`,
-      );
+      debugLog(`sendVoice: SILK conversion failed, uploading raw (${formatFileSize(buf.length)})`);
     } else {
-      debugLog(`${prefix} sendVoice: SILK ready (${fileSize} bytes)`);
+      debugLog(`sendVoice: SILK ready (${fileSize} bytes)`);
     }
 
     const creds = accountToCreds(ctx.account);
@@ -561,12 +547,12 @@ async function sendVoiceFromLocal(
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      debugLog(`${prefix} sendVoice: voice not supported in channel`);
+      debugLog(`sendVoice: voice not supported in channel`);
       return { channel: "qqbot", error: "Voice not supported in channel" };
     }
   } catch (err) {
     const msg = formatErrorMessage(err);
-    debugError(`${prefix} sendVoice (local) failed: ${msg}`);
+    debugError(`sendVoice (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -576,8 +562,7 @@ export async function sendVideoMsg(
   ctx: MediaTargetContext,
   videoPath: string,
 ): Promise<OutboundResult> {
-  const prefix = ctx.logPrefix ?? "[qqbot]";
-  const resolvedMediaPath = resolveOutboundMediaPath(videoPath, prefix, "video");
+  const resolvedMediaPath = resolveOutboundMediaPath(videoPath, "video");
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }
@@ -585,10 +570,10 @@ export async function sendVideoMsg(
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
-    debugLog(`${prefix} sendVideoMsg: urlDirectUpload=false, downloading URL first...`);
-    const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendVideoMsg");
+    debugLog(`sendVideoMsg: urlDirectUpload=false, downloading URL first...`);
+    const localFile = await downloadToFallbackDir(mediaPath, "sendVideoMsg");
     if (localFile) {
-      return await sendVideoFromLocal(ctx, localFile, prefix);
+      return await sendVideoFromLocal(ctx, localFile);
     }
     return { channel: "qqbot", error: `Failed to download video: ${mediaPath.slice(0, 80)}` };
   }
@@ -604,27 +589,27 @@ export async function sendVideoMsg(
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else {
-        debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
+        debugLog(`sendVideoMsg: video not supported in channel`);
         return { channel: "qqbot", error: "Video not supported in channel" };
       }
     }
 
-    return await sendVideoFromLocal(ctx, mediaPath, prefix);
+    return await sendVideoFromLocal(ctx, mediaPath);
   } catch (err) {
     const msg = formatErrorMessage(err);
 
     // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
       debugWarn(
-        `${prefix} sendVideoMsg: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
+        `sendVideoMsg: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
-      const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendVideoMsg");
+      const localFile = await downloadToFallbackDir(mediaPath, "sendVideoMsg");
       if (localFile) {
-        return await sendVideoFromLocal(ctx, localFile, prefix);
+        return await sendVideoFromLocal(ctx, localFile);
       }
     }
 
-    debugError(`${prefix} sendVideoMsg failed: ${msg}`);
+    debugError(`sendVideoMsg failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -633,7 +618,6 @@ export async function sendVideoMsg(
 async function sendVideoFromLocal(
   ctx: MediaTargetContext,
   mediaPath: string,
-  prefix: string,
 ): Promise<OutboundResult> {
   if (!(await fileExistsAsync(mediaPath))) {
     return { channel: "qqbot", error: "Video not found" };
@@ -645,7 +629,7 @@ async function sendVideoFromLocal(
 
   const fileBuffer = await readFileAsync(mediaPath);
   const videoBase64 = fileBuffer.toString("base64");
-  debugLog(`${prefix} sendVideoMsg: local video (${formatFileSize(fileBuffer.length)})`);
+  debugLog(`sendVideoMsg: local video (${formatFileSize(fileBuffer.length)})`);
 
   try {
     const creds = accountToCreds(ctx.account);
@@ -658,12 +642,12 @@ async function sendVideoFromLocal(
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
+      debugLog(`sendVideoMsg: video not supported in channel`);
       return { channel: "qqbot", error: "Video not supported in channel" };
     }
   } catch (err) {
     const msg = formatErrorMessage(err);
-    debugError(`${prefix} sendVideoMsg (local) failed: ${msg}`);
+    debugError(`sendVideoMsg (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -674,11 +658,10 @@ export async function sendDocument(
   filePath: string,
   options: SendDocumentOptions = {},
 ): Promise<OutboundResult> {
-  const prefix = ctx.logPrefix ?? "[qqbot]";
   const extraLocalRoots = options.allowQQBotDataDownloads
     ? [getQQBotDataDir("downloads")]
     : undefined;
-  const resolvedMediaPath = resolveOutboundMediaPath(filePath, prefix, "file", {
+  const resolvedMediaPath = resolveOutboundMediaPath(filePath, "file", {
     extraLocalRoots,
   });
   if (!resolvedMediaPath.ok) {
@@ -689,10 +672,10 @@ export async function sendDocument(
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
-    debugLog(`${prefix} sendDocument: urlDirectUpload=false, downloading URL first...`);
-    const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendDocument");
+    debugLog(`sendDocument: urlDirectUpload=false, downloading URL first...`);
+    const localFile = await downloadToFallbackDir(mediaPath, "sendDocument");
     if (localFile) {
-      return await sendDocumentFromLocal(ctx, localFile, prefix);
+      return await sendDocumentFromLocal(ctx, localFile);
     }
     return { channel: "qqbot", error: `Failed to download file: ${mediaPath.slice(0, 80)}` };
   }
@@ -709,27 +692,27 @@ export async function sendDocument(
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
       } else {
-        debugLog(`${prefix} sendDocument: file not supported in channel`);
+        debugLog(`sendDocument: file not supported in channel`);
         return { channel: "qqbot", error: "File not supported in channel" };
       }
     }
 
-    return await sendDocumentFromLocal(ctx, mediaPath, prefix);
+    return await sendDocumentFromLocal(ctx, mediaPath);
   } catch (err) {
     const msg = formatErrorMessage(err);
 
     // If direct URL upload fails, retry through a local download path.
     if (isHttp) {
       debugWarn(
-        `${prefix} sendDocument: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
+        `sendDocument: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
-      const localFile = await downloadToFallbackDir(mediaPath, prefix, "sendDocument");
+      const localFile = await downloadToFallbackDir(mediaPath, "sendDocument");
       if (localFile) {
-        return await sendDocumentFromLocal(ctx, localFile, prefix);
+        return await sendDocumentFromLocal(ctx, localFile);
       }
     }
 
-    debugError(`${prefix} sendDocument failed: ${msg}`);
+    debugError(`sendDocument failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
@@ -738,7 +721,6 @@ export async function sendDocument(
 async function sendDocumentFromLocal(
   ctx: MediaTargetContext,
   mediaPath: string,
-  prefix: string,
 ): Promise<OutboundResult> {
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
@@ -754,7 +736,7 @@ async function sendDocumentFromLocal(
     return { channel: "qqbot", error: `File is empty: ${mediaPath}` };
   }
   const fileBase64 = fileBuffer.toString("base64");
-  debugLog(`${prefix} sendDocument: local file (${formatFileSize(fileBuffer.length)})`);
+  debugLog(`sendDocument: local file (${formatFileSize(fileBuffer.length)})`);
 
   try {
     const creds = accountToCreds(ctx.account);
@@ -768,33 +750,29 @@ async function sendDocumentFromLocal(
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     } else {
-      debugLog(`${prefix} sendDocument: file not supported in channel`);
+      debugLog(`sendDocument: file not supported in channel`);
       return { channel: "qqbot", error: "File not supported in channel" };
     }
   } catch (err) {
     const msg = formatErrorMessage(err);
-    debugError(`${prefix} sendDocument (local) failed: ${msg}`);
+    debugError(`sendDocument (local) failed: ${msg}`);
     return { channel: "qqbot", error: msg };
   }
 }
 
 /** Download a remote file into the fallback media directory. */
-async function downloadToFallbackDir(
-  httpUrl: string,
-  prefix: string,
-  caller: string,
-): Promise<string | null> {
+async function downloadToFallbackDir(httpUrl: string, caller: string): Promise<string | null> {
   try {
     const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
     const localFile = await downloadFile(httpUrl, downloadDir);
     if (!localFile) {
-      debugError(`${prefix} ${caller} fallback: download also failed for ${httpUrl.slice(0, 80)}`);
+      debugError(`${caller} fallback: download also failed for ${httpUrl.slice(0, 80)}`);
       return null;
     }
-    debugLog(`${prefix} ${caller} fallback: downloaded → ${localFile}`);
+    debugLog(`${caller} fallback: downloaded → ${localFile}`);
     return localFile;
   } catch (err) {
-    debugError(`${prefix} ${caller} fallback download error:`, err);
+    debugError(`${caller} fallback download error:`, err);
     return null;
   }
 }
@@ -961,7 +939,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     debugLog(`[qqbot] sendText: Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
     // Send queue items in order.
-    const mediaTarget = buildMediaTarget({ to, account, replyToId }, "[qqbot:sendText]");
+    const mediaTarget = buildMediaTarget({ to, account, replyToId });
     let lastResult: OutboundResult = { channel: "qqbot" };
 
     for (const item of sendQueue) {
@@ -1080,7 +1058,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };
   }
-  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "[qqbot:sendMedia]", "media", {
+  const resolvedMediaPath = resolveOutboundMediaPath(ctx.mediaUrl, "media", {
     allowMissingLocalPath: true,
   });
   if (!resolvedMediaPath.ok) {
@@ -1088,7 +1066,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   }
   const mediaUrl = resolvedMediaPath.mediaPath;
 
-  const target = buildMediaTarget({ to, account, replyToId }, "[qqbot:sendMedia]");
+  const target = buildMediaTarget({ to, account, replyToId });
 
   // Dispatch by type, preferring MIME and falling back to the file extension.
   // Individual send* helpers already handle direct URL upload vs. download fallback.

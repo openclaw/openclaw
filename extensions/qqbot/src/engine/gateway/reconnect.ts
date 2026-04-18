@@ -80,9 +80,7 @@ export class ReconnectState {
     const delay =
       customDelay ?? RECONNECT_DELAYS[Math.min(this.attempts, RECONNECT_DELAYS.length - 1)];
     this.attempts++;
-    this.log?.debug?.(
-      `[qqbot:${this.accountId}] Reconnecting in ${delay}ms (attempt ${this.attempts})`,
-    );
+    this.log?.debug?.(`Reconnecting in ${delay}ms (attempt ${this.attempts})`);
     return delay;
   }
 
@@ -97,7 +95,7 @@ export class ReconnectState {
     ) {
       const reason =
         code === GatewayCloseCode.INSUFFICIENT_INTENTS ? "offline/sandbox-only" : "banned";
-      this.log?.error(`[qqbot:${this.accountId}] Bot is ${reason}. Please contact QQ platform.`);
+      this.log?.error(`Bot is ${reason}. Please contact QQ platform.`);
       return {
         shouldReconnect: false,
         clearSession: false,
@@ -109,9 +107,7 @@ export class ReconnectState {
 
     // Invalid token.
     if (code === GatewayCloseCode.AUTH_FAILED) {
-      this.log?.info(
-        `[qqbot:${this.accountId}] Invalid token (4004), will refresh token and reconnect`,
-      );
+      this.log?.info(`Invalid token (4004), will refresh token and reconnect`);
       return {
         shouldReconnect: !isAborted,
         clearSession: false,
@@ -123,9 +119,7 @@ export class ReconnectState {
 
     // Rate limited.
     if (code === GatewayCloseCode.RATE_LIMITED) {
-      this.log?.info(
-        `[qqbot:${this.accountId}] Rate limited (4008), waiting ${RATE_LIMIT_DELAY}ms`,
-      );
+      this.log?.info(`Rate limited (4008), waiting ${RATE_LIMIT_DELAY}ms`);
       return {
         shouldReconnect: !isAborted,
         reconnectDelay: RATE_LIMIT_DELAY,
@@ -147,9 +141,7 @@ export class ReconnectState {
         [GatewayCloseCode.SEQ_OUT_OF_RANGE]: "invalid seq on resume",
         [GatewayCloseCode.SESSION_TIMEOUT]: "session timed out",
       };
-      this.log?.info(
-        `[qqbot:${this.accountId}] Error ${code} (${codeDesc[code]}), will re-identify`,
-      );
+      this.log?.info(`Error ${code} (${codeDesc[code]}), will re-identify`);
       return {
         shouldReconnect: !isAborted,
         clearSession: true,
@@ -161,7 +153,7 @@ export class ReconnectState {
 
     // Internal server errors.
     if (code >= GatewayCloseCode.SERVER_ERROR_START && code <= GatewayCloseCode.SERVER_ERROR_END) {
-      this.log?.info(`[qqbot:${this.accountId}] Internal error (${code}), will re-identify`);
+      this.log?.info(`Internal error (${code}), will re-identify`);
       return {
         shouldReconnect: !isAborted && code !== GatewayCloseCode.NORMAL,
         clearSession: true,
@@ -176,13 +168,11 @@ export class ReconnectState {
     if (connectionDuration < QUICK_DISCONNECT_THRESHOLD && this.lastConnectTime > 0) {
       this.quickDisconnectCount++;
       this.log?.debug?.(
-        `[qqbot:${this.accountId}] Quick disconnect detected (${connectionDuration}ms), count: ${this.quickDisconnectCount}`,
+        `Quick disconnect detected (${connectionDuration}ms), count: ${this.quickDisconnectCount}`,
       );
 
       if (this.quickDisconnectCount >= MAX_QUICK_DISCONNECT_COUNT) {
-        this.log?.error(
-          `[qqbot:${this.accountId}] Too many quick disconnects. This may indicate a permission issue.`,
-        );
+        this.log?.error(`Too many quick disconnects. This may indicate a permission issue.`);
         this.quickDisconnectCount = 0;
         return {
           shouldReconnect: !isAborted && code !== 1000,

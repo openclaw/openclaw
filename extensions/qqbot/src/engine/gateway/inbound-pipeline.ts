@@ -250,7 +250,7 @@ async function resolveQuote(
 
   if (refEntry) {
     log?.debug?.(
-      `[qqbot:${account.accountId}] Quote detected via refMsgIdx cache: refMsgIdx=${event.refMsgIdx}, sender=${refEntry.senderName ?? refEntry.senderId}`,
+      `Quote detected via refMsgIdx cache: refMsgIdx=${event.refMsgIdx}, sender=${refEntry.senderName ?? refEntry.senderId}`,
     );
     return {
       id: event.refMsgIdx,
@@ -300,7 +300,7 @@ async function resolveQuote(
         attachmentProcessor,
       );
       log?.debug?.(
-        `[qqbot:${account.accountId}] Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${(refBody ?? "").slice(0, 80)}..."`,
+        `Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${(refBody ?? "").slice(0, 80)}..."`,
       );
       return {
         id: event.refMsgIdx,
@@ -308,13 +308,11 @@ async function resolveQuote(
         isQuote: true,
       };
     } catch (refErr) {
-      log?.error(
-        `[qqbot:${account.accountId}] Failed to format quoted message from msg_elements: ${String(refErr)}`,
-      );
+      log?.error(`Failed to format quoted message from msg_elements: ${String(refErr)}`);
     }
   } else {
     log?.debug?.(
-      `[qqbot:${account.accountId}] Quote detected but no cache and msgType=${event.msgType}: refMsgIdx=${event.refMsgIdx}`,
+      `Quote detected but no cache and msgType=${event.msgType}: refMsgIdx=${event.refMsgIdx}`,
     );
   }
 

@@ -125,10 +125,10 @@ export async function dispatchOutbound(
             ),
           ]);
           if (result.error) {
-            log?.error(`[qqbot:${account.accountId}] Tool fallback error: ${result.error}`);
+            log?.error(`Tool fallback error: ${result.error}`);
           }
         } catch (err) {
-          log?.error(`[qqbot:${account.accountId}] Tool fallback failed: ${String(err)}`);
+          log?.error(`Tool fallback failed: ${String(err)}`);
         }
       }
       return;
@@ -318,7 +318,7 @@ export async function dispatchOutbound(
       },
       onError: async (err: unknown) => {
         const errMsg = err instanceof Error ? err.message : String(err);
-        log?.error(`[qqbot:${account.accountId}] Dispatch error: ${errMsg}`);
+        log?.error(`Dispatch error: ${errMsg}`);
         hasResponse = true;
         if (timeoutId) {
           clearTimeout(timeoutId);

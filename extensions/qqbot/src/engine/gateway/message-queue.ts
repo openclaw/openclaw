@@ -93,7 +93,7 @@ export interface MessageQueue {
  * Messages are serialized per user and processed in parallel across users.
  */
 export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
-  const { accountId, log } = ctx;
+  const { accountId: _accountId, log } = ctx;
 
   const userQueues = new Map<string, QueuedMessage[]>();
   const activeUsers = new Set<string>();
@@ -116,9 +116,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
       return;
     }
     if (activeUsers.size >= MAX_CONCURRENT_USERS) {
-      log?.info(
-        `[qqbot:${accountId}] Max concurrent users (${MAX_CONCURRENT_USERS}) reached, ${peerId} will wait`,
-      );
+      log?.info(`Max concurrent users (${MAX_CONCURRENT_USERS}) reached, ${peerId} will wait`);
       return;
     }
 
@@ -140,9 +138,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
             messagesProcessed++;
           }
         } catch (err) {
-          log?.error(
-            `[qqbot:${accountId}] Message processor error for ${peerId}: ${formatErrorMessage(err)}`,
-          );
+          log?.error(`Message processor error for ${peerId}: ${formatErrorMessage(err)}`);
         }
       }
     } finally {
@@ -170,20 +166,20 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     if (queue.length >= PER_USER_QUEUE_SIZE) {
       const dropped = queue.shift();
       log?.error(
-        `[qqbot:${accountId}] Per-user queue full for ${peerId}, dropping oldest message ${dropped?.messageId}`,
+        `Per-user queue full for ${peerId}, dropping oldest message ${dropped?.messageId}`,
       );
     }
 
     totalEnqueued++;
     if (totalEnqueued > MESSAGE_QUEUE_SIZE) {
       log?.error(
-        `[qqbot:${accountId}] Global queue limit reached (${totalEnqueued}), message from ${peerId} may be delayed`,
+        `Global queue limit reached (${totalEnqueued}), message from ${peerId} may be delayed`,
       );
     }
 
     queue.push(msg);
     log?.debug?.(
-      `[qqbot:${accountId}] Message enqueued for ${peerId}, user queue: ${queue.length}, active users: ${activeUsers.size}`,
+      `Message enqueued for ${peerId}, user queue: ${queue.length}, active users: ${activeUsers.size}`,
     );
 
     void drainUserQueue(peerId);
@@ -192,7 +188,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const startProcessor = (handleMessageFn: (msg: QueuedMessage) => Promise<void>): void => {
     handleMessageFnRef = handleMessageFn;
     log?.debug?.(
-      `[qqbot:${accountId}] Message processor started (per-user concurrency, max ${MAX_CONCURRENT_USERS} users)`,
+      `Message processor started (per-user concurrency, max ${MAX_CONCURRENT_USERS} users)`,
     );
   };
 
@@ -224,7 +220,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const executeImmediate = (msg: QueuedMessage): void => {
     if (handleMessageFnRef) {
       handleMessageFnRef(msg).catch((err) => {
-        log?.error(`[qqbot:${accountId}] Immediate execution error: ${err}`);
+        log?.error(`Immediate execution error: ${err}`);
       });
     }
   };

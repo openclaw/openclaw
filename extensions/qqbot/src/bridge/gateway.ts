@@ -19,7 +19,9 @@ import {
   type CoreGatewayContext,
 } from "../engine/gateway/gateway.js";
 import type { GatewayAccount } from "../engine/gateway/types.js";
-import { initSender } from "../engine/messaging/sender.js";
+import { initSender, registerAccount } from "../engine/messaging/sender.js";
+import type { EngineLogger } from "../engine/types.js";
+import { debugLog, debugError } from "../engine/utils/log.js";
 import { registerTextChunker } from "../engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "../types.js";
 import { setBridgeLogger } from "./logger.js";
@@ -75,16 +77,20 @@ export interface GatewayContext {
 export async function startGateway(ctx: GatewayContext): Promise<void> {
   const runtime = getQQBotRuntimeForEngine();
 
-  // Inject framework logger into engine sender and bridge-layer modules.
-  if (ctx.log) {
-    initSender({ logger: ctx.log });
-    setBridgeLogger(ctx.log);
-  }
+  // Create per-account logger with auto [qqbot:{accountId}] prefix.
+  const accountLogger = createAccountLogger(ctx.log, ctx.account.accountId);
+
+  // Register into engine sender (per-appId logger + API config) and bridge layer.
+  registerAccount(ctx.account.appId, {
+    logger: accountLogger,
+    markdownSupport: ctx.account.markdownSupport,
+  });
+  setBridgeLogger(accountLogger);
 
   registerTextChunker((text, limit) => runtime.channel.text.chunkMarkdownText(text, limit));
 
   if (ctx.channelRuntime) {
-    ctx.log?.info?.(`[qqbot:${ctx.account.accountId}] Registering approval.native runtime context`);
+    accountLogger.info("Registering approval.native runtime context");
     const lease = ctx.channelRuntime.runtimeContexts.register({
       channelId: "qqbot",
       accountId: ctx.account.accountId,
@@ -92,13 +98,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       context: { account: ctx.account },
       abortSignal: ctx.abortSignal,
     });
-    ctx.log?.info?.(
-      `[qqbot:${ctx.account.accountId}] approval.native context registered (lease=${!!lease})`,
-    );
+    accountLogger.info(`approval.native context registered (lease=${!!lease})`);
   } else {
-    ctx.log?.info?.(
-      `[qqbot:${ctx.account.accountId}] No channelRuntime — skipping approval.native registration`,
-    );
+    accountLogger.info("No channelRuntime — skipping approval.native registration");
   }
 
   const coreCtx: CoreGatewayContext = {
@@ -107,9 +109,38 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     cfg: ctx.cfg,
     onReady: ctx.onReady,
     onError: ctx.onError,
-    log: ctx.log,
+    log: accountLogger,
     runtime,
   };
 
   return coreStartGateway(coreCtx);
+}
+
+// ============ Per-account logger factory ============
+
+/**
+ * Create an EngineLogger that auto-prefixes all messages with `[qqbot:{accountId}]`.
+ *
+ * Follows the WhatsApp pattern of per-connection loggers — each account gets
+ * its own logger instance so multi-account logs are automatically attributed.
+ */
+function createAccountLogger(
+  raw: GatewayContext["log"] | undefined,
+  accountId: string,
+): EngineLogger {
+  const prefix = `[${accountId}]`;
+  if (!raw) {
+    return {
+      info: (msg) => debugLog(`${prefix} ${msg}`),
+      error: (msg) => debugError(`${prefix} ${msg}`),
+      warn: (msg) => debugError(`${prefix} ${msg}`),
+      debug: (msg) => debugLog(`${prefix} ${msg}`),
+    };
+  }
+  return {
+    info: (msg) => raw.info(`${prefix} ${msg}`),
+    error: (msg) => raw.error(`${prefix} ${msg}`),
+    warn: (msg) => raw.error(`${prefix} ${msg}`),
+    debug: (msg) => raw.debug?.(`${prefix} ${msg}`),
+  };
 }

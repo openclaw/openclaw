@@ -54,7 +54,7 @@ export async function trySlashCommand(
     (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
   );
   if (isUrgentCommand) {
-    log?.info(`[qqbot:${account.accountId}] Urgent command detected: ${content.slice(0, 20)}`);
+    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
     return "urgent";
   }
 
@@ -85,7 +85,7 @@ export async function trySlashCommand(
       return "enqueue";
     }
 
-    log?.debug?.(`[qqbot:${account.accountId}] Slash command matched: ${content}`);
+    log?.debug?.(`Slash command matched: ${content}`);
 
     const isFileResult = typeof reply === "object" && reply !== null && "filePath" in reply;
     const replyText = isFileResult ? (reply as { text: string }).text : reply;
@@ -123,20 +123,17 @@ export async function trySlashCommand(
             targetId,
             account,
             replyToId: msg.messageId,
-            logPrefix: `[qqbot:${account.accountId}]`,
           },
           replyFile,
         );
       } catch (fileErr) {
-        log?.error(
-          `[qqbot:${account.accountId}] Failed to send slash command file: ${String(fileErr)}`,
-        );
+        log?.error(`Failed to send slash command file: ${String(fileErr)}`);
       }
     }
 
     return "handled";
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] Slash command error: ${String(err)}`);
+    log?.error(`Slash command error: ${String(err)}`);
     return "enqueue";
   }
 }

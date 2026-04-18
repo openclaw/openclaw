@@ -47,7 +47,6 @@ function buildMediaTarget(
     targetType: from.targetType,
     targetId: from.targetId,
     account: account as unknown as MediaTargetContext["account"],
-    logPrefix: `[qqbot:${account.accountId}]`,
   };
 }
 
@@ -68,7 +67,7 @@ export async function dispatchFrameworkSlashResult({
         allowQQBotDataDownloads: true,
       });
     } catch (err) {
-      logger?.warn(`[qqbot:${account.accountId}] framework slash file send failed: ${String(err)}`);
+      logger?.warn(`framework slash file send failed: ${String(err)}`);
     }
     return { text: result.text };
   }

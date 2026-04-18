@@ -33,7 +33,6 @@ export interface MediaTargetContext {
   targetId: string;
   account: GatewayAccount;
   replyToId?: string;
-  logPrefix?: string;
 }
 
 /** Media send result. */
@@ -107,7 +106,6 @@ export type ConsumeQuoteRefFn = () => string | undefined;
 function resolveMediaTargetContext(
   event: DeliverEventContext,
   account: GatewayAccount,
-  prefix: string,
 ): MediaTargetContext {
   return {
     targetType:
@@ -128,7 +126,6 @@ function resolveMediaTargetContext(
             : event.channelId!,
     account,
     replyToId: event.messageId,
-    logPrefix: prefix,
   };
 }
 
@@ -199,7 +196,6 @@ async function sendTextChunks(
   deps: DeliverDeps,
 ): Promise<void> {
   const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
   const chunks = deps.chunkText(text, TEXT_CHUNK_LIMIT);
   await sendTextChunksWithRetry({
     account,
@@ -210,8 +206,8 @@ async function sendTextChunks(
     allowDm: true,
     log,
     onSuccess: (chunk) =>
-      `${prefix} Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
-    onError: (err) => `${prefix} Failed to send text chunk: ${formatErrorMessage(err)}`,
+      `Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
+    onError: (err) => `Failed to send text chunk: ${formatErrorMessage(err)}`,
   });
 }
 
@@ -292,7 +288,6 @@ async function sendVoiceWithTimeout(
   account: GatewayAccount,
   mediaSender: MediaSender,
   log: DeliverAccountContext["log"],
-  prefix: string,
 ): Promise<void> {
   const uploadFormats =
     account.config?.audioFormatPolicy?.uploadDirectFormats ??
@@ -304,7 +299,7 @@ async function sendVoiceWithTimeout(
     const result = await Promise.race([
       mediaSender.sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
         if (ac.signal.aborted) {
-          log?.debug?.(`${prefix} sendVoice completed after timeout, suppressing late delivery`);
+          log?.debug?.(`sendVoice completed after timeout, suppressing late delivery`);
           return {
             channel: "qqbot",
             error: "Voice send completed after timeout (suppressed)",
@@ -320,10 +315,10 @@ async function sendVoiceWithTimeout(
       ),
     ]);
     if (result.error) {
-      log?.error(`${prefix} sendVoice error: ${result.error}`);
+      log?.error(`sendVoice error: ${result.error}`);
     }
   } catch (err) {
-    log?.error(`${prefix} sendVoice unexpected error: ${formatErrorMessage(err)}`);
+    log?.error(`sendVoice unexpected error: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -344,7 +339,6 @@ export async function parseAndSendMediaTags(
   deps: DeliverDeps,
 ): Promise<{ handled: boolean; normalizedText: string }> {
   const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
 
   const text = normalizeMediaTags(replyText);
 
@@ -365,7 +359,7 @@ export async function parseAndSendMediaTags(
     {} as Record<string, number>,
   );
   log?.debug?.(
-    `${prefix} Detected media tags: ${Object.entries(tagCounts)
+    `Detected media tags: ${Object.entries(tagCounts)
       .map(([k, v]) => `${v} <${k}>`)
       .join(", ")}`,
   );
@@ -391,7 +385,7 @@ export async function parseAndSendMediaTags(
     }
 
     const tagName = normalizeLowercaseStringOrEmpty(match[1]);
-    const mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log, prefix);
+    const mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log);
 
     if (mediaPath) {
       const typeMap: Record<string, QueueItem["type"]> = {
@@ -402,7 +396,7 @@ export async function parseAndSendMediaTags(
       };
       const itemType = typeMap[tagName] ?? "image";
       sendQueue.push({ type: itemType, content: mediaPath });
-      log?.debug?.(`${prefix} Found ${itemType} in <${tagName}>: ${mediaPath}`);
+      log?.debug?.(`Found ${itemType} in <${tagName}>: ${mediaPath}`);
     }
 
     lastIndex = match.index + match[0].length;
@@ -416,9 +410,9 @@ export async function parseAndSendMediaTags(
     sendQueue.push({ type: "text", content: filterInternalMarkers(textAfter) });
   }
 
-  log?.debug?.(`${prefix} Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
+  log?.debug?.(`Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-  const mediaTarget = resolveMediaTargetContext(event, account, prefix);
+  const mediaTarget = resolveMediaTargetContext(event, account);
 
   for (const item of sendQueue) {
     if (item.type === "text") {
@@ -429,21 +423,21 @@ export async function parseAndSendMediaTags(
         imageUrl: item.content,
         mediaSender: deps.mediaSender,
         log,
-        onError: (error) => `${prefix} sendPhoto error: ${error}`,
+        onError: (error) => `sendPhoto error: ${error}`,
       });
     } else if (item.type === "voice") {
-      await sendVoiceWithTimeout(mediaTarget, item.content, account, deps.mediaSender, log, prefix);
+      await sendVoiceWithTimeout(mediaTarget, item.content, account, deps.mediaSender, log);
     } else if (item.type === "video") {
       await sendWithResultLogging({
         run: async () => await deps.mediaSender.sendVideoMsg(mediaTarget, item.content),
         log,
-        onError: (error) => `${prefix} sendVideoMsg error: ${error}`,
+        onError: (error) => `sendVideoMsg error: ${error}`,
       });
     } else if (item.type === "file") {
       await sendWithResultLogging({
         run: async () => await deps.mediaSender.sendDocument(mediaTarget, item.content),
         log,
-        onError: (error) => `${prefix} sendDocument error: ${error}`,
+        onError: (error) => `sendDocument error: ${error}`,
       });
     } else if (item.type === "media") {
       await sendWithResultLogging({
@@ -457,7 +451,7 @@ export async function parseAndSendMediaTags(
             account,
           }),
         log,
-        onError: (error) => `${prefix} sendMedia(auto) error: ${error}`,
+        onError: (error) => `sendMedia(auto) error: ${error}`,
       });
     }
   }
@@ -488,7 +482,6 @@ export async function sendPlainReply(
   deps: DeliverDeps,
 ): Promise<void> {
   const { account, qualifiedTarget, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
 
   const collectedImageUrls: string[] = [];
   const localMediaToSend: string[] = [];
@@ -503,7 +496,7 @@ export async function sendPlainReply(
       if (!collectedImageUrls.includes(url)) {
         collectedImageUrls.push(url);
         log?.debug?.(
-          `${prefix} Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : url.slice(0, 80) + "..."}`,
+          `Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : url.slice(0, 80) + "..."}`,
         );
       }
       return true;
@@ -511,7 +504,7 @@ export async function sendPlainReply(
     if (isLocalFilePath(url)) {
       if (!localMediaToSend.includes(url)) {
         localMediaToSend.push(url);
-        log?.debug?.(`${prefix} Collected local media for auto-routing: ${url}`);
+        log?.debug?.(`Collected local media for auto-routing: ${url}`);
       }
       return true;
     }
@@ -535,11 +528,11 @@ export async function sendPlainReply(
     if (url && !collectedImageUrls.includes(url)) {
       if (url.startsWith("http://") || url.startsWith("https://")) {
         collectedImageUrls.push(url);
-        log?.debug?.(`${prefix} Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
+        log?.debug?.(`Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
       } else if (isLocalFilePath(url)) {
         if (!localMediaToSend.includes(url)) {
           localMediaToSend.push(url);
-          log?.debug?.(`${prefix} Collected local media from markdown for auto-routing: ${url}`);
+          log?.debug?.(`Collected local media from markdown for auto-routing: ${url}`);
         }
       }
     }
@@ -553,12 +546,12 @@ export async function sendPlainReply(
     const url = m[1];
     if (url && !collectedImageUrls.includes(url)) {
       collectedImageUrls.push(url);
-      log?.debug?.(`${prefix} Extracted bare image URL: ${url.slice(0, 80)}...`);
+      log?.debug?.(`Extracted bare image URL: ${url.slice(0, 80)}...`);
     }
   }
 
   const useMarkdown = account.markdownSupport;
-  log?.debug?.(`${prefix} Markdown mode: ${useMarkdown}, images: ${collectedImageUrls.length}`);
+  log?.debug?.(`Markdown mode: ${useMarkdown}, images: ${collectedImageUrls.length}`);
 
   let textWithoutImages = filterInternalMarkers(replyText);
 
@@ -597,9 +590,7 @@ export async function sendPlainReply(
 
   // Send local media collected from payload.mediaUrl or markdown local paths.
   if (localMediaToSend.length > 0) {
-    log?.debug?.(
-      `${prefix} Sending ${localMediaToSend.length} local media via sendMedia auto-routing`,
-    );
+    log?.debug?.(`Sending ${localMediaToSend.length} local media via sendMedia auto-routing`);
     await autoMediaBatch({
       qualifiedTarget,
       account,
@@ -607,18 +598,16 @@ export async function sendPlainReply(
       mediaUrls: localMediaToSend,
       mediaSender: deps.mediaSender,
       log,
-      onSuccess: (mediaPath) => `${prefix} Sent local media: ${mediaPath}`,
-      onResultError: (mediaPath, error) =>
-        `${prefix} sendMedia(auto) error for ${mediaPath}: ${error}`,
-      onThrownError: (mediaPath, error) =>
-        `${prefix} sendMedia(auto) failed for ${mediaPath}: ${error}`,
+      onSuccess: (mediaPath) => `Sent local media: ${mediaPath}`,
+      onResultError: (mediaPath, error) => `sendMedia(auto) error for ${mediaPath}: ${error}`,
+      onThrownError: (mediaPath, error) => `sendMedia(auto) failed for ${mediaPath}: ${error}`,
     });
   }
 
   // Forward media gathered during the tool phase.
   if (toolMediaUrls.length > 0) {
     log?.debug?.(
-      `${prefix} Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
+      `Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
     );
     await autoMediaBatch({
       qualifiedTarget,
@@ -627,9 +616,9 @@ export async function sendPlainReply(
       mediaUrls: toolMediaUrls,
       mediaSender: deps.mediaSender,
       log,
-      onSuccess: (mediaUrl) => `${prefix} Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
-      onResultError: (_mediaUrl, error) => `${prefix} Tool media forward error: ${error}`,
-      onThrownError: (_mediaUrl, error) => `${prefix} Tool media forward failed: ${error}`,
+      onSuccess: (mediaUrl) => `Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
+      onResultError: (_mediaUrl, error) => `Tool media forward error: ${error}`,
+      onThrownError: (_mediaUrl, error) => `Tool media forward failed: ${error}`,
     });
     toolMediaUrls.length = 0;
   }
@@ -649,7 +638,6 @@ async function sendMarkdownReply(
   deps: DeliverDeps,
 ): Promise<void> {
   const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
 
   const httpImageUrls: string[] = [];
   const base64ImageUrls: string[] = [];
@@ -661,12 +649,12 @@ async function sendMarkdownReply(
     }
   }
   log?.debug?.(
-    `${prefix} Image classification: httpUrls=${httpImageUrls.length}, base64=${base64ImageUrls.length}`,
+    `Image classification: httpUrls=${httpImageUrls.length}, base64=${base64ImageUrls.length}`,
   );
 
   // Send Base64 images via Rich Media API.
   if (base64ImageUrls.length > 0) {
-    log?.debug?.(`${prefix} Sending ${base64ImageUrls.length} image(s) via Rich Media API...`);
+    log?.debug?.(`Sending ${base64ImageUrls.length} image(s) via Rich Media API...`);
     for (const imageUrl of base64ImageUrls) {
       try {
         const target = buildDeliveryTarget(event);
@@ -676,15 +664,11 @@ async function sendMarkdownReply(
             await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
           });
         } else {
-          log?.debug?.(
-            `${prefix} ${target.type} does not support rich media, skipping Base64 image`,
-          );
+          log?.debug?.(`${target.type} does not support rich media, skipping Base64 image`);
         }
-        log?.debug?.(
-          `${prefix} Sent Base64 image via Rich Media API (size: ${imageUrl.length} chars)`,
-        );
+        log?.debug?.(`Sent Base64 image via Rich Media API (size: ${imageUrl.length} chars)`);
       } catch (imgErr) {
-        log?.error(`${prefix} Failed to send Base64 image via Rich Media API: ${String(imgErr)}`);
+        log?.error(`Failed to send Base64 image via Rich Media API: ${String(imgErr)}`);
       }
     }
   }
@@ -699,12 +683,10 @@ async function sendMarkdownReply(
         const size = await getImageSize(url);
         imagesToAppend.push(formatQQBotMarkdownImage(url, size));
         log?.debug?.(
-          `${prefix} Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
+          `Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
         );
       } catch (err) {
-        log?.debug?.(
-          `${prefix} Failed to get image size, using default: ${formatErrorMessage(err)}`,
-        );
+        log?.debug?.(`Failed to get image size, using default: ${formatErrorMessage(err)}`);
         imagesToAppend.push(formatQQBotMarkdownImage(url, null));
       }
     }
@@ -721,11 +703,11 @@ async function sendMarkdownReply(
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));
         log?.debug?.(
-          `${prefix} Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${imgUrl.slice(0, 60)}...`,
+          `Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${imgUrl.slice(0, 60)}...`,
         );
       } catch (err) {
         log?.debug?.(
-          `${prefix} Failed to get image size for existing md, using default: ${formatErrorMessage(err)}`,
+          `Failed to get image size for existing md, using default: ${formatErrorMessage(err)}`,
         );
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, null));
       }
@@ -755,9 +737,8 @@ async function sendMarkdownReply(
       allowDm: true,
       log,
       onSuccess: (chunk) =>
-        `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
-      onError: (err) =>
-        `${prefix} Failed to send markdown message chunk: ${formatErrorMessage(err)}`,
+        `Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
+      onError: (err) => `Failed to send markdown message chunk: ${formatErrorMessage(err)}`,
     });
   }
 }
@@ -776,9 +757,8 @@ async function sendPlainTextReply(
   deps: DeliverDeps,
 ): Promise<void> {
   const { account, log } = actx;
-  const prefix = `[qqbot:${account.accountId}]`;
 
-  const imgMediaTarget = resolveMediaTargetContext(event, account, prefix);
+  const imgMediaTarget = resolveMediaTargetContext(event, account);
 
   let result = textWithoutImages;
   for (const m of mdMatches) {
@@ -800,9 +780,8 @@ async function sendPlainTextReply(
         imageUrl,
         mediaSender: deps.mediaSender,
         log,
-        onSuccess: (nextImageUrl) =>
-          `${prefix} Sent image via sendPhoto: ${nextImageUrl.slice(0, 80)}...`,
-        onError: (error) => `${prefix} Failed to send image: ${error}`,
+        onSuccess: (nextImageUrl) => `Sent image via sendPhoto: ${nextImageUrl.slice(0, 80)}...`,
+        onError: (error) => `Failed to send image: ${error}`,
       });
     }
 
@@ -817,11 +796,11 @@ async function sendPlainTextReply(
         allowDm: false,
         log,
         onSuccess: (chunk) =>
-          `${prefix} Sent text chunk (${chunk.length}/${result.length} chars) (${event.type})`,
-        onError: (err) => `${prefix} Send failed: ${formatErrorMessage(err)}`,
+          `Sent text chunk (${chunk.length}/${result.length} chars) (${event.type})`,
+        onError: (err) => `Send failed: ${formatErrorMessage(err)}`,
       });
     }
   } catch (err) {
-    log?.error(`${prefix} Send failed: ${formatErrorMessage(err)}`);
+    log?.error(`Send failed: ${formatErrorMessage(err)}`);
   }
 }

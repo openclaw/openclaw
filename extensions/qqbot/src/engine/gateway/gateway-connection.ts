@@ -90,9 +90,7 @@ export class GatewayConnection {
     if (saved) {
       this.sessionId = saved.sessionId;
       this.lastSeq = saved.lastSeq;
-      log?.info(
-        `[qqbot:${account.accountId}] Restored session: sessionId=${this.sessionId}, lastSeq=${this.lastSeq}`,
-      );
+      log?.info(`Restored session: sessionId=${this.sessionId}, lastSeq=${this.lastSeq}`);
     }
   }
 
@@ -147,9 +145,9 @@ export class GatewayConnection {
   // ============ Reconnect ============
 
   private scheduleReconnect(customDelay?: number): void {
-    const { account, log } = this.ctx;
+    const { account: _account, log } = this.ctx;
     if (this.isAborted || this.reconnect.isExhausted()) {
-      log?.error(`[qqbot:${account.accountId}] Max reconnect attempts reached or aborted`);
+      log?.error(`Max reconnect attempts reached or aborted`);
       return;
     }
     if (this.reconnectTimer) {
@@ -171,7 +169,7 @@ export class GatewayConnection {
     const { account, log } = this.ctx;
 
     if (this.isConnecting) {
-      log?.debug?.(`[qqbot:${account.accountId}] Already connecting, skip`);
+      log?.debug?.(`Already connecting, skip`);
       return;
     }
     this.isConnecting = true;
@@ -179,15 +177,15 @@ export class GatewayConnection {
     try {
       this.cleanup();
       if (this.shouldRefreshToken) {
-        log?.debug?.(`[qqbot:${account.accountId}] Refreshing token...`);
+        log?.debug?.(`Refreshing token...`);
         clearTokenCache(account.appId);
         this.shouldRefreshToken = false;
       }
 
       const accessToken = await getAccessToken(account.appId, account.clientSecret);
-      log?.info(`[qqbot:${account.accountId}] ✅ Access token obtained successfully`);
-      const gatewayUrl = await getGatewayUrl(accessToken);
-      log?.info(`[qqbot:${account.accountId}] Connecting to ${gatewayUrl}`);
+      log?.info(`✅ Access token obtained successfully`);
+      const gatewayUrl = await getGatewayUrl(accessToken, account.appId);
+      log?.info(`Connecting to ${gatewayUrl}`);
 
       const ws = new WebSocket(gatewayUrl, {
         headers: { "User-Agent": getPluginUserAgent() },
@@ -216,7 +214,7 @@ export class GatewayConnection {
 
       // ---- WebSocket: open ----
       ws.on("open", () => {
-        log?.info(`[qqbot:${account.accountId}] WebSocket connected`);
+        log?.info(`WebSocket connected`);
         this.isConnecting = false;
         this.reconnect.onConnected();
         this.msgQueue.startProcessor(this.ctx.handleMessage);
@@ -241,9 +239,7 @@ export class GatewayConnection {
               break;
 
             case GatewayOp.DISPATCH: {
-              log?.debug?.(
-                `[qqbot:${account.accountId}] Dispatch event: t=${t}, d=${JSON.stringify(d)}`,
-              );
+              log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
               const result = dispatchEvent(t ?? "", d, account.accountId, log);
               if (result.action === "ready") {
                 this.sessionId = result.sessionId;
@@ -282,28 +278,26 @@ export class GatewayConnection {
             }
           }
         } catch (err) {
-          log?.error(
-            `[qqbot:${account.accountId}] Message parse error: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          log?.error(`Message parse error: ${err instanceof Error ? err.message : String(err)}`);
         }
       });
 
       // ---- WebSocket: close ----
       ws.on("close", (code, reason) => {
-        log?.info(`[qqbot:${account.accountId}] WebSocket closed: ${code} ${reason.toString()}`);
+        log?.info(`WebSocket closed: ${code} ${reason.toString()}`);
         this.isConnecting = false;
         this.handleClose(code);
       });
 
       // ---- WebSocket: error ----
       ws.on("error", (err) => {
-        log?.error(`[qqbot:${account.accountId}] WebSocket error: ${err.message}`);
+        log?.error(`WebSocket error: ${err.message}`);
         this.ctx.onError?.(err);
       });
     } catch (err) {
       this.isConnecting = false;
       const errMsg = err instanceof Error ? err.message : String(err);
-      log?.error(`[qqbot:${account.accountId}] Connection failed: ${errMsg}`);
+      log?.error(`Connection failed: ${errMsg}`);
       if (errMsg.includes("Too many requests") || errMsg.includes("100001")) {
         this.scheduleReconnect(RATE_LIMIT_DELAY);
       } else {

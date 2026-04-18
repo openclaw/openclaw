@@ -34,7 +34,6 @@ export class TypingKeepAlive {
       error: (msg: string) => void;
       debug?: (msg: string) => void;
     },
-    private readonly logPrefix = "[qqbot]",
   ) {}
 
   /** Start periodic keep-alive sends. */
@@ -64,7 +63,7 @@ export class TypingKeepAlive {
     try {
       const token = await this.getToken();
       await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
-      this.log?.debug?.(`${this.logPrefix} Typing keep-alive sent to ${this.openid}`);
+      this.log?.debug?.(`Typing keep-alive sent to ${this.openid}`);
     } catch (err) {
       try {
         this.clearCache();
@@ -72,7 +71,7 @@ export class TypingKeepAlive {
         await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
       } catch {
         this.log?.debug?.(
-          `${this.logPrefix} Typing keep-alive failed for ${this.openid}: ${formatErrorMessage(err)}`,
+          `Typing keep-alive failed for ${this.openid}: ${formatErrorMessage(err)}`,
         );
       }
     }

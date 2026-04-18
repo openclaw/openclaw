@@ -1,22 +1,27 @@
 /**
- * Unified message sender — singleton management + business function layer.
+ * Unified message sender — per-account resource management + business function layer.
  *
  * This module is the **single entry point** for all QQ Bot API operations.
- * It replaces the old `api/facade.ts` by combining:
- * 1. Singleton lifecycle management (ApiClient, TokenManager, MessageApi, MediaApi)
- * 2. Unified message routing by target type (c2c / group / channel / dm)
- * 3. Token retry, gateway URL, background refresh, and other infrastructure
  *
  * ## Architecture
  *
+ * Each account gets its own isolated resource stack:
+ *
  * ```
+ * _accountRegistry: Map<appId, AccountContext>
+ *
+ * AccountContext {
+ *   logger      — per-account prefixed logger
+ *   client      — per-account ApiClient
+ *   tokenMgr    — per-account TokenManager
+ *   mediaApi    — per-account MediaApi
+ *   messageApi  — per-account MessageApi
+ * }
+ * ```
+ *
  * Upper-layer callers (gateway, outbound, reply-dispatcher, proactive)
- *   └── sender.ts (this file)
- *         ├── MessageApi  — text + proactive + channel + dm + input notify
- *         ├── MediaApi    — upload + send media message
- *         ├── TokenManager — token cache + background refresh
- *         └── ApiClient   — low-level HTTP
- * ```
+ * always go through exported functions that resolve the correct
+ * `AccountContext` by appId.
  */
 
 import os from "node:os";
@@ -60,25 +65,15 @@ export function getPluginUserAgent(): string {
 }
 
 /**
- * Initialize sender with the plugin version and optional framework logger.
+ * Initialize sender with the plugin version.
  * Must be called once during startup before any API calls.
- *
- * When `logger` is provided, all API-layer logs (token refresh, HTTP requests)
- * flow through the framework log system instead of the QQBOT_DEBUG gate.
  */
-export function initSender(options: {
-  pluginVersion?: string;
-  openclawVersion?: string;
-  logger?: EngineLogger;
-}): void {
+export function initSender(options: { pluginVersion?: string; openclawVersion?: string }): void {
   if (options.pluginVersion) {
     _pluginVersion = options.pluginVersion;
   }
   if (options.openclawVersion) {
     _openclawVersion = options.openclawVersion;
-  }
-  if (options.logger) {
-    _frameworkLogger = options.logger;
   }
 }
 
@@ -89,32 +84,40 @@ export function setOpenClawVersion(version: string): void {
   }
 }
 
-// ============ Lazy singleton instances ============
+// ============ Per-account resource management ============
 
-/** Framework logger injected via initSender(). Falls back to debugLog when absent. */
-let _frameworkLogger: EngineLogger | null = null;
+/** Complete resource context for a single account. */
+interface AccountContext {
+  logger: EngineLogger;
+  client: ApiClient;
+  tokenMgr: TokenManager;
+  mediaApi: MediaApiClass;
+  messageApi: MessageApiClass;
+  markdownSupport: boolean;
+}
 
-const _logger: EngineLogger = {
-  info: (msg: string) => (_frameworkLogger ? _frameworkLogger.info(msg) : debugLog(msg)),
-  error: (msg: string) => (_frameworkLogger ? _frameworkLogger.error(msg) : debugError(msg)),
-  warn: (msg: string) => (_frameworkLogger?.warn ? _frameworkLogger.warn(msg) : debugWarn(msg)),
-  debug: (msg: string) => (_frameworkLogger?.debug ? _frameworkLogger.debug(msg) : debugLog(msg)),
+/** Per-appId account registry — each account owns all its resources. */
+const _accountRegistry = new Map<string, AccountContext>();
+
+/** Fallback logger for unregistered accounts (CLI / test scenarios). */
+const _fallbackLogger: EngineLogger = {
+  info: (msg: string) => debugLog(msg),
+  error: (msg: string) => debugError(msg),
+  warn: (msg: string) => debugWarn(msg),
+  debug: (msg: string) => debugLog(msg),
 };
 
-let _client: ApiClient | null = null;
-let _tokenMgr: TokenManager | null = null;
-let _mediaApi: MediaApiClass | null = null;
-
-function _ensureInitialized(): void {
-  if (_client) {
-    return;
-  }
-  // Pass buildUserAgent as a getter so UA changes propagate automatically
-  // without rebuilding client/tokenMgr or clearing the appRegistry.
-  _client = new ApiClient({ logger: _logger, userAgent: buildUserAgent });
-  _tokenMgr = new TokenManager({ logger: _logger, userAgent: buildUserAgent });
-  _mediaApi = new MediaApiClass(_client, _tokenMgr, {
-    logger: _logger,
+/**
+ * Build a full resource stack for a given logger.
+ *
+ * Shared by both `registerAccount` (explicit registration) and
+ * `resolveAccount` (lazy fallback for unregistered accounts).
+ */
+function buildAccountContext(logger: EngineLogger, markdownSupport: boolean): AccountContext {
+  const client = new ApiClient({ logger, userAgent: buildUserAgent });
+  const tokenMgr = new TokenManager({ logger, userAgent: buildUserAgent });
+  const mediaApi = new MediaApiClass(client, tokenMgr, {
+    logger,
     uploadCache: {
       computeHash: computeFileHash,
       get: (hash: string, scope: string, targetId: string, fileType: number) =>
@@ -131,71 +134,92 @@ function _ensureInitialized(): void {
     },
     sanitizeFileName,
   });
+  const messageApi = new MessageApiClass(client, tokenMgr, {
+    markdownSupport,
+    logger,
+  });
+
+  return { logger, client, tokenMgr, mediaApi, messageApi, markdownSupport };
 }
 
-function client(): ApiClient {
-  _ensureInitialized();
-  return _client!;
-}
-
-function tokenMgr(): TokenManager {
-  _ensureInitialized();
-  return _tokenMgr!;
-}
-
-function mediaApi(): MediaApiClass {
-  _ensureInitialized();
-  return _mediaApi!;
-}
-
-/** Per-appId registry — holds MessageApi instance and config. */
-interface AppEntry {
-  messageApi: MessageApiClass;
-  markdownSupport: boolean;
-}
-
-const _appRegistry = new Map<string, AppEntry>();
-
-function getOrCreateAppEntry(appId: string): AppEntry {
+/**
+ * Register an account — atomically sets up all per-appId resources.
+ *
+ * Must be called once per account during gateway startup.
+ * Creates a complete isolated resource stack (ApiClient, TokenManager,
+ * MediaApi, MessageApi) with the per-account logger.
+ */
+export function registerAccount(
+  appId: string,
+  options: {
+    logger: EngineLogger;
+    markdownSupport?: boolean;
+  },
+): void {
   const key = appId.trim();
-  let entry = _appRegistry.get(key);
-  if (!entry) {
-    entry = {
-      messageApi: new MessageApiClass(client(), tokenMgr(), {
-        markdownSupport: false,
-        logger: _logger,
-      }),
-      markdownSupport: false,
-    };
-    _appRegistry.set(key, entry);
-  }
-  return entry;
+  const md = options.markdownSupport === true;
+  _accountRegistry.set(key, buildAccountContext(options.logger, md));
 }
 
-function getOrCreateMessageApi(appId: string): MessageApiClass {
-  return getOrCreateAppEntry(appId).messageApi;
+/**
+ * Initialize per-app API behavior such as markdown support.
+ *
+ * If the account was already registered via `registerAccount()`, updates its
+ * MessageApi with the new markdown setting while preserving the existing
+ * logger and resource stack. Otherwise creates a new context.
+ */
+export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
+  const key = appId.trim();
+  const md = options.markdownSupport === true;
+  const existing = _accountRegistry.get(key);
+  if (existing) {
+    // Re-create only MessageApi with updated config, reuse existing stack.
+    existing.messageApi = new MessageApiClass(existing.client, existing.tokenMgr, {
+      markdownSupport: md,
+      logger: existing.logger,
+    });
+    existing.markdownSupport = md;
+  } else {
+    _accountRegistry.set(key, buildAccountContext(_fallbackLogger, md));
+  }
+}
+
+/**
+ * Resolve the AccountContext for a given appId.
+ *
+ * If the account was registered via `registerAccount()`, returns the
+ * pre-built context. Otherwise lazily creates a fallback context.
+ */
+function resolveAccount(appId: string): AccountContext {
+  const key = appId.trim();
+  let ctx = _accountRegistry.get(key);
+  if (!ctx) {
+    ctx = buildAccountContext(_fallbackLogger, false);
+    _accountRegistry.set(key, ctx);
+  }
+  return ctx;
 }
 
 // ============ Instance getters (for advanced callers) ============
 
-/** Get or create a MessageApi instance for the given appId. */
+/** Get the MessageApi instance for the given appId. */
 export function getMessageApi(appId: string): MessageApiClass {
-  return getOrCreateMessageApi(appId);
+  return resolveAccount(appId).messageApi;
 }
 
-/** Get the shared MediaApi instance. */
-export function getMediaApi(): MediaApiClass {
-  return mediaApi();
+/** Get the MediaApi instance for the given appId. */
+export function getMediaApi(appId: string): MediaApiClass {
+  return resolveAccount(appId).mediaApi;
 }
 
-/** Get the shared TokenManager instance. */
-export function getTokenManager(): TokenManager {
-  return tokenMgr();
+/** Get the TokenManager instance for the given appId. */
+export function getTokenManager(appId: string): TokenManager {
+  return resolveAccount(appId).tokenMgr;
 }
 
-/** Get the shared ApiClient instance. */
-export function getApiClient(): ApiClient {
-  return client();
+/** Get the ApiClient instance for the given appId. */
+export function getApiClient(appId: string): ApiClient {
+  return resolveAccount(appId).client;
 }
 
 // ============ Per-appId config ============
@@ -204,42 +228,35 @@ type OnMessageSentCallback = (refIdx: string, meta: OutboundMeta) => void;
 
 /** Register an outbound-message hook scoped to one appId. */
 export function onMessageSent(appId: string, callback: OnMessageSentCallback): void {
-  const key = appId.trim();
-  const api = getOrCreateMessageApi(key);
-  api.onMessageSent(callback);
-}
-
-/** Initialize per-app API behavior such as markdown support. */
-export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
-  const key = appId.trim();
-  const md = options.markdownSupport === true;
-  const messageApi = new MessageApiClass(client(), tokenMgr(), {
-    markdownSupport: md,
-    logger: _logger,
-  });
-  _appRegistry.set(key, { messageApi, markdownSupport: md });
+  resolveAccount(appId).messageApi.onMessageSent(callback);
 }
 
 /** Return whether markdown is enabled for the given appId. */
 export function isMarkdownSupport(appId: string): boolean {
-  return _appRegistry.get(appId.trim())?.markdownSupport ?? false;
+  return _accountRegistry.get(appId.trim())?.markdownSupport ?? false;
 }
 
 // ============ Token management ============
 
 export async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
-  return tokenMgr().getAccessToken(appId, clientSecret);
+  return resolveAccount(appId).tokenMgr.getAccessToken(appId, clientSecret);
 }
 
 export function clearTokenCache(appId?: string): void {
-  tokenMgr().clearCache(appId);
+  if (appId) {
+    resolveAccount(appId).tokenMgr.clearCache(appId);
+  } else {
+    for (const ctx of _accountRegistry.values()) {
+      ctx.tokenMgr.clearCache();
+    }
+  }
 }
 
 export function getTokenStatus(appId: string): {
   status: "valid" | "expired" | "refreshing" | "none";
   expiresAt: number | null;
 } {
-  return tokenMgr().getStatus(appId);
+  return resolveAccount(appId).tokenMgr.getStatus(appId);
 }
 
 export function startBackgroundTokenRefresh(
@@ -257,21 +274,39 @@ export function startBackgroundTokenRefresh(
     };
   },
 ): void {
-  tokenMgr().startBackgroundRefresh(appId, clientSecret, options);
+  resolveAccount(appId).tokenMgr.startBackgroundRefresh(appId, clientSecret, options);
 }
 
 export function stopBackgroundTokenRefresh(appId?: string): void {
-  tokenMgr().stopBackgroundRefresh(appId);
+  if (appId) {
+    resolveAccount(appId).tokenMgr.stopBackgroundRefresh(appId);
+  } else {
+    for (const ctx of _accountRegistry.values()) {
+      ctx.tokenMgr.stopBackgroundRefresh();
+    }
+  }
 }
 
 export function isBackgroundTokenRefreshRunning(appId?: string): boolean {
-  return tokenMgr().isBackgroundRefreshRunning(appId);
+  if (appId) {
+    return resolveAccount(appId).tokenMgr.isBackgroundRefreshRunning(appId);
+  }
+  for (const ctx of _accountRegistry.values()) {
+    if (ctx.tokenMgr.isBackgroundRefreshRunning()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ============ Gateway URL ============
 
-export async function getGatewayUrl(accessToken: string): Promise<string> {
-  const data = await client().request<{ url: string }>(accessToken, "GET", "/gateway");
+export async function getGatewayUrl(accessToken: string, appId: string): Promise<string> {
+  const data = await resolveAccount(appId).client.request<{ url: string }>(
+    accessToken,
+    "GET",
+    "/gateway",
+  );
   return data.url;
 }
 
@@ -283,8 +318,9 @@ export async function acknowledgeInteraction(
   interactionId: string,
   code: 0 | 1 | 2 | 3 | 4 | 5 = 0,
 ): Promise<void> {
-  const token = await tokenMgr().getAccessToken(creds.appId, creds.clientSecret);
-  await client().request(token, "PUT", `/interactions/${interactionId}`, { code });
+  const ctx = resolveAccount(creds.appId);
+  const token = await ctx.tokenMgr.getAccessToken(creds.appId, creds.clientSecret);
+  await ctx.client.request(token, "PUT", `/interactions/${interactionId}`, { code });
 }
 
 // ============ Types ============
@@ -310,7 +346,7 @@ export async function withTokenRetry<T>(
   creds: AccountCreds,
   sendFn: (token: string) => Promise<T>,
   log?: EngineLogger,
-  accountId?: string,
+  _accountId?: string,
 ): Promise<T> {
   try {
     const token = await getAccessToken(creds.appId, creds.clientSecret);
@@ -318,7 +354,7 @@ export async function withTokenRetry<T>(
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
-      log?.debug?.(`[qqbot:${accountId ?? creds.appId}] Token may be expired, refreshing...`);
+      log?.debug?.(`Token may be expired, refreshing...`);
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
       return await sendFn(newToken);
@@ -331,13 +367,11 @@ export async function withTokenRetry<T>(
 
 /**
  * Notify the MessageApi onMessageSent hook after a media send.
- * Centralises the hook invocation that was previously duplicated 4× with
- * `as unknown as` casts.
  */
 function notifyMediaHook(appId: string, result: MessageResponse, meta: OutboundMeta): void {
   const refIdx = result.ext_info?.ref_idx;
   if (refIdx) {
-    getOrCreateMessageApi(appId).notifyMessageSent(refIdx, meta);
+    resolveAccount(appId).messageApi.notifyMessageSent(refIdx, meta);
   }
 }
 
@@ -355,7 +389,7 @@ export async function sendText(
   creds: AccountCreds,
   opts?: { msgId?: string; messageReference?: string },
 ): Promise<MessageResponse> {
-  const api = getOrCreateMessageApi(creds.appId);
+  const api = resolveAccount(creds.appId).messageApi;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
   if (target.type === "c2c" || target.type === "group") {
@@ -416,7 +450,7 @@ export async function sendInputNotify(opts: {
   msgId?: string;
   inputSecond?: number;
 }): Promise<{ refIdx?: string }> {
-  const api = getOrCreateMessageApi(opts.creds.appId);
+  const api = resolveAccount(opts.creds.appId).messageApi;
   const c: Credentials = { appId: opts.creds.appId, clientSecret: opts.creds.clientSecret };
   return api.sendInputNotify({
     openid: opts.openid,
@@ -430,7 +464,7 @@ export async function sendInputNotify(opts: {
  * Raw-token input notify — compatible with TypingKeepAlive's callback signature.
  */
 export function createRawInputNotifyFn(
-  _appId: string,
+  appId: string,
 ): (
   token: string,
   openid: string,
@@ -439,7 +473,7 @@ export function createRawInputNotifyFn(
 ) => Promise<unknown> {
   return async (token, openid, msgId, inputSecond) => {
     const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-    return client().request(token, "POST", `/v2/users/${openid}/messages`, {
+    return resolveAccount(appId).client.request(token, "POST", `/v2/users/${openid}/messages`, {
       msg_type: 6,
       input_notify: { input_type: 1, input_second: inputSecond },
       msg_seq: msgSeq,
@@ -463,6 +497,7 @@ export async function sendImage(
     throw new Error(`Image sending not supported for target type: ${target.type}`);
   }
 
+  const ctx = resolveAccount(creds.appId);
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
@@ -478,7 +513,7 @@ export async function sendImage(
     uploadOpts = { url: imageUrl };
   }
 
-  const uploadResult = await mediaApi().uploadMedia(
+  const uploadResult = await ctx.mediaApi.uploadMedia(
     scope,
     target.id,
     MediaFileType.IMAGE,
@@ -493,7 +528,7 @@ export async function sendImage(
     ...(opts?.localPath ? { mediaLocalPath: opts.localPath } : {}),
   };
 
-  const result = await mediaApi().sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
+  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
     msgId: opts?.msgId,
     content: opts?.content,
   });
@@ -523,15 +558,16 @@ export async function sendVoiceMessage(
     throw new Error(`Voice sending not supported for target type: ${target.type}`);
   }
 
+  const ctx = resolveAccount(creds.appId);
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
-  const uploadResult = await mediaApi().uploadMedia(scope, target.id, MediaFileType.VOICE, c, {
+  const uploadResult = await ctx.mediaApi.uploadMedia(scope, target.id, MediaFileType.VOICE, c, {
     url: opts.voiceUrl,
     fileData: opts.voiceBase64,
   });
 
-  const result = await mediaApi().sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
+  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
     msgId: opts.msgId,
   });
 
@@ -564,15 +600,16 @@ export async function sendVideoMessage(
     throw new Error(`Video sending not supported for target type: ${target.type}`);
   }
 
+  const ctx = resolveAccount(creds.appId);
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
-  const uploadResult = await mediaApi().uploadMedia(scope, target.id, MediaFileType.VIDEO, c, {
+  const uploadResult = await ctx.mediaApi.uploadMedia(scope, target.id, MediaFileType.VIDEO, c, {
     url: opts.videoUrl,
     fileData: opts.videoBase64,
   });
 
-  const result = await mediaApi().sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
+  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
     msgId: opts.msgId,
     content: opts.content,
   });
@@ -607,16 +644,17 @@ export async function sendFileMessage(
     throw new Error(`File sending not supported for target type: ${target.type}`);
   }
 
+  const ctx = resolveAccount(creds.appId);
   const scope: ChatScope = target.type;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
 
-  const uploadResult = await mediaApi().uploadMedia(scope, target.id, MediaFileType.FILE, c, {
+  const uploadResult = await ctx.mediaApi.uploadMedia(scope, target.id, MediaFileType.FILE, c, {
     url: opts.fileUrl,
     fileData: opts.fileBase64,
     fileName: opts.fileName,
   });
 
-  const result = await mediaApi().sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
+  const result = await ctx.mediaApi.sendMediaMessage(scope, target.id, uploadResult.file_info, c, {
     msgId: opts.msgId,
   });
 

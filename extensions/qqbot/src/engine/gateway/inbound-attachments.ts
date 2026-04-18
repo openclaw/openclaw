@@ -85,9 +85,8 @@ export async function processAttachments(
     return EMPTY_RESULT;
   }
 
-  const { accountId, cfg, log } = ctx;
+  const { accountId: _accountId, cfg, log } = ctx;
   const downloadDir = getQQBotMediaDir("downloads");
-  const prefix = `[qqbot:${accountId}]`;
 
   const imageUrls: string[] = [];
   const imageMediaTypes: string[] = [];
@@ -118,11 +117,9 @@ export async function processAttachments(
       if (wavLocalPath) {
         localPath = wavLocalPath;
         audioPath = wavLocalPath;
-        log?.debug?.(
-          `${prefix} Voice attachment: ${att.filename}, downloaded WAV directly (skip SILK→WAV)`,
-        );
+        log?.debug?.(`Voice attachment: ${att.filename}, downloaded WAV directly (skip SILK→WAV)`);
       } else {
-        log?.error(`${prefix} Failed to download voice_wav_url, falling back to original URL`);
+        log?.error(`Failed to download voice_wav_url, falling back to original URL`);
       }
     }
 
@@ -154,10 +151,10 @@ export async function processAttachments(
 
       if (localPath) {
         if (att.content_type?.startsWith("image/")) {
-          log?.debug?.(`${prefix} Downloaded attachment to: ${localPath}`);
+          log?.debug?.(`Downloaded attachment to: ${localPath}`);
           return { localPath, type: "image" as const, contentType: att.content_type, meta };
         } else if (isVoice) {
-          log?.debug?.(`${prefix} Downloaded attachment to: ${localPath}`);
+          log?.debug?.(`Downloaded attachment to: ${localPath}`);
           return processVoiceAttachment(
             localPath,
             audioPath,
@@ -166,14 +163,13 @@ export async function processAttachments(
             cfg,
             downloadDir,
             log,
-            prefix,
           );
         } else {
-          log?.debug?.(`${prefix} Downloaded attachment to: ${localPath}`);
+          log?.debug?.(`Downloaded attachment to: ${localPath}`);
           return { localPath, type: "other" as const, filename: att.filename, meta };
         }
       } else {
-        log?.error(`${prefix} Failed to download: ${attUrl}`);
+        log?.error(`Failed to download: ${attUrl}`);
         if (att.content_type?.startsWith("image/")) {
           return {
             localPath: null,
@@ -183,7 +179,7 @@ export async function processAttachments(
             meta,
           };
         } else if (isVoice && asrReferText) {
-          log?.info(`${prefix} Voice attachment download failed, using asr_refer_text fallback`);
+          log?.info(`Voice attachment download failed, using asr_refer_text fallback`);
           return {
             localPath: null,
             type: "voice-fallback" as const,
@@ -282,7 +278,6 @@ async function processVoiceAttachment(
   cfg: unknown,
   downloadDir: string,
   log: ProcessContext["log"],
-  prefix: string,
 ): Promise<VoiceResult> {
   const wavUrl = att.voice_wav_url
     ? att.voice_wav_url.startsWith("//")
@@ -300,13 +295,11 @@ async function processVoiceAttachment(
   if (!sttCfg) {
     if (asrReferText) {
       log?.debug?.(
-        `${prefix} Voice attachment: ${att.filename} (STT not configured, using asr_refer_text fallback)`,
+        `Voice attachment: ${att.filename} (STT not configured, using asr_refer_text fallback)`,
       );
       return { localPath, type: "voice", transcript: asrReferText, transcriptSource: "asr", meta };
     }
-    log?.debug?.(
-      `${prefix} Voice attachment: ${att.filename} (STT not configured, skipping transcription)`,
-    );
+    log?.debug?.(`Voice attachment: ${att.filename} (STT not configured, skipping transcription)`);
     return {
       localPath,
       type: "voice",
@@ -318,20 +311,20 @@ async function processVoiceAttachment(
 
   // Convert SILK input to WAV before STT when necessary.
   if (!audioPath) {
-    log?.debug?.(`${prefix} Voice attachment: ${att.filename}, converting SILK→WAV...`);
+    log?.debug?.(`Voice attachment: ${att.filename}, converting SILK→WAV...`);
     try {
       const wavResult = await getAudioAdapter().convertSilkToWav(localPath, downloadDir);
       if (wavResult) {
         audioPath = wavResult.wavPath;
         log?.debug?.(
-          `${prefix} Voice converted: ${wavResult.wavPath} (${getAudioAdapter().formatDuration(wavResult.duration)})`,
+          `Voice converted: ${wavResult.wavPath} (${getAudioAdapter().formatDuration(wavResult.duration)})`,
         );
       } else {
         audioPath = localPath;
       }
     } catch (convertErr) {
       log?.error(
-        `${prefix} Voice conversion failed: ${
+        `Voice conversion failed: ${
           convertErr instanceof Error ? convertErr.message : JSON.stringify(convertErr)
         }`,
       );
@@ -358,14 +351,14 @@ async function processVoiceAttachment(
   try {
     const transcript = await transcribeAudio(audioPath, cfg as Record<string, unknown>);
     if (transcript) {
-      log?.debug?.(`${prefix} STT transcript: ${transcript.slice(0, 100)}...`);
+      log?.debug?.(`STT transcript: ${transcript.slice(0, 100)}...`);
       return { localPath, type: "voice", transcript, transcriptSource: "stt", meta };
     }
     if (asrReferText) {
-      log?.debug?.(`${prefix} STT returned empty result, using asr_refer_text fallback`);
+      log?.debug?.(`STT returned empty result, using asr_refer_text fallback`);
       return { localPath, type: "voice", transcript: asrReferText, transcriptSource: "asr", meta };
     }
-    log?.debug?.(`${prefix} STT returned empty result`);
+    log?.debug?.(`STT returned empty result`);
     return {
       localPath,
       type: "voice",
@@ -374,9 +367,7 @@ async function processVoiceAttachment(
       meta,
     };
   } catch (sttErr) {
-    log?.error(
-      `${prefix} STT failed: ${sttErr instanceof Error ? sttErr.message : JSON.stringify(sttErr)}`,
-    );
+    log?.error(`STT failed: ${sttErr instanceof Error ? sttErr.message : JSON.stringify(sttErr)}`);
     if (asrReferText) {
       return { localPath, type: "voice", transcript: asrReferText, transcriptSource: "asr", meta };
     }

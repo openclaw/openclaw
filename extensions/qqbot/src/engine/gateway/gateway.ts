@@ -79,20 +79,18 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   const diag = await runDiagnostics();
   if (diag.warnings.length > 0) {
     for (const w of diag.warnings) {
-      log?.info(`[qqbot:${account.accountId}] ${w}`);
+      log?.info(w);
     }
   }
 
   // ---- 4. API config ----
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
-  log?.debug?.(
-    `[qqbot:${account.accountId}] API config: markdownSupport=${account.markdownSupport}`,
-  );
+  log?.debug?.(`API config: markdownSupport=${account.markdownSupport}`);
 
   // ---- 5. Outbound refIdx cache hook ----
   onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
-      `[qqbot:${account.accountId}] onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
+      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
     );
     const attachments: RefAttachmentSummary[] = [];
     if (meta.mediaType) {
@@ -122,9 +120,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   // ---- 6. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
-    log?.info(
-      `[qqbot:${account.accountId}] Processing message from ${event.senderId}: ${event.content}`,
-    );
+    log?.info(`Processing message from ${event.senderId}: ${event.content}`);
 
     runtime.channel.activity.record({
       channel: "qqbot",
@@ -143,9 +139,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     try {
       await dispatchOutbound(inbound, { runtime, cfg: ctx.cfg, account, log });
     } catch (err) {
-      log?.error(
-        `[qqbot:${account.accountId}] Message processing failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       inbound.typing.keepAlive?.stop();
     }
@@ -202,7 +196,6 @@ async function startTypingForEvent(
         event.senderId,
         event.messageId,
         log,
-        `[qqbot:${account.accountId}]`,
       );
       keepAlive.start();
       return { refIdx: resp.refIdx, keepAlive };
@@ -223,7 +216,6 @@ async function startTypingForEvent(
           event.senderId,
           event.messageId,
           log,
-          `[qqbot:${account.accountId}]`,
         );
         keepAlive.start();
         return { refIdx: resp.refIdx, keepAlive };
@@ -231,9 +223,7 @@ async function startTypingForEvent(
       throw notifyErr;
     }
   } catch (err) {
-    log?.error(
-      `[qqbot:${account.accountId}] sendInputNotify error: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    log?.error(`sendInputNotify error: ${err instanceof Error ? err.message : String(err)}`);
     return { keepAlive: null };
   }
 }
@@ -257,17 +247,15 @@ function createApprovalInteractionHandler(
 
     const adapter = getPlatformAdapter();
     if (!adapter.resolveApproval) {
-      log?.error(`[qqbot:${account.accountId}] resolveApproval not available on PlatformAdapter`);
+      log?.error(`resolveApproval not available on PlatformAdapter`);
       return;
     }
 
     void adapter.resolveApproval(parsed.approvalId, parsed.decision).then((ok) => {
       if (ok) {
-        log?.info(
-          `[qqbot:${account.accountId}] Approval resolved: id=${parsed.approvalId}, decision=${parsed.decision}`,
-        );
+        log?.info(`Approval resolved: id=${parsed.approvalId}, decision=${parsed.decision}`);
       } else {
-        log?.error(`[qqbot:${account.accountId}] Approval resolve failed: id=${parsed.approvalId}`);
+        log?.error(`Approval resolve failed: id=${parsed.approvalId}`);
       }
     });
   };

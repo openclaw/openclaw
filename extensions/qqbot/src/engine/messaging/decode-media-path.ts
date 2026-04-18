@@ -34,10 +34,9 @@ function normalizePath(p: string): string {
  *
  * @param raw - Raw path string from a media tag.
  * @param log - Optional logger for decode diagnostics.
- * @param prefix - Log prefix (e.g. `[qqbot:accountId]`).
  * @returns The decoded, normalized media path.
  */
-export function decodeMediaPath(raw: string, log?: EngineLogger, prefix = ""): string {
+export function decodeMediaPath(raw: string, log?: EngineLogger): string {
   let mediaPath = raw;
   if (mediaPath.startsWith("MEDIA:")) {
     mediaPath = mediaPath.slice("MEDIA:".length);
@@ -54,7 +53,7 @@ export function decodeMediaPath(raw: string, log?: EngineLogger, prefix = ""): s
     const hasNonASCII = /[\u0080-\u00FF]/.test(mediaPath);
 
     if (!isWinLocal && (hasOctal || hasNonASCII)) {
-      log?.debug?.(`${prefix} Decoding path with mixed encoding: ${mediaPath}`);
+      log?.debug?.(`Decoding path with mixed encoding: ${mediaPath}`);
       const decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
         return String.fromCharCode(parseInt(octal, 8));
       });
@@ -72,11 +71,11 @@ export function decodeMediaPath(raw: string, log?: EngineLogger, prefix = ""): s
       const utf8Decoded = buffer.toString("utf8");
       if (!utf8Decoded.includes("\uFFFD") || utf8Decoded.length < decoded.length) {
         mediaPath = utf8Decoded;
-        log?.debug?.(`${prefix} Successfully decoded path: ${mediaPath}`);
+        log?.debug?.(`Successfully decoded path: ${mediaPath}`);
       }
     }
   } catch (decodeErr) {
-    log?.error(`${prefix} Path decode error: ${String(decodeErr)}`);
+    log?.error(`Path decode error: ${String(decodeErr)}`);
   }
 
   return mediaPath;

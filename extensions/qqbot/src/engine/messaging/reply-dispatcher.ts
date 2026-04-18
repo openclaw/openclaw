@@ -117,9 +117,7 @@ export async function sendErrorToTarget(ctx: ReplyContext, errorText: string): P
   try {
     await sendTextToTarget(ctx, errorText);
   } catch (sendErr) {
-    ctx.log?.error(
-      `[qqbot:${ctx.account.accountId}] Failed to send error message: ${String(sendErr)}`,
-    );
+    ctx.log?.error(`Failed to send error message: ${String(sendErr)}`);
   }
 }
 
@@ -135,7 +133,7 @@ export async function handleStructuredPayload(
   recordActivity: () => void,
   deps?: ReplyDispatcherDeps,
 ): Promise<boolean> {
-  const { account, log } = ctx;
+  const { account: _account, log } = ctx;
   const payloadResult = parseQQBotPayload(replyText);
 
   if (!payloadResult.isPayload) {
@@ -143,7 +141,7 @@ export async function handleStructuredPayload(
   }
 
   if (payloadResult.error) {
-    log?.error(`[qqbot:${account.accountId}] Payload parse error: ${payloadResult.error}`);
+    log?.error(`Payload parse error: ${payloadResult.error}`);
     return true;
   }
 
@@ -153,32 +151,24 @@ export async function handleStructuredPayload(
 
   const parsedPayload = payloadResult.payload;
   const unknownPayload = payloadResult.payload as unknown;
-  log?.info(
-    `[qqbot:${account.accountId}] Detected structured payload, type: ${parsedPayload.type}`,
-  );
+  log?.info(`Detected structured payload, type: ${parsedPayload.type}`);
 
   if (isCronReminderPayload(parsedPayload)) {
-    log?.debug?.(`[qqbot:${account.accountId}] Processing cron_reminder payload`);
+    log?.debug?.(`Processing cron_reminder payload`);
     const cronMessage = encodePayloadForCron(parsedPayload);
     const confirmText = `⏰ Reminder scheduled. It will be sent at the configured time: "${parsedPayload.content}"`;
     try {
       await sendTextToTarget(ctx, confirmText);
-      log?.debug?.(
-        `[qqbot:${account.accountId}] Cron reminder confirmation sent, cronMessage: ${cronMessage}`,
-      );
+      log?.debug?.(`Cron reminder confirmation sent, cronMessage: ${cronMessage}`);
     } catch (err) {
-      log?.error(
-        `[qqbot:${account.accountId}] Failed to send cron confirmation: ${formatErrorMessage(err)}`,
-      );
+      log?.error(`Failed to send cron confirmation: ${formatErrorMessage(err)}`);
     }
     recordActivity();
     return true;
   }
 
   if (isMediaPayload(parsedPayload)) {
-    log?.debug?.(
-      `[qqbot:${account.accountId}] Processing media payload, mediaType: ${parsedPayload.mediaType}`,
-    );
+    log?.debug?.(`Processing media payload, mediaType: ${parsedPayload.mediaType}`);
 
     if (parsedPayload.mediaType === "image") {
       await handleImagePayload(ctx, parsedPayload);
@@ -189,9 +179,7 @@ export async function handleStructuredPayload(
     } else if (parsedPayload.mediaType === "file") {
       await handleFilePayload(ctx, parsedPayload);
     } else {
-      log?.error(
-        `[qqbot:${account.accountId}] Unknown media type: ${JSON.stringify(parsedPayload.mediaType)}`,
-      );
+      log?.error(`Unknown media type: ${JSON.stringify(parsedPayload.mediaType)}`);
     }
     recordActivity();
     return true;
@@ -204,7 +192,7 @@ export async function handleStructuredPayload(
     typeof unknownPayload.type === "string"
       ? unknownPayload.type
       : "unknown";
-  log?.error(`[qqbot:${account.accountId}] Unknown payload type: ${payloadType}`);
+  log?.error(`Unknown payload type: ${payloadType}`);
   return true;
 }
 
@@ -226,9 +214,7 @@ function validateStructuredPayloadLocalPath(
     return allowedPath;
   }
 
-  ctx.log?.error(
-    `[qqbot:${ctx.account.accountId}] Blocked ${mediaType} payload local path outside QQ Bot media storage`,
-  );
+  ctx.log?.error(`Blocked ${mediaType} payload local path outside QQ Bot media storage`);
   return null;
 }
 
@@ -327,7 +313,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
     imageUrl = normalizedPath;
   } else {
     log?.error(
-      `[qqbot:${account.accountId}] Image payload URL must use http(s) or data:image/: ${sanitizeForLog(payload.path)}`,
+      `Image payload URL must use http(s) or data:image/: ${sanitizeForLog(payload.path)}`,
     );
     return;
   }
@@ -351,16 +337,14 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       };
       const mimeType = mimeTypes[ext];
       if (!mimeType) {
-        log?.error(`[qqbot:${account.accountId}] Unsupported image format: ${ext}`);
+        log?.error(`Unsupported image format: ${ext}`);
         return;
       }
       imageUrl = `data:${mimeType};base64,${base64Data}`;
-      log?.debug?.(
-        `[qqbot:${account.accountId}] Converted local image to Base64 (size: ${formatFileSize(fileBuffer.length)})`,
-      );
+      log?.debug?.(`Converted local image to Base64 (size: ${formatFileSize(fileBuffer.length)})`);
     } catch (readErr) {
       log?.error(
-        `[qqbot:${account.accountId}] Failed to read local image: ${
+        `Failed to read local image: ${
           readErr instanceof Error ? readErr.message : JSON.stringify(readErr)
         }`,
       );
@@ -393,13 +377,13 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       log,
       account.accountId,
     );
-    log?.debug?.(`[qqbot:${account.accountId}] Sent image via media payload`);
+    log?.debug?.(`Sent image via media payload`);
 
     if (payload.caption) {
       await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] Failed to send image: ${formatErrorMessage(err)}`);
+    log?.error(`Failed to send image: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -410,40 +394,40 @@ async function handleAudioPayload(
 ): Promise<void> {
   const { target, account, cfg, log } = ctx;
   if (!deps) {
-    log?.error(`[qqbot:${account.accountId}] TTS deps not provided, cannot handle audio payload`);
+    log?.error(`TTS deps not provided, cannot handle audio payload`);
     return;
   }
   try {
     const ttsText = payload.caption || payload.path;
     if (!ttsText?.trim()) {
-      log?.error(`[qqbot:${account.accountId}] Voice missing text`);
+      log?.error(`Voice missing text`);
       return;
     }
 
-    log?.debug?.(`[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..."`);
+    log?.debug?.(`TTS: "${ttsText.slice(0, 50)}..."`);
     const ttsResult = await deps.tts.textToSpeech({
       text: ttsText,
       cfg,
       channel: "qqbot",
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
-      log?.error(`[qqbot:${account.accountId}] TTS failed: ${ttsResult.error ?? "unknown"}`);
+      log?.error(`TTS failed: ${ttsResult.error ?? "unknown"}`);
       return;
     }
 
     const providerLabel = ttsResult.provider ?? "unknown";
     log?.debug?.(
-      `[qqbot:${account.accountId}] TTS returned: provider=${providerLabel}, format=${ttsResult.outputFormat}, path=${ttsResult.audioPath}`,
+      `TTS returned: provider=${providerLabel}, format=${ttsResult.outputFormat}, path=${ttsResult.audioPath}`,
     );
 
     const silkBase64 = await deps.tts.audioFileToSilkBase64(ttsResult.audioPath);
     if (!silkBase64) {
-      log?.error(`[qqbot:${account.accountId}] Failed to convert TTS audio to SILK`);
+      log?.error(`Failed to convert TTS audio to SILK`);
       return;
     }
     const silkPath = ttsResult.audioPath;
 
-    log?.debug?.(`[qqbot:${account.accountId}] TTS done (${providerLabel}), file: ${silkPath}`);
+    log?.debug?.(`TTS done (${providerLabel}), file: ${silkPath}`);
 
     const deliveryTarget = buildDeliveryTarget(target);
     const creds = accountToCreds(account);
@@ -459,18 +443,16 @@ async function handleAudioPayload(
             filePath: silkPath,
           });
         } else {
-          log?.error(
-            `[qqbot:${account.accountId}] Voice not supported in ${deliveryTarget.type}, sending text fallback`,
-          );
+          log?.error(`Voice not supported in ${deliveryTarget.type}, sending text fallback`);
           await senderSendText(deliveryTarget, ttsText, creds, { msgId: target.messageId });
         }
       },
       log,
       account.accountId,
     );
-    log?.debug?.(`[qqbot:${account.accountId}] Voice message sent`);
+    log?.debug?.(`Voice message sent`);
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${formatErrorMessage(err)}`);
+    log?.error(`TTS/voice send failed: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -484,15 +466,13 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
     const videoPath = resolved.path;
     const isHttpUrl = resolved.isHttpUrl;
 
-    log?.debug?.(
-      `[qqbot:${account.accountId}] Video send: ${describeMediaTargetForLog(videoPath, isHttpUrl)}`,
-    );
+    log?.debug?.(`Video send: ${describeMediaTargetForLog(videoPath, isHttpUrl)}`);
 
     const deliveryTarget = buildDeliveryTarget(target);
     const creds = accountToCreds(account);
 
     if (deliveryTarget.type !== "c2c" && deliveryTarget.type !== "group") {
-      log?.error(`[qqbot:${account.accountId}] Video not supported in ${deliveryTarget.type}`);
+      log?.error(`Video not supported in ${deliveryTarget.type}`);
       return;
     }
 
@@ -508,7 +488,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
           const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
           const videoBase64 = fileBuffer.toString("base64");
           log?.debug?.(
-            `[qqbot:${account.accountId}] Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
+            `Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
           await senderSendVideo(deliveryTarget, creds, {
             videoBase64,
@@ -520,13 +500,13 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       log,
       account.accountId,
     );
-    log?.debug?.(`[qqbot:${account.accountId}] Video message sent`);
+    log?.debug?.(`Video message sent`);
 
     if (payload.caption) {
       await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] Video send failed: ${formatErrorMessage(err)}`);
+    log?.error(`Video send failed: ${formatErrorMessage(err)}`);
   }
 }
 
@@ -542,14 +522,14 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
 
     const fileName = sanitizeFileName(path.basename(filePath));
     log?.debug?.(
-      `[qqbot:${account.accountId}] File send: ${describeMediaTargetForLog(filePath, isHttpUrl)} (${isHttpUrl ? "URL" : "local"})`,
+      `File send: ${describeMediaTargetForLog(filePath, isHttpUrl)} (${isHttpUrl ? "URL" : "local"})`,
     );
 
     const deliveryTarget = buildDeliveryTarget(target);
     const creds = accountToCreds(account);
 
     if (deliveryTarget.type !== "c2c" && deliveryTarget.type !== "group") {
-      log?.error(`[qqbot:${account.accountId}] File not supported in ${deliveryTarget.type}`);
+      log?.error(`File not supported in ${deliveryTarget.type}`);
       return;
     }
 
@@ -576,8 +556,8 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
       log,
       account.accountId,
     );
-    log?.debug?.(`[qqbot:${account.accountId}] File message sent`);
+    log?.debug?.(`File message sent`);
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] File send failed: ${formatErrorMessage(err)}`);
+    log?.error(`File send failed: ${formatErrorMessage(err)}`);
   }
 }
