@@ -510,6 +510,7 @@ export async function startGatewayServer(
         runtimeState.skillsRefreshTimer = null;
       },
       skillsChangeUnsub: runtimeState.skillsChangeUnsub,
+      sessionRunCancelRequesterUnsub: runtimeState.sessionRunCancelRequesterUnsub,
       ...(authRateLimiter ? { disposeAuthRateLimiter: () => authRateLimiter.dispose() } : {}),
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
@@ -589,6 +590,7 @@ export async function startGatewayServer(
     });
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
+    runtimeState.sessionRunCancelRequesterUnsub = earlyRuntime.sessionRunCancelRequesterUnsub;
     if (earlyRuntime.maintenance) {
       runtimeState.tickInterval = earlyRuntime.maintenance.tickInterval;
       runtimeState.healthInterval = earlyRuntime.maintenance.healthInterval;
