@@ -1242,6 +1242,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerCompactionProvider: (
                 provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
               ) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return;
+                }
                 const existing = getRegisteredCompactionProvider(provider.id);
                 if (existing) {
                   const ownerDetail = existing.ownerPluginId
@@ -1281,6 +1284,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return;
+                }
                 registerMemoryCapability(record.id, capability);
               },
               registerMemoryPromptSection: (builder) => {
@@ -1307,12 +1313,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return;
+                }
                 registerMemoryPromptSection(builder);
               },
               registerMemoryPromptSupplement: (builder) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return;
+                }
                 registerMemoryPromptSupplement(record.id, builder);
               },
               registerMemoryCorpusSupplement: (supplement) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return;
+                }
                 registerMemoryCorpusSupplement(record.id, supplement);
               },
               registerMemoryFlushPlan: (resolver) => {
@@ -1339,6 +1354,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return;
+                }
                 registerMemoryFlushPlanResolver(resolver);
               },
               registerMemoryRuntime: (runtime) => {
@@ -1363,6 +1381,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     message:
                       "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
                   });
+                  return;
+                }
+                if (registryParams.activateGlobalSideEffects === false) {
                   return;
                 }
                 registerMemoryRuntime(runtime);
@@ -1394,11 +1415,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                const existing = getRegisteredMemoryEmbeddingProvider(adapter.id);
+                const existing =
+                  registryParams.activateGlobalSideEffects === false
+                    ? registry.memoryEmbeddingProviders.find(
+                        (entry) => entry.provider.id === adapter.id,
+                      )
+                    : getRegisteredMemoryEmbeddingProvider(adapter.id);
                 if (existing) {
-                  const ownerDetail = existing.ownerPluginId
-                    ? ` (owner: ${existing.ownerPluginId})`
-                    : "";
+                  const ownerDetail =
+                    "ownerPluginId" in existing && existing.ownerPluginId
+                      ? ` (owner: ${existing.ownerPluginId})`
+                      : "pluginId" in existing && existing.pluginId
+                        ? ` (owner: ${existing.pluginId})`
+                        : "";
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
@@ -1407,9 +1436,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryEmbeddingProvider(adapter, {
-                  ownerPluginId: record.id,
-                });
+                if (registryParams.activateGlobalSideEffects !== false) {
+                  registerMemoryEmbeddingProvider(adapter, {
+                    ownerPluginId: record.id,
+                  });
+                }
                 registry.memoryEmbeddingProviders.push({
                   pluginId: record.id,
                   pluginName: record.name,

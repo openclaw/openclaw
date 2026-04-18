@@ -2219,12 +2219,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
       const previousMemoryRuntime = getMemoryRuntime();
 
-      if (!shouldActivate) {
-        registry.plugins.push(record);
-        seenIds.set(pluginId, candidate.origin);
-        continue;
-      }
-
       try {
         runPluginRegisterSync(register, api);
         registry.plugins.push(record);

@@ -13,6 +13,11 @@ import {
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import {
+  clearCompactionProviders,
+  getRegisteredCompactionProvider,
+  registerCompactionProvider,
+} from "./compaction-provider.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import {
@@ -787,6 +792,7 @@ function expectEscapingEntryRejected(params: {
 }
 
 afterEach(() => {
+  clearCompactionProviders();
   resetPluginLoaderTestStateForTest();
 });
 
@@ -1878,7 +1884,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
-  it("does not execute plugin register during non-activating loads", () => {
+  it("preserves snapshot registrations without leaking command globals during non-activating loads", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "snapshot-register-skip",
@@ -1887,11 +1893,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
         id: "snapshot-register-skip",
         register(api) {
           api.registerCommand({
-            id: "snapshot-register-skip.test",
+            name: "snapshot-register-skip.test",
             description: "test",
-            execute() {
-              return { ok: true };
-            },
+            handler: async () => ({ text: "ok" }),
           });
         },
       };`,
@@ -1913,6 +1917,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-register-skip")?.status).toBe(
       "loaded",
     );
+    expect(scoped.commands).toEqual([]);
     expect(getPluginCommandSpecs().map((spec) => spec.name)).not.toContain(
       "snapshot-register-skip.test",
     );
@@ -2002,6 +2007,53 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+  });
+
+  it("does not replace active compaction providers during non-activating loads", () => {
+    useNoBundledPlugins();
+    registerCompactionProvider(
+      {
+        id: "active-compaction",
+        label: "Active Compaction",
+        summarize: async () => "active",
+      },
+      { ownerPluginId: "active-plugin" },
+    );
+    const plugin = writePlugin({
+      id: "snapshot-compaction",
+      filename: "snapshot-compaction.cjs",
+      body: `module.exports = {
+        id: "snapshot-compaction",
+        register(api) {
+          api.registerCompactionProvider({
+            id: "snapshot-compaction",
+            label: "Snapshot Compaction",
+            summarize: async () => "snapshot",
+          });
+        },
+      };`,
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-compaction"],
+        },
+      },
+      onlyPluginIds: ["snapshot-compaction"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-compaction")?.status).toBe(
+      "loaded",
+    );
+    expect(getRegisteredCompactionProvider("active-compaction")?.ownerPluginId).toBe(
+      "active-plugin",
+    );
+    expect(getRegisteredCompactionProvider("snapshot-compaction")).toBeUndefined();
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
