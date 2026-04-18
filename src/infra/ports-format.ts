@@ -1,12 +1,44 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { isGatewayArgv, parseWindowsCmdline } from "./gateway-process-argv.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
+
+function tokenizeListenerCommand(listener: PortListener): string[] {
+  const commandLine = listener.commandLine?.trim();
+  if (commandLine) {
+    return parseWindowsCmdline(commandLine);
+  }
+  const command = listener.command?.trim();
+  return command ? [command] : [];
+}
+
+function normalizeExecutableBasename(value: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(value.replaceAll("\\", "/"));
+  const lastSlash = normalized.lastIndexOf("/");
+  const basename = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  return basename.replace(/\.(bat|cmd|exe)$/i, "");
+}
+
+function isGatewayListener(listener: PortListener): boolean {
+  const args = tokenizeListenerCommand(listener);
+  if (args.length > 0 && isGatewayArgv(args, { allowGatewayBinary: true })) {
+    return true;
+  }
+
+  const executableCandidates = [
+    listener.commandLine ? tokenizeListenerCommand({ commandLine: listener.commandLine })[0] : "",
+    listener.command ?? "",
+  ];
+  return executableCandidates.some(
+    (candidate) => normalizeExecutableBasename(candidate ?? "") === "openclaw-gateway",
+  );
+}
 
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
   const raw = normalizeLowercaseStringOrEmpty(
     `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
   );
-  if (raw.includes("openclaw")) {
+  if (isGatewayListener(listener)) {
     return "gateway";
   }
   if (raw.includes("ssh")) {

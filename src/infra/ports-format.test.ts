@@ -13,9 +13,31 @@ describe("ports-format", () => {
     [{ commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" }, "ssh"],
     [{ command: "ssh" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ commandLine: "/usr/local/bin/openclaw-gateway" }, "gateway"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
+  });
+
+  it("does not trust unrelated processes just because their path contains openclaw", () => {
+    expect(
+      classifyPortListener(
+        { commandLine: "/opt/helpers/openclaw-proxy relay --listen 127.0.0.1:18789" },
+        18789,
+      ),
+    ).toBe("unknown");
+    expect(
+      isGatewayOwnedLocalPortUsage(
+        [
+          {
+            pid: 4242,
+            commandLine: "/opt/helpers/openclaw-proxy relay --listen 127.0.0.1:18789",
+            address: "127.0.0.1:18789",
+          },
+        ],
+        18789,
+      ),
+    ).toBe(false);
   });
 
   it("builds ordered hints for mixed listener kinds and multiplicity", () => {

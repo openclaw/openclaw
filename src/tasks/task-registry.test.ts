@@ -1637,6 +1637,77 @@ describe("task-registry", () => {
     });
   });
 
+  it("caches session-store loads within a single inspection reconcile pass", () => {
+    const now = Date.now();
+    const loadSessionStore = vi.fn(() => ({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now - 30_000,
+        endedAt: now - 30_000,
+      },
+    }));
+    const taskA = {
+      ...createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-cache-a",
+        task: "Finished task A",
+        status: "succeeded",
+        deliveryStatus: "failed",
+        notifyPolicy: "done_only",
+      }),
+      endedAt: now - 60_000,
+      lastEventAt: now - 60_000,
+    };
+    const taskB = {
+      ...createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-cache-b",
+        task: "Finished task B",
+        status: "succeeded",
+        deliveryStatus: "failed",
+        notifyPolicy: "done_only",
+      }),
+      endedAt: now - 45_000,
+      lastEventAt: now - 45_000,
+    };
+
+    setTaskRegistryMaintenanceRuntimeForTests({
+      readAcpSessionEntry: () => ({
+        cfg: {} as never,
+        storePath: "",
+        sessionKey: "",
+        storeSessionKey: "",
+        entry: undefined,
+        storeReadFailed: false,
+      }),
+      loadSessionStore,
+      resolveStorePath: () => "/tmp/sessions.json",
+      parseAgentSessionKey: () => null,
+      isCronJobActive: () => false,
+      getAgentRunContext: () => undefined,
+      deleteTaskRecordById: () => false,
+      ensureTaskRegistryReady: () => {},
+      getTaskById: () => undefined,
+      listTaskRecords: () => [taskA, taskB],
+      markTaskLostById: () => null,
+      maybeDeliverTaskTerminalUpdate: async () => null,
+      resolveTaskForLookupToken: () => undefined,
+      setTaskCleanupAfterById: () => null,
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({ taskId: taskA.taskId, deliveryStatus: "parent_missing" }),
+      expect.objectContaining({ taskId: taskB.taskId, deliveryStatus: "parent_missing" }),
+    ]);
+    expect(loadSessionStore).toHaveBeenCalledTimes(1);
+  });
+
   it("summarizes inspectable task audit findings", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

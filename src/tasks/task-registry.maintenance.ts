@@ -81,6 +81,16 @@ export type TaskRegistryMaintenanceSummary = {
   pruned: number;
 };
 
+type TaskRegistryMaintenancePassContext = {
+  sessionStoreByPath: Map<string, Record<string, unknown>>;
+};
+
+function createMaintenancePassContext(): TaskRegistryMaintenancePassContext {
+  return {
+    sessionStoreByPath: new Map(),
+  };
+}
+
 function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: string): unknown {
   const direct = store[sessionKey];
   if (direct) {
@@ -119,7 +129,20 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
-function hasBackingSession(task: TaskRecord): boolean {
+function loadSessionStoreCached(
+  storePath: string,
+  context: TaskRegistryMaintenancePassContext,
+): Record<string, unknown> {
+  const cached = context.sessionStoreByPath.get(storePath);
+  if (cached) {
+    return cached;
+  }
+  const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
+  context.sessionStoreByPath.set(storePath, store);
+  return store;
+}
+
+function hasBackingSession(task: TaskRecord, context: TaskRegistryMaintenancePassContext): boolean {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
@@ -151,35 +174,45 @@ function hasBackingSession(task: TaskRecord): boolean {
     }
     const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-    const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
+    const store = loadSessionStoreCached(storePath, context);
     return Boolean(findSessionEntryByKey(store, childSessionKey));
   }
 
   return true;
 }
 
-function shouldMarkLost(task: TaskRecord, now: number): boolean {
+function shouldMarkLost(
+  task: TaskRecord,
+  now: number,
+  context: TaskRegistryMaintenancePassContext,
+): boolean {
   if (!isActiveTask(task)) {
     return false;
   }
   if (!hasLostGraceExpired(task, now)) {
     return false;
   }
-  return !hasBackingSession(task);
+  return !hasBackingSession(task, context);
 }
 
-function loadSessionEntryByKey(sessionKey: string): unknown {
+function loadSessionEntryByKey(
+  sessionKey: string,
+  context: TaskRegistryMaintenancePassContext,
+): unknown {
   const key = sessionKey.trim();
   if (!key) {
     return undefined;
   }
   const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(key)?.agentId;
   const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-  const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
+  const store = loadSessionStoreCached(storePath, context);
   return findSessionEntryByKey(store, key);
 }
 
-function hasClosedRequesterSession(task: TaskRecord): boolean {
+function hasClosedRequesterSession(
+  task: TaskRecord,
+  context: TaskRegistryMaintenancePassContext,
+): boolean {
   if (task.scopeKind !== "session") {
     return false;
   }
@@ -187,7 +220,7 @@ function hasClosedRequesterSession(task: TaskRecord): boolean {
   if (!requesterSessionKey) {
     return false;
   }
-  const entry = loadSessionEntryByKey(requesterSessionKey);
+  const entry = loadSessionEntryByKey(requesterSessionKey, context);
   if (!entry || typeof entry !== "object") {
     return false;
   }
@@ -195,12 +228,15 @@ function hasClosedRequesterSession(task: TaskRecord): boolean {
   return typeof endedAt === "number" && Number.isFinite(endedAt) && endedAt > 0;
 }
 
-function projectTaskDeliveryForOperatorInspection(task: TaskRecord): TaskRecord {
+function projectTaskDeliveryForOperatorInspection(
+  task: TaskRecord,
+  context: TaskRegistryMaintenancePassContext,
+): TaskRecord {
   if (
     task.status !== "succeeded" ||
     task.terminalOutcome === "blocked" ||
     task.deliveryStatus !== "failed" ||
-    !hasClosedRequesterSession(task)
+    !hasClosedRequesterSession(task, context)
   ) {
     return task;
   }
@@ -262,15 +298,21 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
 
 export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): TaskRecord {
   const now = Date.now();
-  const reconciled = shouldMarkLost(task, now) ? projectTaskLost(task, now) : task;
-  return projectTaskDeliveryForOperatorInspection(reconciled);
+  const context = createMaintenancePassContext();
+  const reconciled = shouldMarkLost(task, now, context) ? projectTaskLost(task, now) : task;
+  return projectTaskDeliveryForOperatorInspection(reconciled, context);
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  const now = Date.now();
+  const context = createMaintenancePassContext();
   return taskRegistryMaintenanceRuntime
     .listTaskRecords()
-    .map((task) => reconcileTaskRecordForOperatorInspection(task));
+    .map((task) => {
+      const reconciled = shouldMarkLost(task, now, context) ? projectTaskLost(task, now) : task;
+      return projectTaskDeliveryForOperatorInspection(reconciled, context);
+    });
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
@@ -293,11 +335,12 @@ export function reconcileTaskLookupToken(token: string): TaskRecord | undefined 
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
+  const context = createMaintenancePassContext();
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
-    if (shouldMarkLost(task, now)) {
+    if (shouldMarkLost(task, now, context)) {
       reconciled += 1;
       continue;
     }
@@ -335,6 +378,7 @@ function startScheduledSweep() {
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
+  const context = createMaintenancePassContext();
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
@@ -345,7 +389,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     if (!current) {
       continue;
     }
-    if (shouldMarkLost(current, now)) {
+    if (shouldMarkLost(current, now, context)) {
       const next = markTaskLost(current, now);
       if (next.status === "lost") {
         reconciled += 1;
