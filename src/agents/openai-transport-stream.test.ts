@@ -2156,4 +2156,178 @@ describe("openai transport stream", () => {
     expect(assembledText).toBe("Hello! How can I help?");
     expect(assembledThinking).toBe("Let me reason: step one. Step two.");
   });
+
+  it("preserves typed-block order when delta.content arrays interleave text and thinking", async () => {
+    // Locks in the Codex review concern: a delta.content array shaped
+    // `[{type:"text",…},{type:"thinking",…},{type:"text",…}]` must produce
+    // text → thinking → text blocks in that order, not coalesce into one
+    // text block followed by one thinking block.
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small Latest",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-mistral-order",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                { type: "text", text: "intro." },
+                { type: "thinking", thinking: "thought." },
+                { type: "text", text: "outro." },
+              ],
+            } as unknown,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-mistral-order",
+        object: "chat.completion.chunk" as const,
+        choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: "stop" }],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content.map((block) => (block as { type: string }).type)).toEqual([
+      "text",
+      "thinking",
+      "text",
+    ]);
+    expect((output.content[0] as { text: string }).text).toBe("intro.");
+    expect((output.content[1] as { thinking: string }).thinking).toBe("thought.");
+    expect((output.content[2] as { text: string }).text).toBe("outro.");
+  });
+
+  it("falls through to reasoning_content when delta.content array yields no supported blocks", async () => {
+    // Locks in the Copilot review concern: an empty array (or an array of only
+    // unsupported block types) must NOT swallow the chunk via an unconditional
+    // `continue`. reasoning_content / tool_calls in the same chunk should still
+    // be processed.
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small Latest",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-mistral-fallthrough",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [{ type: "unknown_block_type", payload: 1 }],
+              reasoning_content: "fallback reasoning",
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-mistral-fallthrough",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "answer." } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-mistral-fallthrough",
+        object: "chat.completion.chunk" as const,
+        choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: "stop" }],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    const thinkingBlock = output.content.find(
+      (block) => (block as { type: string }).type === "thinking",
+    ) as { thinking: string } | undefined;
+    const textBlock = output.content.find(
+      (block) => (block as { type: string }).type === "text",
+    ) as { text: string } | undefined;
+
+    expect(thinkingBlock?.thinking).toBe("fallback reasoning");
+    expect(textBlock?.text).toBe("answer.");
+  });
 });

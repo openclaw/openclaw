@@ -1124,27 +1124,31 @@ async function processOpenAICompletionsStream(
       // (`[{type:"thinking", thinking:"..."}, {type:"text", text:"..."}]`)
       // instead of a string. JS string concatenation on the array (`"" + arr`)
       // produced literal `"[object Object]"` tokens in the assembled text and a
-      // matching corrupted `text_delta` event. Unpack typed blocks into text +
-      // reasoning deltas, route reasoning blocks through the existing thinking
-      // append path, and only emit a text delta if real text content arrives.
-      // Plain string content keeps the original fast path.
+      // matching corrupted `text_delta` event. Walk the typed blocks in order
+      // and route each one through the existing text / thinking append paths
+      // so transcript block chronology and stream event order match the
+      // provider's original ordering. Plain string content keeps the original
+      // fast path. Unrecognized non-array shapes (including arrays whose blocks
+      // are all unsupported) fall through so reasoning_* and tool_calls in the
+      // same chunk are still processed.
       const unpacked = unpackOpenAICompletionsContent(choice.delta.content);
-      if (unpacked.thinkingDelta.length > 0) {
-        const reasoningDelta = {
-          signature: "content_thinking",
-          text: unpacked.thinkingDelta,
-        };
-        if (currentBlock?.type === "toolCall") {
-          if (!pendingThinkingDelta) {
-            pendingThinkingDelta = { ...reasoningDelta };
+      for (const delta of unpacked.deltas) {
+        if (delta.kind === "thinking") {
+          const reasoningDelta = {
+            signature: "content_thinking",
+            text: delta.value,
+          };
+          if (currentBlock?.type === "toolCall") {
+            if (!pendingThinkingDelta) {
+              pendingThinkingDelta = { ...reasoningDelta };
+            } else {
+              pendingThinkingDelta.text += reasoningDelta.text;
+            }
           } else {
-            pendingThinkingDelta.text += reasoningDelta.text;
+            appendThinkingDelta(reasoningDelta);
           }
-        } else {
-          appendThinkingDelta(reasoningDelta);
+          continue;
         }
-      }
-      if (unpacked.textDelta.length > 0) {
         flushPendingThinkingDelta();
         if (!currentBlock || currentBlock.type !== "text") {
           finishCurrentBlock();
@@ -1152,20 +1156,20 @@ async function processOpenAICompletionsStream(
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
-        currentBlock.text += unpacked.textDelta;
+        currentBlock.text += delta.value;
         stream.push({
           type: "text_delta",
           contentIndex: blockIndex(),
-          delta: unpacked.textDelta,
+          delta: delta.value,
           partial: output,
         });
       }
       if (unpacked.recognized) {
         continue;
       }
-      // Unrecognized truthy non-string shape: fall through to the reasoning /
-      // tool_calls branches below rather than coercing the value into the
-      // assembled text.
+      // Unrecognized truthy non-string / no-supported-block shape: fall through
+      // to the reasoning / tool_calls branches below rather than coercing the
+      // value into the assembled text.
     }
     const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
     if (reasoningDelta) {
@@ -1233,53 +1237,73 @@ async function processOpenAICompletionsStream(
 //     (e.g. `[{type:"thinking", thinking:"..."}, {type:"text", text:"..."}]`,
 //     observed for Mistral with reasoning enabled where reasoning content
 //     arrives inside `delta.content` instead of a top-level reasoning field).
-// `recognized` is true for both the string fast path and the typed-block array
-// shape. When false (e.g. a plain object or unexpected primitive), the caller
-// falls through to the reasoning/tool_calls branches instead of coercing the
-// value into assembled text.
+// Deltas are returned in the original block order (not coalesced by type) so a
+// `[{type:"text",…},{type:"thinking",…}]` array does not silently flip into
+// thinking-then-text on the consumer side.
+// `recognized` is true for the string fast path and for arrays that yielded at
+// least one supported typed block. Empty arrays or arrays whose blocks are all
+// unsupported shapes return `recognized: false` so reasoning_* and tool_calls
+// fields in the same chunk are still processed by the loop below.
+type OpenAICompletionsContentDelta =
+  | { kind: "text"; value: string }
+  | { kind: "thinking"; value: string };
+
 function unpackOpenAICompletionsContent(rawContent: unknown): {
-  textDelta: string;
-  thinkingDelta: string;
+  deltas: OpenAICompletionsContentDelta[];
   recognized: boolean;
 } {
   if (typeof rawContent === "string") {
-    return { textDelta: rawContent, thinkingDelta: "", recognized: true };
+    return {
+      deltas: rawContent.length > 0 ? [{ kind: "text", value: rawContent }] : [],
+      recognized: true,
+    };
   }
   if (!Array.isArray(rawContent)) {
-    return { textDelta: "", thinkingDelta: "", recognized: false };
+    return { deltas: [], recognized: false };
   }
-  let textDelta = "";
-  let thinkingDelta = "";
+  const deltas: OpenAICompletionsContentDelta[] = [];
+  let sawSupportedBlock = false;
   for (const part of rawContent) {
     if (!part || typeof part !== "object") {
       continue;
     }
     const block = part as { type?: unknown; text?: unknown; thinking?: unknown };
     if (block.type === "text" && typeof block.text === "string") {
-      textDelta += block.text;
+      sawSupportedBlock = true;
+      if (block.text.length > 0) {
+        deltas.push({ kind: "text", value: block.text });
+      }
       continue;
     }
     if (block.type === "thinking") {
       // Mistral reasoning blocks observed in two shapes: `.thinking` as a
       // string, or `.thinking` as a nested array of `{type:"text", text}` parts.
       if (typeof block.thinking === "string") {
-        thinkingDelta += block.thinking;
+        sawSupportedBlock = true;
+        if (block.thinking.length > 0) {
+          deltas.push({ kind: "thinking", value: block.thinking });
+        }
         continue;
       }
       if (Array.isArray(block.thinking)) {
+        let thinkingValue = "";
         for (const sub of block.thinking) {
           if (!sub || typeof sub !== "object") {
             continue;
           }
-          const subText = (sub as { text?: unknown }).text;
-          if (typeof subText === "string") {
-            thinkingDelta += subText;
+          const subBlock = sub as { type?: unknown; text?: unknown };
+          if (subBlock.type === "text" && typeof subBlock.text === "string") {
+            thinkingValue += subBlock.text;
           }
+        }
+        sawSupportedBlock = true;
+        if (thinkingValue.length > 0) {
+          deltas.push({ kind: "thinking", value: thinkingValue });
         }
       }
     }
   }
-  return { textDelta, thinkingDelta, recognized: true };
+  return { deltas, recognized: sawSupportedBlock };
 }
 
 function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
