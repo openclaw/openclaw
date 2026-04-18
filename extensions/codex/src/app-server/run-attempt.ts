@@ -37,10 +37,11 @@ import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 type CodexAppServerClientFactory = (
   startOptions?: CodexAppServerStartOptions,
+  authProfileId?: string,
 ) => Promise<CodexAppServerClient>;
 
-let clientFactory: CodexAppServerClientFactory = (startOptions) =>
-  getSharedCodexAppServerClient({ startOptions });
+let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =>
+  getSharedCodexAppServerClient({ startOptions, authProfileId });
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
@@ -101,7 +102,7 @@ export async function runCodexAppServerAttempt(
       timeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start);
+        const startupClient = await clientFactory(appServer.start, params.authProfileId);
         const startupThread = await startOrResumeThread({
           client: startupClient,
           params,
@@ -487,6 +488,7 @@ export const __testing = {
     clientFactory = factory;
   },
   resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = (startOptions) => getSharedCodexAppServerClient({ startOptions });
+    clientFactory = (startOptions, authProfileId) =>
+      getSharedCodexAppServerClient({ startOptions, authProfileId });
   },
 } as const;

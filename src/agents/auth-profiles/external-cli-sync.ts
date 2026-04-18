@@ -1,12 +1,5 @@
-import {
-  readCodexCliCredentialsCached,
-  readMiniMaxCliCredentialsCached,
-} from "../cli-credentials.js";
-import {
-  EXTERNAL_CLI_SYNC_TTL_MS,
-  MINIMAX_CLI_PROFILE_ID,
-  OPENAI_CODEX_DEFAULT_PROFILE_ID,
-} from "./constants.js";
+import { readMiniMaxCliCredentialsCached } from "../cli-credentials.js";
+import { EXTERNAL_CLI_SYNC_TTL_MS, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import { log } from "./constants.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -81,11 +74,6 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
     readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
-  },
-  {
-    profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    provider: "openai-codex",
-    readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
   },
 ];
 
