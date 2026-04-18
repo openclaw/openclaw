@@ -22,6 +22,13 @@ export type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  /**
+   * Returns true when the agent loop is NOT actively running — either before
+   * the first prompt starts (startup window) or after the prompt finishes
+   * (teardown window).  During these windows the steering queue will NOT be
+   * drained, so accepting messages would silently drop them.
+   */
+  isStopped?: () => boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
 };
@@ -107,12 +114,12 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
-  if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
-  }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    return false;
+  }
+  if (handle.isStopped?.()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=agent_stopped`);
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });

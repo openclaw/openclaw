@@ -167,7 +167,6 @@ function createMinimalRun(params?: {
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
         isRunActive: params?.isRunActive,
-        isStreaming: false,
         opts,
         typing,
         sessionEntry: params?.sessionEntry,

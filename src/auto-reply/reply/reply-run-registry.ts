@@ -11,6 +11,12 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  /**
+   * True once the agent loop has begun shutting down (stop requested or
+   * aborting). Steer messages should still be accepted while active but
+   * not-yet-stopped; they are only blocked once the run has actually stopped.
+   */
+  isStopped?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -463,7 +469,11 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  if (!backend.isStreaming()) {
+  // Accept steer while the run is active and not yet stopped.
+  // Using isActive+isStopped instead of isStreaming: isStreaming is false
+  // during tool execution, but steer should still be queued in that phase.
+  const stopped = backend.isStopped?.() ?? false;
+  if (stopped) {
     return false;
   }
   void backend.queueMessage(text);
