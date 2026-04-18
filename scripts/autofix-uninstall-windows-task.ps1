@@ -5,7 +5,7 @@
 #
 # Also clears the running lock file (in case a run was mid-flight)
 # and reports on any logs left behind. Does NOT delete the log files
-# themselves — those live under ~/.openclaw/autofix/ and you can keep
+# themselves -- those live under ~/.openclaw/autofix/ and you can keep
 # or prune them manually.
 
 param(
@@ -17,16 +17,16 @@ $ErrorActionPreference = "Stop"
 $Existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($Existing) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-    Write-Host "✓ Unregistered task: $TaskName"
+    Write-Host "[OK] Unregistered task: $TaskName"
 } else {
-    Write-Host "Task '$TaskName' was not registered; nothing to do."
+    Write-Host "[skip] Task not registered: $TaskName"
 }
 
 # Clean up any stale lock file so the task can be re-registered cleanly.
 $LockFile = Join-Path $env:USERPROFILE ".openclaw\autofix\autofix.lock"
 if (Test-Path $LockFile) {
     Remove-Item $LockFile -Force
-    Write-Host "✓ Removed lock file: $LockFile"
+    Write-Host "[OK] Removed lock file: $LockFile"
 }
 
 # Report on logs without deleting.
