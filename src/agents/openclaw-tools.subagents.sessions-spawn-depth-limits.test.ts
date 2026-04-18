@@ -106,7 +106,7 @@ describe("sessions_spawn depth + child limits", () => {
         return { runId: "run-depth" };
       }
       if (req.method === "agent.wait") {
-        return { status: "running" };
+        return { status: "pending" };
       }
       return {};
     });
@@ -330,7 +330,7 @@ describe("sessions_spawn depth + child limits", () => {
         return { runId: "run-depth" };
       }
       if (req.method === "agent.wait") {
-        return { status: "running" };
+        return { status: "pending" };
       }
       return {};
     });

@@ -106,6 +106,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   beforeEach(() => {
+    vi.useRealTimers();
     lifecycleHandler = undefined;
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
@@ -117,6 +118,9 @@ describe("subagent registry steer restarts", () => {
 
   const flushAnnounce = async () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+  const waitForRegistrySideEffect = async (assertion: () => void) => {
+    await vi.waitFor(assertion, { interval: 1, timeout: 1_000 });
   };
 
   const withPendingAgentWait = async <T>(run: () => Promise<T>): Promise<T> => {
@@ -239,6 +243,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   afterEach(async () => {
+    vi.useRealTimers();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
@@ -277,10 +282,10 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-new");
 
-      await vi.waitFor(() => {
+      await waitForRegistrySideEffect(() => {
         expect(announceSpy).toHaveBeenCalledTimes(1);
       });
-      await vi.waitFor(() => {
+      await waitForRegistrySideEffect(() => {
         const matchingCalls = runSubagentEndedHookMock.mock.calls.filter((call) => {
           const ctx = call[1] as { runId?: string } | undefined;
           return ctx?.runId === "run-new";
@@ -318,7 +323,7 @@ describe("subagent registry steer restarts", () => {
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
 
       resolveAnnounce(true);
-      await vi.waitFor(() => {
+      await waitForRegistrySideEffect(() => {
         expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
       });
       expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
@@ -413,7 +418,7 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-terminal-state-new");
 
-      await vi.waitFor(() => {
+      await waitForRegistrySideEffect(() => {
         expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
           expect.objectContaining({
             runId: "run-terminal-state-new",
@@ -571,26 +576,25 @@ describe("subagent registry steer restarts", () => {
     expect(run?.outcome).toEqual({ status: "error", error: "manual kill" });
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
-    await vi.waitFor(() => {
-      expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-        {
-          targetSessionKey: childSessionKey,
-          targetKind: "subagent",
-          reason: "subagent-killed",
-          sendFarewell: true,
-          accountId: undefined,
-          runId: "run-killed",
-          endedAt: expect.any(Number),
-          outcome: "killed",
-          error: "manual kill",
-        },
-        {
-          runId: "run-killed",
-          childSessionKey,
-          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-        },
-      );
-    });
+    await flushAnnounce();
+    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
+      {
+        targetSessionKey: childSessionKey,
+        targetKind: "subagent",
+        reason: "subagent-killed",
+        sendFarewell: true,
+        accountId: undefined,
+        runId: "run-killed",
+        endedAt: expect.any(Number),
+        outcome: "killed",
+        error: "manual kill",
+      },
+      {
+        runId: "run-killed",
+        childSessionKey,
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      },
+    );
   });
 
   it("treats a child session as inactive when only a stale older row is still unended", async () => {
@@ -679,7 +683,7 @@ describe("subagent registry steer restarts", () => {
     });
 
     emitLifecycleEnd("run-parent");
-    await vi.waitFor(() => {
+    await waitForRegistrySideEffect(() => {
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
@@ -687,7 +691,7 @@ describe("subagent registry steer restarts", () => {
     });
 
     emitLifecycleEnd("run-child");
-    await vi.waitFor(() => {
+    await waitForRegistrySideEffect(() => {
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
