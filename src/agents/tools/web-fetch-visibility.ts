@@ -26,6 +26,13 @@ const HIDDEN_CLASS_NAMES = new Set([
   "offscreen",
 ]);
 
+let parseHtmlPromise: Promise<typeof import("linkedom").parseHTML> | null = null;
+
+async function loadParseHTML(): Promise<typeof import("linkedom").parseHTML> {
+  parseHtmlPromise ??= import("linkedom").then(({ parseHTML }) => parseHTML);
+  return parseHtmlPromise;
+}
+
 function hasHiddenClass(className: string): boolean {
   const classes = normalizeLowercaseStringOrEmpty(className).split(/\s+/);
   return classes.some((cls) => HIDDEN_CLASS_NAMES.has(cls));
@@ -137,7 +144,7 @@ export async function sanitizeHtml(html: string): Promise<string> {
 
   let document: Document;
   try {
-    const { parseHTML } = await import("linkedom");
+    const parseHTML = await loadParseHTML();
     ({ document } = parseHTML(sanitized) as { document: Document });
   } catch {
     return sanitized;

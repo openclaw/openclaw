@@ -19,33 +19,10 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 describe("spawnSubagentDirect thread binding delivery", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    hoisted.callGatewayMock.mockReset();
-    hoisted.updateSessionStoreMock.mockReset();
-    hoisted.registerSubagentRunMock.mockReset();
-    hoisted.emitSessionLifecycleEventMock.mockReset();
-    hoisted.hookRunner.hasHooks.mockReset();
-    hoisted.hookRunner.runSubagentSpawning.mockReset();
-    installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
-  });
-
-  it("seeds a thread-bound child session from the binding created during spawn", async () => {
-    hoisted.hookRunner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "subagent_spawning",
-    );
-    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
-      status: "ok",
-      threadBindingReady: true,
-      deliveryOrigin: {
-        channel: "matrix",
-        accountId: "sut",
-        to: "room:!room:example",
-        threadId: "$thread-root",
-      },
-    });
-    const { spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+  function loadThreadBindingSpawnModule(
+    overrides: Partial<Parameters<typeof loadSubagentSpawnModuleForTest>[0]> = {},
+  ) {
+    return loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       loadConfig: () =>
         createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -62,30 +39,117 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       hookRunner: hoisted.hookRunner,
       resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    hoisted.callGatewayMock.mockReset();
+    hoisted.updateSessionStoreMock.mockReset();
+    hoisted.registerSubagentRunMock.mockReset();
+    hoisted.emitSessionLifecycleEventMock.mockReset();
+    hoisted.hookRunner.hasHooks.mockReset();
+    hoisted.hookRunner.runSubagentSpawning.mockReset();
+    installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+  });
+
+  it("passes the target agent's bound account to thread binding hooks", async () => {
+    const boundRoom = "!room:example.org";
+    let hookRequester:
+      | { channel?: string; accountId?: string; to?: string; threadId?: string | number }
+      | undefined;
+    hoisted.hookRunner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "subagent_spawning",
+    );
+    hoisted.hookRunner.runSubagentSpawning.mockImplementation(async (event: unknown) => {
+      hookRequester = (
+        event as {
+          requester?: {
+            channel?: string;
+            accountId?: string;
+            to?: string;
+            threadId?: string | number;
+          };
+        }
+      ).requester;
+      return {
+        status: "ok",
+        threadBindingReady: true,
+        deliveryOrigin: {
+          channel: "matrix",
+          to: `room:${boundRoom}`,
+          threadId: "$thread-root",
+        },
+      };
+    });
+    const { spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: hoisted.callGatewayMock,
+      loadConfig: () =>
+        createSubagentSpawnTestConfig(os.tmpdir(), {
+          agents: {
+            defaults: {
+              workspace: os.tmpdir(),
+              subagents: {
+                allowAgents: ["bot-alpha"],
+              },
+            },
+            list: [
+              { id: "main", workspace: "/tmp/workspace-main" },
+              { id: "bot-alpha", workspace: "/tmp/workspace-bot-alpha" },
+            ],
+          },
+          bindings: [
+            {
+              type: "route",
+              agentId: "bot-alpha",
+              match: {
+                channel: "matrix",
+                peer: {
+                  kind: "channel",
+                  id: boundRoom,
+                },
+                accountId: "bot-alpha",
+              },
+            },
+          ],
+        }),
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
+      registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
+      hookRunner: hoisted.hookRunner,
+      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
     });
 
     const result = await spawnSubagentDirect(
       {
         task: "reply with a marker",
+        agentId: "bot-alpha",
         thread: true,
         mode: "session",
       },
       {
         agentSessionKey: "agent:main:main",
         agentChannel: "matrix",
-        agentAccountId: "sut",
-        agentTo: "room:!room:example",
+        agentAccountId: "bot-beta",
+        agentTo: `room:${boundRoom}`,
       },
     );
 
     expect(result.status).toBe("accepted");
+    expect(hookRequester).toMatchObject({
+      channel: "matrix",
+      accountId: "bot-alpha",
+      to: `room:${boundRoom}`,
+    });
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([call]) => (call as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
     expect(agentCall?.params).toMatchObject({
       channel: "matrix",
-      accountId: "sut",
-      to: "room:!room:example",
+      accountId: "bot-alpha",
+      to: `room:${boundRoom}`,
       threadId: "$thread-root",
       deliver: true,
     });
@@ -93,8 +157,8 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       expect.objectContaining({
         requesterOrigin: {
           channel: "matrix",
-          accountId: "sut",
-          to: "room:!room:example",
+          accountId: "bot-alpha",
+          to: `room:${boundRoom}`,
           threadId: "$thread-root",
         },
         expectsCompletionMessage: false,
@@ -111,21 +175,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       status: "ok",
       threadBindingReady: true,
     });
-    const { spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
-      callGatewayMock: hoisted.callGatewayMock,
-      loadConfig: () =>
-        createSubagentSpawnTestConfig(os.tmpdir(), {
-          agents: {
-            defaults: {
-              workspace: os.tmpdir(),
-            },
-            list: [{ id: "main", workspace: "/tmp/workspace-main" }],
-          },
-        }),
-      updateSessionStoreMock: hoisted.updateSessionStoreMock,
-      registerSubagentRunMock: hoisted.registerSubagentRunMock,
-      emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
-      hookRunner: hoisted.hookRunner,
+    const { spawnSubagentDirect } = await loadThreadBindingSpawnModule({
       getSessionBindingService: () => ({
         listBySession: () => [
           {
@@ -141,8 +191,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       resolveConversationDeliveryTarget: () => ({
         to: "channel:oc_dm_chat_1",
       }),
-      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
     });
 
     const result = await spawnSubagentDirect(
