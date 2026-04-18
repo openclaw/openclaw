@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProviderExternalAuthProfile } from "../plugins/provider-external-auth.types.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -10,8 +11,12 @@ import {
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
+const resolveExternalAuthProfilesWithPluginsMock = vi.hoisted(() =>
+  vi.fn<() => ProviderExternalAuthProfile[]>(() => []),
+);
+
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
 }));
 
 vi.mock("./cli-credentials.js", () => ({
@@ -51,6 +56,11 @@ vi.mock("./cli-credentials.js", () => ({
 }));
 
 describe("ensureAuthProfileStore", () => {
+  afterEach(() => {
+    resolveExternalAuthProfilesWithPluginsMock.mockReset();
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+  });
+
   function withTempAgentDir<T>(prefix: string, run: (agentDir: string) => T): T {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     try {
@@ -385,55 +395,43 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
-  it("exposes Codex CLI auth without persisting copied tokens into auth-profiles.json", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-external-sync-"));
-    const previousCodexHome = process.env.CODEX_HOME;
+  it("exposes provider-managed runtime auth without persisting copied tokens", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-external-auth-"));
     const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
     const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
     try {
       const agentDir = path.join(root, "agent");
-      const codexHome = path.join(root, "codex-home");
       fs.mkdirSync(agentDir, { recursive: true });
-      fs.mkdirSync(codexHome, { recursive: true });
-      fs.writeFileSync(
-        path.join(codexHome, "auth.json"),
-        `${JSON.stringify(
-          {
-            auth_mode: "chatgpt",
-            tokens: {
-              access_token: "codex-access-token",
-              refresh_token: "codex-refresh-token",
-              account_id: "acct_123",
-            },
-            last_refresh: "2026-03-01T00:00:00.000Z",
+      resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
+        {
+          profileId: "demo-provider:external",
+          credential: {
+            type: "oauth",
+            provider: "demo-provider",
+            access: "external-access-token",
+            refresh: "external-refresh-token",
+            expires: Date.now() + 60_000,
+            accountId: "acct_123",
           },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
+          persistence: "runtime-only",
+        },
+      ]);
 
-      process.env.CODEX_HOME = codexHome;
       process.env.OPENCLAW_AGENT_DIR = agentDir;
       process.env.PI_CODING_AGENT_DIR = agentDir;
       clearRuntimeAuthProfileStoreSnapshots();
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles["openai-codex:default"]).toMatchObject({
+      expect(store.profiles["demo-provider:external"]).toMatchObject({
         type: "oauth",
-        provider: "openai-codex",
-        access: "codex-access-token",
-        refresh: "codex-refresh-token",
+        provider: "demo-provider",
+        access: "external-access-token",
+        refresh: "external-refresh-token",
       });
 
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
       if (previousAgentDir === undefined) {
         delete process.env.OPENCLAW_AGENT_DIR;
       } else {

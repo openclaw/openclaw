@@ -1,25 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createExpiredOauthStore,
+  resolveApiKeyForProfileInTest,
+} from "./oauth-test-utils.js";
 import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { OAuthCredential } from "./types.js";
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
-}
-
-function resolveApiKeyForProfileInTest(
-  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
-) {
-  return resolveApiKeyForProfile({ cfg: {}, ...params });
-}
 
 const { withFileLockMock } = vi.hoisted(() => ({
   withFileLockMock: vi.fn(
@@ -66,35 +61,21 @@ vi.mock("./external-auth.js", () => ({
   shouldPersistExternalAuthProfile: () => true,
 }));
 
-vi.mock("./external-cli-sync.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./external-cli-sync.js")>("./external-cli-sync.js");
-  return {
-    ...actual,
-    syncExternalCliCredentials: () => false,
-    readManagedExternalCliCredential: () => null,
-    resolveExternalCliAuthProfiles: () => [],
-    areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  };
-});
-
-function createExpiredOauthStore(params: {
-  profileId: string;
-  provider: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: Date.now() - 60_000,
-      } satisfies OAuthCredential,
-    },
-  };
-}
+vi.mock("./external-cli-sync.js", () => ({
+  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
+    credential?.type === "oauth" &&
+    credential.access.trim().length > 0 &&
+    Number.isFinite(credential.expires) &&
+    credential.expires - now > 5 * 60 * 1000,
+  isSafeToUseExternalCliCredential: () => true,
+  readExternalCliBootstrapCredential: () => null,
+  readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
+  shouldBootstrapFromExternalCliCredential: () => false,
+  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
+    existing !== incoming,
+}));
 
 function createLockTimeoutError(lockPath: string): FileLockTimeoutError {
   return Object.assign(new Error(`file lock timeout for ${lockPath.slice(0, -5)}`), {
@@ -104,13 +85,15 @@ function createLockTimeoutError(lockPath: string): FileLockTimeoutError {
 }
 
 describe("OAuth refresh lock timeout classification", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let agentDir = "";
+  let caseIndex = 0;
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-lock-timeout-"));
+    ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
+  });
 
   beforeEach(async () => {
     withFileLockMock.mockReset();
@@ -118,25 +101,23 @@ describe("OAuth refresh lock timeout classification", () => {
       async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => await run(),
     );
     clearRuntimeAuthProfileStoreSnapshots();
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-lock-timeout-"));
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    agentDir = path.join(tempRoot, "agents", "main", "agent");
+    const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
+    process.env.OPENCLAW_STATE_DIR = caseRoot;
+    agentDir = path.join(caseRoot, "agents", "main", "agent");
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
     await fs.mkdir(agentDir, { recursive: true });
-    await loadOAuthModuleForTest();
     resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
     envSnapshot.restore();
     clearRuntimeAuthProfileStoreSnapshots();
-    if (resetOAuthRefreshQueuesForTest) {
-      resetOAuthRefreshQueuesForTest();
-    }
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    resetOAuthRefreshQueuesForTest();
+  });
+
+  afterAll(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
   it("maps only global refresh lock timeouts to refresh_contention", async () => {
@@ -151,7 +132,7 @@ describe("OAuth refresh lock timeout classification", () => {
     });
 
     try {
-      await resolveApiKeyForProfileInTest({
+      await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store,
         profileId,
         agentDir,
@@ -190,7 +171,7 @@ describe("OAuth refresh lock timeout classification", () => {
       });
 
     try {
-      await resolveApiKeyForProfileInTest({
+      await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store,
         profileId,
         agentDir,
