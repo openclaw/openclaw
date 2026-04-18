@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
+import { DEFAULT_GATEWAY_PORT, resolveStateDir } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -90,34 +90,40 @@ rm -f "$0"
       const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
       const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
       const escapedPlistPath = shellEscape(plistPath);
-      const logPath = path.join(home, ".openclaw", "logs", "update-restart.log");
+      const logDir = path.join(resolveStateDir(env), "logs");
+      const logPath = path.join(logDir, "update-restart.log");
+      const escapedLogDir = shellEscape(logDir);
       const escapedLogPath = shellEscape(logPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-# Capture launchctl stderr so bootstrap/kickstart failures leave a durable
-# audit trail. Without this, transient launchctl errors (plist-on-disk race,
-# schema rejection, stale job) disappear into /dev/null and the updater
-# reports success while the gateway is silently offline — see #68486.
-mkdir -p "$(dirname '${escapedLogPath}')" 2>/dev/null || true
-exec 2>>'${escapedLogPath}'
-echo "[$(date -u +%FT%TZ)] openclaw update restart attempt (label=${escaped})" >&2
+# Capture launchctl output so bootstrap/kickstart failures leave a durable
+# audit trail. Log setup is best-effort: restart must still run if the log path
+# is temporarily unavailable.
+mkdir -p '${escapedLogDir}' 2>/dev/null || true
+exec >>'${escapedLogPath}' 2>&1 || true
+printf '[%s] openclaw update restart attempt (label=%s)\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart. Any step's stderr now
-# lands in update-restart.log; the final kickstart no longer swallows
-# its exit code with \`|| true\`, so a genuine failure exits non-zero and
-# is inspectable.
+# then re-register via bootstrap and kickstart. The final status is captured
+# before self-cleanup so a genuine failure remains observable.
+status=0
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
   launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'
   launchctl kickstart -k 'gui/${uid}/${escaped}'
+  status=$?
 fi
-echo "[$(date -u +%FT%TZ)] openclaw update restart done" >&2
-# Self-cleanup (log is retained under ~/.openclaw/logs/update-restart.log).
+if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw update restart done\\n' "$(date -u +%FT%TZ)" >&2
+else
+  printf '[%s] openclaw update restart failed status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+fi
+# Self-cleanup (log is retained under the OpenClaw state logs directory).
 rm -f "$0"
+exit "$status"
 `;
     } else if (platform === "win32") {
       const taskName = resolveWindowsTaskName(env);
