@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
@@ -116,7 +116,12 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     "PI_CODING_AGENT_DIR",
   ]);
   let tempRoot = "";
+  let caseIndex = 0;
   let mainAgentDir = "";
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-mirror-"));
+  });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
@@ -126,9 +131,10 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
     externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
     clearRuntimeAuthProfileStoreSnapshots();
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-mirror-"));
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    caseIndex += 1;
+    const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
+    process.env.OPENCLAW_STATE_DIR = caseRoot;
+    mainAgentDir = path.join(caseRoot, "agents", "main", "agent");
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
     process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     await fs.mkdir(mainAgentDir, { recursive: true });
@@ -141,6 +147,9 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     resetOAuthRefreshQueuesForTest();
+  });
+
+  afterAll(async () => {
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

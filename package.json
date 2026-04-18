@@ -1488,6 +1488,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.19.0",
+    "@anthropic-ai/sdk": "0.81.0",
     "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@aws-sdk/client-bedrock": "3.1032.0",
     "@aws-sdk/client-bedrock-runtime": "3.1032.0",
@@ -1534,7 +1535,6 @@
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
     "linkedom": "^0.18.12",
-    "long": "^5.3.2",
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.3.0",
     "mpg123-decoder": "^1.0.3",
@@ -1553,7 +1553,6 @@
     "tar": "7.5.13",
     "tslog": "^4.10.2",
     "undici": "8.1.0",
-    "uuid": "^13.0.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"

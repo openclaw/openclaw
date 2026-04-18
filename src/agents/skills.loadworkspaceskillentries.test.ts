@@ -41,9 +41,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   await restoreMockSkillsHomeEnv(envSnapshot, async () => {
     if (fakeHome) {
       await fs.rm(fakeHome, { recursive: true, force: true });

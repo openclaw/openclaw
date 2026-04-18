@@ -33,6 +33,7 @@ function resolveProviderChoiceOptions(params?: {
     scope: "text-inference",
   }).map((contribution) =>
     Object.assign(
+      {},
       { value: contribution.option.value as AuthChoice, label: contribution.option.label },
       contribution.option.hint ? { hint: contribution.option.hint } : {},
       contribution.option.assistantPriority !== undefined
@@ -140,10 +141,9 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   const groups = Array.from(groupsById.values())
-    .map((group) => ({
-      ...group,
-      options: [...group.options].toSorted(compareAssistantOptions),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
+    )
     .toSorted(compareGroupLabels);
 
   const skipOption = params.includeSkip
