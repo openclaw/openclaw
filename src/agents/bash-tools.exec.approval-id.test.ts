@@ -305,7 +305,7 @@ describe("exec approvals", () => {
     await expect
       .poll(() => (invokeParams as { params?: { runId?: string } } | undefined)?.params?.runId, {
         timeout: 2000,
-        interval: 20,
+        interval: 1,
       })
       .toBe(approvalId);
     expect(
@@ -313,7 +313,7 @@ describe("exec approvals", () => {
     ).toMatchObject({
       suppressNotifyOnExit: true,
     });
-    await expect.poll(() => agentParams, { timeout: 2_000, interval: 20 }).toBeTruthy();
+    await expect.poll(() => agentParams, { timeout: 2_000, interval: 1 }).toBeTruthy();
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -768,7 +768,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -809,7 +809,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:discord:channel:123",
@@ -887,7 +887,7 @@ describe("exec approvals", () => {
 
     resolveDecision?.({ decision: "allow-once" });
 
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:discord:channel:123",
@@ -945,7 +945,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
 
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -998,7 +998,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain("An async command did not run.");
     expect(agentCalls[0]?.message).toContain(
