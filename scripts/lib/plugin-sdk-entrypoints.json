@@ -165,6 +165,7 @@
   "string-coerce-runtime",
   "group-access",
   "global-singleton",
+  "directory-config-runtime",
   "directory-runtime",
   "googlechat",
   "googlechat-runtime-shared",
