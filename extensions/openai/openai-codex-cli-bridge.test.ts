@@ -36,10 +36,12 @@ describe("prepareOpenAICodexCliExecution", () => {
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
             accountId: "acct-123",
+            idToken: "id-token",
           },
         },
       },
       agentDir,
+      { filterExternalAuthProfiles: false },
     );
 
     const result = await prepareOpenAICodexCliExecution({
@@ -64,6 +66,7 @@ describe("prepareOpenAICodexCliExecution", () => {
     expect(authFile).toEqual({
       auth_mode: "chatgpt",
       tokens: {
+        id_token: "id-token",
         access_token: "access-token",
         refresh_token: "refresh-token",
         account_id: "acct-123",
@@ -90,6 +93,7 @@ describe("prepareOpenAICodexCliExecution", () => {
         },
       },
       agentDir,
+      { filterExternalAuthProfiles: false },
     );
 
     await expect(
@@ -124,6 +128,7 @@ describe("prepareOpenAICodexCliExecution", () => {
         },
       },
       agentDir,
+      { filterExternalAuthProfiles: false },
     );
 
     await expect(

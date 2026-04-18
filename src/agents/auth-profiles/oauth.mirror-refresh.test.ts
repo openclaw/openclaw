@@ -652,10 +652,9 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     });
   });
 
-  it("refuses to mirror into a main store that lacks identity binding", async () => {
-    // Authoritative main-store overwrites now require a positive identity
-    // match. A pre-capture main credential must not be replaced by a
-    // sub-agent refresh from an arbitrary account.
+  it("mirrors identity-bearing refreshes into a pre-capture main store", async () => {
+    // Pre-capture main credentials may lack account identity. Allow the
+    // refreshed sub-agent credential to upgrade the main store with identity.
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
@@ -703,14 +702,13 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     });
     expect(result?.apiKey).toBe("sub-refreshed-access");
 
-    // Main must remain unchanged because there was no positive identity
-    // binding to authorize the overwrite.
     const mainRaw = JSON.parse(
       await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
     expect(mainRaw.profiles[profileId]).toMatchObject({
-      access: "main-pre-capture-access",
-      refresh: "main-pre-capture-refresh",
+      access: "sub-refreshed-access",
+      refresh: "sub-refreshed-refresh",
+      accountId: "acct-sub",
     });
   });
 

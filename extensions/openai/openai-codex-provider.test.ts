@@ -118,6 +118,41 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("exposes Codex CLI auth as a runtime-only external profile", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai-codex",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct-123",
+    };
+    readOpenAICodexCliOAuthProfileMock.mockReturnValueOnce({
+      profileId: "openai-codex:default",
+      credential,
+    });
+
+    expect(
+      provider.resolveExternalAuthProfiles?.({
+        env: { CODEX_HOME: "/sandboxed/codex-home" } as NodeJS.ProcessEnv,
+        store: { version: 1, profiles: {} },
+      }),
+    ).toEqual([
+      {
+        profileId: "openai-codex:default",
+        credential,
+        persistence: "runtime-only",
+      },
+    ]);
+    expect(readOpenAICodexCliOAuthProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ CODEX_HOME: "/sandboxed/codex-home" }),
+        store: { version: 1, profiles: {} },
+      }),
+    );
+  });
+
   it("uses the provider auth context env when importing Codex CLI auth", async () => {
     const provider = buildOpenAICodexProviderPlugin();
     const importMethod = provider.auth?.find((method) => method.id === "import-codex-cli");
@@ -156,7 +191,7 @@ describe("openai codex provider", () => {
     ).resolves.toMatchObject({
       profiles: [
         {
-          profileId: "default:codex@example.com",
+          profileId: "openai-codex:default",
           credential: expect.objectContaining({
             provider: "openai-codex",
             access: "access-token",

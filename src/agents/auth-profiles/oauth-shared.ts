@@ -22,7 +22,8 @@ export function areOAuthCredentialsEquivalent(
     a.email === b.email &&
     a.enterpriseUrl === b.enterpriseUrl &&
     a.projectId === b.projectId &&
-    a.accountId === b.accountId
+    a.accountId === b.accountId &&
+    a.idToken === b.idToken
   );
 }
 
@@ -140,6 +141,12 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   }
   if (existing.provider !== incoming.provider) {
     return false;
+  }
+  if (areOAuthCredentialsEquivalent(existing, incoming)) {
+    return true;
+  }
+  if (!hasOAuthIdentity(existing)) {
+    return true;
   }
   return hasMatchingOAuthIdentity(existing, incoming);
 }

@@ -41,10 +41,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
             accountId: "acct-123",
+            idToken: "id-token",
           },
         },
       },
       agentDir,
+      { filterExternalAuthProfiles: false },
     );
 
     const result = await bridgeCodexAppServerStartOptions({
@@ -73,6 +75,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     expect(authFile).toEqual({
       auth_mode: "chatgpt",
       tokens: {
+        id_token: "id-token",
         access_token: "access-token",
         refresh_token: "refresh-token",
         account_id: "acct-123",
@@ -93,7 +96,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
       args: ["app-server"],
       headers: { authorization: "Bearer dev-token" },
     };
-    saveAuthProfileStore({ version: 1, profiles: {} }, agentDir);
+    saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, {
+      filterExternalAuthProfiles: false,
+    });
 
     await expect(
       bridgeCodexAppServerStartOptions({
@@ -121,6 +126,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         },
       },
       agentDir,
+      { filterExternalAuthProfiles: false },
     );
 
     const codexHome = resolveHashedCodexHome(agentDir, "openai-codex:default");

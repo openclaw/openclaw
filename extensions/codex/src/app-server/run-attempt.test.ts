@@ -532,7 +532,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const binding = await startOrResumeThread({
       client: {
-        request: async (method) => {
+        request: async (method: string) => {
           if (method === "thread/resume") {
             return { thread: { id: "thread-existing" }, modelProvider: "openai" };
           }
