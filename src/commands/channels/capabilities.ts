@@ -48,7 +48,7 @@ type ChannelCapabilitiesReport = {
 };
 
 function normalizeTimeout(raw: unknown, fallback = 10_000) {
-  const value = typeof raw === "string" ? Number(raw) : Number(raw);
+  const value = typeof raw === "number" ? raw : Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
     return fallback;
   }
