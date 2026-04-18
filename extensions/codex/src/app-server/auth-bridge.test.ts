@@ -54,6 +54,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
     const result = await bridgeCodexAppServerStartOptions({
       startOptions: {
+        transport: "stdio",
         command: "codex",
         args: ["app-server"],
         headers: { authorization: "Bearer dev-token" },
@@ -92,6 +93,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     tempDirs.push(agentDir);
     const startOptions = {
+      transport: "stdio" as const,
       command: "codex",
       args: ["app-server"],
       headers: { authorization: "Bearer dev-token" },
@@ -133,8 +135,10 @@ describe("bridgeCodexAppServerStartOptions", () => {
     await expect(
       bridgeCodexAppServerStartOptions({
         startOptions: {
+          transport: "stdio",
           command: "codex",
           args: ["app-server"],
+          headers: {},
         },
         agentDir,
       }),

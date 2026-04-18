@@ -131,7 +131,6 @@ describe("auth external oauth helpers", () => {
         refresh: "fresh-cli-refresh-token",
         expires: createUsableOAuthExpiry(),
         accountId: "acct-cli",
-        expires: createUsableOAuthExpiry(),
       }),
     );
 
