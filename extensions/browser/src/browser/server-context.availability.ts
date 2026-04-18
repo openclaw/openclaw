@@ -201,7 +201,11 @@ export function createProfileAvailability({
       // Browser control service can restart while a loopback OpenClaw browser is still
       // alive. Give that pre-existing browser one longer probe window before falling
       // back to local executable resolution.
-      if (!attachOnly && !remoteCdp && profile.cdpIsLoopback && !profileState.running) {
+      // Also apply this retry window for attachOnly profiles connecting to external Chrome.
+      if (
+        (!attachOnly && !remoteCdp && profile.cdpIsLoopback && !profileState.running) ||
+        (attachOnly && profile.cdpIsLoopback)
+      ) {
         if (
           (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) &&
           (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))
@@ -213,7 +217,7 @@ export function createProfileAvailability({
         throw new BrowserProfileUnavailableError(
           remoteCdp
             ? `Remote CDP for profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`
-            : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
+            : `Browser attachOnly is enabled and profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`,
         );
       }
       const launched = await launchOpenClawChrome(current.resolved, profile);
