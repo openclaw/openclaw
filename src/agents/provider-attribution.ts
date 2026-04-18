@@ -1,3 +1,4 @@
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -131,6 +132,7 @@ const OPENAI_RESPONSES_APIS = new Set([
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
+const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>(["xai-native"]);
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
@@ -184,6 +186,36 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isManifestProviderEndpointClass(value: string): value is ProviderEndpointClass {
+  return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
+}
+
+function resolveManifestProviderEndpoint(params: {
+  host: string;
+  normalizedBaseUrl?: string;
+}): ProviderEndpointResolution | undefined {
+  const registry = loadPluginManifestRegistry({ cache: true });
+  for (const plugin of registry.plugins) {
+    for (const endpoint of plugin.providerEndpoints ?? []) {
+      if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
+        continue;
+      }
+      if (endpoint.hosts?.some((host) => host.toLowerCase() === params.host)) {
+        return { endpointClass: endpoint.endpointClass, hostname: params.host };
+      }
+      if (
+        params.normalizedBaseUrl &&
+        endpoint.baseUrls?.some(
+          (baseUrl) => normalizeComparableBaseUrl(baseUrl) === params.normalizedBaseUrl,
+        )
+      ) {
+        return { endpointClass: endpoint.endpointClass, hostname: params.host };
+      }
+    }
+  }
+  return undefined;
 }
 
 function isLocalEndpointHost(host: string): boolean {
@@ -246,9 +278,6 @@ export function resolveProviderEndpoint(
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return { endpointClass: "openrouter", hostname: host };
   }
-  if (host === "api.x.ai" || host === "api.grok.x.ai") {
-    return { endpointClass: "xai-native", hostname: host };
-  }
   if (host === "api.z.ai") {
     return { endpointClass: "zai-native", hostname: host };
   }
@@ -272,6 +301,10 @@ export function resolveProviderEndpoint(
       hostname: host,
       googleVertexRegion: googleVertexHost[1],
     };
+  }
+  const manifestEndpoint = resolveManifestProviderEndpoint({ host, normalizedBaseUrl });
+  if (manifestEndpoint) {
+    return manifestEndpoint;
   }
   if (isLocalEndpointHost(host)) {
     return { endpointClass: "local", hostname: host };
@@ -549,7 +582,6 @@ export function resolveProviderRequestCapabilities(
   const policy = resolveProviderRequestPolicy(input, env);
   const provider = policy.provider;
   const api = normalizeOptionalLowercaseString(input.api);
-  const normalizedModelId = normalizeOptionalLowercaseString(input.modelId);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
@@ -573,12 +605,6 @@ export function resolveProviderRequestCapabilities(
 
   let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
   if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
-    compatibilityFamily = "moonshot";
-  } else if (
-    provider === "ollama" &&
-    normalizedModelId?.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
-  ) {
     compatibilityFamily = "moonshot";
   }
 
