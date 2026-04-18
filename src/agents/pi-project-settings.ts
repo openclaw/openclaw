@@ -9,14 +9,8 @@ import { applyPiCompactionSettingsFromConfig } from "./pi-settings.js";
 
 export {
   buildEmbeddedPiSettingsSnapshot,
-  DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY,
   loadEnabledBundlePiSettingsSnapshot,
   resolveEmbeddedPiProjectSettingsPolicy,
-  SANITIZED_PROJECT_PI_KEYS,
-} from "./pi-project-settings-snapshot.js";
-export type {
-  EmbeddedPiProjectSettingsPolicy,
-  PiSettingsSnapshot,
 } from "./pi-project-settings-snapshot.js";
 
 export function createEmbeddedPiSettingsManager(params: {
