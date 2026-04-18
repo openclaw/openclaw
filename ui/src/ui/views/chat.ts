@@ -141,6 +141,10 @@ export type ChatProps = {
     decision: "approve" | "reject" | "edit",
     feedback?: string,
   ) => void | Promise<void>;
+  // PR-10 AskUserQuestion: route the user's answer to sessions.patch
+  // { planApproval: { action: "answer", answer: <text> }} via the
+  // host. Same approval-card surface, different action verb.
+  onPlanApprovalAnswer?: (answer: string) => void | Promise<void>;
   /** Open the full plan content in the right sidebar (read-only viewer). */
   onOpenPlanInSidebar?: (request: PlanApprovalRequest) => void;
   /**
@@ -1587,6 +1591,10 @@ export function renderChat(props: ChatProps) {
                 props.onOpenPlanInSidebar(props.planApprovalRequest);
               }
             },
+            // PR-10 AskUserQuestion routing.
+            onAnswerOption: props.onPlanApprovalAnswer
+              ? (answer) => void props.onPlanApprovalAnswer!(answer)
+              : undefined,
           })
         : nothing}
 
@@ -1640,6 +1648,10 @@ export function renderChat(props: ChatProps) {
                       activeSession?.execSecurity,
                       activeSession?.execAsk,
                       activeSession?.planMode?.mode,
+                      // PR-10: surface "Plan ⚡" when the session has
+                      // auto-approve armed so the chip + tooltip match
+                      // the live runtime state.
+                      activeSession?.planMode?.autoApprove,
                     );
                     return renderModeSwitcher({
                       currentMode,

@@ -1942,7 +1942,46 @@ export function renderApp(state: AppViewState) {
                 // the user picks anything-but-plan while a plan-mode
                 // session is active, also clear plan mode so the chip
                 // labels match the actual runtime state.
+                //
+                // PR-10 auto-mode: when the user picks "Plan ⚡" we
+                // also fire a planApproval { action: "auto",
+                // autoEnabled: true } patch. Picking plain "Plan"
+                // clears the flag (autoEnabled: false). The two
+                // patches are independent so the auto toggle survives
+                // approval/cancel cycles cleanly.
                 if (!state.client || !state.connected) {
+                  return;
+                }
+                // PR-10 review M2: skip the patch entirely when the
+                // selection matches the currently-resolved chip state.
+                // Without this, clicking the active mode in the dropdown
+                // bumps `planMode.updatedAt` and re-fires both patches —
+                // visible to crons that watch `updatedAt` as activity
+                // and adds noise to the gateway log.
+                const activeSession = state.sessionsResult?.sessions?.find(
+                  (s: { key?: string }) => s.key === state.sessionKey,
+                );
+                const currentChipMode: string | null = (() => {
+                  // Inline minimal copy of resolveCurrentMode's plan-aware
+                  // logic; the imported helper isn't accessible from this
+                  // bundling layer without a cycle. Cheap structural check:
+                  if (activeSession?.planMode?.mode === "plan") {
+                    if (activeSession.planMode.autoApprove === true) {
+                      return "plan-auto";
+                    }
+                    return "plan";
+                  }
+                  return null; // permission-mode comparison handled by patch idempotency
+                })();
+                if (
+                  currentChipMode &&
+                  mode.id === currentChipMode &&
+                  // Plan ⚡ → Plan ⚡ and Plan → Plan are the only redundant
+                  // selections worth short-circuiting; permission-mode
+                  // chips are already idempotent server-side (same
+                  // execSecurity/execAsk = no state delta).
+                  (mode.id === "plan" || mode.id === "plan-auto")
+                ) {
                   return;
                 }
                 const sessionKey = state.sessionKey;
@@ -1976,6 +2015,29 @@ export function renderApp(state: AppViewState) {
                         : `Failed to set mode: ${String(err)}`;
                   },
                 );
+                // PR-10 auto-toggle: fire a follow-up patch only when
+                // we're switching INTO or OUT OF plan mode AND the
+                // selected mode disagrees with the current autoApprove
+                // state. We always send for plan-* selections so the
+                // backend is the source of truth (and so toggling
+                // between Plan and Plan ⚡ flips the flag without
+                // re-entering plan mode).
+                if (mode.planMode === "plan") {
+                  const autoEnabled = mode.planAutoApprove === true;
+                  const autoPatch: Record<string, unknown> = {
+                    key: sessionKey,
+                    planApproval: { action: "auto", autoEnabled },
+                  };
+                  void state.client.request("sessions.patch", autoPatch).then(
+                    () => {
+                      // No-op; lastError already cleared by the
+                      // primary patch above.
+                    },
+                    (err: unknown) => {
+                      state.lastError = `Failed to ${autoEnabled ? "enable" : "disable"} auto-approve: ${String(err)}`;
+                    },
+                  );
+                }
               },
               // PR-8 follow-up: inline plan approval card lives above
               // the chat input. Replaces the modal overlay so the rest
@@ -1987,6 +2049,9 @@ export function renderApp(state: AppViewState) {
               planApprovalReviseDraft: state.planApprovalReviseDraft,
               onPlanApprovalDecision: (decision, feedback) =>
                 state.handlePlanApprovalDecision(decision, feedback),
+              // PR-10 AskUserQuestion: route the chosen answer back
+              // through the same approval-card surface.
+              onPlanApprovalAnswer: (answer) => state.handlePlanApprovalAnswer(answer),
               onPlanApprovalReviseOpen: () => state.handlePlanApprovalReviseOpen(),
               onPlanApprovalReviseCancel: () => state.handlePlanApprovalReviseCancel(),
               onPlanApprovalReviseDraftChange: (text) =>

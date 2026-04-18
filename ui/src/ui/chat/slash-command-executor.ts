@@ -131,9 +131,18 @@ export async function executeSlashCommand(
 }
 
 /**
- * `/plan on|off|status` — toggle the session into or out of plan mode.
- * Routes through `setSessionPlanMode` (sessions.patch with `planMode`)
- * which the gateway's PR-8 handler validates against the
+ * `/plan on|off|status|view|auto [on|off]` — manage plan-mode session state.
+ *
+ * - `on` / `off`: toggle planMode via `setSessionPlanMode`
+ * - `view`: UI-only sidebar toggle (no gateway round-trip)
+ * - `status`: print usage / discoverability helper
+ * - `auto on|off`: PR-10 — toggle the session's autoApprove flag via
+ *   `sessions.patch { planApproval: { action: "auto", autoEnabled }}`.
+ *   When ON, future `exit_plan_mode` submissions auto-resolve as
+ *   "approve" without user confirmation (Cloud Code parity for
+ *   long-running unattended sessions).
+ *
+ * All paths are validated against the gateway's
  * `agents.defaults.planMode.enabled` opt-in gate.
  */
 async function executePlan(
@@ -153,17 +162,51 @@ async function executePlan(
       action: "toggle-plan-view",
     };
   }
+  // PR-10: `/plan auto on|off` toggles autoApprove. Without an
+  // explicit on/off arg, defaults to on (matches the chip's "switch
+  // INTO Plan ⚡" intent).
+  if (raw === "auto" || raw.startsWith("auto ")) {
+    const tail = raw.slice(4).trim();
+    let autoEnabled: boolean;
+    if (!tail || tail === "on") {
+      autoEnabled = true;
+    } else if (tail === "off") {
+      autoEnabled = false;
+    } else {
+      return {
+        content: `Unrecognized auto value "${tail}". Valid: on, off.`,
+      };
+    }
+    try {
+      await setSessionPlanAutoApprove(client, sessionKey, autoEnabled);
+      return {
+        content: autoEnabled
+          ? "Plan auto-approve **enabled** — future plan submissions resolve as approved without confirmation."
+          : "Plan auto-approve **disabled** — plan submissions require manual confirmation.",
+        action: "refresh",
+      };
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("plan mode is disabled")) {
+        return {
+          content:
+            "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
+        };
+      }
+      return { content: `Failed to set plan auto-approve: ${msg}` };
+    }
+  }
   if (!raw || raw === "status") {
     return {
       content: formatDirectiveOptions(
-        "Usage: `/plan on` to enter plan mode, `/plan off` to exit, `/plan view` to toggle the sidebar.",
-        "on, off, status, view",
+        "Usage: `/plan on` to enter plan mode, `/plan off` to exit, `/plan view` to toggle the sidebar, `/plan auto on|off` to toggle auto-approve.",
+        "on, off, status, view, auto",
       ),
     };
   }
   if (raw !== "on" && raw !== "off") {
     return {
-      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status, view.`,
+      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status, view, auto.`,
     };
   }
   const mode: "plan" | "normal" = raw === "on" ? "plan" : "normal";
@@ -447,6 +490,32 @@ export async function setSessionPlanMode(
   mode: "plan" | "normal",
 ): Promise<void> {
   await client.request("sessions.patch", { key: sessionKey, planMode: mode });
+}
+
+/**
+ * PR-10: toggle the session's plan-mode autoApprove flag.
+ *
+ * - `true`: future `exit_plan_mode` submissions auto-resolve as
+ *   "approve" without user confirmation. The plan-snapshot persister's
+ *   auto-approve branch (`autoApproveIfEnabled`) reads this flag and
+ *   fires the approve action immediately on emission.
+ * - `false`: clears the flag. Pending plans surfaced after this point
+ *   wait for manual confirmation through the inline approval card or
+ *   channel-native buttons (PR-11).
+ *
+ * The patch handler accepts the toggle even when no plan-mode session
+ * is currently active — this lets users pre-arm auto-approve before
+ * entering plan mode, matching the chip's "Plan ⚡" intent.
+ */
+export async function setSessionPlanAutoApprove(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  autoEnabled: boolean,
+): Promise<void> {
+  await client.request("sessions.patch", {
+    key: sessionKey,
+    planApproval: { action: "auto", autoEnabled },
+  });
 }
 
 async function executeUsage(

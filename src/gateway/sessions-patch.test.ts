@@ -456,3 +456,235 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
   });
 });
+
+describe("PR-10 plan auto-mode patch routing", () => {
+  // All paths require the planMode feature gate to be on.
+  function planModeEnabledCfg(): OpenClawConfig {
+    return {
+      agents: { defaults: { planMode: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+  }
+
+  test("rejects planApproval action='auto' when feature gate is OFF", async () => {
+    const result = await runPatch({
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "auto", autoEnabled: true },
+      },
+      // EMPTY_CFG → planMode.enabled !== true.
+    });
+    expectPatchError(result, "plan mode is disabled");
+  });
+
+  test("toggles autoApprove ON when no planMode entry exists yet (pre-arms)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: true },
+        },
+      }),
+    );
+    // Pre-arming: planMode entry materialized as mode:"normal" with the
+    // flag set, so the next enter_plan_mode preserves it.
+    expect(entry.planMode?.mode).toBe("normal");
+    expect(entry.planMode?.autoApprove).toBe(true);
+  });
+
+  test("toggles autoApprove ON when an active plan-mode session exists", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: true },
+        },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("plan"); // unchanged
+    expect(entry.planMode?.autoApprove).toBe(true);
+  });
+
+  test("toggles autoApprove OFF without disturbing an active plan-mode session", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "abc",
+          rejectionCount: 0,
+          updatedAt: 1,
+          autoApprove: true,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: false },
+        },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("plan");
+    expect(entry.planMode?.approval).toBe("pending");
+    expect(entry.planMode?.approvalId).toBe("abc");
+    expect(entry.planMode?.autoApprove).toBe(false);
+  });
+
+  test("preserves autoApprove across approve transition (mode → normal)", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "abc",
+          rejectionCount: 0,
+          updatedAt: 1,
+          autoApprove: true,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "abc" },
+        },
+      }),
+    );
+    // Approve transitions mode → normal; the autoApprove flag must survive
+    // so the NEXT enter_plan_mode in the same session also auto-approves.
+    expect(entry.planMode?.mode).toBe("normal");
+    expect(entry.planMode?.autoApprove).toBe(true);
+  });
+
+  test("clears planMode entry on approve when autoApprove is unset", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "pending",
+          approvalId: "abc",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "abc" },
+        },
+      }),
+    );
+    // No autoApprove flag → planMode is cleared entirely (matches the
+    // pre-PR-10 behavior).
+    expect(entry.planMode).toBeUndefined();
+  });
+
+  test("rejects answer action without an answer string", async () => {
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "answer", answer: "" } as unknown as never,
+      },
+    });
+    expectPatchError(result, "answer");
+  });
+
+  test("M3 fix: pre-arming `/plan auto on` then `/plan on` carries autoApprove forward", async () => {
+    // Step 1: user runs /plan auto on while not in plan mode. Server
+    // materializes a `mode: "normal"` placeholder with autoApprove=true.
+    const armed = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "auto", autoEnabled: true },
+        },
+      }),
+    );
+    expect(armed.planMode?.mode).toBe("normal");
+    expect(armed.planMode?.autoApprove).toBe(true);
+
+    // Step 2: user runs /plan on. Without the M3 fix this branch
+    // creates a fresh planMode entry that drops autoApprove. WITH the
+    // fix, the existing autoApprove flag is carried forward into the
+    // new plan-mode entry so the very first plan submission auto-
+    // approves as the user expects.
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: armed,
+    };
+    const planned = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: { key: MAIN_SESSION_KEY, planMode: "plan" },
+      }),
+    );
+    expect(planned.planMode?.mode).toBe("plan");
+    expect(planned.planMode?.approval).toBe("none");
+    expect(planned.planMode?.autoApprove).toBe(true);
+  });
+
+  test("M3: /plan on without prior pre-arm does NOT add autoApprove", async () => {
+    // Sanity check: the carry-forward only fires when the prior entry
+    // had autoApprove=true. A bare /plan on starts with autoApprove
+    // unset (never entered the truthy branch).
+    const planned = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: { key: MAIN_SESSION_KEY, planMode: "plan" },
+      }),
+    );
+    expect(planned.planMode?.mode).toBe("plan");
+    expect(planned.planMode?.autoApprove).toBeUndefined();
+  });
+
+  test("accepts answer action without state change (runtime handles injection)", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: 1,
+        },
+      } as unknown as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "answer", answer: "Option A" },
+        },
+      }),
+    );
+    // No state change — the runtime injects [QUESTION_ANSWER] separately.
+    expect(entry.planMode?.mode).toBe("plan");
+    expect(entry.planMode?.approval).toBe("none");
+  });
+});

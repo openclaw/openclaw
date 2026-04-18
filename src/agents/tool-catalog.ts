@@ -1,4 +1,5 @@
 import {
+  ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY,
   CRON_TOOL_DISPLAY_SUMMARY,
   ENTER_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
   EXEC_TOOL_DISPLAY_SUMMARY,
@@ -278,6 +279,17 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "exit_plan_mode",
     label: "exit_plan_mode",
     description: EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  // PR-10: ask_user_question — plan-mode-safe clarifying question tool.
+  // Same gating as the other plan-mode tools (only registered when
+  // agents.defaults.planMode.enabled is true).
+  {
+    id: "ask_user_question",
+    label: "ask_user_question",
+    description: ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

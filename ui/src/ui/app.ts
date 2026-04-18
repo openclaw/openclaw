@@ -231,6 +231,13 @@ function buildPlanViewMarkdown(
     verifiedCriteria?: string[];
   }>,
   summary?: string,
+  archetype?: {
+    analysis?: string;
+    assumptions?: string[];
+    risks?: ReadonlyArray<{ risk: string; mitigation: string }>;
+    verification?: string[];
+    references?: string[];
+  },
 ): string {
   const stepLines = plan
     .map((step, i) => {
@@ -256,7 +263,52 @@ function buildPlanViewMarkdown(
   const allTerminal =
     plan.length > 0 && plan.every((s) => s.status === "completed" || s.status === "cancelled");
   const header = summary ?? (allTerminal ? "Plan complete \u2713" : "Active plan");
-  return `# ${header}\n\n${stepLines}\n`;
+  const sections: string[] = [`# ${header}`, ""];
+  // PR-10 archetype: render rich plan sections when present. Markdown
+  // structure mirrors the persisted file format (title → analysis →
+  // plan checklist → assumptions → risks → verification → references).
+  // Sections only appear when populated so simple plans render
+  // identically to today.
+  if (archetype?.analysis) {
+    sections.push("## Analysis", "", archetype.analysis, "");
+  }
+  sections.push("## Plan", "", stepLines, "");
+  if (archetype?.assumptions && archetype.assumptions.length > 0) {
+    sections.push("## Assumptions", "");
+    for (const a of archetype.assumptions) {
+      sections.push(`- ${a}`);
+    }
+    sections.push("");
+  }
+  if (archetype?.risks && archetype.risks.length > 0) {
+    sections.push("## Risks", "");
+    sections.push("| Risk | Mitigation |");
+    sections.push("| --- | --- |");
+    for (const r of archetype.risks) {
+      sections.push(`| ${escapeMarkdownCell(r.risk)} | ${escapeMarkdownCell(r.mitigation)} |`);
+    }
+    sections.push("");
+  }
+  if (archetype?.verification && archetype.verification.length > 0) {
+    sections.push("## Verification", "");
+    for (const v of archetype.verification) {
+      sections.push(`- ${v}`);
+    }
+    sections.push("");
+  }
+  if (archetype?.references && archetype.references.length > 0) {
+    sections.push("## References", "");
+    for (const r of archetype.references) {
+      sections.push(`- ${r}`);
+    }
+    sections.push("");
+  }
+  return sections.join("\n");
+}
+
+/** PR-10: minimal cell-escape so risk/mitigation text doesn't break the markdown table. */
+function escapeMarkdownCell(text: string): string {
+  return text.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
 }
 
 @customElement("openclaw-app")
@@ -1006,6 +1058,54 @@ export class OpenClawApp extends LitElement {
     this.planApprovalError = null;
   }
 
+  /**
+   * PR-10 AskUserQuestion: route the user's answer back to the agent.
+   * Same approval-card surface as plan approve/reject/edit, but the
+   * action verb is "answer" — no plan-mode state transition, the
+   * answer arrives as a synthetic user message tagged
+   * `[QUESTION_ANSWER]` so the agent's next turn can act on it.
+   */
+  async handlePlanApprovalAnswer(answer: string): Promise<void> {
+    const active = this.planApprovalRequest;
+    if (!active || !this.client || this.planApprovalBusy) {
+      return;
+    }
+    if (!active.question) {
+      // Defensive: only fire when the approval is actually a question.
+      return;
+    }
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.planApprovalBusy = true;
+    this.planApprovalError = null;
+    const snapshotRequest = active;
+    this.planApprovalRequest = null;
+    try {
+      await this.client.request("sessions.patch", {
+        key: active.sessionKey,
+        planApproval: {
+          action: "answer",
+          answer: trimmed,
+          ...(active.approvalId ? { approvalId: active.approvalId } : {}),
+        },
+      });
+      // Inject `[QUESTION_ANSWER]` as a synthetic user message so the
+      // agent's next turn can act on the answer. Plan-mode state is
+      // unchanged — the agent continues its planning cycle.
+      const message = `[QUESTION_ANSWER] ${trimmed}`;
+      void handleSendChatInternal(this, message).catch((err: unknown) => {
+        this.lastError = `Question answered but failed to notify agent: ${String(err)}`;
+      });
+    } catch (err) {
+      this.planApprovalRequest = snapshotRequest;
+      this.planApprovalError = `Question answer failed: ${String(err)}`;
+    } finally {
+      this.planApprovalBusy = false;
+    }
+  }
+
   /** Cancel the inline revise textarea WITHOUT submitting. */
   handlePlanApprovalReviseCancel(): void {
     this.planApprovalReviseOpen = false;
@@ -1185,7 +1285,16 @@ export class OpenClawApp extends LitElement {
     const isGenericTitle =
       !rawTitle || rawTitle === "Plan approval requested" || rawTitle.startsWith("Plan approval —");
     const headerCandidate = !isGenericTitle ? rawTitle : request.summary || "Proposed plan";
-    const md = buildPlanViewMarkdown(request.plan, headerCandidate);
+    // PR-10: pass archetype fields so the sidebar markdown shows the
+    // full plan structure (analysis / assumptions / risks / verification
+    // / references) instead of just the step checklist.
+    const md = buildPlanViewMarkdown(request.plan, headerCandidate, {
+      ...(request.analysis ? { analysis: request.analysis } : {}),
+      ...(request.assumptions ? { assumptions: request.assumptions } : {}),
+      ...(request.risks ? { risks: request.risks } : {}),
+      ...(request.verification ? { verification: request.verification } : {}),
+      ...(request.references ? { references: request.references } : {}),
+    });
     this.handleOpenSidebar({ kind: "markdown", content: md });
   }
 

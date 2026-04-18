@@ -30,6 +30,11 @@ export interface InlinePlanApprovalProps {
   onReviseSubmit: () => void;
   /** Pop the full plan into the right sidebar (read-only). */
   onOpenPlan: () => void;
+  // PR-10 AskUserQuestion: required when request.question is present.
+  // Routed by the host to sessions.patch { planApproval: { action:
+  // "answer", answer: <text> } }. Same approval-card shell renders the
+  // question prompt + one button per option (and optional Other field).
+  onAnswerOption?: (answer: string) => void;
 }
 
 export function renderInlinePlanApproval(
@@ -39,6 +44,12 @@ export function renderInlinePlanApproval(
     return nothing;
   }
   const { request, busy, error, reviseOpen } = props;
+  // PR-10 AskUserQuestion: when the approval payload carries a
+  // question, render a different card shape (question prompt + N
+  // option buttons) instead of the standard plan approval triad.
+  if (request.question) {
+    return renderInlineQuestion(props);
+  }
   const stepCount = request.plan.length;
   const stepLabel = stepCount === 1 ? "step" : "steps";
   const summary = request.summary?.trim();
@@ -140,6 +151,67 @@ export function renderInlinePlanApproval(
               </button>
             </div>
           `}
+    </div>
+  `;
+}
+
+/**
+ * PR-10: question variant of the inline approval card. Same visual
+ * shell as the plan approval card but renders the question prompt +
+ * one button per option (plus an optional "Other..." textarea when
+ * `allowFreetext` is true). Click → onAnswerOption(text).
+ */
+function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
+  const { request, busy, error } = props;
+  const question = request!.question!;
+  return html`
+    <div class="plan-inline-card" role="region" aria-label="Agent question">
+      <div class="plan-inline-card__header">
+        <div class="plan-inline-card__title">
+          <strong>Agent has a question</strong>
+          <span class="plan-inline-card__summary">— ${question.prompt}</span>
+        </div>
+      </div>
+      <div class="plan-inline-card__meta">
+        ${question.options.length} options${question.allowFreetext ? " + free text" : ""}
+      </div>
+      ${error ? html`<div class="plan-inline-card__error">${error}</div>` : nothing}
+      <div class="plan-inline-card__actions plan-inline-card__actions--question">
+        ${question.options.map(
+          (option, idx) => html`
+            <button
+              class="plan-inline-card__btn ${idx === 0 ? "plan-inline-card__btn--primary" : ""}"
+              type="button"
+              ?disabled=${busy}
+              @click=${() => props.onAnswerOption?.(option)}
+              title=${`Answer: ${option}`}
+            >
+              ${option}
+            </button>
+          `,
+        )}
+        ${question.allowFreetext
+          ? html`
+              <button
+                class="plan-inline-card__btn plan-inline-card__btn--secondary"
+                type="button"
+                ?disabled=${busy}
+                @click=${() => {
+                  // Simple free-text via prompt() — keeps the card
+                  // shell minimal. A richer inline-textarea variant
+                  // would mirror the revise UX; defer to PR-11 polish.
+                  const answer = window.prompt(question.prompt, "");
+                  if (answer && answer.trim()) {
+                    props.onAnswerOption?.(answer.trim());
+                  }
+                }}
+                title="Type a free-text answer"
+              >
+                Other…
+              </button>
+            `
+          : nothing}
+      </div>
     </div>
   `;
 }

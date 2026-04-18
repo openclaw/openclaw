@@ -33,6 +33,27 @@ describe("resolveCurrentMode", () => {
     expect(mode.id).toBe("accept");
   });
 
+  it("PR-10: returns Plan ⚡ when planMode='plan' AND autoApprove=true", () => {
+    const mode = resolveCurrentMode("allowlist", "off", "plan", true);
+    expect(mode.id).toBe("plan-auto");
+    expect(mode.planMode).toBe("plan");
+    expect(mode.planAutoApprove).toBe(true);
+    expect(mode.shortLabel).toBe("Plan ⚡");
+  });
+
+  it("PR-10: returns plain Plan when planMode='plan' AND autoApprove=false", () => {
+    const mode = resolveCurrentMode("allowlist", "off", "plan", false);
+    expect(mode.id).toBe("plan");
+  });
+
+  it("PR-10: ignores autoApprove when planMode is not 'plan' (auto only applies in plan mode)", () => {
+    // Pre-armed auto-approve before entering plan mode shouldn't make
+    // the chip lie about being in plan mode. The flag is meaningful
+    // only AFTER planMode is "plan".
+    const mode = resolveCurrentMode("allowlist", "off", "normal", true);
+    expect(mode.id).toBe("accept");
+  });
+
   it("returns a Custom mode for unknown combos (was: forced Ask, fixed P1 r3094970182)", () => {
     const mode = resolveCurrentMode("unknown", "unknown");
     expect(mode.id).toBe("custom");
@@ -41,9 +62,14 @@ describe("resolveCurrentMode", () => {
     expect(mode.execAsk).toBe("unknown");
   });
 
-  it("returns Custom for undefined inputs (no execSecurity / execAsk)", () => {
+  it("returns Default for undefined inputs (Default is the explicit no-override entry)", () => {
+    // PR-8 follow-up: the Default mode entry has both execSecurity and
+    // execAsk undefined (it's the "clear overrides" intent). So
+    // resolveCurrentMode(undefined, undefined) now MATCHES the Default
+    // entry rather than falling through to Custom. Pre-PR-8 this was
+    // Custom (no preset matched undefined/undefined).
     const mode = resolveCurrentMode(undefined, undefined);
-    expect(mode.id).toBe("custom");
+    expect(mode.id).toBe("default");
     expect(mode.execSecurity).toBeUndefined();
     expect(mode.execAsk).toBeUndefined();
   });
@@ -77,7 +103,7 @@ describe("handleModeShortcut", () => {
     } as unknown as KeyboardEvent;
   }
 
-  it("returns correct mode for Ctrl+1 through Ctrl+4 (Ask/Accept/Plan/Bypass)", () => {
+  it("returns correct mode for Ctrl+<shortcut> across every MODE_DEFINITIONS entry", () => {
     for (const mode of MODE_DEFINITIONS) {
       const result = handleModeShortcut(makeKeyEvent(mode.shortcut, true, false));
       expect(result).not.toBeNull();
@@ -85,19 +111,26 @@ describe("handleModeShortcut", () => {
     }
   });
 
-  it("Ctrl+3 returns Plan mode", () => {
-    const result = handleModeShortcut(makeKeyEvent("3", true, false));
+  it("Ctrl+4 returns Plan mode", () => {
+    const result = handleModeShortcut(makeKeyEvent("4", true, false));
     expect(result?.id).toBe("plan");
     expect(result?.planMode).toBe("plan");
   });
 
-  it("Ctrl+4 returns Bypass mode", () => {
-    const result = handleModeShortcut(makeKeyEvent("4", true, false));
+  it("PR-10: Ctrl+5 returns Plan ⚡ (auto-approve) mode", () => {
+    const result = handleModeShortcut(makeKeyEvent("5", true, false));
+    expect(result?.id).toBe("plan-auto");
+    expect(result?.planMode).toBe("plan");
+    expect(result?.planAutoApprove).toBe(true);
+  });
+
+  it("Ctrl+6 returns Bypass mode", () => {
+    const result = handleModeShortcut(makeKeyEvent("6", true, false));
     expect(result?.id).toBe("bypass");
   });
 
-  it("returns null for Ctrl+5 (no matching mode)", () => {
-    expect(handleModeShortcut(makeKeyEvent("5", true, false))).toBeNull();
+  it("returns null for Ctrl+7 (no matching mode)", () => {
+    expect(handleModeShortcut(makeKeyEvent("7", true, false))).toBeNull();
   });
 
   it("returns null for Cmd+1 on macOS (preserves browser tab switching)", () => {
@@ -206,8 +239,11 @@ describe("focus guard (input/textarea/contenteditable)", () => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+    // Ctrl+1 is "Default permissions" since the default-mode addition
+    // (PR-8 follow-up). Pre-PR-8 this was "Ask"; the label moved when
+    // Default became the post-plan-mode fallback target.
     const result = handleModeShortcut(makeKeyEvent("1"));
-    expect(result?.id).toBe("ask");
+    expect(result?.id).toBe("default");
   });
 
   it("returns null when focus is inside a Shadow DOM root (input nested in a Web Component)", () => {
@@ -311,10 +347,13 @@ describe("renderModeSwitcher (jsdom render — Copilot r3095798778)", () => {
     const labels = Array.from(items).map(
       (el) => el.querySelector(".agent-chat__mode-menu__label")?.textContent,
     );
-    expect(labels).toContain("Ask permissions");
+    // The "ask" entry's label is "Ask each mutation" (vs "Ask
+    // permissions" in older copy). Assert against the live label so a
+    // future copy tweak keeps the test honest.
+    expect(labels).toContain(ask.label);
     const activeItems = host.querySelectorAll(".agent-chat__mode-menu__item--active");
     expect(activeItems).toHaveLength(1);
-    expect(activeItems[0].textContent).toContain("Ask permissions");
+    expect(activeItems[0].textContent).toContain(ask.label);
   });
 
   it("does NOT render the menu container when menuOpen=false", () => {

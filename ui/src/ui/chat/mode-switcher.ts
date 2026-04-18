@@ -34,6 +34,16 @@ export interface ModeDefinition {
    * mutation gate from #67538b. PR-8 wires the RPC dispatch.
    */
   planMode?: "plan" | "normal";
+  /**
+   * PR-10 auto mode. When `planMode === "plan"` and this is true,
+   * selecting the mode also patches `planApproval.action: "auto"` with
+   * `autoEnabled: true`, arming the session's auto-approve flag so
+   * future plan submissions resolve as "approve" without user
+   * confirmation. Selecting plain "Plan" (planMode set, autoApprove
+   * unset) clears the flag so the user can drop back to manual
+   * approval mid-session.
+   */
+  planAutoApprove?: boolean;
   icon: TemplateResult;
 }
 
@@ -92,6 +102,21 @@ const planIcon = html`<svg
   <path d="M9 11l3 3L22 4" />
   <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
 </svg>`;
+// PR-10 plan-auto icon: lightning bolt over the plan checkmark to
+// distinguish "auto-approving plan" from plain "plan mode."
+const planAutoIcon = html`<svg
+  width="14"
+  height="14"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+>
+  <path d="M13 2L3 14h7l-1 8 11-12h-7l1-8z" />
+</svg>`;
 
 export const MODE_DEFINITIONS: ModeDefinition[] = [
   // "Default" clears the per-session execSecurity/execAsk overrides so
@@ -141,11 +166,25 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     planMode: "plan",
     icon: planIcon,
   },
+  // PR-10 plan-auto: same plan mode (mutation gate active, exit_plan_mode
+  // still required) but the runtime auto-resolves submitted plans as
+  // "approve" without user confirmation. Useful for long-running unattended
+  // sessions where the user trusts the agent to plan + execute its own
+  // checkpoints. Selecting plain "Plan" clears the flag.
+  {
+    id: "plan-auto",
+    label: "Plan (auto-approve)",
+    shortLabel: "Plan ⚡",
+    shortcut: "5",
+    planMode: "plan",
+    planAutoApprove: true,
+    icon: planAutoIcon,
+  },
   {
     id: "bypass",
     label: "Bypass permissions",
     shortLabel: "Bypass",
-    shortcut: "5",
+    shortcut: "6",
     execSecurity: "full",
     execAsk: "off",
     icon: unlockIcon,
@@ -199,8 +238,19 @@ export function resolveCurrentMode(
   execSecurity?: string,
   execAsk?: string,
   planMode?: "plan" | "normal",
+  planAutoApprove?: boolean,
 ): ModeDefinition {
   if (planMode === "plan") {
+    // PR-10: prefer the "plan-auto" entry when the session's
+    // autoApprove flag is set so the chip surfaces the auto state.
+    // Falls back to plain "plan" when the flag is absent so existing
+    // sessions render unchanged.
+    if (planAutoApprove === true) {
+      const autoEntry = MODE_DEFINITIONS.find((m) => m.id === "plan-auto");
+      if (autoEntry) {
+        return autoEntry;
+      }
+    }
     const planEntry = MODE_DEFINITIONS.find((m) => m.id === "plan");
     if (planEntry) {
       return planEntry;
@@ -254,7 +304,7 @@ export function renderModeSwitcher(params: {
             onToggleMenu();
           }
         }}
-        title="Switch mode (Ctrl+1-4)"
+        title="Switch mode (Ctrl+1-6)"
         aria-haspopup="menu"
         aria-expanded="${menuOpen ? "true" : "false"}"
       >
