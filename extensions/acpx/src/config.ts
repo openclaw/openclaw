@@ -260,6 +260,8 @@ export function resolveAcpxPluginConfig(params: {
     ]),
   );
 
+  const probeAgent = normalized.probeAgent?.trim();
+
   return {
     cwd,
     stateDir,
@@ -273,6 +275,7 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    probeAgent: probeAgent && probeAgent.length > 0 ? probeAgent : undefined,
     legacyCompatibilityConfig: {
       strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
       queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,

@@ -46,6 +46,10 @@
         "type": "number",
         "minimum": 0
       },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
+      },
       "mcpServers": {
         "type": "object",
         "additionalProperties": {
@@ -130,6 +134,11 @@
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "probeAgent": {
+      "label": "Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the runtime built-in probe agent (codex). Set this to another configured ACP agent id (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {
