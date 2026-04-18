@@ -35,6 +35,10 @@ type HookRunnerLike = {
     input: { prompt: string },
     context: HookContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
+  runBeforePromptBuild(
+    input: { prompt: string; messages: unknown[]; availableTools?: string[] },
+    context: HookContext,
+  ): Promise<{ toolsAllow?: string[] } | undefined>;
 };
 
 export async function resolveHookModelSelection(params: {
@@ -96,6 +100,10 @@ export async function resolveHookModelSelection(params: {
     provider,
     modelId,
     legacyBeforeAgentStartResult,
+    // toolsAllow is now consumed from the full before_prompt_build call in attempt.ts,
+    // where availableTools is populated and plugins can make informed decisions.
+    // Legacy before_agent_start toolsAllow is still supported here for backwards compat.
+    hookToolsAllow: legacyBeforeAgentStartResult?.toolsAllow,
   };
 }
 

@@ -688,7 +688,7 @@ export async function runEmbeddedAttempt(
       senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    let effectiveTools = [...tools, ...filteredBundledTools];
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -1833,6 +1833,7 @@ export async function runEmbeddedAttempt(
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
+          availableTools: toolsRaw.map((tool) => tool.name),
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
@@ -1866,6 +1867,18 @@ export async function runEmbeddedAttempt(
             systemPromptText = prependedOrAppendedSystemPrompt;
             log.debug(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
+            );
+          }
+
+          // Apply toolsAllow from the full before_prompt_build hook to narrow the tool surface.
+          // This is the load-bearing call for dynamic tool resolution — plugins have access to
+          // availableTools here and can make informed classification decisions.
+          if (hookResult?.toolsAllow && hookResult.toolsAllow.length > 0) {
+            const originalLength = effectiveTools.length;
+            const allowSet = new Set(hookResult.toolsAllow);
+            effectiveTools = effectiveTools.filter((t) => allowSet.has(t.name));
+            log.debug(
+              `hooks: toolsAllow narrowed tools ${originalLength} → ${effectiveTools.length}`,
             );
           }
         }

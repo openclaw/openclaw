@@ -89,6 +89,7 @@ describe("resolvePromptBuildHookResult", () => {
       systemPrompt: "legacy-system",
       prependSystemContext: undefined,
       appendSystemContext: undefined,
+      toolsAllow: undefined,
     });
   });
 
@@ -132,6 +133,28 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+    expect(result.toolsAllow).toBeUndefined();
+  });
+
+  it("prefers prompt-build toolsAllow over legacy hook toolsAllow", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        toolsAllow: ["read", "exec"],
+      })),
+      runBeforeAgentStart: vi.fn(async () => ({
+        toolsAllow: ["write"],
+      })),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(result.toolsAllow).toEqual(["read", "exec"]);
   });
 });
 
