@@ -298,7 +298,11 @@ def _call_claude_subscription(system: str, user_msg: str) -> str:
         input=prompt,
         capture_output=True,
         text=True,
-        timeout=300,
+        # 10 minutes. A larger source file (e.g. run.ts >1000 LOC) plus
+        # all its review comments can easily take 4-7 minutes for Claude
+        # to analyze + emit a patched file; 5 min hit the 300s timeout
+        # often enough to fail entire runs on complex PRs.
+        timeout=int(os.environ.get("AUTOFIX_CLAUDE_TIMEOUT", "600")),
         check=False,
         encoding="utf-8",
         errors="replace",
