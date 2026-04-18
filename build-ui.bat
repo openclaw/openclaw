@@ -10,7 +10,7 @@ echo Installing UI dependencies...
 call pnpm install
 if errorlevel 1 (
     echo.
-    echo Install failed! Make sure pnpm is installed: npm install -g pnpm
+    echo Install failed!
     pause
     exit /b 1
 )
@@ -28,6 +28,6 @@ if errorlevel 1 (
 echo.
 echo ============================================
 echo   UI built successfully!
-echo   Output: dist\control-ui\
+echo   Restart the gateway to pick up changes.
 echo ============================================
 pause

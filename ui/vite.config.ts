@@ -24,6 +24,21 @@ export default defineConfig(() => {
   return {
     base,
     publicDir: path.resolve(here, "public"),
+    // Shim Node.js built-in modules that leak into the browser bundle via
+    // transitive imports (e.g. src/config/paths.ts -> src/infra/home-dir.ts).
+    // Without these, path.resolve / os.homedir / process.cwd() all crash in the
+    // browser, preventing <openclaw-app> from registering (blank page).
+    resolve: {
+      alias: {
+        "node:path": path.resolve(here, "src/shims/path.ts"),
+        "node:os": path.resolve(here, "src/shims/os.ts"),
+        "node:fs": path.resolve(here, "src/shims/fs.ts"),
+      },
+    },
+    define: {
+      "process.cwd": '(() => "/")',
+      "process.env": "{}",
+    },
     optimizeDeps: {
       include: ["lit/directives/repeat.js"],
     },
