@@ -256,6 +256,10 @@ export type FailoverClassification =
 export type ProviderRuntimeFailureKind =
   | "auth_scope"
   | "auth_refresh"
+  | "refresh_timeout"
+  | "refresh_contention"
+  | "callback_timeout"
+  | "callback_validation"
   | "auth_html_403"
   | "upstream_html"
   | "proxy"
@@ -439,6 +443,26 @@ function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
     return true;
   }
   return false;
+}
+
+function isOAuthRefreshTimeoutMessage(raw: string): boolean {
+  return /\boauth refresh call\b.*\bexceeded hard timeout\b/i.test(raw);
+}
+
+function isOAuthRefreshContentionMessage(raw: string): boolean {
+  return (
+    /\brefresh_contention\b/i.test(raw) ||
+    (/\bfile lock timeout\b/i.test(raw) &&
+      /(?:\/|\\|^)(?:oauth-refresh|openclaw-oauth-refresh)[^/\n\\]*?(?:\.lock)?\b/i.test(raw))
+  );
+}
+
+function isOAuthCallbackTimeoutMessage(raw: string): boolean {
+  return /\bcallback_timeout\b/i.test(raw);
+}
+
+function isOAuthCallbackValidationMessage(raw: string): boolean {
+  return /\bcallback_validation_failed\b/i.test(raw);
 }
 
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
@@ -825,6 +849,21 @@ export function classifyProviderRuntimeFailureKind(
   if (!message && typeof status !== "number") {
     return "unknown";
   }
+  if (normalizedSignal.code === "refresh_contention") {
+    return "refresh_contention";
+  }
+  if (message && isOAuthRefreshContentionMessage(message)) {
+    return "refresh_contention";
+  }
+  if (message && isOAuthRefreshTimeoutMessage(message)) {
+    return "refresh_timeout";
+  }
+  if (message && isOAuthCallbackTimeoutMessage(message)) {
+    return "callback_timeout";
+  }
+  if (message && isOAuthCallbackValidationMessage(message)) {
+    return "callback_validation";
+  }
   if (message && classifyOAuthRefreshFailure(message)) {
     return "auth_refresh";
   }
@@ -909,6 +948,34 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "auth_refresh") {
     return "Authentication refresh failed. Re-authenticate this provider and try again.";
+  }
+
+  if (providerRuntimeFailureKind === "refresh_contention") {
+    return (
+      "Authentication refresh is already in progress elsewhere and this attempt " +
+      "timed out waiting for it. Retry in a moment."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "refresh_timeout") {
+    return (
+      "Authentication refresh timed out before the provider completed. " +
+      "Retry in a moment; re-authenticate only if it keeps failing."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "callback_timeout") {
+    return (
+      "Browser OAuth did not complete before manual fallback kicked in. " +
+      "Retry the login flow and paste the redirect URL if prompted."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "callback_validation") {
+    return (
+      "Browser OAuth returned an invalid or incomplete callback. " +
+      "Retry the login flow and make sure the full redirect URL is pasted if prompted."
+    );
   }
 
   if (providerRuntimeFailureKind === "auth_scope") {

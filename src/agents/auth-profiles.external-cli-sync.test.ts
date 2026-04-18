@@ -22,7 +22,7 @@ function makeOAuthCredential(
     provider: overrides.provider,
     access: overrides.access ?? `${overrides.provider}-access`,
     refresh: overrides.refresh ?? `${overrides.provider}-refresh`,
-    expires: overrides.expires ?? Date.now() + 60_000,
+    expires: overrides.expires ?? Date.now() + 10 * 60_000,
     accountId: overrides.accountId,
     email: overrides.email,
     enterpriseUrl: overrides.enterpriseUrl,
@@ -109,13 +109,13 @@ describe("external cli oauth resolution", () => {
   });
 
   describe("external cli bootstrap policy", () => {
-    it("treats only non-expired access tokens as usable local oauth", () => {
+    it("treats only non-expired and non-near-expiry access tokens as usable local oauth", () => {
       expect(
         hasUsableOAuthCredential(
           makeOAuthCredential({
             provider: "openai-codex",
             access: "live-access",
-            expires: Date.now() + 60_000,
+            expires: Date.now() + 10 * 60_000,
           }),
         ),
       ).toBe(true);
@@ -125,6 +125,15 @@ describe("external cli oauth resolution", () => {
             provider: "openai-codex",
             access: "expired-access",
             expires: Date.now() - 60_000,
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        hasUsableOAuthCredential(
+          makeOAuthCredential({
+            provider: "openai-codex",
+            access: "near-expiry-access",
+            expires: Date.now() + 60_000,
           }),
         ),
       ).toBe(false);
@@ -153,7 +162,7 @@ describe("external cli oauth resolution", () => {
             provider: "openai-codex",
             access: "healthy-local-access",
             refresh: "healthy-local-refresh",
-            expires: Date.now() + 60_000,
+            expires: Date.now() + 10 * 60_000,
           }),
           imported,
         }),
@@ -169,6 +178,40 @@ describe("external cli oauth resolution", () => {
           imported,
         }),
       ).toBe(true);
+      expect(
+        shouldBootstrapFromExternalCliCredential({
+          existing: makeOAuthCredential({
+            provider: "openai-codex",
+            access: "near-expiry-local-access",
+            refresh: "near-expiry-local-refresh",
+            expires: Date.now() + 60_000,
+          }),
+          imported,
+        }),
+      ).toBe(true);
+    });
+
+    it("does not bootstrap across different known oauth identities", () => {
+      const imported = makeOAuthCredential({
+        provider: "openai-codex",
+        access: "fresh-cli-access",
+        refresh: "fresh-cli-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-external",
+      });
+
+      expect(
+        shouldBootstrapFromExternalCliCredential({
+          existing: makeOAuthCredential({
+            provider: "openai-codex",
+            access: "expired-local-access",
+            refresh: "expired-local-refresh",
+            expires: Date.now() - 60_000,
+            accountId: "acct-local",
+          }),
+          imported,
+        }),
+      ).toBe(false);
     });
   });
 
@@ -296,7 +339,7 @@ describe("external cli oauth resolution", () => {
           provider: "openai-codex",
           access: "healthy-local-access",
           refresh: "healthy-local-refresh",
-          expires: Date.now() + 60_000,
+          expires: Date.now() + 10 * 60_000,
         }),
       ),
     );

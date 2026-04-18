@@ -8,7 +8,7 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
+import { hasUsableOAuthCredential as hasUsableOAuthCredentialShared } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type ExternalCliResolvedProfile = {
@@ -41,6 +41,46 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+// Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+export function isSafeToUseExternalCliCredential(
+  existing: OAuthCredential | undefined,
+  imported: OAuthCredential,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+  if (existing.provider !== imported.provider) {
+    return false;
+  }
+
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const importedEmail = normalizeAuthEmailToken(imported.email);
+
+  if (existingAccountId !== undefined && importedAccountId !== undefined) {
+    return existingAccountId === importedAccountId;
+  }
+  if (existingEmail !== undefined && importedEmail !== undefined) {
+    return existingEmail === importedEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
+    return false;
+  }
+  return true;
+}
+
 function hasNewerStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -70,13 +110,7 @@ export function hasUsableOAuthCredential(
   credential: OAuthCredential | undefined,
   now = Date.now(),
 ): boolean {
-  if (!credential || credential.type !== "oauth") {
-    return false;
-  }
-  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
-    return false;
-  }
-  return resolveTokenExpiryState(credential.expires, now) === "valid";
+  return hasUsableOAuthCredentialShared(credential, { now });
 }
 
 export function shouldBootstrapFromExternalCliCredential(params: {
@@ -85,6 +119,9 @@ export function shouldBootstrapFromExternalCliCredential(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
+  if (!isSafeToUseExternalCliCredential(params.existing, params.imported)) {
+    return false;
+  }
   if (hasUsableOAuthCredential(params.existing, now)) {
     return false;
   }
@@ -144,7 +181,26 @@ export function resolveExternalCliAuthProfiles(
       continue;
     }
     const existing = store.profiles[providerConfig.profileId];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    const existingOAuth =
+      existing?.type === "oauth" && existing.provider === providerConfig.provider
+        ? existing
+        : undefined;
+    if (existing && !existingOAuth) {
+      log.debug("kept explicit local auth over external cli bootstrap", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+        localType: existing.type,
+        localProvider: existing.provider,
+      });
+      continue;
+    }
+    if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
+      log.warn("refused external cli oauth bootstrap: identity mismatch", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
     if (
       !shouldBootstrapFromExternalCliCredential({
         existing: existingOAuth,
