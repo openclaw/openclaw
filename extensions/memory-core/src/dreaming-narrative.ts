@@ -147,7 +147,7 @@ async function startNarrativeRunOrFallback(params: {
 }): Promise<string | null> {
   try {
     const run = await params.subagent.run({
-      idempotencyKey: params.sessionKey,
+      idempotencyKey: `${params.sessionKey}-${params.nowMs}`,
       sessionKey: params.sessionKey,
       message: params.message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
@@ -180,10 +180,9 @@ async function startNarrativeRunOrFallback(params: {
 function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
-  nowMs: number;
 }): string {
   const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
-  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
+  return `dreaming-narrative-${params.phase}-${workspaceHash}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -848,11 +847,18 @@ export async function generateAndAppendDreamNarrative(params: {
   const sessionKey = buildNarrativeSessionKey({
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
-    nowMs,
   });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
   let waitStatus: string | null = null;
+
+  // Defensive cleanup: delete any leftover session from a previous failed run
+  // to prevent stale conversation context from polluting the new narrative.
+  try {
+    await params.subagent.deleteSession({ sessionKey });
+  } catch {
+    // Ignore — session may not exist yet.
+  }
 
   try {
     runId = await startNarrativeRunOrFallback({

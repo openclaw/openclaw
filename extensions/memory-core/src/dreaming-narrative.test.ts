@@ -585,7 +585,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
 
     await generateAndAppendDreamNarrative({
       subagent,
@@ -601,12 +601,13 @@ describe("generateAndAppendDreamNarrative", () => {
 
     expect(subagent.run).toHaveBeenCalledOnce();
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
-      idempotencyKey: expectedSessionKey,
+      idempotencyKey: `${expectedSessionKey}-${nowMs}`,
       sessionKey: expectedSessionKey,
       deliver: false,
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    // deleteSession is called twice: once for pre-run cleanup, once in finally
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
@@ -721,7 +722,8 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(content).toContain("API endpoints need authentication");
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    // deleteSession is called twice: once for pre-run cleanup, once in finally
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
 
   it("falls back when the request-scoped runtime error is detected by stable code", async () => {
@@ -880,7 +882,9 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(firstSessionKey).not.toBe(secondSessionKey);
     expect(firstSessionKey).toContain("dreaming-narrative-light-");
     expect(secondSessionKey).toContain("dreaming-narrative-light-");
-    expect(subagent.deleteSession.mock.calls[0]?.[0]?.sessionKey).toBe(firstSessionKey);
-    expect(subagent.deleteSession.mock.calls[1]?.[0]?.sessionKey).toBe(secondSessionKey);
+    // Each workspace triggers deleteSession twice (pre-run cleanup + finally)
+    const deleteKeys = subagent.deleteSession.mock.calls.map((c: unknown[]) => (c[0] as { sessionKey: string })?.sessionKey);
+    expect(deleteKeys.filter((k: string) => k === firstSessionKey)).toHaveLength(2);
+    expect(deleteKeys.filter((k: string) => k === secondSessionKey)).toHaveLength(2);
   });
 });
