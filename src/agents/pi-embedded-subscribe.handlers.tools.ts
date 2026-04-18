@@ -1695,7 +1695,13 @@ export async function handleToolExecutionEnd(
         ? optionsRaw.filter((o): o is string => typeof o === "string" && o.trim().length > 0)
         : [];
       if (questionText && options.length >= 2) {
-        const approvalId = `question-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        // PR-10 deep-dive review: derive approvalId deterministically
+        // from the tool call so transcript replay / repair produces the
+        // same byte sequence (prompt-cache stability rule, same intent
+        // as the H5 questionId fix on the tool side). Was previously
+        // `question-<timestamp>-<random>` which invalidated the cache
+        // every replay and surfaced as duplicate "stale" cards.
+        const approvalId = `question-${toolCallId}`;
         const questionApprovalData: AgentApprovalEventData = {
           phase: "requested",
           kind: "plugin",

@@ -486,8 +486,19 @@ export async function applySessionsPatchToStore(params: {
       // PR-10 auto-mode toggle. Sets the session's autoApprove flag
       // without resolving any specific approval. When enabled, future
       // exit_plan_mode submissions auto-resolve as "approve" via the
-      // plan-snapshot persister's auto-approve branch.
-      const autoEnabled = patch.planApproval.autoEnabled === true;
+      // autoApproveIfEnabled branch in
+      // src/agents/pi-embedded-subscribe.handlers.tools.ts.
+      //
+      // PR-10 deep-dive review: require an explicit `autoEnabled`
+      // boolean. A malformed patch (`{action:"auto"}` with the field
+      // omitted) was previously coerced to `false` via
+      // `=== true`, silently disabling auto-approve. That's a
+      // surprising no-op; reject the patch instead so the client sees
+      // a clear validation error.
+      if (typeof patch.planApproval.autoEnabled !== "boolean") {
+        return invalid('planApproval action="auto" requires `autoEnabled: boolean`');
+      }
+      const autoEnabled = patch.planApproval.autoEnabled;
       if (!next.planMode) {
         // No active plan-mode session — toggle is meaningful only when
         // plan mode is armed. Allow the toggle to be set in advance so

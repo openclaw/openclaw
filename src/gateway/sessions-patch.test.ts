@@ -476,6 +476,22 @@ describe("PR-10 plan auto-mode patch routing", () => {
     expectPatchError(result, "plan mode is disabled");
   });
 
+  test("rejects action='auto' patches missing autoEnabled (deep-dive validation)", async () => {
+    // Pre-fix: a patch with `action: "auto"` and no `autoEnabled` was
+    // silently coerced to `false` and disabled auto-approve. Post-fix:
+    // the handler returns an explicit validation error so the caller
+    // can correct the malformed patch instead of debugging a phantom
+    // toggle-off.
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: { action: "auto" } as unknown as never,
+      },
+    });
+    expectPatchError(result, "autoEnabled");
+  });
+
   test("toggles autoApprove ON when no planMode entry exists yet (pre-arms)", async () => {
     const entry = expectPatchOk(
       await runPatch({
