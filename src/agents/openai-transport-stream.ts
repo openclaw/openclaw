@@ -1054,7 +1054,8 @@ async function processOpenAICompletionsStream(
         partialArgs: string;
       }
     | null = null;
-  let pendingThinkingDelta: { signature: string; text: string } | null = null;
+  let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
+  let isFlushingPendingPostToolCallDeltas = false;
   const blockIndex = () => output.content.length - 1;
   const finishCurrentBlock = () => {
     if (!currentBlock) {
@@ -1069,7 +1070,23 @@ async function processOpenAICompletionsStream(
       output.content[blockIndex()] = completed;
     }
   };
-  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+  const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
+    const previous = pendingPostToolCallDeltas[pendingPostToolCallDeltas.length - 1];
+    if (!previous || previous.kind !== next.kind) {
+      pendingPostToolCallDeltas.push(next);
+      return;
+    }
+    if (next.kind === "thinking" && previous.kind === "thinking") {
+      if (previous.signature !== next.signature) {
+        pendingPostToolCallDeltas.push(next);
+        return;
+      }
+      previous.text += next.text;
+      return;
+    }
+    previous.text += next.text;
+  };
+  const appendThinkingDeltaInternal = (reasoningDelta: { signature: string; text: string }) => {
     if (!currentBlock || currentBlock.type !== "thinking") {
       finishCurrentBlock();
       currentBlock = {
@@ -1088,16 +1105,7 @@ async function processOpenAICompletionsStream(
       partial: output,
     });
   };
-  const flushPendingThinkingDelta = () => {
-    if (!pendingThinkingDelta) {
-      return;
-    }
-    const bufferedDelta = pendingThinkingDelta;
-    pendingThinkingDelta = null;
-    appendThinkingDelta(bufferedDelta);
-  };
-  const appendTextDelta = (text: string) => {
-    flushPendingThinkingDelta();
+  const appendTextDeltaInternal = (text: string) => {
     if (!currentBlock || currentBlock.type !== "text") {
       finishCurrentBlock();
       currentBlock = { type: "text", text: "" };
@@ -1111,6 +1119,34 @@ async function processOpenAICompletionsStream(
       delta: text,
       partial: output,
     });
+  };
+  const flushPendingPostToolCallDeltas = () => {
+    if (
+      isFlushingPendingPostToolCallDeltas ||
+      currentBlock?.type === "toolCall" ||
+      pendingPostToolCallDeltas.length === 0
+    ) {
+      return;
+    }
+    isFlushingPendingPostToolCallDeltas = true;
+    const bufferedDeltas = pendingPostToolCallDeltas;
+    pendingPostToolCallDeltas = [];
+    for (const delta of bufferedDeltas) {
+      if (delta.kind === "text") {
+        appendTextDeltaInternal(delta.text);
+      } else {
+        appendThinkingDeltaInternal(delta);
+      }
+    }
+    isFlushingPendingPostToolCallDeltas = false;
+  };
+  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+    flushPendingPostToolCallDeltas();
+    appendThinkingDeltaInternal(reasoningDelta);
+  };
+  const appendTextDelta = (text: string) => {
+    flushPendingPostToolCallDeltas();
+    appendTextDeltaInternal(text);
   };
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
@@ -1135,11 +1171,12 @@ async function processOpenAICompletionsStream(
     if (!choice.delta) {
       continue;
     }
-    const hasToolCallDeltas =
-      Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
-    let deferredVisibleReasoningText = "";
     if (choice.delta.content) {
-      appendTextDelta(choice.delta.content);
+      if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
+      } else {
+        appendTextDelta(choice.delta.content);
+      }
       continue;
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(
@@ -1147,20 +1184,12 @@ async function processOpenAICompletionsStream(
       compat.visibleReasoningDetailTypes,
     );
     for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "text") {
-        if (currentBlock?.type === "toolCall" && hasToolCallDeltas) {
-          deferredVisibleReasoningText += reasoningDelta.text;
-          continue;
-        }
-        appendTextDelta(reasoningDelta.text);
+      if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta({ ...reasoningDelta });
         continue;
       }
-      if (currentBlock?.type === "toolCall") {
-        if (!pendingThinkingDelta) {
-          pendingThinkingDelta = { ...reasoningDelta };
-        } else {
-          pendingThinkingDelta.text += reasoningDelta.text;
-        }
+      if (reasoningDelta.kind === "text") {
+        appendTextDelta(reasoningDelta.text);
       } else {
         appendThinkingDelta(reasoningDelta);
       }
@@ -1172,7 +1201,12 @@ async function processOpenAICompletionsStream(
           currentBlock.type !== "toolCall" ||
           (toolCall.id && currentBlock.id !== toolCall.id)
         ) {
+          const switchingToolCall = currentBlock?.type === "toolCall";
           finishCurrentBlock();
+          if (switchingToolCall) {
+            currentBlock = null;
+            flushPendingPostToolCallDeltas();
+          }
           currentBlock = {
             type: "toolCall",
             id: toolCall.id || "",
@@ -1204,12 +1238,13 @@ async function processOpenAICompletionsStream(
         }
       }
     }
-    if (deferredVisibleReasoningText) {
-      appendTextDelta(deferredVisibleReasoningText);
-    }
+    flushPendingPostToolCallDeltas();
   }
   finishCurrentBlock();
-  flushPendingThinkingDelta();
+  if (currentBlock?.type === "toolCall") {
+    currentBlock = null;
+  }
+  flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
@@ -1238,7 +1273,7 @@ function getCompletionsReasoningDeltas(
       output.push(next);
       return;
     }
-    if (next.kind === "thinking") {
+    if (next.kind === "thinking" && previous.kind === "thinking") {
       if (previous.signature !== next.signature) {
         output.push(next);
         return;
