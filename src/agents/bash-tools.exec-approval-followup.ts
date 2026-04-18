@@ -228,7 +228,11 @@ export async function sendExecApprovalFollowup(
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
         }),
-        { expectFinal: true },
+        // Only wait for the followup turn to be accepted. Waiting for the
+        // final agent result here turns a background completion notification
+        // into a full session-turn wait, which can deadlock behind an already
+        // busy session lane and surface as a bogus followup timeout.
+        { expectFinal: false },
       );
       return true;
     } catch (err) {
