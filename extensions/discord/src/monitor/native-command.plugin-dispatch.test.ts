@@ -2,7 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestRegistry,
   setActivePluginRegistry,
@@ -343,6 +343,10 @@ describe("Discord native plugin command dispatch", () => {
       await import("./native-command.js"));
   });
 
+  afterEach(() => {
+    discordNativeCommandTesting.setDeferTimeoutMs(1500);
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
@@ -383,6 +387,30 @@ describe("Discord native plugin command dispatch", () => {
         accountId: params.accountId,
       }),
     );
+  });
+
+  it("abandons dispatch when interaction defer times out", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    const command = await createStatusCommand(cfg);
+    const dispatchSpy = createDispatchSpy();
+
+    discordNativeCommandTesting.setDeferTimeoutMs(5);
+    interaction.defer.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        }),
+    );
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      interaction as unknown,
+    );
+
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
   it("executes plugin commands from the real registry through the native Discord command path", async () => {

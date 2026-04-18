@@ -45,6 +45,7 @@ import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
@@ -90,6 +91,8 @@ const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
 const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
+const DISCORD_NATIVE_COMMAND_SLOW_MS = 3000;
+let discordNativeCommandDeferTimeoutMs = 1500;
 let matchPluginCommandImpl = pluginRuntime.matchPluginCommand;
 let executePluginCommandImpl = pluginRuntime.executePluginCommand;
 let dispatchReplyWithDispatcherImpl = dispatchReplyWithDispatcher;
@@ -122,6 +125,11 @@ export const __testing = {
   ): typeof resolveDiscordNativeInteractionRouteState {
     const previous = resolveDiscordNativeInteractionRouteStateImpl;
     resolveDiscordNativeInteractionRouteStateImpl = next;
+    return previous;
+  },
+  setDeferTimeoutMs(next: number): number {
+    const previous = discordNativeCommandDeferTimeoutMs;
+    discordNativeCommandDeferTimeoutMs = next;
     return previous;
   },
 };
@@ -605,15 +613,40 @@ function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
+function isDiscordInteractionTimeout(error: unknown): error is Error {
+  return error instanceof Error && error.message === "timeout";
+}
+
+async function withDiscordInteractionTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<T>((_resolve, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 async function safeDiscordInteractionCall<T>(
   label: string,
   fn: () => Promise<T>,
+  options?: { swallowTimeout?: boolean },
 ): Promise<T | null> {
   try {
     return await fn();
   } catch (error) {
     if (isDiscordUnknownInteraction(error)) {
       logVerbose(`discord: ${label} skipped (interaction expired)`);
+      return null;
+    }
+    if (options?.swallowTimeout && isDiscordInteractionTimeout(error)) {
+      log.warn(`discord: ${label} timed out`);
       return null;
     }
     throw error;
@@ -693,10 +726,18 @@ export function createDiscordNativeCommand(params: {
     options = options;
 
     async run(interaction: CommandInteraction) {
-      const deferred = await safeDiscordInteractionCall("interaction defer", () =>
-        interaction.defer(),
+      const commandLogLabel = resolveDiscordCommandLogLabel(commandDefinition);
+      const interactionId = interaction.rawData.id;
+      const nativeCommandLabel = `/${commandLogLabel} interaction=${interactionId}`;
+      const startedAt = Date.now();
+      logVerbose(`discord: native command start ${nativeCommandLabel}`);
+      const deferred = await safeDiscordInteractionCall(
+        `interaction defer ${nativeCommandLabel}`,
+        () => withDiscordInteractionTimeout(() => interaction.defer(), discordNativeCommandDeferTimeoutMs),
+        { swallowTimeout: true },
       );
       if (deferred === null) {
+        logVerbose(`discord: native command aborted before dispatch ${nativeCommandLabel}`);
         return;
       }
       const commandArgs = argDefinitions?.length
@@ -711,20 +752,33 @@ export function createDiscordNativeCommand(params: {
           } satisfies CommandArgs)
         : undefined;
       const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
-      await dispatchDiscordCommandInteraction({
-        interaction,
-        prompt,
-        command: commandDefinition,
-        commandArgs: commandArgsWithRaw,
-        cfg,
-        discordConfig,
-        accountId,
-        sessionPrefix,
-        // Slash commands are deferred up front, so all later responses must use
-        // follow-up/edit semantics instead of the initial reply endpoint.
-        preferFollowUp: true,
-        threadBindings,
-      });
+      try {
+        await dispatchDiscordCommandInteraction({
+          interaction,
+          prompt,
+          command: commandDefinition,
+          commandArgs: commandArgsWithRaw,
+          cfg,
+          discordConfig,
+          accountId,
+          sessionPrefix,
+          // Slash commands are deferred up front, so all later responses must use
+          // follow-up/edit semantics instead of the initial reply endpoint.
+          preferFollowUp: true,
+          threadBindings,
+        });
+      } catch (error) {
+        log.warn(
+          `discord: native command failed ${nativeCommandLabel} after ${Date.now() - startedAt}ms (${formatErrorMessage(error)})`,
+        );
+        throw error;
+      }
+      const durationMs = Date.now() - startedAt;
+      if (durationMs >= DISCORD_NATIVE_COMMAND_SLOW_MS) {
+        log.warn(`discord: native command slow ${nativeCommandLabel} (${durationMs}ms)`);
+      } else {
+        logVerbose(`discord: native command ok ${nativeCommandLabel} (${durationMs}ms)`);
+      }
     }
   })();
 }
@@ -1343,7 +1397,9 @@ async function deliverDiscordInteractionReply(params: {
       if (!chunk.trim()) {
         continue;
       }
-      await interaction.followUp({ content: chunk });
+      await safeDiscordInteractionCall("interaction follow-up chunk", () =>
+        interaction.followUp({ content: chunk }),
+      );
     }
     return;
   }
