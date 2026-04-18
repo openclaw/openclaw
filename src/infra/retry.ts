@@ -58,11 +58,20 @@ export function resolveRetryConfig(
   return { attempts, minDelayMs, maxDelayMs, jitter };
 }
 
-function applyJitter(delayMs: number, jitter: number): number {
+type JitterMode = "symmetric" | "positive";
+
+function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmetric"): number {
   if (jitter <= 0) {
     return delayMs;
   }
-  const offset = (generateSecureFraction() * 2 - 1) * jitter;
+  // `symmetric` spreads within ±jitter around the base delay; correct for pure
+  // exponential backoff where going slightly early is harmless. `positive`
+  // only adds to the base delay; use it when the base delay is already a
+  // lower bound the caller must respect (for example a server-supplied
+  // Retry-After) so concurrent clients still spread without ever dipping
+  // below the caller's floor.
+  const fraction = generateSecureFraction();
+  const offset = mode === "positive" ? fraction * jitter : (fraction * 2 - 1) * jitter;
   return Math.max(0, Math.round(delayMs * (1 + offset)));
 }
 
@@ -117,7 +126,12 @@ export async function retryAsync<T>(
         ? Math.max(retryAfterMs, minDelayMs)
         : minDelayMs * 2 ** (attempt - 1);
       let delay = Math.min(baseDelay, maxDelayMs);
-      delay = applyJitter(delay, jitter);
+      // Server-supplied Retry-After is a lower-bound contract with the
+      // upstream rate limiter; symmetric jitter would let roughly half the
+      // retries land before the requested time and invite escalation. Use
+      // positive-only jitter in that case so clients still spread but never
+      // dip below the server's hint.
+      delay = applyJitter(delay, jitter, hasRetryAfter ? "positive" : "symmetric");
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
 
       options.onRetry?.({
