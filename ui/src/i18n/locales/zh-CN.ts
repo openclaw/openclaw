@@ -859,6 +859,7 @@ export const zh_CN: TranslationMap = {
       modelSelection: "模型选择",
       notSet: "未设置",
       inheritDefault: "继承默认值",
+      inheritDefaultWithModel: "Inherit default ({model})",
       modelPlaceholder: "provider/model",
       fallbacks: "备选模型",
     },
