@@ -1,10 +1,15 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { resolveEffectiveMediaEntryCapabilities } from "../media-understanding/entry-capabilities.js";
+import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
+import type { MediaUnderstandingCapability } from "../media-understanding/types.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../plugins/contracts/inventory/bundled-capability-metadata.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import type { MediaUnderstandingModelConfig } from "./types.tools.js";
 import {
   SilentReplyPolicyConfigSchema,
   SilentReplyRewriteConfigSchema,
@@ -157,23 +162,74 @@ const SkillEntrySchema = z
   })
   .strict();
 
-function sharedMediaModelCanResolveForImage(
-  model: { capabilities?: unknown[] } | undefined,
-): boolean {
-  return Array.isArray(model?.capabilities) && model.capabilities.includes("image");
-}
-
-function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
+type MediaAliasValidationConfig = {
   tools?: {
     media?: {
-      models?: Array<{ capabilities?: unknown[] } | undefined>;
+      models?: Array<MediaUnderstandingModelConfig | undefined>;
       image?: {
         enabled?: boolean;
         models?: unknown[];
       };
     };
   };
+  agents?: {
+    defaults?: {
+      imageModel?: string | { primary?: string; fallbacks?: string[] };
+    };
+  };
+  models?: z.input<typeof ModelsConfigSchema>;
+};
+
+function buildMediaAliasValidationProviderRegistry(
+  cfg: MediaAliasValidationConfig,
+): Map<string, { capabilities?: MediaUnderstandingCapability[] }> {
+  const registry = new Map<string, { capabilities?: MediaUnderstandingCapability[] }>();
+
+  for (const snapshot of BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS) {
+    for (const providerId of snapshot.mediaUnderstandingProviderIds) {
+      registry.set(normalizeMediaProviderId(providerId), {
+        capabilities: ["image"],
+      });
+    }
+  }
+
+  const configProviders = cfg.models?.providers;
+  if (configProviders && typeof configProviders === "object") {
+    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
+      if (!providerKey?.trim()) {
+        continue;
+      }
+      const normalizedKey = normalizeMediaProviderId(providerKey);
+      if (registry.has(normalizedKey)) {
+        continue;
+      }
+      const hasImageModel = (providerCfg.models ?? []).some(
+        (model) => Array.isArray(model?.input) && model.input.includes("image"),
+      );
+      if (hasImageModel) {
+        registry.set(normalizedKey, { capabilities: ["image"] });
+      }
+    }
+  }
+
+  return registry;
+}
+
+function sharedMediaModelCanResolveForImage(params: {
+  model: MediaUnderstandingModelConfig | undefined;
+  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
 }): boolean {
+  const capabilities =
+    params.model &&
+    resolveEffectiveMediaEntryCapabilities({
+      entry: params.model,
+      source: "shared",
+      providerRegistry: params.providerRegistry,
+    });
+  return Array.isArray(capabilities) && capabilities.includes("image");
+}
+
+function toolsMediaImageCanFallBackToAgentDefaults(cfg: MediaAliasValidationConfig): boolean {
   const media = cfg.tools?.media;
   if (media?.image?.enabled === false) {
     return false;
@@ -188,26 +244,14 @@ function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
   if (sharedModels.length === 0) {
     return true;
   }
-  return !sharedModels.some(sharedMediaModelCanResolveForImage);
+  const providerRegistry = buildMediaAliasValidationProviderRegistry(cfg);
+  return !sharedModels.some((model) =>
+    sharedMediaModelCanResolveForImage({ model, providerRegistry }),
+  );
 }
 
 function addToolsMediaImageFallbackAliasIssues(
-  cfg: {
-    tools?: {
-      media?: {
-        models?: Array<{ provider?: string; capabilities?: unknown[] } | undefined>;
-        image?: {
-          enabled?: boolean;
-          models?: unknown[];
-        };
-      };
-    };
-    agents?: {
-      defaults?: {
-        imageModel?: string | { primary?: string; fallbacks?: string[] };
-      };
-    };
-  },
+  cfg: MediaAliasValidationConfig,
   ctx: z.RefinementCtx,
 ) {
   if (!toolsMediaImageCanFallBackToAgentDefaults(cfg)) {

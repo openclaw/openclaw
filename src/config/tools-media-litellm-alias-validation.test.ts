@@ -237,8 +237,23 @@ describe("tools.media LiteLLM alias validation", () => {
       },
       agents: { defaults: { imageModel: { primary: "litellm/vision" } } },
     });
+    const inferredSharedImageProvider = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini",
+              type: "provider",
+            },
+          ],
+        },
+      },
+      agents: { defaults: { imageModel: { primary: "litellm/vision" } } },
+    });
     expect(direct.ok).toBe(true);
     expect(concreteLiteLLM.ok).toBe(true);
     expect(explicitImageModels.ok).toBe(true);
+    expect(inferredSharedImageProvider.ok).toBe(true);
   });
 });
