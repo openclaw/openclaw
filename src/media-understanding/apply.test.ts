@@ -6,6 +6,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { sanitizeMimeType } from "./apply.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -1417,5 +1418,43 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("<file");
     expect(ctx.Body).toContain("vendor-json");
+  });
+});
+
+describe("sanitizeMimeType", () => {
+  it("accepts a plain MIME type", () => {
+    expect(sanitizeMimeType("image/png")).toBe("image/png");
+    expect(sanitizeMimeType("application/vnd.api+json")).toBe("application/vnd.api+json");
+  });
+
+  it("strips standard parameters", () => {
+    expect(sanitizeMimeType("text/plain; charset=utf-8")).toBe("text/plain");
+    expect(sanitizeMimeType("text/csv;charset=UTF-8")).toBe("text/csv");
+  });
+
+  it("lowercases mixed-case input", () => {
+    expect(sanitizeMimeType("Image/PNG")).toBe("image/png");
+  });
+
+  it("returns undefined for empty or missing input", () => {
+    expect(sanitizeMimeType(undefined)).toBeUndefined();
+    expect(sanitizeMimeType("")).toBeUndefined();
+    expect(sanitizeMimeType("   ")).toBeUndefined();
+  });
+
+  it("rejects malformed input with trailing junk instead of truncating", () => {
+    expect(sanitizeMimeType("image/png junk")).toBeUndefined();
+    expect(sanitizeMimeType("image/png\nextra")).toBeUndefined();
+  });
+
+  it("rejects path-like inputs that previously captured an allowlisted prefix", () => {
+    expect(sanitizeMimeType("image/png/../etc/passwd")).toBeUndefined();
+    expect(sanitizeMimeType("image/png/evil")).toBeUndefined();
+  });
+
+  it("rejects inputs without a type/subtype separator", () => {
+    expect(sanitizeMimeType("imagepng")).toBeUndefined();
+    expect(sanitizeMimeType("/png")).toBeUndefined();
+    expect(sanitizeMimeType("image/")).toBeUndefined();
   });
 });

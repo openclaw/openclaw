@@ -74,12 +74,15 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-function sanitizeMimeType(value?: string): string | undefined {
+// End-anchored so malformed input ("image/png junk", "image/png..etc")
+// returns undefined instead of silently truncating to a prefix that could
+// then pass the downstream allowlist check.
+export function sanitizeMimeType(value?: string): string | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
+  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)(?:;.*)?$/);
   return match?.[1];
 }
 
