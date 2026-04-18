@@ -824,6 +824,44 @@ function restoreRegistryRollbackSnapshot(
   }
 }
 
+// Roll back mutations a failing register() made to its PluginRecord. The
+// record keeps counter/id lists that downstream status + inspect surfaces
+// read (e.g. src/plugins/status.ts reports `services`, `httpRoutes`, etc.
+// straight off the record), so leaving them populated after register throws
+// makes an error-status plugin look like it is still providing those
+// capabilities. Snapshot every own field before register runs and restore
+// them in place on the catch path; identity is preserved so recordPluginError
+// can still push the same object into registry.plugins.
+type PluginRecordSnapshot = Record<string, unknown>;
+
+function capturePluginRecordSnapshot(record: PluginRecord): PluginRecordSnapshot {
+  const snapshot: PluginRecordSnapshot = {};
+  for (const [key, value] of Object.entries(record)) {
+    snapshot[key] = Array.isArray(value) ? value.slice() : value;
+  }
+  return snapshot;
+}
+
+function restorePluginRecordSnapshot(record: PluginRecord, snapshot: PluginRecordSnapshot): void {
+  const target = record as unknown as Record<string, unknown>;
+  for (const key of Object.keys(target)) {
+    if (!(key in snapshot)) {
+      delete target[key];
+    }
+  }
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (Array.isArray(value)) {
+      const current = target[key];
+      if (Array.isArray(current)) {
+        current.length = 0;
+        current.push(...value);
+        continue;
+      }
+    }
+    target[key] = value;
+  }
+}
+
 function recordPluginError(params: {
   logger: PluginLogger;
   registry: PluginRegistry;
@@ -1816,6 +1854,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // status, so orphan entries from error-status plugins would otherwise
       // be served as if the plugin had loaded cleanly.
       const previousRegistryState = captureRegistryRollbackSnapshot(registry);
+      // Also snapshot the record itself — register() mutates counter/id
+      // arrays on the plugin record (record.services, record.gatewayMethods,
+      // record.httpRoutes, ...) that status/inspect surfaces read directly.
+      // Without this the error-status record still advertises the capabilities
+      // of the partial registration.
+      const previousRecordState = capturePluginRecordSnapshot(record);
 
       try {
         const result = register(api);
@@ -1854,6 +1898,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           runtime: previousMemoryRuntime,
         });
         restoreRegistryRollbackSnapshot(registry, previousRegistryState);
+        restorePluginRecordSnapshot(record, previousRecordState);
         recordPluginError({
           logger,
           registry,

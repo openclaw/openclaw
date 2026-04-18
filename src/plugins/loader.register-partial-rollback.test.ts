@@ -30,6 +30,58 @@ describe("plugin register() throw rolls back partial registry contributions", ()
     cleanupPluginLoaderFixturesForTest();
   });
 
+  it("clears the plugin record's counter/id arrays when register fails", () => {
+    // Status / inspect surfaces read `record.services`, `record.gatewayMethods`,
+    // `record.httpRoutes`, etc. directly off PluginRegistry.plugins[]. If these
+    // are left populated after a failing register(), the error-status plugin
+    // still advertises the capabilities it tried (and failed) to contribute.
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "partial-record",
+      filename: "partial-record.cjs",
+      body: `module.exports = {
+        id: "partial-record",
+        register(api) {
+          api.registerHttpRoute({
+            path: "/orphan-record",
+            auth: "plugin",
+            handler: async () => new Response(null, { status: 204 }),
+          });
+          api.registerService({
+            id: "orphan-record-service",
+            start: async () => {},
+          });
+          api.registerGatewayMethod(
+            "plugin.orphan.record",
+            async () => ({ ok: true }),
+          );
+          throw new Error("register failed after partial record mutations");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["partial-record"],
+        },
+      },
+      onlyPluginIds: ["partial-record"],
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "partial-record");
+    expect(record?.status).toBe("error");
+    // The failing register() had incremented record.httpRoutes and pushed
+    // onto record.services / record.gatewayMethods. Those must all revert so
+    // status UIs don't report a phantom capability for the error plugin.
+    expect(record?.httpRoutes).toBe(0);
+    expect(record?.services).toEqual([]);
+    expect(record?.gatewayMethods).toEqual([]);
+  });
+
   it("clears newly-registered gatewayHandlers/gatewayMethodScopes when register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
