@@ -124,13 +124,14 @@ type IsolatedDeliveryContract = "cron-owned" | "shared";
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
   resolvedDelivery: ResolvedCronDeliveryTarget;
+  deliveryMode: "announce" | "webhook" | "none";
 }) {
   return {
     // Only enforce an explicit message target when the cron delivery target
     // was successfully resolved. When resolution fails the agent should not
     // be blocked by a target it cannot satisfy (#27898).
     requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
-    disableMessageTool: params.deliveryRequested,
+    disableMessageTool: params.deliveryMode !== "none",
   };
 }
 
@@ -158,6 +159,7 @@ async function resolveCronDeliveryContext(params: {
       toolPolicy: resolveCronToolPolicy({
         deliveryRequested: false,
         resolvedDelivery,
+        deliveryMode: deliveryPlan.mode,
       }),
     };
   }
@@ -176,6 +178,7 @@ async function resolveCronDeliveryContext(params: {
     toolPolicy: resolveCronToolPolicy({
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
+      deliveryMode: deliveryPlan.mode,
     }),
   };
 }
