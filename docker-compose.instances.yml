@@ -25,6 +25,7 @@ x-openclaw-base: &openclaw-base
     HOME: /home/node
     TERM: xterm-256color
     NODE_ENV: production
+    TZ: America/Los_Angeles
     # GPU disabled by default in containers (no CUDA support)
     OPENCLAW_LLAMA_GPU: "off"
     # Gateway process skips channel monitors (discord-router handles Discord).
