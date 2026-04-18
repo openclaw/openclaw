@@ -1,5 +1,7 @@
-import { isRecord } from "../utils.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleSync,
+  resolveBundledPluginPublicArtifactPath,
+} from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -12,17 +14,24 @@ const WEB_SEARCH_ARTIFACT_CANDIDATES = [
   "web-search-provider.js",
   "web-search.js",
 ] as const;
+const WEB_SEARCH_RUNTIME_ARTIFACT_CANDIDATES = ["web-search-provider.js", "web-search.js"] as const;
 const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-contract-api.js",
   "web-fetch-provider.js",
   "web-fetch.js",
 ] as const;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPlugin {
+function isWebProviderPlugin(
+  value: unknown,
+): value is WebSearchProviderPlugin | WebFetchProviderPlugin {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
@@ -38,20 +47,12 @@ function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPl
   );
 }
 
+function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPlugin {
+  return isWebProviderPlugin(value);
+}
+
 function isWebFetchProviderPlugin(value: unknown): value is WebFetchProviderPlugin {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.label === "string" &&
-    typeof value.hint === "string" &&
-    isStringArray(value.envVars) &&
-    typeof value.placeholder === "string" &&
-    typeof value.signupUrl === "string" &&
-    typeof value.credentialPath === "string" &&
-    typeof value.getCredentialValue === "function" &&
-    typeof value.setCredentialValue === "function" &&
-    typeof value.createTool === "function"
-  );
+  return isWebProviderPlugin(value);
 }
 
 function collectProviderFactories<TProvider>(params: {
@@ -128,6 +129,28 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
   return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
 }
 
+export function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
+  dirName: string;
+  pluginId: string;
+}): PluginWebSearchProviderEntry[] | null {
+  const mod = tryLoadBundledPublicArtifactModule({
+    dirName: params.dirName,
+    artifactCandidates: WEB_SEARCH_RUNTIME_ARTIFACT_CANDIDATES,
+  });
+  if (!mod) {
+    return null;
+  }
+  const providers = collectProviderFactories({
+    mod,
+    suffix: "WebSearchProvider",
+    isProvider: isWebSearchProviderPlugin,
+  });
+  if (providers.length === 0) {
+    return null;
+  }
+  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
+}
+
 export function loadBundledWebFetchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
@@ -167,6 +190,23 @@ export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(para
   return providers;
 }
 
+export function resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts(params: {
+  onlyPluginIds: readonly string[];
+}): PluginWebSearchProviderEntry[] | null {
+  const providers: PluginWebSearchProviderEntry[] = [];
+  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
+    const loadedProviders = loadBundledRuntimeWebSearchProviderEntriesFromDir({
+      dirName: pluginId,
+      pluginId,
+    });
+    if (!loadedProviders) {
+      return null;
+    }
+    providers.push(...loadedProviders);
+  }
+  return providers;
+}
+
 export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): PluginWebFetchProviderEntry[] | null {
@@ -182,4 +222,27 @@ export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(param
     providers.push(...loadedProviders);
   }
   return providers;
+}
+
+function hasBundledPublicArtifactCandidate(params: {
+  dirName: string;
+  artifactCandidates: readonly string[];
+}): boolean {
+  return params.artifactCandidates.some((artifactBasename) =>
+    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: params.dirName, artifactBasename })),
+  );
+}
+
+export function hasBundledWebSearchProviderPublicArtifact(pluginId: string): boolean {
+  return hasBundledPublicArtifactCandidate({
+    dirName: pluginId,
+    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
+  });
+}
+
+export function hasBundledWebFetchProviderPublicArtifact(pluginId: string): boolean {
+  return hasBundledPublicArtifactCandidate({
+    dirName: pluginId,
+    artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
+  });
 }

@@ -1,40 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-const warningFilterKey = Symbol.for("openclaw.warning-filter");
-
-function installProcessWarningFilter() {
-  if (globalThis[warningFilterKey]?.installed) {
-    return;
-  }
-
-  const originalEmitWarning = process.emitWarning.bind(process);
-  process.emitWarning = (...args) => {
-    const [warningArg, secondArg, thirdArg] = args;
-    const warning =
-      warningArg instanceof Error
-        ? {
-            name: warningArg.name,
-            message: warningArg.message,
-            code: warningArg.code,
-          }
-        : {
-            name: typeof secondArg === "string" ? secondArg : secondArg?.type,
-            message: typeof warningArg === "string" ? warningArg : undefined,
-            code: typeof thirdArg === "string" ? thirdArg : secondArg?.code,
-          };
-
-    if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
-      return;
-    }
-
-    return Reflect.apply(originalEmitWarning, process, args);
-  };
-
-  globalThis[warningFilterKey] = { installed: true };
-}
+import { installProcessWarningFilter } from "./process-warning-filter.mjs";
 
 installProcessWarningFilter();
 
@@ -64,6 +34,44 @@ function parseArgs(argv) {
 
 const { packageRoot } = parseArgs(process.argv.slice(2));
 const distExtensionsRoot = path.join(packageRoot, "dist", "extensions");
+const installedLayoutEnv = "OPENCLAW_BUNDLED_CHANNEL_SMOKE_INSTALLED_LAYOUT";
+
+function packageRootLooksInstalled(root) {
+  return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
+}
+
+function smokeInInstalledLayoutIfNeeded() {
+  if (process.env[installedLayoutEnv] === "1" || packageRootLooksInstalled(packageRoot)) {
+    return;
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-smoke-"));
+  const nodeModulesRoot = path.join(tempRoot, "node_modules");
+  const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
+  fs.mkdirSync(nodeModulesRoot, { recursive: true });
+  fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--preserve-symlinks",
+        fileURLToPath(import.meta.url),
+        "--package-root",
+        installedPackageRoot,
+      ],
+      {
+        env: { ...process.env, [installedLayoutEnv]: "1" },
+        stdio: "inherit",
+      },
+    );
+    process.exit(result.status ?? 1);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+smokeInInstalledLayoutIfNeeded();
 
 async function importBuiltModule(absolutePath) {
   return import(pathToFileURL(absolutePath).href);

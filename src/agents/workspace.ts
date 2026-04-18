@@ -263,6 +263,22 @@ export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
+export async function resolveWorkspaceBootstrapStatus(
+  dir: string,
+): Promise<"pending" | "complete"> {
+  const resolvedDir = resolveUserPath(dir);
+  const state = await readWorkspaceSetupStateForDir(resolvedDir);
+  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+    return "complete";
+  }
+  const bootstrapExists = await fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME));
+  return bootstrapExists ? "pending" : "complete";
+}
+
+export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
+  return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
+}
+
 async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
@@ -334,6 +350,7 @@ export async function ensureAgentWorkspace(params?: {
   userPath?: string;
   heartbeatPath?: string;
   bootstrapPath?: string;
+  identityPathCreated?: boolean;
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
@@ -382,7 +399,7 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
+  const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
@@ -459,6 +476,7 @@ export async function ensureAgentWorkspace(params?: {
     userPath,
     heartbeatPath,
     bootstrapPath,
+    identityPathCreated,
   };
 }
 

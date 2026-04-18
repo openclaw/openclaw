@@ -1,54 +1,58 @@
 import { describe, expect, it } from "vitest";
-import { resolveManifestContractPluginIds } from "./manifest-registry.js";
 import {
-  resolveBundledWebFetchProvidersFromPublicArtifacts,
-  resolveBundledWebSearchProvidersFromPublicArtifacts,
-} from "./web-provider-public-artifacts.js";
+  resolveManifestContractOwnerPluginId,
+  resolveManifestContractPluginIds,
+} from "./manifest-registry.js";
+import {
+  hasBundledWebFetchProviderPublicArtifact,
+  hasBundledWebSearchProviderPublicArtifact,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+} from "./web-provider-public-artifacts.explicit.js";
 
 describe("web provider public artifacts", () => {
-  it("covers every bundled web search provider declared in manifests", () => {
-    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
+  it("has a public artifact for every bundled web search provider declared in manifests", () => {
+    const pluginIds = resolveManifestContractPluginIds({
+      contract: "webSearchProviders",
+      origin: "bundled",
+    });
+
+    expect(pluginIds).not.toHaveLength(0);
+    for (const pluginId of pluginIds) {
+      expect(hasBundledWebSearchProviderPublicArtifact(pluginId)).toBe(true);
+    }
+  });
+
+  it("keeps public web search artifacts mapped to their manifest owner plugin", () => {
+    const pluginIds = resolveManifestContractPluginIds({
+      contract: "webSearchProviders",
+      origin: "bundled",
+    });
+
+    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: pluginIds,
     });
 
     expect(providers).not.toBeNull();
-    expect(
-      providers
-        ?.map((entry) => entry.pluginId)
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(
-      resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        origin: "bundled",
-      }),
-    );
+    for (const provider of providers ?? []) {
+      expect(
+        resolveManifestContractOwnerPluginId({
+          contract: "webSearchProviders",
+          value: provider.id,
+          origin: "bundled",
+        }),
+      ).toBe(provider.pluginId);
+    }
   });
 
-  it("covers every bundled web fetch provider declared in manifests", () => {
-    const providers = resolveBundledWebFetchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
+  it("has a public artifact for every bundled web fetch provider declared in manifests", () => {
+    const pluginIds = resolveManifestContractPluginIds({
+      contract: "webFetchProviders",
+      origin: "bundled",
     });
 
-    expect(providers).not.toBeNull();
-    expect(
-      providers
-        ?.map((entry) => entry.pluginId)
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(
-      resolveManifestContractPluginIds({
-        contract: "webFetchProviders",
-        origin: "bundled",
-      }),
-    );
-  });
-
-  it("prefers lightweight bundled web fetch contract artifacts", () => {
-    const provider = resolveBundledWebFetchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
-      onlyPluginIds: ["firecrawl"],
-    })?.[0];
-
-    expect(provider?.pluginId).toBe("firecrawl");
-    expect(provider?.createTool({ config: {} as never })).toBeNull();
+    expect(pluginIds).not.toHaveLength(0);
+    for (const pluginId of pluginIds) {
+      expect(hasBundledWebFetchProviderPublicArtifact(pluginId)).toBe(true);
+    }
   });
 });

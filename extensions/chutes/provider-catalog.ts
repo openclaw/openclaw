@@ -4,7 +4,7 @@ import {
   CHUTES_MODEL_CATALOG,
   buildChutesModelDefinition,
   discoverChutesModels,
-} from "./api.js";
+} from "./models.js";
 
 /**
  * Build the Chutes provider with dynamic model discovery.

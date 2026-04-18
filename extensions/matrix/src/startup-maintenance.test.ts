@@ -1,8 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+
+const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
+  available: true,
+}));
+
+vi.mock("./legacy-crypto-inspector-availability.js", () => ({
+  isMatrixLegacyCryptoInspectorAvailable: () => legacyCryptoInspectorAvailability.available,
+}));
+
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
+import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 
 async function seedLegacyMatrixState(home: string) {
   const stateDir = path.join(home, ".openclaw");
@@ -26,6 +36,22 @@ function makeMatrixStartupConfig(includeCredentials = true) {
   } as const;
 }
 
+async function seedLegacyMatrixCrypto(home: string) {
+  const stateDir = path.join(home, ".openclaw");
+  const { rootDir } = resolveMatrixAccountStorageRoot({
+    stateDir,
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    accessToken: "tok-123",
+  });
+  await fs.mkdir(path.join(rootDir, "crypto"), { recursive: true });
+  await fs.writeFile(
+    path.join(rootDir, "crypto", "bot-sdk.json"),
+    JSON.stringify({ deviceId: "DEVICE123" }),
+    "utf8",
+  );
+}
+
 function createSuccessfulMatrixMigrationDeps() {
   return {
     maybeCreateMatrixMigrationSnapshot: vi.fn(async () => ({
@@ -42,6 +68,10 @@ function createSuccessfulMatrixMigrationDeps() {
 }
 
 describe("runMatrixStartupMaintenance", () => {
+  beforeEach(() => {
+    legacyCryptoInspectorAvailability.available = true;
+  });
+
   it("creates a snapshot before actionable startup migration", async () => {
     await withTempHome(async (home) => {
       await seedLegacyMatrixState(home);
@@ -78,6 +108,7 @@ describe("runMatrixStartupMaintenance", () => {
       const autoMigrateLegacyMatrixStateMock = vi.fn();
       const autoPrepareLegacyMatrixCryptoMock = vi.fn();
       const info = vi.fn();
+      const warn = vi.fn();
 
       await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(false),
@@ -87,7 +118,7 @@ describe("runMatrixStartupMaintenance", () => {
           autoMigrateLegacyMatrixState: autoMigrateLegacyMatrixStateMock as never,
           autoPrepareLegacyMatrixCrypto: autoPrepareLegacyMatrixCryptoMock as never,
         },
-        log: { info },
+        log: { info, warn },
       });
 
       expect(maybeCreateMatrixMigrationSnapshotMock).not.toHaveBeenCalled();
@@ -95,6 +126,41 @@ describe("runMatrixStartupMaintenance", () => {
       expect(autoPrepareLegacyMatrixCryptoMock).not.toHaveBeenCalled();
       expect(info).toHaveBeenCalledWith(
         "matrix: migration remains in a warning-only state; no pre-migration snapshot was needed yet",
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not be resolved yet"));
+    });
+  });
+
+  it("logs the concrete unavailable-inspector warning when startup migration is warning-only", async () => {
+    legacyCryptoInspectorAvailability.available = false;
+
+    await withTempHome(async (home) => {
+      await seedLegacyMatrixCrypto(home);
+      const maybeCreateMatrixMigrationSnapshotMock = vi.fn();
+      const autoMigrateLegacyMatrixStateMock = vi.fn();
+      const autoPrepareLegacyMatrixCryptoMock = vi.fn();
+      const info = vi.fn();
+      const warn = vi.fn();
+
+      await runMatrixStartupMaintenance({
+        cfg: makeMatrixStartupConfig(),
+        env: process.env,
+        deps: {
+          maybeCreateMatrixMigrationSnapshot: maybeCreateMatrixMigrationSnapshotMock as never,
+          autoMigrateLegacyMatrixState: autoMigrateLegacyMatrixStateMock as never,
+          autoPrepareLegacyMatrixCrypto: autoPrepareLegacyMatrixCryptoMock as never,
+        },
+        log: { info, warn },
+      });
+
+      expect(maybeCreateMatrixMigrationSnapshotMock).not.toHaveBeenCalled();
+      expect(autoMigrateLegacyMatrixStateMock).not.toHaveBeenCalled();
+      expect(autoPrepareLegacyMatrixCryptoMock).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledWith(
+        "matrix: migration remains in a warning-only state; no pre-migration snapshot was needed yet",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "matrix: legacy encrypted-state warnings:\n- Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.",
       );
     });
   });

@@ -4,8 +4,8 @@ import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
-import { writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
-import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-state.js";
+import { saveJsonFile } from "../../plugin-sdk/json-store.js";
+import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
@@ -14,7 +14,7 @@ import type {
   SessionBindingCapabilities,
   SessionBindingRecord,
   SessionBindingUnbindInput,
-} from "./session-binding-service.js";
+} from "./session-binding.types.js";
 
 type PersistedCurrentConversationBindingsFile = {
   version: 1;
@@ -25,7 +25,6 @@ const CURRENT_BINDINGS_FILE_VERSION = 1;
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 
 let bindingsLoaded = false;
-let persistPromise: Promise<void> = Promise.resolve();
 const bindingsByConversationKey = new Map<string, SessionBindingRecord>();
 
 function buildConversationKey(ref: ConversationRef): string {
@@ -76,24 +75,22 @@ function loadBindingsIntoMemory(): void {
     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
       continue;
     }
-    bindingsByConversationKey.set(buildConversationKey(record.conversation), {
+    const conversation = normalizeConversationRef(record.conversation);
+    const targetSessionKey = record.targetSessionKey?.trim() ?? "";
+    if (!targetSessionKey) {
+      continue;
+    }
+    bindingsByConversationKey.set(buildConversationKey(conversation), {
       ...record,
-      conversation: normalizeConversationRef(record.conversation),
+      bindingId: buildBindingId(conversation),
+      targetSessionKey,
+      conversation,
     });
   }
 }
 
-async function persistBindingsToDisk(): Promise<void> {
-  await writeJsonFileAtomically(resolveBindingsFilePath(), toPersistedFile());
-}
-
-function enqueuePersist(): Promise<void> {
-  persistPromise = persistPromise
-    .catch(() => {})
-    .then(async () => {
-      await persistBindingsToDisk();
-    });
-  return persistPromise;
+function persistBindingsToDisk(): void {
+  saveJsonFile(resolveBindingsFilePath(), toPersistedFile());
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -106,7 +103,7 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
-  void enqueuePersist();
+  persistBindingsToDisk();
   return null;
 }
 
@@ -117,7 +114,10 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   if (!normalized) {
     return false;
   }
-  const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
+  const matchesPluginId = (plugin: {
+    id?: string | null;
+    meta?: { aliases?: readonly string[] } | null;
+  }) =>
     plugin.id === normalized ||
     (plugin.meta?.aliases ?? []).some(
       (alias) => normalizeOptionalLowercaseString(alias) === normalized,
@@ -125,7 +125,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   // Read the already-installed runtime channel registry from shared state only.
   // Importing plugins/runtime here creates a module cycle through plugin-sdk
   // surfaces during bundled channel discovery.
-  const plugin = getActivePluginChannelRegistryFromState()?.channels.find((entry) =>
+  const plugin = (getActivePluginChannelRegistryFromState()?.channels ?? []).find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
   if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {
@@ -181,7 +181,7 @@ export async function bindGenericCurrentConversation(
     },
   };
   bindingsByConversationKey.set(key, record);
-  await enqueuePersist();
+  persistBindingsToDisk();
   return record;
 }
 
@@ -223,6 +223,7 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
+  persistBindingsToDisk();
 }
 
 export async function unbindGenericCurrentConversationBindings(
@@ -238,7 +239,7 @@ export async function unbindGenericCurrentConversationBindings(
     if (record) {
       bindingsByConversationKey.delete(key);
       removed.push(record);
-      await enqueuePersist();
+      persistBindingsToDisk();
     }
     return removed;
   }
@@ -254,7 +255,7 @@ export async function unbindGenericCurrentConversationBindings(
     removed.push(record);
   }
   if (removed.length > 0) {
-    await enqueuePersist();
+    persistBindingsToDisk();
   }
   return removed;
 }
@@ -266,7 +267,6 @@ export const __testing = {
   }) {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
-    persistPromise = Promise.resolve();
     if (params?.deletePersistedFile) {
       const filePath = resolveBindingsFilePath(params.env);
       try {

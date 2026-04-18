@@ -70,8 +70,8 @@ const CASES: ReasonCase[] = [
   },
   {
     reason: "timeout",
-    allowCooldownProbe: false,
-    useTransientProbeSlot: false,
+    allowCooldownProbe: true,
+    useTransientProbeSlot: true,
     preserveTransientProbeSlot: false,
   },
   {

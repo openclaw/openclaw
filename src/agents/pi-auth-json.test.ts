@@ -1,9 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { saveAuthProfileStore } from "./auth-profiles.js";
+import { describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "./pi-auth-json.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+vi.mock("./auth-profiles/external-cli-sync.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles/external-cli-sync.js")>(
+    "./auth-profiles/external-cli-sync.js",
+  );
+  return {
+    ...actual,
+    readManagedExternalCliCredential: () => null,
+    resolveExternalCliAuthProfiles: () => [],
+  };
+});
 
 type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
 

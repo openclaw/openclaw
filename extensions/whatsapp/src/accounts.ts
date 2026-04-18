@@ -7,11 +7,12 @@ import {
   resolveUserPath,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
+import type { WhatsAppAccountConfig } from "./account-types.js";
 import { hasWebCredsSync } from "./creds-files.js";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -27,6 +28,7 @@ export type ResolvedWhatsAppAccount = {
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
+  historyLimit?: number;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
@@ -140,6 +142,7 @@ export function resolveWhatsAppAccount(params: {
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,
     groupPolicy: merged.groupPolicy,
+    historyLimit: merged.historyLimit,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,
     mediaMaxMb: merged.mediaMaxMb,

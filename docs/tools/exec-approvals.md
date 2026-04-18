@@ -20,6 +20,11 @@ session or config defaults request `ask: "on-miss"`.
 Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
 `openclaw approvals get --node <id|name|ip>` to inspect the requested policy,
 host policy sources, and the effective result.
+For the local machine, `openclaw exec-policy show` exposes the same merged view and
+`openclaw exec-policy set|preset` can synchronize the local requested policy with the
+local host approvals file in one step. When a local scope requests `host=node`,
+`openclaw exec-policy show` reports that scope as node-managed at runtime instead of
+pretending the local approvals file is the effective source of truth.
 
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).
@@ -143,6 +148,21 @@ openclaw approvals set --stdin <<'EOF'
 EOF
 ```
 
+Local shortcut for the same gateway-host policy on the current machine:
+
+```bash
+openclaw exec-policy preset yolo
+```
+
+That local shortcut updates both:
+
+- local `tools.exec.host/security/ask`
+- local `~/.openclaw/exec-approvals.json` defaults
+
+It is intentionally local-only. If you need to change gateway-host or node-host approvals
+remotely, continue using `openclaw approvals set --gateway` or
+`openclaw approvals set --node <id|name|ip>`.
+
 For a node host, apply the same approvals file on that node instead:
 
 ```bash
@@ -157,6 +177,12 @@ openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
 }
 EOF
 ```
+
+Important local-only limitation:
+
+- `openclaw exec-policy` does not synchronize node approvals
+- `openclaw exec-policy set --host node` is rejected
+- node exec approvals are fetched from the node at runtime, so node-targeted updates must use `openclaw approvals --node ...`
 
 Session-only shortcut:
 

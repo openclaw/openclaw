@@ -24,6 +24,7 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
     skillsSnapshot: [],
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
+    skipProviderRuntimeHints: true,
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
@@ -38,8 +39,8 @@ afterEach(() => {
 });
 
 describe("buildEmbeddedRunBaseParams runtime config", () => {
-  it("prefers the active runtime snapshot when queued reply config still contains SecretRefs", () => {
-    const sourceConfig: OpenClawConfig = {
+  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", () => {
+    const staleSnapshot: OpenClawConfig = {
       models: {
         providers: {
           openai: {
@@ -54,7 +55,7 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
         },
       },
     };
-    const runtimeConfig: OpenClawConfig = {
+    const resolvedRunConfig: OpenClawConfig = {
       models: {
         providers: {
           openai: {
@@ -65,10 +66,10 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
         },
       },
     };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
 
     const resolved = buildEmbeddedRunBaseParams({
-      run: makeRun(sourceConfig),
+      run: makeRun(resolvedRunConfig),
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
@@ -78,6 +79,6 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
       }),
     });
 
-    expect(resolved.config).toBe(runtimeConfig);
+    expect(resolved.config).toBe(resolvedRunConfig);
   });
 });

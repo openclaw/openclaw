@@ -1,10 +1,11 @@
 import { expect, it } from "vitest";
-import type { ResolvedSlackAccount } from "../../../extensions/slack/api.js";
 import type { MsgContext } from "../../../src/auto-reply/templating.js";
 import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withTempHome } from "../temp-home.js";
+
+type ResolvedSlackAccount = import("@openclaw/slack/api.js").ResolvedSlackAccount;
 
 type SlackMessageEvent = {
   channel: string;
@@ -33,7 +34,7 @@ type SlackTestApi = {
 const slackPrepareTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "slack",
-  artifactBasename: "test-api.js",
+  artifactBasename: "inbound-contract-test-api.js",
 });
 
 let slackTestApiPromise: Promise<SlackTestApi> | undefined;

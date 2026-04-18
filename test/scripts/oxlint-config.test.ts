@@ -22,6 +22,26 @@ describe("oxlint config", () => {
     expect(tsconfig.exclude ?? []).not.toContain("extensions");
   });
 
+  it("includes scripts in root type-aware lint coverage", () => {
+    const tsconfig = readJson<OxlintTsconfig>("tsconfig.oxlint.json");
+
+    expect(tsconfig.include).toContain("scripts/**/*");
+  });
+
+  it("has a discoverable scripts tsconfig for type-aware linting", () => {
+    const tsconfig = readJson<OxlintTsconfig>("scripts/tsconfig.json");
+
+    expect(tsconfig.include).toContain("**/*.ts");
+    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
+  });
+
+  it("has a discoverable test tsconfig for type-aware linting", () => {
+    const tsconfig = readJson<OxlintTsconfig>("test/tsconfig.json");
+
+    expect(tsconfig.include).toContain("**/*.ts");
+    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
+  });
+
   it("does not ignore the bundled extensions tree", () => {
     const config = readJson<OxlintConfig>(".oxlintrc.json");
 
