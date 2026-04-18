@@ -99,3 +99,131 @@ describe("createExitPlanModeTool — subagent gate", () => {
     expect(result.details).toMatchObject({ status: "approval_requested" });
   });
 });
+
+describe("createExitPlanModeTool — PR-10 archetype fields", () => {
+  const planSteps = [{ step: "do thing", status: "pending" }];
+
+  it("forwards title (clamped to 80 chars)", async () => {
+    const tool = createExitPlanModeTool();
+    const longTitle = "x".repeat(200);
+    const result = await tool.execute(
+      "c1",
+      { plan: planSteps, title: longTitle },
+      new AbortController().signal,
+    );
+    const details = result.details as { title?: string };
+    expect(details.title).toBeDefined();
+    expect(details.title!.length).toBe(80);
+  });
+
+  it("forwards analysis when non-empty (trimmed)", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      { plan: planSteps, analysis: "  Multi-paragraph analysis text.  " },
+      new AbortController().signal,
+    );
+    expect(result.details).toMatchObject({
+      analysis: "Multi-paragraph analysis text.",
+    });
+  });
+
+  it("drops analysis when whitespace-only (treats as missing)", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      { plan: planSteps, analysis: "   " },
+      new AbortController().signal,
+    );
+    expect((result.details as Record<string, unknown>).analysis).toBeUndefined();
+  });
+
+  it("forwards assumptions array (trim + drop blank)", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      { plan: planSteps, assumptions: [" tests pass first run ", "", "  ", "auth exports stable"] },
+      new AbortController().signal,
+    );
+    expect(result.details).toMatchObject({
+      assumptions: ["tests pass first run", "auth exports stable"],
+    });
+  });
+
+  it("drops assumptions array when all entries blank", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      { plan: planSteps, assumptions: ["", "  "] },
+      new AbortController().signal,
+    );
+    expect((result.details as Record<string, unknown>).assumptions).toBeUndefined();
+  });
+
+  it("forwards risks array (only entries with both risk + mitigation)", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      {
+        plan: planSteps,
+        risks: [
+          { risk: "race condition", mitigation: "use mutex" },
+          { risk: "missing mitigation only" }, // dropped
+          { mitigation: "no risk text" }, // dropped
+          { risk: "  ", mitigation: "  " }, // dropped (both blank after trim)
+          { risk: "   sql injection   ", mitigation: "  use parameterized query  " },
+          "not an object", // dropped
+          null, // dropped
+        ],
+      },
+      new AbortController().signal,
+    );
+    expect(result.details).toMatchObject({
+      risks: [
+        { risk: "race condition", mitigation: "use mutex" },
+        { risk: "sql injection", mitigation: "use parameterized query" },
+      ],
+    });
+  });
+
+  it("drops risks array when no entries have both fields", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      { plan: planSteps, risks: [{ risk: "alone" }] },
+      new AbortController().signal,
+    );
+    expect((result.details as Record<string, unknown>).risks).toBeUndefined();
+  });
+
+  it("forwards verification + references (trim + drop blank)", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute(
+      "c1",
+      {
+        plan: planSteps,
+        verification: ["pnpm test passes", " "],
+        references: ["src/x.ts:1", "PR #123", ""],
+      },
+      new AbortController().signal,
+    );
+    expect(result.details).toMatchObject({
+      verification: ["pnpm test passes"],
+      references: ["src/x.ts:1", "PR #123"],
+    });
+  });
+
+  it("omits all archetype fields when none supplied (backwards-compat)", async () => {
+    const tool = createExitPlanModeTool();
+    const result = await tool.execute("c1", { plan: planSteps }, new AbortController().signal);
+    const details = result.details as Record<string, unknown>;
+    expect(details.analysis).toBeUndefined();
+    expect(details.assumptions).toBeUndefined();
+    expect(details.risks).toBeUndefined();
+    expect(details.verification).toBeUndefined();
+    expect(details.references).toBeUndefined();
+    // Pre-existing fields still present.
+    expect(details.status).toBe("approval_requested");
+    expect(details.plan).toEqual(planSteps);
+  });
+});

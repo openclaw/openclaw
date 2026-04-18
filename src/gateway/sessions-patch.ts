@@ -429,12 +429,22 @@ export async function applySessionsPatchToStore(params: {
         // Fresh entry: clear any stale rejection history, reset to a clean
         // pending-nothing state. The agent calls exit_plan_mode to actually
         // submit a plan for approval; until then approval is "none".
+        //
+        // PR-10 auto-mode: if the user pre-armed auto-approve via
+        // `/plan auto on` BEFORE entering plan mode, we materialized a
+        // `mode: "normal"` placeholder entry with `autoApprove: true`.
+        // Carry that flag forward into the fresh plan-mode entry so the
+        // very first plan submission auto-approves as the user expects.
+        // Without this, `/plan auto on` then `/plan on` silently loses
+        // the flag (user-visible bug — review M3).
+        const carryAutoApprove = next.planMode?.autoApprove === true;
         next.planMode = {
           mode: "plan",
           approval: "none",
           enteredAt: planNow,
           updatedAt: planNow,
           rejectionCount: 0,
+          ...(carryAutoApprove ? { autoApprove: true } : {}),
         };
       }
     } else if (raw !== undefined) {
@@ -449,9 +459,6 @@ export async function applySessionsPatchToStore(params: {
   // for the state-machine semantics (rejection cycle counter, terminal-
   // state guards, approvalId mismatch as no-op, etc.).
   if ("planApproval" in patch && patch.planApproval !== undefined) {
-    if (!next.planMode) {
-      return invalid("planApproval requires an active plan-mode session");
-    }
     const planModeEnabled = cfg.agents?.defaults?.planMode?.enabled === true;
     if (!planModeEnabled) {
       return invalid(
@@ -459,25 +466,86 @@ export async function applySessionsPatchToStore(params: {
       );
     }
     const action = patch.planApproval.action;
-    const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
-    const expectedApprovalId = normalizeOptionalString(patch.planApproval.approvalId) || undefined;
-    const resolved = resolvePlanApproval(next.planMode, action, feedback, expectedApprovalId);
-    // resolvePlanApproval returns the same reference when the action is
-    // a no-op (stale approvalId, terminal-state guard, etc.). Detecting
-    // this lets the client distinguish "applied" from "ignored" without
-    // querying the resulting state shape.
-    if (resolved === next.planMode) {
-      return invalid(
-        "planApproval ignored: stale approvalId or session is in a terminal approval state",
-      );
-    }
-    next.planMode = { ...resolved, updatedAt: now };
-    // Approve / edit transition the mode to "normal" — the approval
-    // resolution unlocks mutations. Clear the per-session planMode entry
-    // so subsequent reads see no active plan state (matches the
-    // sessions.patch { planMode: "normal" } semantics).
-    if (next.planMode.mode === "normal") {
-      delete next.planMode;
+    // PR-10 ask_user_question: "answer" routes through the runtime as
+    // a synthetic user message tagged [QUESTION_ANSWER]. It does NOT
+    // transition planMode or use the resolvePlanApproval state machine.
+    // Handled in the runtime (next-turn injection), not here — server
+    // accepts the patch and lets the client know it's been recorded.
+    if (action === "answer") {
+      const answer = normalizeOptionalString(patch.planApproval.answer) || undefined;
+      if (!answer) {
+        return invalid('planApproval action="answer" requires `answer` text');
+      }
+      // No state change. The actual injection happens via the existing
+      // approval-reply dispatch path (which the channel/UI will route
+      // separately as a synthetic user message). We accept the patch as
+      // a no-op so the client's optimistic dismissal succeeds.
+      // (PR-10 follow-up: wire the answer into the synthetic-user-msg
+      // pipeline. For now, the client handles the dispatch directly.)
+    } else if (action === "auto") {
+      // PR-10 auto-mode toggle. Sets the session's autoApprove flag
+      // without resolving any specific approval. When enabled, future
+      // exit_plan_mode submissions auto-resolve as "approve" via the
+      // plan-snapshot persister's auto-approve branch.
+      const autoEnabled = patch.planApproval.autoEnabled === true;
+      if (!next.planMode) {
+        // No active plan-mode session — toggle is meaningful only when
+        // plan mode is armed. Allow the toggle to be set in advance so
+        // the next enter_plan_mode picks it up.
+        next.planMode = {
+          mode: "normal",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: now,
+          autoApprove: autoEnabled,
+        };
+      } else {
+        next.planMode = {
+          ...next.planMode,
+          autoApprove: autoEnabled,
+          updatedAt: now,
+        };
+      }
+    } else {
+      // Existing approve/reject/edit path.
+      if (!next.planMode) {
+        return invalid("planApproval requires an active plan-mode session");
+      }
+      const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
+      const expectedApprovalId =
+        normalizeOptionalString(patch.planApproval.approvalId) || undefined;
+      const resolved = resolvePlanApproval(next.planMode, action, feedback, expectedApprovalId);
+      // resolvePlanApproval returns the same reference when the action is
+      // a no-op (stale approvalId, terminal-state guard, etc.). Detecting
+      // this lets the client distinguish "applied" from "ignored" without
+      // querying the resulting state shape.
+      if (resolved === next.planMode) {
+        return invalid(
+          "planApproval ignored: stale approvalId or session is in a terminal approval state",
+        );
+      }
+      next.planMode = { ...resolved, updatedAt: now };
+      // Approve / edit transition the mode to "normal" — the approval
+      // resolution unlocks mutations. Clear the per-session planMode entry
+      // so subsequent reads see no active plan state (matches the
+      // sessions.patch { planMode: "normal" } semantics).
+      if (next.planMode.mode === "normal") {
+        // PR-10 auto-mode: preserve `autoApprove` flag across the close
+        // so the next enter_plan_mode keeps the toggle. Without this
+        // the user would have to re-toggle every plan cycle.
+        const preservedAutoApprove = next.planMode.autoApprove;
+        if (preservedAutoApprove) {
+          next.planMode = {
+            mode: "normal",
+            approval: "none",
+            rejectionCount: 0,
+            updatedAt: now,
+            autoApprove: true,
+          };
+        } else {
+          delete next.planMode;
+        }
+      }
     }
   }
 

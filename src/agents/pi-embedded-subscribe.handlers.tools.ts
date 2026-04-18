@@ -233,7 +233,16 @@ async function persistPlanModeEnter(
         // Fresh entry: clear any stale rejection history, reset to a
         // clean pending-nothing state. Mirrors the sessions.patch
         // { planMode: "plan" } user-driven path.
+        //
+        // PR-10 auto-mode: preserve `autoApprove` across plan cycles.
+        // The sessions-patch approve branch keeps the flag on `mode →
+        // normal` transitions; without re-applying it here, the flag
+        // would be lost on the very next enter_plan_mode call (since
+        // entry.planMode.mode is "normal" at that point so we hit this
+        // fresh-entry branch). Reading from `current` covers both
+        // pre-armed (normal/none w/ autoApprove) and fresh (no entry).
         wasFreshEntry = true;
+        const carryAutoApprove = current?.autoApprove === true;
         return {
           planMode: {
             mode: "plan",
@@ -241,6 +250,7 @@ async function persistPlanModeEnter(
             enteredAt: now,
             updatedAt: now,
             rejectionCount: 0,
+            ...(carryAutoApprove ? { autoApprove: true } : {}),
           },
         };
       },
@@ -250,6 +260,96 @@ async function persistPlanModeEnter(
     log?.warn?.(`failed to persist plan-mode entry: ${String(err)}`);
     return { ok: false, freshEntry: false };
   }
+}
+
+/**
+ * PR-10 auto-mode: if the session has `planMode.autoApprove === true`,
+ * fire `sessions.patch { planApproval: { action: "approve", approvalId }}`
+ * immediately so the plan executes without waiting for the user.
+ *
+ * Failure mode (review H1): if `callGatewayTool` throws (gateway
+ * restart, network blip, schema rejection of the auto-approve patch),
+ * the approval card stays on-screen for manual click and we log a
+ * `error` (not `warn`) so the operator sees the silent fall-back.
+ * The user-visible degradation is "auto-mode briefly behaves like
+ * manual" — acceptable, but loud enough in the logs to debug.
+ *
+ * Reads the session entry directly so the toggle takes effect on the
+ * very next plan submission (no agent-side state mirroring needed).
+ *
+ * Race window (review H2): we read the store via `readSessionStoreReadOnly`
+ * (no lock). Between the read and the auto-approve patch, the user
+ * could click "Reject" — we'd then over-approve. The mitigation is
+ * that the approve and reject actions both go through `resolvePlanApproval`
+ * with the same approvalId, so whichever lands LAST wins. Auto-approve
+ * lands first in practice (it fires synchronously inside the tool-end
+ * handler) so a user reject lands on `mode: normal, approval: none`
+ * (terminal) and is cleanly rejected by the state-machine guard.
+ */
+async function autoApproveIfEnabled(params: {
+  sessionKey: string;
+  approvalId: string;
+  log?: {
+    warn?: (msg: string) => void;
+    info?: (msg: string) => void;
+    error?: (msg: string) => void;
+  };
+}): Promise<void> {
+  try {
+    const [
+      { loadConfig },
+      { resolveStorePath },
+      { parseAgentSessionKey },
+      { readSessionStoreReadOnly },
+    ] = await Promise.all([
+      loadConfigModule(),
+      loadSessionPaths(),
+      loadRouting(),
+      loadSessionStoreRead(),
+    ]);
+    const cfg = loadConfig();
+    const parsed = parseAgentSessionKey(params.sessionKey);
+    const storePath = resolveStorePath(
+      cfg.session?.store,
+      parsed?.agentId ? { agentId: parsed.agentId } : {},
+    );
+    const store = readSessionStoreReadOnly(storePath);
+    const entry = store[params.sessionKey];
+    if (!entry?.planMode?.autoApprove) {
+      return; // not auto-mode; let the user resolve manually
+    }
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    await callGatewayTool(
+      "sessions.patch",
+      {},
+      {
+        key: params.sessionKey,
+        planApproval: {
+          action: "approve",
+          approvalId: params.approvalId,
+        },
+      },
+    );
+    params.log?.info?.(
+      `auto-mode: plan auto-approved sessionKey=${params.sessionKey} approvalId=${params.approvalId}`,
+    );
+  } catch (err) {
+    // Use error-level logging instead of warn so operators notice the
+    // silent fall-back. The user sees the approval card stay open and
+    // can resolve it manually; auto-mode briefly degrades.
+    (params.log?.error ?? params.log?.warn)?.(
+      `auto-approve FAILED — approval card requires manual resolve. ` +
+        `sessionKey=${params.sessionKey} approvalId=${params.approvalId}: ${String(err)}`,
+    );
+  }
+}
+
+let sessionStoreReadModulePromise:
+  | Promise<typeof import("../config/sessions/store-read.js")>
+  | undefined;
+function loadSessionStoreRead(): Promise<typeof import("../config/sessions/store-read.js")> {
+  sessionStoreReadModulePromise ??= import("../config/sessions/store-read.js");
+  return sessionStoreReadModulePromise;
 }
 
 /**
@@ -442,9 +542,16 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
  * Returns null if the tool result doesn't carry a plan (e.g. tool
  * raised before producing one).
  */
-function readPlanProposalDetails(
-  result: unknown,
-): { plan: AgentApprovalPlanStep[]; summary?: string; title?: string } | null {
+function readPlanProposalDetails(result: unknown): {
+  plan: AgentApprovalPlanStep[];
+  summary?: string;
+  title?: string;
+  analysis?: string;
+  assumptions?: string[];
+  risks?: Array<{ risk: string; mitigation: string }>;
+  verification?: string[];
+  references?: string[];
+} | null {
   const details = readToolResultDetailsRecord(result);
   if (!details || details.status !== "approval_requested") {
     return null;
@@ -477,10 +584,54 @@ function readPlanProposalDetails(
   // PR-9 Tier 1: surface explicit `title` field if the agent supplied
   // one via exit_plan_mode. Fallback to summary handled by the caller.
   const rawTitle = details.title;
+  // PR-10 archetype fields. All optional; only forwarded when valid.
+  const rawAnalysis = details.analysis;
+  const rawAssumptions = details.assumptions;
+  const rawRisks = details.risks;
+  const rawVerification = details.verification;
+  const rawReferences = details.references;
+  const cleanStringArray = (raw: unknown): string[] | undefined => {
+    if (!Array.isArray(raw)) {
+      return undefined;
+    }
+    const cleaned = raw
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return cleaned.length > 0 ? cleaned : undefined;
+  };
+  const assumptions = cleanStringArray(rawAssumptions);
+  const verification = cleanStringArray(rawVerification);
+  const references = cleanStringArray(rawReferences);
+  let risks: Array<{ risk: string; mitigation: string }> | undefined;
+  if (Array.isArray(rawRisks)) {
+    const cleanedRisks: Array<{ risk: string; mitigation: string }> = [];
+    for (const entry of rawRisks) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const e = entry as Record<string, unknown>;
+      const risk = typeof e.risk === "string" ? e.risk.trim() : "";
+      const mitigation = typeof e.mitigation === "string" ? e.mitigation.trim() : "";
+      if (risk.length > 0 && mitigation.length > 0) {
+        cleanedRisks.push({ risk, mitigation });
+      }
+    }
+    if (cleanedRisks.length > 0) {
+      risks = cleanedRisks;
+    }
+  }
   return {
     plan,
     ...(typeof rawTitle === "string" && rawTitle.trim() ? { title: rawTitle.trim() } : {}),
     ...(typeof rawSummary === "string" && rawSummary.trim() ? { summary: rawSummary } : {}),
+    ...(typeof rawAnalysis === "string" && rawAnalysis.trim()
+      ? { analysis: rawAnalysis.trim() }
+      : {}),
+    ...(assumptions ? { assumptions } : {}),
+    ...(risks ? { risks } : {}),
+    ...(verification ? { verification } : {}),
+    ...(references ? { references } : {}),
   };
 }
 
@@ -1493,6 +1644,13 @@ export async function handleToolExecutionEnd(
         approvalId,
         plan: details.plan,
         ...(details.summary ? { summary: details.summary } : {}),
+        // PR-10 archetype fields. Forwarded to UI/channel renderers
+        // so the approval card can show analysis/assumptions/risks/etc.
+        ...(details.analysis ? { analysis: details.analysis } : {}),
+        ...(details.assumptions ? { assumptions: details.assumptions } : {}),
+        ...(details.risks ? { risks: details.risks } : {}),
+        ...(details.verification ? { verification: details.verification } : {}),
+        ...(details.references ? { references: details.references } : {}),
       };
       emitAgentApprovalEvent({
         runId: ctx.params.runId,
@@ -1503,6 +1661,69 @@ export async function handleToolExecutionEnd(
         stream: "approval",
         data: approvalData,
       });
+      // PR-10 auto-mode: if the session has autoApprove=true, fire
+      // `sessions.patch { planApproval: { action: "approve" } }`
+      // immediately so the agent doesn't wait. The user-visible
+      // sequence is: plan submitted → instantly auto-approved →
+      // execution starts. If the user wants to interrupt, they can
+      // toggle auto-mode off (resets the flag) or `/stop` mid-run.
+      if (ctx.params.sessionKey) {
+        void autoApproveIfEnabled({
+          sessionKey: ctx.params.sessionKey,
+          approvalId,
+          log: ctx.log,
+        });
+      }
+    }
+  }
+
+  // PR-10: ask_user_question intercept — emit a "question" approval
+  // event through the same kind:"plugin" pipeline as exit_plan_mode.
+  // The plan-approval card UI detects the `question` field and renders
+  // one button per option instead of the standard Approve/Revise/Reject
+  // triad. The user's chosen answer routes back via sessions.patch
+  // { planApproval: { action: "answer", answer: <choice> } }.
+  if (toolName === "ask_user_question" && !isToolError) {
+    const details = readToolResultDetailsRecord(result);
+    if (details && details.status === "question_submitted") {
+      const questionText = typeof details.question === "string" ? details.question : "";
+      const optionsRaw = details.options;
+      const allowFreetext =
+        typeof details.allowFreetext === "boolean" ? details.allowFreetext : false;
+      const questionId = typeof details.questionId === "string" ? details.questionId : undefined;
+      const options = Array.isArray(optionsRaw)
+        ? optionsRaw.filter((o): o is string => typeof o === "string" && o.trim().length > 0)
+        : [];
+      if (questionText && options.length >= 2) {
+        const approvalId = `question-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const questionApprovalData: AgentApprovalEventData = {
+          phase: "requested",
+          kind: "plugin",
+          status: "pending",
+          title: "Agent has a question",
+          itemId,
+          toolCallId,
+          approvalId,
+          // Empty plan keeps the plan branch quiet on the UI side; the
+          // question branch takes over.
+          plan: [],
+          question: {
+            prompt: questionText,
+            options,
+            allowFreetext,
+            ...(questionId ? { questionId } : {}),
+          },
+        };
+        emitAgentApprovalEvent({
+          runId: ctx.params.runId,
+          ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+          data: questionApprovalData,
+        });
+        void ctx.params.onAgentEvent?.({
+          stream: "approval",
+          data: questionApprovalData,
+        });
+      }
     }
   }
 

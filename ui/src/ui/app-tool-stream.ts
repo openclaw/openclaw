@@ -461,6 +461,25 @@ export type PlanApprovalRequest = {
   summary?: string;
   plan: Array<{ step: string; status: string; activeForm?: string }>;
   receivedAt: number;
+  // PR-10 plan-archetype fields. All optional and additive — the
+  // approval card / sidebar render them when present.
+  analysis?: string;
+  assumptions?: string[];
+  risks?: Array<{ risk: string; mitigation: string }>;
+  verification?: string[];
+  references?: string[];
+  /**
+   * PR-10 AskUserQuestion: when present, this approval is a question
+   * (not a plan submission). The plan-approval card renders a question
+   * prompt + one button per option instead of the standard
+   * Approve/Revise/Reject triad.
+   */
+  question?: {
+    prompt: string;
+    options: string[];
+    allowFreetext?: boolean;
+    questionId?: string;
+  };
 };
 
 type PlanApprovalHost = ToolStreamHost & {
@@ -537,28 +556,39 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
+  // PR-10 AskUserQuestion: question approvals carry `question` but
+  // emit with `plan: []` (questions don't have plan steps). Detect this
+  // BEFORE the plan-empty early-return so the question card renders.
+  // Without this guard, both ask_user_question and the future
+  // mode-state-transition events would be dropped silently.
+  const isQuestionEvent = data.question != null && typeof data.question === "object";
   const rawPlan = data.plan;
-  if (!Array.isArray(rawPlan) || rawPlan.length === 0) {
+  if (!isQuestionEvent && (!Array.isArray(rawPlan) || rawPlan.length === 0)) {
     return;
   }
   const plan: PlanApprovalRequest["plan"] = [];
-  for (const entry of rawPlan) {
-    if (!entry || typeof entry !== "object") {
-      continue;
+  if (Array.isArray(rawPlan)) {
+    for (const entry of rawPlan) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const step = (entry as Record<string, unknown>).step;
+      const status = (entry as Record<string, unknown>).status;
+      const activeForm = (entry as Record<string, unknown>).activeForm;
+      if (typeof step !== "string" || typeof status !== "string") {
+        continue;
+      }
+      plan.push({
+        step,
+        status,
+        ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+      });
     }
-    const step = (entry as Record<string, unknown>).step;
-    const status = (entry as Record<string, unknown>).status;
-    const activeForm = (entry as Record<string, unknown>).activeForm;
-    if (typeof step !== "string" || typeof status !== "string") {
-      continue;
-    }
-    plan.push({
-      step,
-      status,
-      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
-    });
   }
-  if (plan.length === 0) {
+  // For non-question events, an empty parsed plan still means "drop
+  // the event" — a malformed step list is worse than no card. Question
+  // events bypass this gate (their plan IS expected to be empty).
+  if (!isQuestionEvent && plan.length === 0) {
     return;
   }
   const approvalId =
@@ -571,6 +601,59 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
     typeof data.summary === "string" && data.summary.trim() ? data.summary : undefined;
   const toolCallId =
     typeof data.toolCallId === "string" && data.toolCallId.trim() ? data.toolCallId : undefined;
+  // PR-10 archetype fields. Defensive-parsed (drop blanks).
+  const cleanStrArr = (v: unknown): string[] | undefined => {
+    if (!Array.isArray(v)) {
+      return undefined;
+    }
+    const c = v
+      .filter((e): e is string => typeof e === "string")
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
+    return c.length > 0 ? c : undefined;
+  };
+  const analysis =
+    typeof data.analysis === "string" && data.analysis.trim() ? data.analysis.trim() : undefined;
+  const assumptions = cleanStrArr(data.assumptions);
+  const verification = cleanStrArr(data.verification);
+  const references = cleanStrArr(data.references);
+  let risks: PlanApprovalRequest["risks"];
+  if (Array.isArray(data.risks)) {
+    const c: NonNullable<PlanApprovalRequest["risks"]> = [];
+    for (const e of data.risks) {
+      if (!e || typeof e !== "object") {
+        continue;
+      }
+      const r = (e as Record<string, unknown>).risk;
+      const m = (e as Record<string, unknown>).mitigation;
+      if (typeof r === "string" && typeof m === "string" && r.trim() && m.trim()) {
+        c.push({ risk: r.trim(), mitigation: m.trim() });
+      }
+    }
+    if (c.length > 0) {
+      risks = c;
+    }
+  }
+  // PR-10 AskUserQuestion: if data.question is present, this approval
+  // is a clarifying question (not a plan submission). The card UI
+  // detects question and renders one button per option instead of
+  // the standard Approve/Revise/Reject triad.
+  let question: PlanApprovalRequest["question"];
+  if (data.question && typeof data.question === "object") {
+    const q = data.question as Record<string, unknown>;
+    const promptText = typeof q.prompt === "string" ? q.prompt.trim() : "";
+    const opts = cleanStrArr(q.options);
+    if (promptText && opts && opts.length > 0) {
+      question = {
+        prompt: promptText,
+        options: opts,
+        ...(typeof q.allowFreetext === "boolean" ? { allowFreetext: q.allowFreetext } : {}),
+        ...(typeof q.questionId === "string" && q.questionId.trim()
+          ? { questionId: q.questionId.trim() }
+          : {}),
+      };
+    }
+  }
   const next: PlanApprovalRequest = {
     approvalId,
     sessionKey,
@@ -579,6 +662,12 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
     receivedAt: Date.now(),
     ...(summary ? { summary } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(analysis ? { analysis } : {}),
+    ...(assumptions ? { assumptions } : {}),
+    ...(risks ? { risks } : {}),
+    ...(verification ? { verification } : {}),
+    ...(references ? { references } : {}),
+    ...(question ? { question } : {}),
   };
   host.planApprovalRequest = next;
   // Auto-open the full plan in the right sidebar so the user can read

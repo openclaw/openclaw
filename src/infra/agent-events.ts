@@ -98,6 +98,36 @@ export type AgentApprovalEventData = {
   plan?: AgentApprovalPlanStep[];
   /** One-line summary the agent included with the proposed plan. */
   summary?: string;
+  // PR-10 plan-archetype fields. All optional and additive — channel
+  // renderers / UI cards display them when present, fall back to
+  // plan + summary when omitted.
+  /** Markdown body explaining current state, chosen approach, and rationale. */
+  analysis?: string;
+  /** Explicit assumptions made during planning. */
+  assumptions?: string[];
+  /** Risk register with mitigations. */
+  risks?: Array<{ risk: string; mitigation: string }>;
+  /** Concrete steps that will confirm the plan succeeded. */
+  verification?: string[];
+  /** File paths, URLs, PR numbers, doc references the plan builds on. */
+  references?: string[];
+  /**
+   * PR-10 AskUserQuestion: when present, this approval is a clarifying
+   * question rather than a plan submission. UI renders the question +
+   * one button per option; the chosen answer is routed back via
+   * sessions.patch { planApproval: { action: "answer", answer: <choice> }}.
+   * `kind` stays "plugin" — the approval pipeline is shared.
+   */
+  question?: {
+    prompt: string;
+    options: string[];
+    allowFreetext?: boolean;
+    /**
+     * Stable id for this question (separate from approvalId) so the UI
+     * can correlate option text → answer when freetext is also allowed.
+     */
+    questionId?: string;
+  };
 };
 
 export type AgentCommandOutputEventData = {

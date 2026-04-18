@@ -225,6 +225,19 @@ export type SessionEntry = {
      * once the plan resolves.
      */
     nudgeJobIds?: string[];
+    /**
+     * PR-10 auto-mode: when true, future `exit_plan_mode` submissions
+     * auto-resolve as "approve" without waiting for the user. The
+     * plan-snapshot-persister (gateway/plan-snapshot-persister.ts)
+     * detects this flag and, on receiving a plan approval event, fires
+     * a synthetic resolved-approve through `resolvePlanApproval`.
+     *
+     * Survives plan-mode → normal transitions so the user doesn't have
+     * to re-toggle every plan cycle. Cleared explicitly via
+     * sessions.patch { planApproval: { action: "auto", autoEnabled: false } }
+     * or via the `/plan auto` slash command (PR-11).
+     */
+    autoApprove?: boolean;
   };
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;

@@ -206,12 +206,28 @@ export const SessionsPatchParamsSchema = Type.Object(
     planApproval: Type.Optional(
       Type.Object(
         {
+          // PR-10: extend with "answer" — used by ask_user_question
+          // resolutions. Same approvalId / staleness semantics; the
+          // routed payload differs (carries `answer` instead of plan
+          // approve/reject/edit) and the runtime injects
+          // [QUESTION_ANSWER] into the next agent turn instead of
+          // [PLAN_DECISION].
+          //
+          // PR-10 auto-mode: "auto" — toggles the session's auto-approve
+          // flag without resolving any specific approval. Routed when
+          // the user toggles "Plan (auto)" in the chip / via /plan auto.
           action: Type.Union([
             Type.Literal("approve"),
             Type.Literal("reject"),
             Type.Literal("edit"),
+            Type.Literal("answer"),
+            Type.Literal("auto"),
           ]),
           feedback: Type.Optional(NonEmptyString),
+          /** PR-10 ask_user_question: chosen / typed answer text. */
+          answer: Type.Optional(NonEmptyString),
+          /** PR-10 auto-mode: enable (true) / disable (false) auto-approve. */
+          autoEnabled: Type.Optional(Type.Boolean()),
           approvalId: Type.Optional(NonEmptyString),
         },
         { additionalProperties: false },

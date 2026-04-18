@@ -67,6 +67,63 @@ const ExitPlanModeToolSchema = Type.Object({
         "Optional one-line summary surfaced in the approval prompt (UI / channel renderers).",
     }),
   ),
+  // PR-10 plan-archetype fields — all optional and backwards-compatible.
+  // The plan-archetype system-prompt fragment (see plan-mode/plan-archetype-prompt.ts)
+  // tells the agent when these are required vs nice-to-have.
+  analysis: Type.Optional(
+    Type.String({
+      description:
+        "Markdown body explaining current state, chosen approach, and rationale. " +
+        "Multi-paragraph; this is the part of the plan that gives the user enough " +
+        "context to evaluate the proposal without re-reading every transcript turn. " +
+        "Required for non-trivial multi-file changes; can be omitted for one-shot fixes.",
+    }),
+  ),
+  assumptions: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Explicit assumptions made during planning. Each entry is one sentence. " +
+        'Examples: "Tests will pass on first run after the new path lands", ' +
+        '"`packages/auth` retains its current public exports". ' +
+        "If any assumption is wrong, the plan needs revision — surface them.",
+    }),
+  ),
+  risks: Type.Optional(
+    Type.Array(
+      Type.Object(
+        {
+          risk: Type.String({ description: "What could go wrong (one sentence)." }),
+          mitigation: Type.String({
+            description: "How the plan reduces or contains the risk.",
+          }),
+        },
+        { additionalProperties: false },
+      ),
+      {
+        description:
+          "Risk register: things that could go wrong + how the plan mitigates each. " +
+          "Use this to surface known unknowns before approval.",
+      },
+    ),
+  ),
+  verification: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Concrete steps that will confirm the plan succeeded. " +
+        'Examples: "`pnpm test src/agents/...` passes", ' +
+        '"VM 127263714 responds to SSH within 60s", ' +
+        '"Telegram approval card renders inline buttons for kind=plugin". ' +
+        "Required for tasks where premature closure has cost; covers Wave B1 closure-gate criteria.",
+    }),
+  ),
+  references: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Optional list of file paths, URLs, PR numbers, or doc references the plan builds on. " +
+        'Examples: "src/agents/plan-mode/types.ts:42", "PR #67538", "docs/agents/prompt-stack-spec.md". ' +
+        "Renders as a Reference section in the persisted markdown.",
+    }),
+  ),
 });
 
 type ExitPlanModeStep = {
@@ -133,6 +190,9 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
       const rawTitle = readStringParam(params, "title");
       const title = rawTitle ? rawTitle.trim().slice(0, 80) : undefined;
       const plan = readPlanSteps(params);
+      // PR-10 archetype fields. All optional; readPlanArchetypeFields
+      // does the parsing + sanitization (trim + drop blank entries).
+      const archetype = readPlanArchetypeFields(params);
 
       // PR-8 follow-up: hard-block plan submission while any subagents
       // spawned during this run are still in flight. Eva's own post-
@@ -180,8 +240,91 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
           ...(title ? { title } : {}),
           ...(summary ? { summary } : {}),
           plan,
+          // PR-10 archetype fields. Spread only when the agent supplied
+          // them — keeps the tool result minimal for simple plans.
+          ...(archetype.analysis ? { analysis: archetype.analysis } : {}),
+          ...(archetype.assumptions && archetype.assumptions.length > 0
+            ? { assumptions: archetype.assumptions }
+            : {}),
+          ...(archetype.risks && archetype.risks.length > 0 ? { risks: archetype.risks } : {}),
+          ...(archetype.verification && archetype.verification.length > 0
+            ? { verification: archetype.verification }
+            : {}),
+          ...(archetype.references && archetype.references.length > 0
+            ? { references: archetype.references }
+            : {}),
         },
       };
     },
   };
+}
+
+/**
+ * PR-10: parse the optional archetype fields from `exit_plan_mode` args.
+ * Each field is parsed defensively (trim + drop blank entries) so a
+ * malformed agent payload doesn't poison the approval card. Returns an
+ * object with only the parsed fields populated; missing/invalid fields
+ * stay undefined (caller spreads them conditionally).
+ */
+function readPlanArchetypeFields(params: Record<string, unknown>): {
+  analysis?: string;
+  assumptions?: string[];
+  risks?: Array<{ risk: string; mitigation: string }>;
+  verification?: string[];
+  references?: string[];
+} {
+  const out: ReturnType<typeof readPlanArchetypeFields> = {};
+  const rawAnalysis = readStringParam(params, "analysis");
+  if (rawAnalysis && rawAnalysis.trim().length > 0) {
+    out.analysis = rawAnalysis.trim();
+  }
+  const rawAssumptions = params.assumptions;
+  if (Array.isArray(rawAssumptions)) {
+    const cleaned = rawAssumptions
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleaned.length > 0) {
+      out.assumptions = cleaned;
+    }
+  }
+  const rawRisks = params.risks;
+  if (Array.isArray(rawRisks)) {
+    const cleaned: Array<{ risk: string; mitigation: string }> = [];
+    for (const entry of rawRisks) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const e = entry as Record<string, unknown>;
+      const risk = typeof e.risk === "string" ? e.risk.trim() : "";
+      const mitigation = typeof e.mitigation === "string" ? e.mitigation.trim() : "";
+      if (risk.length > 0 && mitigation.length > 0) {
+        cleaned.push({ risk, mitigation });
+      }
+    }
+    if (cleaned.length > 0) {
+      out.risks = cleaned;
+    }
+  }
+  const rawVerification = params.verification;
+  if (Array.isArray(rawVerification)) {
+    const cleaned = rawVerification
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleaned.length > 0) {
+      out.verification = cleaned;
+    }
+  }
+  const rawReferences = params.references;
+  if (Array.isArray(rawReferences)) {
+    const cleaned = rawReferences
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (cleaned.length > 0) {
+      out.references = cleaned;
+    }
+  }
+  return out;
 }
