@@ -404,6 +404,7 @@ export function loadGatewayPlugins(params: {
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir: string;
+  cache?: boolean;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -463,6 +464,7 @@ export function loadGatewayPlugins(params: {
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
+    cache: params.cache,
     onlyPluginIds: pluginIds,
     logger: createGatewayPluginRegistrationLogger({
       suppressInfoLogs: params.suppressPluginInfoLogs,
