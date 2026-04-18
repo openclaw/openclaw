@@ -2402,6 +2402,59 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("placeholder waiting text that should be ignored");
   });
 
+  it("prefers descendant findings over persisted round-one user payloads", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-parent-persisted-payload") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-a",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "result from child a",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-persisted-payload",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "placeholder waiting text that should be ignored",
+      roundOneUserDeliveryPayload: {
+        text: "stale persisted payload",
+        source: "sanitized-fallback",
+        capturedAt: 1,
+      },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("result from child a");
+    expect(msg).not.toContain("stale persisted payload");
+    expect(msg).not.toContain("placeholder waiting text that should be ignored");
+  });
+
   it("dedupes stale direct-child rows before building child completion findings", async () => {
     subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
     subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(

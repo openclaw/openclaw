@@ -607,7 +607,9 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     const userDeliveryPayload = !requesterIsSubagent
-      ? persistedUserDeliveryPayload ?? buildStoredUserDeliveryPayload(findings)
+      ? childCompletionFindings?.trim()
+        ? buildStoredUserDeliveryPayload(findings)
+        : persistedUserDeliveryPayload ?? buildStoredUserDeliveryPayload(findings)
       : undefined;
     const usePlainUserDeliveryPrompt = expectsCompletionMessage && !requesterIsSubagent;
     const replyInstruction = buildAnnounceReplyInstruction({
