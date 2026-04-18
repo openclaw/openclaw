@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { withPathResolutionEnv } from "../test-utils/env.js";
+import { captureEnv, withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -33,6 +33,7 @@ vi.mock("./skills/plugin-skills.js", () => ({
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
 let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
+const pluginEnvSnapshot = captureEnv(["OPENCLAW_DISABLE_BUNDLED_PLUGINS"]);
 
 const resolveTestSkillDirs = (workspaceDir: string) => ({
   managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -44,6 +45,16 @@ const apiKeyField = ["api", "Key"].join("");
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+}
+
+async function writePromptLimitSkills(workspaceDir: string) {
+  for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", name),
+      name,
+      description: "D".repeat(240),
+    });
+  }
 }
 
 const withClearedEnv = <T>(
@@ -111,6 +122,7 @@ function envSkillSnapshot(name: string, metadata: SkillEntry["metadata"]): Skill
 
 beforeAll(async () => {
   await fixtureSuite.setup();
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
   skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
   await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
@@ -127,6 +139,7 @@ afterAll(async () => {
     await tempHome.restore();
     tempHome = null;
   }
+  pluginEnvSnapshot.restore();
   await fixtureSuite.cleanup();
 });
 
@@ -331,13 +344,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
   it("applies per-agent skillsLimits.maxSkillsPromptChars", async () => {
     const workspaceDir = await makeWorkspace();
-    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "D".repeat(240),
-      });
-    }
+    await writePromptLimitSkills(workspaceDir);
 
     const prompt = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
@@ -369,13 +376,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
   it("does not apply agents.list[].skillsLimits without an explicit agent id", async () => {
     const workspaceDir = await makeWorkspace();
-    for (const name of ["alpha-skill", "beta-skill", "gamma-skill"]) {
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "D".repeat(240),
-      });
-    }
+    await writePromptLimitSkills(workspaceDir);
 
     const prompt = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
