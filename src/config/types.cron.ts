@@ -41,10 +41,18 @@ export type CronConfig = {
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /**
-   * Opt-in: allow cron webhook POST to reach RFC 1918 / loopback / link-local
-   * targets by relaxing the SSRF guard with `{ allowPrivateNetwork: true }`.
-   * Default false. Enable only for operator-controlled self-hosted deployments
-   * where the webhook receiver runs on the same host or private network.
+   * Opt-in: relax the cron webhook POST SSRF guard with
+   * `{ allowPrivateNetwork: true }`. The scope is broader than just
+   * permitting targets that resolve to RFC 1918 / loopback / link-local IPs:
+   * it also disables the SSRF guard's hostname blocklist, so `localhost`,
+   * `*.internal`, and cloud metadata hostnames such as
+   * `metadata.google.internal` become reachable.
+   *
+   * Default false. Enable only for operator-controlled self-hosted
+   * deployments where the webhook receiver runs on the same host or private
+   * network. In a multi-tenant or cloud deployment this can let cron jobs
+   * reach internal services (including instance metadata endpoints), so
+   * leave it off unless you know every configured webhook target is trusted.
    */
   webhookAllowPrivateNetwork?: boolean;
   /**

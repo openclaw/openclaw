@@ -19750,7 +19750,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "boolean",
             title: "Cron Webhook: Allow Private Network Targets",
             description:
-              "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }` so `http(s)://` targets resolving to RFC 1918 / loopback / link-local addresses are allowed. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant deployment lets cron jobs reach internal services. Default false.",
+              "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }`. The scope is broader than just permitting targets that resolve to RFC 1918 / loopback / link-local IPs: the SSRF hostname blocklist is also disabled, so internal hostnames such as `localhost`, `*.internal`, and cloud metadata endpoints like `metadata.google.internal` become reachable too. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant or cloud deployment lets cron jobs reach internal services including instance metadata endpoints. Default false.",
           },
           sessionRetention: {
             anyOf: [
@@ -26245,7 +26245,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.webhookAllowPrivateNetwork": {
       label: "Cron Webhook: Allow Private Network Targets",
-      help: "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }` so `http(s)://` targets resolving to RFC 1918 / loopback / link-local addresses are allowed. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant deployment lets cron jobs reach internal services. Default false.",
+      help: "When true, relax the cron webhook POST SSRF guard with `{ allowPrivateNetwork: true }`. The scope is broader than just permitting targets that resolve to RFC 1918 / loopback / link-local IPs: the SSRF hostname blocklist is also disabled, so internal hostnames such as `localhost`, `*.internal`, and cloud metadata endpoints like `metadata.google.internal` become reachable too. Operator-only opt-in for self-hosted deployments where the webhook receiver runs on the same host or private network; enabling this in a multi-tenant or cloud deployment lets cron jobs reach internal services including instance metadata endpoints. Default false.",
       tags: ["access", "automation"],
     },
     "cron.sessionRetention": {
