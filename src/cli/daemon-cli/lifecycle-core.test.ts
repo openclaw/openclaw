@@ -30,6 +30,7 @@ let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
 let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function readJsonLog<T extends object>() {
   const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;

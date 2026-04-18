@@ -141,11 +141,11 @@ function parseEnumOption<T extends string>(
   return (allowed as readonly string[]).includes(raw) ? (raw as T) : null;
 }
 
-function formatModeChoices<T extends string>(modes: readonly T[]): string {
+function formatModeChoices(modes: readonly string[]): string {
   return modes.map((mode) => `"${mode}"`).join("|");
 }
 
-function formatModeErrorList<T extends string>(modes: readonly T[]): string {
+function formatModeErrorList(modes: readonly string[]): string {
   const quoted = modes.map((mode) => `"${mode}"`);
   if (quoted.length === 0) {
     return "";
