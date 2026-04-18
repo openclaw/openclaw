@@ -63,13 +63,16 @@ export function loadRouterConfig(opts: {
       try {
         const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
         gatewayToken = raw?.gateway?.auth?.token ?? "";
-        onboarded = raw?.onboarded === true;
         // Don't read port from instance config — that's the container-internal
         // port (always 18789). The host-mapped port is computed from the offset.
       } catch {
         // Fall through with defaults
       }
     }
+
+    // Onboarding state stored in a separate file (not openclaw.json which has schema validation)
+    const onboardedPath = path.join(instancesDir, discordUserId, ".onboarded");
+    onboarded = fs.existsSync(onboardedPath);
 
     // Env vars override computed values
     const envToken = process.env[`OPENCLAW_${discordUserId}_TOKEN`];
@@ -93,12 +96,11 @@ export function loadRouterConfig(opts: {
   };
 }
 
-/** Mark an instance as onboarded in its config file. */
+/** Mark an instance as onboarded by creating a .onboarded flag file. */
 export function markOnboarded(instance: InstanceConfig): void {
   try {
-    const raw = JSON.parse(fs.readFileSync(instance.configPath, "utf-8"));
-    raw.onboarded = true;
-    fs.writeFileSync(instance.configPath, JSON.stringify(raw, null, 2));
+    const onboardedPath = instance.configPath.replace("openclaw.json", ".onboarded");
+    fs.writeFileSync(onboardedPath, new Date().toISOString());
     instance.onboarded = true;
   } catch {
     // Best effort

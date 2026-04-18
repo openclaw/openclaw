@@ -64,7 +64,6 @@ cfg = {
     'meta': {
         'lastTouchedVersion': '2026.2.4',
     },
-    'onboarded': False,
     'auth': {
         'profiles': {
             'anthropic:default': {
