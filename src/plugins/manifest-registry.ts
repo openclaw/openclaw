@@ -34,6 +34,7 @@ import {
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestModelSupport,
+  type PluginManifestProviderEndpoint,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
 } from "./manifest.js";
@@ -85,6 +86,7 @@ export type PluginManifestRecord = {
   providers: string[];
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
+  providerEndpoints?: PluginManifestProviderEndpoint[];
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -329,6 +331,7 @@ function buildRecord(params: {
       ? path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry)
       : undefined,
     modelSupport: params.manifest.modelSupport,
+    providerEndpoints: params.manifest.providerEndpoints,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],

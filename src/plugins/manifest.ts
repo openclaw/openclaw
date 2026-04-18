@@ -39,6 +39,18 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+export type PluginManifestProviderEndpoint = {
+  /**
+   * Core endpoint class this plugin-owned endpoint should map to. Core must
+   * already know the class; manifests own host/baseUrl matching metadata.
+   */
+  endpointClass: string;
+  /** Hostnames that should resolve to this endpoint class. */
+  hosts?: string[];
+  /** Exact normalized base URLs that should resolve to this endpoint class. */
+  baseUrls?: string[];
+};
+
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
 
 export type PluginManifestActivation = {
@@ -161,6 +173,8 @@ export type PluginManifest = {
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
   modelSupport?: PluginManifestModelSupport;
+  /** Cheap provider endpoint metadata used before provider runtime loads. */
+  providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
@@ -431,6 +445,37 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
   } satisfies PluginManifestModelSupport;
 
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
+}
+
+function normalizeManifestProviderEndpoints(
+  value: unknown,
+): PluginManifestProviderEndpoint[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const endpoints: PluginManifestProviderEndpoint[] = [];
+  for (const rawEndpoint of value) {
+    if (!isRecord(rawEndpoint)) {
+      continue;
+    }
+    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
+    if (!endpointClass) {
+      continue;
+    }
+    const hosts = normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase());
+    const baseUrls = normalizeTrimmedStringList(rawEndpoint.baseUrls);
+    if (hosts.length === 0 && baseUrls.length === 0) {
+      continue;
+    }
+    endpoints.push({
+      endpointClass,
+      ...(hosts.length > 0 ? { hosts } : {}),
+      ...(baseUrls.length > 0 ? { baseUrls } : {}),
+    });
+  }
+
+  return endpoints.length > 0 ? endpoints : undefined;
 }
 
 function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
@@ -710,6 +755,7 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
+  const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
@@ -746,6 +792,7 @@ export function loadPluginManifest(
       providers,
       providerDiscoveryEntry,
       modelSupport,
+      providerEndpoints,
       cliBackends,
       syntheticAuthRefs,
       nonSecretAuthMarkers,

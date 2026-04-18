@@ -95,6 +95,12 @@ Those belong in your plugin code and `package.json`.
   "modelSupport": {
     "modelPrefixes": ["router-"]
   },
+  "providerEndpoints": [
+    {
+      "endpointClass": "xai-native",
+      "hosts": ["api.x.ai"]
+    }
+  ],
   "cliBackends": ["openrouter-cli"],
   "syntheticAuthRefs": ["openrouter-cli"],
   "providerAuthEnvVars": {
@@ -153,6 +159,7 @@ Those belong in your plugin code and `package.json`.
 | `channels`                          | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                  |
 | `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
+| `providerEndpoints`                 | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                     |
 | `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
 | `syntheticAuthRefs`                 | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                       |
 | `nonSecretAuthMarkers`              | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                         |
@@ -602,6 +609,9 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `providerAuthAliases` lets provider variants reuse another provider's auth
   env vars, auth profiles, config-backed auth, and API-key onboarding choice
   without hardcoding that relationship in core.
+- `providerEndpoints` lets provider plugins own simple endpoint host/baseUrl
+  matching metadata. Use it only for endpoint classes core already supports;
+  the plugin still owns runtime behavior.
 - `syntheticAuthRefs` is the cheap metadata path for provider-owned synthetic
   auth hooks that must be visible to cold model discovery before the runtime
   registry exists. Only list refs whose runtime provider or CLI backend actually
