@@ -588,8 +588,30 @@ export async function applySessionsPatchToStore(params: {
       // `resolveYieldDuringApprovedPlanInstruction` can detect
       // "just approved" within a grace window without depending on
       // `planMode.approval` (which is reset/cleared on transition).
+      //
+      // PR-11 review fix (Codex P1 #3105356737 / #3105389082): also
+      // persist a `[PLAN_DECISION]: approved` synthetic-message
+      // injection on the SessionEntry so the runtime sees it on the
+      // NEXT agent turn — this is the same mechanism used for
+      // `[QUESTION_ANSWER]:` (action="answer"). Single source of
+      // truth: any caller of `sessions.patch { planApproval: action }`
+      // gets the injection automatically without per-channel wiring.
+      // Webchat continues to work via the existing direct injection
+      // path; non-web channels (Telegram /plan accept etc.) get the
+      // injection via this gateway-side path once PR-15 wires the
+      // runtime consumer.
       if (action === "approve" || action === "edit") {
         next.recentlyApprovedAt = now;
+        const decisionLabel = action === "approve" ? "approved" : "edited";
+        next.pendingAgentInjection = `[PLAN_DECISION]: ${decisionLabel}`;
+      } else if (action === "reject") {
+        // On reject, agent stays in plan mode and revises.
+        const safeFeedback = (feedback ?? "")
+          .replace(/@(channel|here|everyone)\b/gi, "@\u{FE6B}$1")
+          .replace(/<@/g, "<\u{200B}@");
+        next.pendingAgentInjection = safeFeedback
+          ? `[PLAN_DECISION]: rejected\nfeedback: ${safeFeedback}`
+          : `[PLAN_DECISION]: rejected`;
       }
       // Approve / edit transition the mode to "normal" — the approval
       // resolution unlocks mutations. Clear the per-session planMode entry

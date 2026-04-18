@@ -15,6 +15,7 @@
  * the existing agent/heartbeat/transcript/lifecycle subscriptions.
  */
 import { loadConfig } from "../config/io.js";
+import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import {
   clearInPlanModeForSession,
@@ -86,12 +87,49 @@ async function persistSnapshot(params: {
    * write — closing plan mode structurally so the agent doesn't have to
    * make a separate exit_plan_mode call. Triggered by `phase: "completed"`
    * events from `update_plan` when every step is terminal.
+   *
+   * PR-11 review fix (Codex P1 #3105389081): the close is now GATED on
+   * the existence of an approved/edited plan-mode state. Without the
+   * gate, a planning-phase `update_plan` (called BEFORE
+   * `exit_plan_mode` ever fires) could mark all steps terminal and
+   * trigger `closeOnComplete`, silently unlocking mutations without
+   * any user approval. Reading `planMode.approval` from the live
+   * session entry (or `recentlyApprovedAt` for the post-transition
+   * window) ensures the auto-close only fires after a real approval.
    */
   closeOnComplete?: boolean;
   emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
 }) {
   const cfg = loadConfig();
   const target = resolveGatewaySessionStoreTarget({ cfg, key: params.sessionKey });
+  // PR-11 review fix (Codex P1 #3105389081): pre-flight check for the
+  // close gate. Read the entry BEFORE the patch fires to determine
+  // whether the auto-close is authorized. The gate allows close when
+  // either: (a) planMode.approval is "approved" or "edited" (we're in
+  // the brief window before the approve patch flipped mode → normal),
+  // OR (b) recentlyApprovedAt is within a reasonable window
+  // (post-transition, planMode may be deleted). If neither holds, the
+  // close is suppressed — the agent must explicitly call
+  // exit_plan_mode + receive user approval to unlock mutations.
+  let allowAutoClose = !params.closeOnComplete;
+  if (params.closeOnComplete) {
+    let existing: Record<string, unknown> | undefined;
+    try {
+      const existingStore = readSessionStoreReadOnly(target.storePath);
+      existing = existingStore[params.sessionKey] as Record<string, unknown> | undefined;
+    } catch {
+      // If we can't read the store, default to disallowing auto-close
+      // (fail-safe — prefer requiring explicit approval over silent
+      // mutation unlock).
+      existing = undefined;
+    }
+    const planMode = existing?.planMode as Record<string, unknown> | undefined;
+    const approval = planMode?.approval;
+    const recentlyApprovedAt = existing?.recentlyApprovedAt;
+    const isRecentlyApproved =
+      typeof recentlyApprovedAt === "number" && Date.now() - recentlyApprovedAt < 5 * 60_000;
+    allowAutoClose = approval === "approved" || approval === "edited" || isRecentlyApproved;
+  }
   await updateSessionStore(target.storePath, async (store) => {
     return await applySessionsPatchToStore({
       cfg,
@@ -109,17 +147,22 @@ async function persistSnapshot(params: {
             : {}),
           ...(s.verifiedCriteria !== undefined ? { verifiedCriteria: s.verifiedCriteria } : {}),
         })),
-        ...(params.closeOnComplete ? { planMode: "normal" as const } : {}),
+        ...(params.closeOnComplete && allowAutoClose ? { planMode: "normal" as const } : {}),
       },
     });
   });
-  if (params.closeOnComplete) {
+  if (params.closeOnComplete && allowAutoClose) {
     // PR-9 Wave A2: mirror the session-state flip into in-memory run
     // context so concurrent / subsequent `sessions_spawn` calls in this
     // session see the cleared state immediately (no session-store
     // re-read on the spawn hot path).
     clearInPlanModeForSession(params.sessionKey);
     log.info(`plan completed → planMode auto-flipped to normal: sessionKey=${params.sessionKey}`);
+  } else if (params.closeOnComplete && !allowAutoClose) {
+    log.info(
+      `plan completed but auto-close suppressed (no approved state): sessionKey=${params.sessionKey} — ` +
+        "agent must call exit_plan_mode for explicit user approval before mutations unlock",
+    );
   }
   params.emitSessionsChanged?.({ sessionKey: params.sessionKey, reason: "patch" });
 }

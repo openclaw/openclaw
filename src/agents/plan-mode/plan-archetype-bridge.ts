@@ -87,6 +87,45 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * PR-14 review fix (Codex P2 #3105434459): parse a Telegram threadId
+ * safely. Accepts: a finite positive number, a string of digits, or a
+ * scoped string of form `"<chatId>:<threadId>"` where the suffix
+ * after the colon is digits. Returns `undefined` for anything else
+ * (incl. NaN, negative, or unparseable values) — caller treats
+ * undefined as "no thread routing" rather than passing NaN to the
+ * Telegram API (which would silently lose the topic scope).
+ */
+function parseTelegramThreadId(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      return undefined;
+    }
+    // Try direct parse first (most common: pure digits).
+    const direct = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(direct) && direct > 0 && String(direct) === trimmed) {
+      return direct;
+    }
+    // Scoped form: take the suffix after the LAST colon.
+    const colonIdx = trimmed.lastIndexOf(":");
+    if (colonIdx >= 0 && colonIdx < trimmed.length - 1) {
+      const suffix = trimmed.slice(colonIdx + 1);
+      const parsed = Number.parseInt(suffix, 10);
+      if (Number.isFinite(parsed) && parsed > 0 && String(parsed) === suffix) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Read-only session entry lookup. Mirrors the
  * `loadSessionStoreRuntime` + `updateSessionStoreEntry` pattern used
  * elsewhere in the runtime, but as a non-mutating read.
@@ -161,10 +200,17 @@ export async function dispatchPlanArchetypeAttachment(
     // src/plugin-sdk/CLAUDE.md boundary rules).
     const { sendDocumentTelegram } = await import("../../plugin-sdk/telegram.js");
     const caption = buildPlanAttachmentCaption(input.details.title, input.details.summary);
+    // PR-14 review fix (Codex P2 #3105434459): parse the threadId
+    // safely. Telegram delivery contexts can carry scoped thread ids
+    // like `"<chatId>:<threadId>"` for DM-topic flows, where a raw
+    // `Number(...)` coerces to NaN. Use a guarded parse: numeric or
+    // numeric-suffix-after-colon only; bail on anything else (no
+    // thread routing rather than NaN).
+    const messageThreadId = parseTelegramThreadId(dctx.threadId);
     await sendDocumentTelegram(dctx.to, absPath, {
       caption,
       parseMode: "HTML",
-      ...(dctx.threadId != null ? { messageThreadId: Number(dctx.threadId) } : {}),
+      ...(messageThreadId !== undefined ? { messageThreadId } : {}),
       ...(dctx.accountId ? { accountId: dctx.accountId } : {}),
     });
     log?.info?.(`plan-bridge: telegram attachment sent (${filename} → chat ${dctx.to})`);
