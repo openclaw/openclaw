@@ -158,4 +158,45 @@ describe("config observe recovery", () => {
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
     });
   });
+
+  it("refuses to restore from a backup that contains redacted-placeholder secret values (#68423)", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const goodConfig = {
+        update: { channel: "beta" },
+        gateway: { mode: "local", auth: { mode: "token", token: "real-secret-token-value" } },
+        channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
+      };
+      await seedConfig(configPath, goodConfig);
+      const pollutedBackup = {
+        ...goodConfig,
+        gateway: { mode: "local", auth: { mode: "token", token: "***" } },
+      };
+      await fsp.writeFile(
+        `${configPath}.bak`,
+        `${JSON.stringify(pollutedBackup, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const clobberedRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
+      await fsp.writeFile(configPath, clobberedRaw, "utf-8");
+
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps,
+        configPath,
+        raw: clobberedRaw,
+        parsed: { update: { channel: "beta" } },
+      });
+
+      // Recovery is refused — the original (clobbered) raw is returned unchanged
+      // so the gateway surfaces the real failure rather than silently fixating
+      // a polluted backup.
+      expect(recovered.raw).toBe(clobberedRaw);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobberedRaw);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Refusing to restore config from backup"),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.auth.token"));
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { isRecord } from "../utils.js";
+import { findRedactedSecretSites } from "./backup-pollution.js";
 import {
   appendConfigAuditRecord,
   appendConfigAuditRecordSync,
@@ -550,6 +551,15 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
     return { raw: params.raw, parsed: params.parsed };
   }
 
+  const pollutedSites = findRedactedSecretSites(backupParsed);
+  if (pollutedSites.length > 0) {
+    params.deps.logger.warn(
+      `Refusing to restore config from backup ${backupPath}: backup contains redacted-placeholder secret values at ${pollutedSites.join(", ")}. ` +
+        "Inspect the backup chain manually before recovery.",
+    );
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
   const clobberedPath = await persistClobberedConfigSnapshot({
     deps: params.deps,
     configPath: params.configPath,
@@ -641,6 +651,15 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   }
   const backup = backupBaseline ?? readConfigFingerprintForPathSync(params.deps, backupPath);
   if (!backup?.gatewayMode) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
+  const pollutedSites = findRedactedSecretSites(backupParsed);
+  if (pollutedSites.length > 0) {
+    params.deps.logger.warn(
+      `Refusing to restore config from backup ${backupPath}: backup contains redacted-placeholder secret values at ${pollutedSites.join(", ")}. ` +
+        "Inspect the backup chain manually before recovery.",
+    );
     return { raw: params.raw, parsed: params.parsed };
   }
 
