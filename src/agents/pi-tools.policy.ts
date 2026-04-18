@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
@@ -174,7 +174,7 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   return [raw];
 }
 
-function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupIds?: string[];
 } {
@@ -388,7 +388,7 @@ export function resolveGroupToolPolicy(params: {
   }
   let plugin;
   try {
-    plugin = getChannelPlugin(channel);
+    plugin = getLoadedChannelPlugin(channel);
   } catch {
     plugin = undefined;
   }

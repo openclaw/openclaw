@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSanitizeSessionHistoryHelpersMock,
+  createSanitizeSessionHistoryProviderHookRuntimeMock,
   createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeInMemorySessionManager,
@@ -15,6 +16,24 @@ vi.mock("./pi-embedded-helpers.js", async () => await createSanitizeSessionHisto
 vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
+);
+vi.mock("../plugins/provider-hook-runtime.js", () =>
+  createSanitizeSessionHistoryProviderHookRuntimeMock({
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      provider === "openai"
+        ? {
+            buildReplayPolicy: (context?: { modelApi?: string }) => ({
+              sanitizeMode: "images-only",
+              sanitizeToolCallIds: context?.modelApi === "openai-completions",
+              ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+              applyAssistantFirstOrderingFix: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+            }),
+          }
+        : undefined,
+    ),
+  }),
 );
 
 describe("sanitizeSessionHistory openai tool id preservation", () => {
