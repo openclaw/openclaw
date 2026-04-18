@@ -624,7 +624,7 @@ describe("draft stream initial message debounce", () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
 
-      stream.update("Processing"); // 10 chars, below 30
+      stream.update("Processing");
       await stream.flush();
 
       expect(api.sendMessage).not.toHaveBeenCalled();
@@ -634,7 +634,7 @@ describe("draft stream initial message debounce", () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
 
-      stream.update("Processing"); // 10 chars, below 30
+      stream.update("Processing");
       await stream.discard?.();
       await stream.flush();
 
@@ -646,7 +646,6 @@ describe("draft stream initial message debounce", () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
 
-      // Exactly 30 chars
       stream.update("I am processing your request..");
       await stream.flush();
 
@@ -657,7 +656,7 @@ describe("draft stream initial message debounce", () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
 
-      stream.update("I am processing your request, please wait a moment"); // 50 chars
+      stream.update("I am processing your request, please wait a moment");
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalled();
@@ -669,17 +668,15 @@ describe("draft stream initial message debounce", () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);
 
-      // First message at threshold (30 chars)
       stream.update("I am processing your request..");
       await stream.flush();
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
 
-      // Subsequent updates should edit, not wait for threshold
       stream.update("I am processing your request.. and summarizing");
       await stream.flush();
 
       expect(api.editMessageText).toHaveBeenCalled();
-      expect(api.sendMessage).toHaveBeenCalledTimes(1); // still only 1 send
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -689,7 +686,6 @@ describe("draft stream initial message debounce", () => {
       const stream = createTelegramDraftStream({
         api: api as unknown as Bot["api"],
         chatId: 123,
-        // no minInitialChars (backward-compatible behavior)
       });
 
       stream.update("Hi");
