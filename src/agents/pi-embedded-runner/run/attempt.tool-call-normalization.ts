@@ -12,6 +12,7 @@ import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
@@ -774,50 +775,29 @@ function wrapStreamTrimToolCallNames(
     return message;
   };
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as {
-              partial?: unknown;
-              message?: unknown;
-            };
-            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
-            if (event.message && typeof event.message === "object") {
-              const countedStreamAttempt = guardUnknownToolLoopInMessage(
-                event.message,
-                unknownToolGuardState,
-                {
-                  allowedToolNames,
-                  threshold: options?.unknownToolThreshold,
-                  countAttempt: !streamAttemptAlreadyCounted,
-                  resetOnAllowedTool: true,
-                  resetOnMissingUnknownTool: false,
-                },
-              );
-              streamAttemptAlreadyCounted ||= countedStreamAttempt;
-            }
-            guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
-              allowedToolNames,
-              threshold: options?.unknownToolThreshold,
-              countAttempt: false,
-            });
-          }
-          return result;
+  wrapStreamObjectEvents(stream, (event) => {
+    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    if (event.message && typeof event.message === "object") {
+      const countedStreamAttempt = guardUnknownToolLoopInMessage(
+        event.message,
+        unknownToolGuardState,
+        {
+          allowedToolNames,
+          threshold: options?.unknownToolThreshold,
+          countAttempt: !streamAttemptAlreadyCounted,
+          resetOnAllowedTool: true,
+          resetOnMissingUnknownTool: false,
         },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
+      );
+      streamAttemptAlreadyCounted ||= countedStreamAttempt;
+    }
+    guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
+      allowedToolNames,
+      threshold: options?.unknownToolThreshold,
+      countAttempt: false,
+    });
+  });
 
   return stream;
 }
