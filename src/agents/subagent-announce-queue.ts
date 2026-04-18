@@ -162,7 +162,7 @@ function scheduleAnnounceDrain(key: string) {
             prompt,
             internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
           });
-          queue.items.splice(0);
+          queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);
           }
