@@ -979,6 +979,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      mcpAppsEnabled: config?.mcp?.apps?.enabled === true,
       timeFormat: config?.agents?.defaults?.timeFormat,
     } satisfies ControlUiBootstrapConfig);
     return true;

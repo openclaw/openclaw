@@ -26,6 +26,7 @@ export {
 export {
   buildCanvasDocumentEntryUrl,
   createCanvasDocument,
+  type McpAppViewMeta,
   resolveCanvasDocumentAssets,
   resolveCanvasDocumentDir,
   resolveCanvasHttpPathToLocalPath,

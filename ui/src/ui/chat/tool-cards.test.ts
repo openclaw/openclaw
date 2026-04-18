@@ -8,6 +8,7 @@ import {
   isToolErrorOutput,
   renderToolCard,
   renderToolCardSidebar,
+  renderToolPreview,
 } from "./tool-cards.ts";
 
 function requireFirstMockArg(
@@ -313,6 +314,89 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
+
+  it("renders MCP app previews through the MCP app bridge when enabled", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          title: "Weather app",
+          preferredHeight: 420,
+          url: "/__openclaw__/canvas/documents/cv_weather/index.html",
+          mcpApp: {
+            serverName: "weather",
+            toolName: "forecast",
+            uiResourceUri: "ui://weather/forecast",
+            sessionKey: "main",
+            toolInput: { city: "Pittsburgh" },
+            toolResult: { temp: 72 },
+          },
+        },
+        "chat_message",
+        { mcpAppsEnabled: true },
+      ),
+      container,
+    );
+
+    const appView = container.querySelector("mcp-app-view") as
+      | (HTMLElement & {
+          src?: string;
+          height?: number;
+          mcpTitle?: string;
+          mcpServerName?: string;
+          mcpSessionKey?: string;
+          mcpAppToolName?: string;
+          mcpUiResourceUri?: string;
+          mcpViewUrl?: string;
+          mcpToolInput?: unknown;
+          mcpToolResult?: unknown;
+        })
+      | null;
+    expect(appView).not.toBeNull();
+    expect(appView?.src).toBe("/__openclaw__/canvas/documents/cv_weather/index.html");
+    expect(appView?.height).toBe(420);
+    expect(appView?.mcpTitle).toBe("Weather app");
+    expect(appView?.mcpServerName).toBe("weather");
+    expect(appView?.mcpSessionKey).toBe("main");
+    expect(appView?.mcpAppToolName).toBe("forecast");
+    expect(appView?.mcpUiResourceUri).toBe("ui://weather/forecast");
+    expect(appView?.mcpViewUrl).toBe("/__openclaw__/canvas/documents/cv_weather/index.html");
+    expect(appView?.mcpToolInput).toEqual({ city: "Pittsburgh" });
+    expect(appView?.mcpToolResult).toEqual({ temp: 72 });
+    expect(container.querySelector("iframe.chat-tool-card__preview-frame")).toBeNull();
+  });
+
+  it("does not render MCP app previews when disabled", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          title: "Weather app",
+          preferredHeight: 420,
+          url: "/__openclaw__/canvas/documents/cv_weather/index.html",
+          mcpApp: {
+            serverName: "weather",
+            toolName: "forecast",
+            uiResourceUri: "ui://weather/forecast",
+          },
+        },
+        "chat_message",
+        { mcpAppsEnabled: false },
+      ),
+      container,
+    );
+
+    expect(container.querySelector("mcp-app-view")).toBeNull();
+    expect(container.querySelector("iframe.chat-tool-card__preview-frame")).toBeNull();
+    expect(container.querySelector(".chat-tool-card__preview")).toBeNull();
+  });
+
   describe("isToolErrorOutput", () => {
     it("flags JSON payloads that carry a top-level error string", () => {
       expect(

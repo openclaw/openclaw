@@ -108,6 +108,36 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("keeps app-only MCP tools out of model-visible tool materialization", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          {
+            serverName: "weather",
+            safeServerName: "weather",
+            toolName: "forecast",
+            description: "Forecast",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "Forecast",
+            uiVisibility: ["model", "app"],
+          },
+          {
+            serverName: "weather",
+            safeServerName: "weather",
+            toolName: "app_refresh",
+            description: "Refresh app",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "Refresh app",
+            uiVisibility: ["app"],
+          },
+        ],
+        serverName: "weather",
+      }),
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["weather__forecast"]);
+  });
+
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({

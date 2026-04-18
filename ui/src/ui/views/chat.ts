@@ -152,6 +152,7 @@ export type ChatProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  mcpAppsEnabled?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
   userName?: string | null;
@@ -2150,6 +2151,7 @@ export function renderChat(props: ChatProps) {
             props.canvasPluginSurfaceUrl,
             props.embedSandboxMode ?? "scripts",
             props.allowExternalEmbedUrls ?? false,
+            props.mcpAppsEnabled ?? false,
             threadContextWindow,
           ],
           () =>
@@ -2242,6 +2244,7 @@ export function renderChat(props: ChatProps) {
                     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                     embedSandboxMode: props.embedSandboxMode ?? "scripts",
                     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                    mcpAppsEnabled: props.mcpAppsEnabled ?? false,
                     contextWindow: threadContextWindow,
                     onDelete: () => {
                       deleted.delete(item.key);

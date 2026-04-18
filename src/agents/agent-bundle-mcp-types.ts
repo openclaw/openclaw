@@ -1,5 +1,9 @@
 /** Shared bundle MCP catalog, runtime, and manager types. */
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolResult,
+  ListResourceTemplatesResult,
+  ListToolsResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -44,6 +48,8 @@ export type McpCatalogTool = {
   description?: string;
   inputSchema: TSchema;
   fallbackDescription: string;
+  uiResourceUri?: string;
+  uiVisibility?: Array<"model" | "app">;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -68,6 +74,7 @@ export type SessionMcpRuntime = {
   sessionKey?: string;
   workspaceDir: string;
   configFingerprint: string;
+  mcpAppsEnabled?: boolean;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;
@@ -78,6 +85,11 @@ export type SessionMcpRuntime = {
   peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
+  listResourceTemplates?: (
+    serverName: string,
+    params?: { cursor?: string },
+  ) => Promise<ListResourceTemplatesResult>;
   listResources?: (serverName: string) => Promise<unknown>;
   readResource?: (serverName: string, uri: string) => Promise<unknown>;
   listPrompts?: (serverName: string) => Promise<unknown>;
