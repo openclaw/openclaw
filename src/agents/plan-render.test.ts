@@ -230,6 +230,52 @@ describe("mention neutralization", () => {
     const result2 = renderPlanWithHeader("@here urgent", steps, "plaintext");
     expect(result2).not.toMatch(/@here\b/);
   });
+
+  // PR-11 deep-dive review B1: pre-fix, neutralizeMentions only fired
+  // for plaintext + slack-mrkdwn. Markdown (Discord/Mattermost/Matrix)
+  // and HTML (Telegram) leaked @everyone/@here/@channel + Discord
+  // raw-mention syntax. These tests pin the post-fix behavior.
+  it("markdown: neutralizes @channel/@here/@everyone in step text (review B1)", () => {
+    const steps: PlanStepForRender[] = [
+      { step: "Notify @channel about deploy", status: "pending" },
+      { step: "@here review needed", status: "pending" },
+      { step: "@everyone please respond", status: "pending" },
+    ];
+    const result = renderPlanChecklist(steps, "markdown");
+    expect(result).not.toMatch(/@channel\b/);
+    expect(result).not.toMatch(/@here\b/);
+    expect(result).not.toMatch(/@everyone\b/);
+  });
+
+  it("markdown: neutralizes Discord raw mentions <@123> / <@!123> / <@&123> (review B1)", () => {
+    const steps: PlanStepForRender[] = [
+      { step: "Ping <@!12345> for review", status: "pending" },
+      { step: "Notify role <@&98765>", status: "pending" },
+    ];
+    const result = renderPlanChecklist(steps, "markdown");
+    // The `<@` sequence must be broken with U+200B so Discord's parser
+    // doesn't treat it as a mention.
+    expect(result).not.toContain("<@!12345>");
+    expect(result).not.toContain("<@&98765>");
+    expect(result).toContain("<\u200B@");
+  });
+
+  it("html: neutralizes @channel/@here/@everyone in step text (review B1)", () => {
+    const steps: PlanStepForRender[] = [
+      { step: "Notify @channel about deploy", status: "pending" },
+      { step: "@everyone please respond", status: "pending" },
+    ];
+    const result = renderPlanChecklist(steps, "html");
+    expect(result).not.toMatch(/@channel\b/);
+    expect(result).not.toMatch(/@everyone\b/);
+  });
+
+  it("markdown renderPlanWithHeader: neutralizes @everyone in TITLE (review B1)", () => {
+    const steps: PlanStepForRender[] = [{ step: "Tag release", status: "pending" }];
+    const result = renderPlanWithHeader("@everyone release plan", steps, "markdown");
+    expect(result).not.toMatch(/@everyone\b/);
+    expect(result).toContain("release plan");
+  });
 });
 
 describe("activeForm fallback", () => {

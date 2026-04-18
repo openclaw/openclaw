@@ -223,9 +223,16 @@ export const SessionsPatchParamsSchema = Type.Object(
             Type.Literal("answer"),
             Type.Literal("auto"),
           ]),
-          feedback: Type.Optional(NonEmptyString),
+          // PR-11 deep-dive review H4: cap user-controlled text fields
+          // server-side. Without a maxLength, /plan revise can submit
+          // multi-MB feedback that gets persisted to SessionEntry,
+          // re-injected into [PLAN_DECISION] every plan cycle, and
+          // bloats the prompt-cache hash. Same protection for `answer`
+          // (ask_user_question free-text). 8 KB is generous for human-
+          // typed feedback while still bounding the worst case.
+          feedback: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
           /** PR-10 ask_user_question: chosen / typed answer text. */
-          answer: Type.Optional(NonEmptyString),
+          answer: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
           /** PR-10 auto-mode: enable (true) / disable (false) auto-approve. */
           autoEnabled: Type.Optional(Type.Boolean()),
           approvalId: Type.Optional(NonEmptyString),

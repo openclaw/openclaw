@@ -274,7 +274,18 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
     // PLAN_STEP_STATUSES). Coerce here so the call type-checks; if a
     // future runtime shape diverges, the renderer's switch falls
     // through to the pending case as a defensive default.
-    const checklist = renderPlanChecklist(steps as PlanStepForRender[], format);
+    let checklist = renderPlanChecklist(steps as PlanStepForRender[], format);
+    // PR-11 deep-dive review M7: cap the rendered checklist below the
+    // tightest channel limit (Telegram + WhatsApp = 4096 chars). Long
+    // multi-step plans with `acceptanceCriteria` would otherwise be
+    // rejected by the channel transport or truncated mid-step.
+    // 3500 chars leaves headroom for the title prefix + footer.
+    const RESTATE_SOFT_CAP = 3500;
+    if (checklist.length > RESTATE_SOFT_CAP) {
+      const truncated = checklist.slice(0, RESTATE_SOFT_CAP);
+      const remainingSteps = steps.length - (truncated.match(/\n/g)?.length ?? 0) - 1;
+      checklist = `${truncated}\n… (${Math.max(remainingSteps, 0)} more line(s) — open the plan-view sidebar in Control UI for the full checklist)`;
+    }
     return {
       shouldContinue: false,
       reply: {
@@ -367,9 +378,18 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
           approvalId: planMode.approvalId,
         },
       });
+      // PR-11 deep-dive review M8: neutralize @-mentions when echoing
+      // the user-typed feedback back into the channel. A low-privilege
+      // operator could otherwise cause the bot to ping @everyone /
+      // @here / @channel via the feedback echo (the bot's reply may
+      // have different rendering / role permissions than the user's
+      // original message).
+      const safeEcho = sub.feedback
+        .replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1")
+        .replace(/<@/g, "<\u200B@");
       return {
         shouldContinue: false,
-        reply: { text: `Plan returned for revision with feedback: "${sub.feedback}"` },
+        reply: { text: `Plan returned for revision with feedback: "${safeEcho}"` },
       };
     }
   } catch (error) {

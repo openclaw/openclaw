@@ -401,6 +401,63 @@ describe("/plan handler — parser dispatch", () => {
     expect(result?.reply?.text).toContain("Plan was already resolved");
   });
 
+  it("/plan revise neutralizes @-mention bombs in the feedback echo (deep-dive M8)", async () => {
+    callGatewayMock.mockResolvedValueOnce({});
+    const result = await handlePlanCommand(
+      makeParams({
+        body: "/plan revise @everyone please review by EOD <@!12345>",
+        sessionEntry: {
+          planMode: {
+            mode: "plan",
+            approval: "pending",
+            approvalId: "a1",
+            rejectionCount: 0,
+            updatedAt: 1,
+          },
+        } as unknown as SessionEntry,
+      }),
+      true,
+    );
+    // Feedback was forwarded to gateway as-is (server-side sanitization
+    // is its own concern; we don't double-process there).
+    expect(callGatewayMock.mock.calls[0][0].params.planApproval.feedback).toBe(
+      "@everyone please review by EOD <@!12345>",
+    );
+    // But the BOT'S reply to the channel must have the mentions
+    // neutralized so the bot doesn't ping the channel itself.
+    expect(result?.reply?.text).not.toMatch(/@everyone\b/);
+    expect(result?.reply?.text).toContain("@\uFE6Beveryone"); // ﹫-style neutralization
+    expect(result?.reply?.text).toContain("<\u200B@!12345>"); // zero-width-space inside Discord raw mention
+  });
+
+  it("/plan restate truncates output above the channel size cap (deep-dive M7)", async () => {
+    // Build a 100-step plan to force truncation. Each step adds ~30 chars.
+    const longSteps = Array.from({ length: 100 }, (_, i) => ({
+      step: `step ${i.toString().padStart(3, "0")} — long descriptive sentence text`,
+      status: "pending",
+    }));
+    const result = await handlePlanCommand(
+      makeParams({
+        body: "/plan restate",
+        channel: "telegram",
+        sessionEntry: {
+          planMode: {
+            mode: "plan",
+            approval: "none",
+            rejectionCount: 0,
+            updatedAt: 1,
+            lastPlanSteps: longSteps,
+          },
+        } as unknown as SessionEntry,
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toBeDefined();
+    // Message must stay under Telegram's 4096-char limit (with headroom).
+    expect(result!.reply!.text!.length).toBeLessThanOrEqual(4096);
+    expect(result?.reply?.text).toContain("more line");
+  });
+
   it("plaintext format applies to extended SMS-like channels (review M4)", async () => {
     for (const channel of ["irc", "nostr", "voice-call", "line", "qqbot", "zalo"]) {
       const result = await handlePlanCommand(

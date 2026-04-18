@@ -58,7 +58,11 @@ function renderStepLine(
 ): string {
   switch (format) {
     case "html": {
-      const esc = escapeHtml(label);
+      // PR-11 deep-dive review B1: neutralize mentions BEFORE escaping
+      // so an agent-controlled step text like "@everyone deploy now"
+      // can't ping a Telegram channel or any HTML-rendering surface
+      // that follows mention conventions.
+      const esc = escapeHtml(neutralizeMentions(label));
       if (status === "completed") {
         return `✅ ${esc}`;
       }
@@ -71,7 +75,13 @@ function renderStepLine(
       return `⬚ ${esc}`;
     }
     case "markdown": {
-      const md = escapeMarkdown(label);
+      // PR-11 deep-dive review B1 (BLOCKER): markdown renders on
+      // Discord, Mattermost, Matrix, MSTeams, GoogleChat, Feishu, web,
+      // CLI. Without neutralization, an agent-controlled step text
+      // containing "@everyone" pings the entire channel on Discord +
+      // Mattermost. escapeMarkdown handles `*`/`[`/etc but does NOT
+      // touch `@`, so we need a separate pass.
+      const md = escapeMarkdown(neutralizeMentions(label));
       if (status === "completed") {
         return `- [x] ${md}`;
       }
@@ -136,11 +146,12 @@ function renderAcceptanceCriteria(step: PlanStepForRender, format: PlanRenderFor
     const isVerified = verified.has(rawCriterion);
     switch (format) {
       case "html": {
-        const esc = escapeHtml(criterion);
+        // Same PR-11 B1 neutralization as the parent step path.
+        const esc = escapeHtml(neutralizeMentions(criterion));
         return isVerified ? `   ✓ ${esc}` : `   ◻ ${esc}`;
       }
       case "markdown": {
-        const md = escapeMarkdown(criterion);
+        const md = escapeMarkdown(neutralizeMentions(criterion));
         return isVerified ? `    - [x] ${md}` : `    - [ ] ${md}`;
       }
       case "plaintext": {
@@ -175,9 +186,12 @@ export function renderPlanWithHeader(
 
   switch (format) {
     case "html":
-      return `<b>${escapeHtml(safeTitle)}</b>\n${checklist}`;
+      return `<b>${escapeHtml(neutralizeMentions(safeTitle))}</b>\n${checklist}`;
     case "markdown":
-      return `### ${safeTitle}\n${checklist}`;
+      // PR-11 B1: same mention-neutralization pass as the markdown
+      // step branch — `### @everyone Plan` pings the channel on
+      // Discord/Mattermost without this.
+      return `### ${escapeMarkdown(neutralizeMentions(safeTitle))}\n${checklist}`;
     case "plaintext":
       // Codex P2 #67534 r3095517064: neutralize @mentions in the title
       // path too — checklist labels are already protected by
@@ -229,10 +243,19 @@ function escapeMarkdown(text: string): string {
 /**
  * Inserts U+FE6B between '@' and known mention triggers to prevent
  * @channel / @here / @everyone notifications from user-controlled text.
- * Mirrors the slack-mrkdwn approach but applied across plaintext too.
+ *
+ * PR-11 deep-dive review: also neutralize Discord raw user mentions
+ * `<@123>` / `<@!123>` / `<@&123>` (role mention) by inserting U+200B
+ * between `<` and `@`. Discord parses these as pings; an agent
+ * embedding such a string in a plan step would otherwise notify the
+ * named user/role on `/plan restate`.
+ *
+ * Channel coverage: Telegram (HTML), Discord/Matrix/Mattermost
+ * (markdown), Slack (mrkdwn — handled separately by escapeSlackMrkdwn
+ * via U+FE6B on every `@`), plaintext (iMessage/Signal/SMS).
  */
 function neutralizeMentions(text: string): string {
-  return text.replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1");
+  return text.replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1").replace(/<@/g, "<\u200B@");
 }
 
 const warnedStatuses = new Set<string>();
