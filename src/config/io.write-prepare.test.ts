@@ -415,4 +415,22 @@ describe("config io write prepare", () => {
       enabled: false,
     });
   });
+
+  it("preserves root $schema during unrelated partial writes", () => {
+    const sourceConfig: OpenClawConfig = {
+      $schema: "https://openclaw.ai/config.json",
+      gateway: { mode: "local" },
+    } satisfies OpenClawConfig;
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        gateway: { mode: "local", port: 18789 },
+      } satisfies OpenClawConfig,
+    }) as OpenClawConfig;
+
+    expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
 });

@@ -68,7 +68,38 @@ export function resolvePersistCandidateForWrite(params: {
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
-  return applyMergePatch(projectedSource, patch);
+  const persisted = applyMergePatch(projectedSource, patch);
+  return preserveRootSchemaUri({
+    sourceConfig: params.sourceConfig,
+    nextConfig: params.nextConfig,
+    persistedCandidate: persisted,
+  });
+}
+
+function readRootSchemaUri(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.$schema !== "string") {
+    return undefined;
+  }
+  return value.$schema;
+}
+
+function preserveRootSchemaUri(params: {
+  sourceConfig: unknown;
+  nextConfig: unknown;
+  persistedCandidate: unknown;
+}): unknown {
+  const nextSchema = readRootSchemaUri(params.nextConfig);
+  if (nextSchema !== undefined) {
+    return params.persistedCandidate;
+  }
+  const sourceSchema = readRootSchemaUri(params.sourceConfig);
+  if (sourceSchema === undefined || !isRecord(params.persistedCandidate)) {
+    return params.persistedCandidate;
+  }
+  return {
+    ...params.persistedCandidate,
+    $schema: sourceSchema,
+  };
 }
 
 export function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
