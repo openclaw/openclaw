@@ -264,11 +264,11 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
     ...mocks.listGatewayAgentsBasic(),
     bootstrapPendingCount: 0,
     totalSessions: 1,
-    agents: mocks.listGatewayAgentsBasic().agents.map((agent: { id: string; name?: string }) => ({
-      ...agent,
-      bootstrapPending: false,
-      activeSessions: 1,
-    })),
+    agents: mocks
+      .listGatewayAgentsBasic()
+      .agents.map((agent: { id: string; name?: string }) =>
+        Object.assign({}, agent, { bootstrapPending: false, activeSessions: 1 }),
+      ),
   };
   const sessions = createSessionStatusRows();
   const channelIssues = gatewayReachable

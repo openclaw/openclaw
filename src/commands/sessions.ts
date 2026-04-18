@@ -146,11 +146,12 @@ export async function sessionsCommand(
   const rows = targets
     .flatMap((target) => {
       const store = loadSessionStore(target.storePath);
-      return toSessionDisplayRows(store).map((row) => ({
-        ...row,
-        agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
-        kind: classifySessionKey(row.key, store[row.key]),
-      }));
+      return toSessionDisplayRows(store).map((row) =>
+        Object.assign({}, row, {
+          agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
+          kind: classifySessionKey(row.key, store[row.key]),
+        }),
+      );
     })
     .filter((row) => {
       if (activeMinutes === undefined) {

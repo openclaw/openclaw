@@ -211,15 +211,14 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
           return model;
         }
         providerMutated = true;
-        return {
-          ...raw,
+        return Object.assign({}, raw, {
           reasoning,
           input,
           cost,
           contextWindow,
           maxTokens,
           api,
-        } as ModelDefinitionConfig;
+        }) as ModelDefinitionConfig;
       });
 
       if (!providerMutated) {

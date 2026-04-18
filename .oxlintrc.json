@@ -17,7 +17,7 @@
     "eslint-plugin-unicorn/prefer-set-size": "error",
     "oxc/no-accumulating-spread": "error",
     "oxc/no-async-endpoint-handlers": "error",
-    "oxc/no-map-spread": "off",
+    "oxc/no-map-spread": "error",
     "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "error",
@@ -55,7 +55,8 @@
     {
       "files": ["src/security/**"],
       "rules": {
-        "eslint/no-warning-comments": "off"
+        "eslint/no-warning-comments": "off",
+        "oxc/no-map-spread": "off"
       }
     },
     {
