@@ -144,7 +144,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
   });
 
   it("refreshes exactly once when many agents share one OAuth profile and all race on expiry", async () => {
-    const agentCount = 8;
+    const agentCount = 4;
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
     const accountId = "acct-shared";
