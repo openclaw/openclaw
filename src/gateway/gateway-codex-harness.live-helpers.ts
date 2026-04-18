@@ -23,7 +23,6 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available models in this Codex environment:",
   "Available agent models:",
   "Visible options in this session:",
-  "Current:",
   "Current: `codex/",
   "Current model:",
   "Current model: `codex/",

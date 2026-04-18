@@ -35,4 +35,16 @@ describe("gateway codex harness live helpers", () => {
   it("rejects unrelated codex command output", () => {
     expect(isExpectedCodexModelsCommandText("Codex is healthy.")).toBe(false);
   });
+
+  it("rejects generic current-status output that is not a model listing", () => {
+    const text = [
+      "Current: waiting for the Codex CLI to finish booting.",
+      "Try again in a few seconds.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(false);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(false);
+  });
 });
