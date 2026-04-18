@@ -18,6 +18,7 @@ const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
+const TASKS_PAD = 56;
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -65,6 +66,21 @@ function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
   return theme.muted(padded);
 }
 
+function formatFlowTaskSummary(flowId: string): string {
+  const taskSummary = getFlowTaskSummary(flowId);
+  const recentFailures = taskSummary.recentFailures ?? taskSummary.failures;
+  const historicalFailures = taskSummary.historicalFailures ?? 0;
+  return [
+    `${taskSummary.active} active/${taskSummary.total} total`,
+    `${recentFailures} recent failure${recentFailures === 1 ? "" : "s"}`,
+    historicalFailures > 0
+      ? `${historicalFailures} historical failure${historicalFailures === 1 ? "" : "s"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   const header = [
     "TaskFlow".padEnd(ID_PAD),
@@ -77,8 +93,7 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
   for (const flow of flows) {
-    const taskSummary = getFlowTaskSummary(flow.flowId);
-    const counts = `${taskSummary.active} active/${taskSummary.total} total`;
+    const counts = formatFlowTaskSummary(flow.flowId);
     lines.push(
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
@@ -86,7 +101,7 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
         formatFlowStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
         safeFlowDisplayText(flow.controllerId, CTRL_PAD).padEnd(CTRL_PAD),
-        counts.padEnd(14),
+        counts.padEnd(TASKS_PAD),
         safeFlowDisplayText(flow.goal, 80),
       ].join(" "),
     );
@@ -226,7 +241,7 @@ export async function flowsShowCommand(
     `createdAt: ${new Date(flow.createdAt).toISOString()}`,
     `updatedAt: ${new Date(flow.updatedAt).toISOString()}`,
     `endedAt: ${flow.endedAt ? new Date(flow.endedAt).toISOString() : "n/a"}`,
-    `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.failures} issues`,
+    `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.recentFailures ?? taskSummary.failures} recent failure${(taskSummary.recentFailures ?? taskSummary.failures) === 1 ? "" : "s"}${(taskSummary.historicalFailures ?? 0) > 0 ? ` · ${taskSummary.historicalFailures} historical failure${taskSummary.historicalFailures === 1 ? "" : "s"}` : ""}`,
   ];
   for (const line of lines) {
     runtime.log(line);

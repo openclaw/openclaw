@@ -4,6 +4,7 @@ import type {
   TaskRuntimeCounts,
   TaskStatusCounts,
 } from "./task-registry.types.js";
+import { buildTaskStatusSnapshot } from "./task-status.js";
 
 function createEmptyTaskStatusCounts(): TaskStatusCounts {
   return {
@@ -32,25 +33,28 @@ export function createEmptyTaskRegistrySummary(): TaskRegistrySummary {
     active: 0,
     terminal: 0,
     failures: 0,
+    recentFailures: 0,
+    historicalFailures: 0,
     byStatus: createEmptyTaskStatusCounts(),
     byRuntime: createEmptyTaskRuntimeCounts(),
   };
 }
 
 export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistrySummary {
+  const taskList = [...records];
   const summary = createEmptyTaskRegistrySummary();
-  for (const task of records) {
+  const snapshot = buildTaskStatusSnapshot(taskList);
+
+  summary.active = snapshot.activeCount;
+  summary.terminal = Math.max(0, taskList.length - snapshot.activeCount);
+  summary.recentFailures = snapshot.recentFailureCount;
+  summary.historicalFailures = snapshot.historicalFailureCount;
+  summary.failures = snapshot.recentFailureCount + snapshot.historicalFailureCount;
+
+  for (const task of taskList) {
     summary.total += 1;
     summary.byStatus[task.status] += 1;
     summary.byRuntime[task.runtime] += 1;
-    if (task.status === "queued" || task.status === "running") {
-      summary.active += 1;
-    } else {
-      summary.terminal += 1;
-    }
-    if (task.status === "failed" || task.status === "timed_out" || task.status === "lost") {
-      summary.failures += 1;
-    }
   }
   return summary;
 }

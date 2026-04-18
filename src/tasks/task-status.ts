@@ -157,6 +157,7 @@ export type TaskStatusSnapshot = {
   activeCount: number;
   totalCount: number;
   recentFailureCount: number;
+  historicalFailureCount: number;
 };
 
 export function buildTaskStatusSnapshot(
@@ -170,6 +171,10 @@ export function buildTaskStatusSnapshot(
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
   const focus =
     active[0] ?? recentTerminal.find((task) => isFailureTask(task)) ?? recentTerminal[0];
+  const recentFailureCount = recentTerminal.filter(isFailureTask).length;
+  const historicalFailureCount = visibleCandidates.filter(
+    (task) => !isActiveTask(task) && isFailureTask(task) && !isRecentTerminalTask(task, now),
+  ).length;
   return {
     latest: active[0] ?? recentTerminal[0],
     focus,
@@ -178,6 +183,7 @@ export function buildTaskStatusSnapshot(
     recentTerminal,
     activeCount: active.length,
     totalCount: visible.length,
-    recentFailureCount: recentTerminal.filter(isFailureTask).length,
+    recentFailureCount,
+    historicalFailureCount,
   };
 }

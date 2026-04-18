@@ -55,6 +55,20 @@ describe("task status snapshot", () => {
     expect(snapshot.totalCount).toBe(0);
     expect(snapshot.focus).toBeUndefined();
   });
+
+  it("counts old failures as historical residue instead of recent failures", () => {
+    const oldFailure = makeTask({
+      status: "failed",
+      endedAt: NOW - 10 * 60_000,
+      error: "old failure",
+    });
+
+    const snapshot = buildTaskStatusSnapshot([oldFailure], { now: NOW });
+
+    expect(snapshot.activeCount).toBe(0);
+    expect(snapshot.recentFailureCount).toBe(0);
+    expect(snapshot.historicalFailureCount).toBe(1);
+  });
 });
 
 describe("task status formatting", () => {
