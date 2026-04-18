@@ -75,3 +75,50 @@ describe("concept vocabulary", () => {
     });
   });
 });
+
+describe("stopword filtering", () => {
+  it("filters common English stopwords from concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-04-04.md",
+      snippet: "The router was not very good but the failover can help when you have been there.",
+    });
+
+    expect(tags).toEqual(expect.arrayContaining(["router", "failover"]));
+    expect(tags).not.toContain("the");
+    expect(tags).not.toContain("was");
+    expect(tags).not.toContain("not");
+    expect(tags).not.toContain("very");
+    expect(tags).not.toContain("but");
+    expect(tags).not.toContain("can");
+    expect(tags).not.toContain("you");
+    expect(tags).not.toContain("been");
+  });
+
+  it("filters LLM transcript role markers from concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-04-04.md",
+      snippet:
+        "assistant user role content function message response. The gateway backup completed.",
+    });
+
+    expect(tags).toEqual(expect.arrayContaining(["gateway", "backup"]));
+    expect(tags).not.toContain("assistant");
+    expect(tags).not.toContain("user");
+    expect(tags).not.toContain("role");
+    expect(tags).not.toContain("content");
+    expect(tags).not.toContain("function");
+    expect(tags).not.toContain("message");
+    expect(tags).not.toContain("response");
+  });
+
+  it("preserves meaningful domain terms while filtering noise", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-04-04.md",
+      snippet: "Configured the OpenAI embedding model for the QMD router backup system.",
+    });
+
+    expect(tags).toEqual(expect.arrayContaining(["openai", "embedding", "router", "backup"]));
+    expect(tags).not.toContain("the");
+    expect(tags).not.toContain("for");
+  });
+});
