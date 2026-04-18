@@ -93,6 +93,26 @@ describe("models cli", () => {
     );
   });
 
+  it("passes --profile to models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--profile",
+      "default",
+    ]);
+
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        profile: "default",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();

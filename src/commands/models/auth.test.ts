@@ -352,10 +352,12 @@ describe("modelsAuthLoginCommand", () => {
       }),
       agentDir: "/tmp/openclaw/agents/main",
     });
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledTimes(1);
     expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
       provider: "openai-codex",
       mode: "oauth",
     });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:default"]).toBeUndefined();
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
@@ -426,6 +428,37 @@ describe("modelsAuthLoginCommand", () => {
       "claude-cli/claude-sonnet-4-6": {},
     });
     expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+  });
+
+  it("passes --profile through to provider auth methods", async () => {
+    const runtime = createRuntime();
+    const targetedRun = vi.fn().mockImplementation(async (ctx) => {
+      expect(ctx.opts).toEqual({ profile: "default" });
+      return {
+        profiles: [
+          {
+            profileId: "openai-codex:default",
+            credential: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "access-token",
+              refresh: "refresh-token",
+            },
+          },
+        ],
+      };
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        run: targetedRun as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", profile: "default" }, runtime);
+
+    expect(targetedRun).toHaveBeenCalledOnce();
   });
 
   it("runs the requested anthropic cli auth method with the full login context", async () => {

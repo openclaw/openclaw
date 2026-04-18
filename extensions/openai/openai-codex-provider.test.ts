@@ -1,6 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
+const { refreshOpenAICodexTokenMock, loginOpenAICodexOAuthMock } = vi.hoisted(() => ({
+  refreshOpenAICodexTokenMock: vi.fn(),
+  loginOpenAICodexOAuthMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-login", () => ({
+  loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
+}));
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
@@ -15,6 +22,7 @@ describe("openai codex provider", () => {
 
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
+    loginOpenAICodexOAuthMock.mockReset();
   });
 
   it("falls back to the cached credential when accountId extraction fails", async () => {
@@ -70,6 +78,27 @@ describe("openai codex provider", () => {
       refresh: "next-refresh",
       expires: expect.any(Number),
     });
+  });
+
+  it("uses the requested auth profile name when provided", async () => {
+    loginOpenAICodexOAuthMock.mockResolvedValue({
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    });
+    const provider = buildOpenAICodexProviderPlugin();
+    const result = await provider.auth[0]?.run({
+      prompter: {} as never,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
+      isRemote: false,
+      openUrl: async () => {},
+      oauth: { createVpsAwareHandlers: vi.fn() } as never,
+      config: {},
+      opts: { profile: "default" },
+    } as never);
+
+    expect(result?.profiles[0]?.profileId).toBe("openai-codex:default");
   });
 
   it("returns deprecated-profile doctor guidance for legacy Codex CLI ids", () => {
