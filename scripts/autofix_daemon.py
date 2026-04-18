@@ -61,10 +61,20 @@ def _resolve_repo_root() -> Path:
     if override:
         return Path(override).resolve()
     if getattr(sys, "frozen", False):
-        # PyInstaller single-file bundle: sys.executable is the .exe path.
-        # User drops the .exe next to autofix.py / node_modules, so the
-        # repo root is the exe's parent dir.
-        return Path(sys.executable).resolve().parent
+        # PyInstaller single-file bundle: sys.executable is the .exe
+        # path. The build script writes the exe into <repo>/dist/, so
+        # the repo root is the exe's grandparent, not its parent. But
+        # users might also drop the exe anywhere, so walk upward from
+        # the exe's directory looking for the expected OpenClaw repo
+        # markers (openclaw.mjs + autofix.py) rather than hardcoding
+        # "go up N levels".
+        start = Path(sys.executable).resolve().parent
+        for candidate in (start, *start.parents):
+            if (candidate / "openclaw.mjs").is_file() and (
+                candidate / "autofix.py"
+            ).is_file():
+                return candidate
+        return start  # fallback: exe's own directory (caller will error out)
     return Path(__file__).resolve().parent.parent
 
 
