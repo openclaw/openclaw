@@ -6,6 +6,7 @@ import {
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
 import {
+  createTaskRecord,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
@@ -111,6 +112,70 @@ describe("flows commands", () => {
           },
         ],
       });
+    });
+  });
+
+  it("lists TaskFlows in text mode with recent and historical failure evidence", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const now = Date.now();
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Investigate task pressure",
+        status: "running",
+        createdAt: now - 10 * 60_000,
+        updatedAt: now - 10 * 60_000,
+      });
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child-running",
+        runId: "run-child-running",
+        label: "Collect live state",
+        task: "Collect live state",
+        startedAt: now - 2 * 60_000,
+        lastEventAt: now - 30_000,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child-recent",
+        runId: "run-child-recent",
+        label: "Inspect recent failure",
+        task: "Inspect recent failure",
+        status: "failed",
+        startedAt: now - 2 * 60_000,
+        lastEventAt: now - 90_000,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child-historical",
+        runId: "run-child-historical",
+        label: "Inspect historical failure",
+        task: "Inspect historical failure",
+        status: "failed",
+        startedAt: now - 20 * 60_000,
+        lastEventAt: now - 20 * 60_000,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({ json: false }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain("1 active · 1 recent failure · 1 historical failure");
     });
   });
 
