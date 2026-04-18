@@ -9,10 +9,16 @@ import {
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { loadBundledPluginPublicSurfaceSync } from "../test-utils/bundled-plugin-public-surface.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+const OLLAMA_PROVIDER_DISCOVERY_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "ollama",
+  artifactBasename: "provider-discovery.js",
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -48,20 +54,16 @@ describe("Ollama provider", () => {
     }
   }
 
-  let ollamaCatalogProvider: ProviderPlugin | undefined;
+  let ollamaCatalogProvider: Promise<ProviderPlugin | undefined> | undefined;
 
-  function loadOllamaCatalogProvider(): ProviderPlugin | undefined {
-    if (ollamaCatalogProvider) {
-      return ollamaCatalogProvider;
-    }
-    const surface = loadBundledPluginPublicSurfaceSync<{
-      default?: ProviderPlugin;
-      ollamaProviderDiscovery?: ProviderPlugin;
-    }>({
-      pluginId: "ollama",
-      artifactBasename: "provider-discovery.js",
+  function loadOllamaCatalogProvider(): Promise<ProviderPlugin | undefined> {
+    ollamaCatalogProvider ??= import(OLLAMA_PROVIDER_DISCOVERY_MODULE_ID).then((surface) => {
+      const typed = surface as {
+        default?: ProviderPlugin;
+        ollamaProviderDiscovery?: ProviderPlugin;
+      };
+      return typed.default ?? typed.ollamaProviderDiscovery;
     });
-    ollamaCatalogProvider = surface.default ?? surface.ollamaProviderDiscovery;
     return ollamaCatalogProvider;
   }
 
@@ -69,7 +71,7 @@ describe("Ollama provider", () => {
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
   }): Promise<ProviderConfig | undefined> {
-    const provider = loadOllamaCatalogProvider();
+    const provider = await loadOllamaCatalogProvider();
     if (!provider) {
       return undefined;
     }
