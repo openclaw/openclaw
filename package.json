@@ -1474,8 +1474,6 @@
     "tsgo:all": "pnpm tsgo:core && pnpm tsgo:core:test && pnpm tsgo:extensions && pnpm tsgo:extensions:test",
     "tsgo:core": "node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo",
     "tsgo:core:test": "node scripts/run-tsgo.mjs -p tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo",
-    "tsgo:core:test:agents": "node scripts/run-tsgo.mjs -p tsconfig.core.test.agents.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test-agents.tsbuildinfo",
-    "tsgo:core:test:non-agents": "node scripts/run-tsgo.mjs -p tsconfig.core.test.non-agents.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test-non-agents.tsbuildinfo",
     "tsgo:extensions": "node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo",
     "tsgo:extensions:test": "node scripts/run-tsgo.mjs -p tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo",
     "tsgo:prod": "pnpm tsgo:core && pnpm tsgo:extensions",
