@@ -703,11 +703,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     ).toBe("bot-alpha-dm");
   });
 
-  it("sessions_spawn strips conversation: prefix for Teams-style targets", async () => {
-    const rawConversationId = "19:example-conversation@thread.v2";
-    // Teams inbound context sets OriginatingTo to `conversation:<id>`. With the
-    // generic prefix peeler in extractRequesterPeer, the bound-account lookup
-    // should still find the binding keyed on the raw conversation id.
+  it("sessions_spawn strips only the Teams conversation: wrapper", async () => {
+    const rawConversationId = "a:1:example-conversation@thread.v2";
+    // Teams inbound context sets OriginatingTo to `conversation:<id>`. The
+    // Teams id itself may start with another token-colon segment, so extraction
+    // must stop after the known wrapper instead of peeling arbitrary prefixes.
     expect(
       await executeBoundAccountSpawn({
         callId: "call-teams-conversation",

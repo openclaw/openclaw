@@ -26,6 +26,13 @@ const KIND_PREFIX_TO_CHAT_TYPE: Readonly<Record<string, ChatType>> = {
 // Matches one leading `<alpha-token>:` wrapper at a time.
 const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
 
+function shouldPeelRequesterPrefix(prefix: string, channelId: string | undefined): boolean {
+  if (prefix in KIND_PREFIX_TO_CHAT_TYPE) {
+    return true;
+  }
+  return Boolean(channelId && prefix === `${channelId.trim().toLowerCase()}:`);
+}
+
 export function extractRequesterPeer(
   channelId: string | undefined,
   requesterTo: string | undefined,
@@ -49,6 +56,9 @@ export function extractRequesterPeer(
       break;
     }
     const prefix = match[0].toLowerCase();
+    if (!shouldPeelRequesterPrefix(prefix, channelId)) {
+      break;
+    }
     if (prefix in KIND_PREFIX_TO_CHAT_TYPE) {
       inferredKind ??= KIND_PREFIX_TO_CHAT_TYPE[prefix];
     }
