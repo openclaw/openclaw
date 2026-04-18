@@ -1079,6 +1079,10 @@ function collectPythonIgnoredRanges(content: string): OffsetRange[] {
     if (isTriple) {
       i += 3;
       while (i < content.length) {
+        if (content[i] === "\\") {
+          i += 2;
+          continue;
+        }
         if (content[i] === quote && content[i + 1] === quote && content[i + 2] === quote) {
           i += 3;
           break;
