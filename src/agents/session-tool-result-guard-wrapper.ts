@@ -26,7 +26,10 @@ function stripBase64ImagesFromToolResult(message: AgentMessage): AgentMessage {
 
   const strippedContent = toolResult.content.map((item) => {
     if (typeof item === "object" && item !== null && "type" in item && item.type === "image") {
-      // Keep the image type marker and MEDIA path (from text content), but strip base64 data
+      // The MEDIA path is in a sibling text content block and is untouched.
+      // Strip the base64 payload; keep enough metadata for sanitizeContentBlocksImages
+      // to recognise this as an already-processed image block and replace it with a
+      // text placeholder on the next session load.
       return {
         type: "image" as const,
         data: "", // Empty string instead of multi-MB base64
