@@ -118,6 +118,21 @@ function normalizeHealthSummary(summary: HealthSummary): HealthSummary {
     ];
   });
   const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const defaultRawAgent =
+    rawAgents.find((agent) => {
+      const record = asNullableRecord(agent);
+      return record?.isDefault === true;
+    }) ?? rawAgents[0];
+  const defaultRawHeartbeat = asNullableRecord(asNullableRecord(defaultRawAgent)?.heartbeat);
+  const hasExplicitDisabledHeartbeat =
+    defaultRawHeartbeat !== null &&
+    (defaultRawHeartbeat.enabled === false ||
+      (typeof defaultRawHeartbeat.everyMs === "number" &&
+        Number.isFinite(defaultRawHeartbeat.everyMs) &&
+        defaultRawHeartbeat.everyMs <= 0) ||
+      defaultRawHeartbeat.every === "disabled" ||
+      defaultRawHeartbeat.every === "0m" ||
+      defaultRawHeartbeat.every === "0s");
   const reportedHeartbeatSeconds =
     typeof summary.heartbeatSeconds === "number" && Number.isFinite(summary.heartbeatSeconds)
       ? Math.max(0, summary.heartbeatSeconds)
@@ -128,7 +143,9 @@ function normalizeHealthSummary(summary: HealthSummary): HealthSummary {
     heartbeatSeconds:
       defaultAgent?.heartbeat.everyMs != null
         ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
-        : reportedHeartbeatSeconds,
+        : hasExplicitDisabledHeartbeat
+          ? 0
+          : reportedHeartbeatSeconds,
   };
 }
 
