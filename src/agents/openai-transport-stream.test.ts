@@ -2075,7 +2075,7 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("keeps reasoning.text and visible-text from the same reasoning_details chunk", async () => {
+  it("preserves reasoning.text, visible-text, and tool_calls from the same reasoning_details chunk", async () => {
     const model = {
       id: "openrouter/google/gemini-2.5-flash",
       name: "Gemini 2.5 Flash",
@@ -2134,7 +2134,7 @@ describe("openai transport stream", () => {
       {
         id: "chatcmpl-mix",
         object: "chat.completion.chunk" as const,
-        choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: "stop" }],
+        choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: "tool_calls" }],
       },
     ] as const;
     async function* mockStream() {
@@ -2145,10 +2145,14 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
+    // All three signals coexist in a single chunk: the reasoning trace, the
+    // visible reply, and the tool-call fragment. None may be dropped or the
+    // turn loses either the answer or the tool invocation.
+    expect(output.stopReason).toBe("toolUse");
     expect(output.content).toMatchObject([
       { type: "thinking", thinking: "think" },
       { type: "text", text: "visible" },
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { q: "x" } },
     ]);
-    expect(output.content.some((b) => (b as { type?: string }).type === "toolCall")).toBe(false);
   });
 });

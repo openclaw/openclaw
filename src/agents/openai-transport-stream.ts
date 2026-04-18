@@ -1136,7 +1136,6 @@ async function processOpenAICompletionsStream(
       continue;
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(choice.delta as Record<string, unknown>);
-    let emittedVisibleTextFromReasoning = false;
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "text") {
         flushPendingThinkingDelta();
@@ -1153,7 +1152,6 @@ async function processOpenAICompletionsStream(
           delta: reasoningDelta.text,
           partial: output,
         });
-        emittedVisibleTextFromReasoning = true;
       } else if (currentBlock?.type === "toolCall") {
         if (!pendingThinkingDelta) {
           pendingThinkingDelta = { signature: reasoningDelta.signature, text: reasoningDelta.text };
@@ -1164,12 +1162,11 @@ async function processOpenAICompletionsStream(
         appendThinkingDelta({ signature: reasoningDelta.signature, text: reasoningDelta.text });
       }
     }
-    // Mirror the `choice.delta.content` branch above: once a chunk emitted
-    // user-visible text, skip `tool_calls` in the same delta so a text block
-    // and tool-call block are not opened in the same iteration.
-    if (emittedVisibleTextFromReasoning) {
-      continue;
-    }
+    // Fall through to `tool_calls` processing intentionally: if a chunk
+    // carries both `reasoning_details` visible text and a `tool_calls`
+    // fragment, dropping the fragment here would lose tool-invocation state
+    // when `finish_reason` is `tool_calls`. `finishCurrentBlock()` below
+    // correctly finalizes the open text block before the tool-call block.
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
         if (
