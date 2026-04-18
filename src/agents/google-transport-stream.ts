@@ -210,9 +210,12 @@ function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThin
   }
 }
 
-function getDisabledThinkingConfig(modelId: string): Record<string, unknown> {
+function getDisabledThinkingConfig(modelId: string): Record<string, unknown> | undefined {
   if (isGemini3ProModel(modelId)) {
-    return { thinkingLevel: "LOW" };
+    // Gemini 3/3.1 Pro cannot disable thinking (MINIMAL not supported, LOW
+    // still thinks and burns tokens causing empty replies). Omit thinkingConfig
+    // entirely so the model falls back to its default dynamic thinking.
+    return undefined;
   }
   if (isGemini3FlashModel(modelId)) {
     return { thinkingLevel: "MINIMAL" };
