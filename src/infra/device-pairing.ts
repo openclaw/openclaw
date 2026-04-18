@@ -217,6 +217,13 @@ function normalizeScopes(scopes: string[] | undefined): string[] {
       out.add(trimmed);
     }
   }
+  // Auto-expand operator scopes: admin implies read+write, write implies read
+  if (out.has("operator.admin")) {
+    out.add("operator.read");
+    out.add("operator.write");
+  } else if (out.has("operator.write")) {
+    out.add("operator.read");
+  }
   return [...out].toSorted();
 }
 
