@@ -47,6 +47,9 @@ const QQBotExecApprovalsSchema = z
   .strict()
   .optional();
 
+const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
+const QQBotGroupPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
+
 const QQBotAccountSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -55,6 +58,9 @@ const QQBotAccountSchema = z
     clientSecret: buildSecretInputSchema().optional(),
     clientSecretFile: z.string().optional(),
     allowFrom: AllowFromListSchema,
+    groupAllowFrom: AllowFromListSchema,
+    dmPolicy: QQBotDmPolicySchema,
+    groupPolicy: QQBotGroupPolicySchema,
     systemPrompt: z.string().optional(),
     markdownSupport: z.boolean().optional(),
     voiceDirectUploadFormats: z.array(z.string()).optional(),

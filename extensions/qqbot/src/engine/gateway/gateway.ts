@@ -136,6 +136,12 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       startTyping: (ev) => startTypingForEvent(ev, account, log),
     });
 
+    if (inbound.blocked) {
+      log?.info(`Dropped inbound qqbot message: ${inbound.blockReason ?? "blocked by allowFrom"}`);
+      inbound.typing.keepAlive?.stop();
+      return;
+    }
+
     try {
       await dispatchOutbound(inbound, { runtime, cfg: ctx.cfg, account, log });
     } catch (err) {

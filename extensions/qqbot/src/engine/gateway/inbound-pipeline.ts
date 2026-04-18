@@ -12,7 +12,11 @@
  * No message sending. Independently testable.
  */
 
-import { formatAllowFrom } from "../config/allow-from.js";
+import {
+  normalizeQQBotSenderId,
+  resolveQQBotAccess,
+  type QQBotAccessResult,
+} from "../access/index.js";
 import {
   formatMessageReferenceForAgent,
   type AttachmentProcessor,
@@ -51,6 +55,50 @@ export async function buildInboundContext(
     accountId: account.accountId,
     peer: { kind: isGroupChat ? "group" : "direct", id: peerId },
   });
+
+  // ---- 1a. Early access control ----
+  //
+  // Evaluate the account-level dmPolicy / groupPolicy + allowFrom /
+  // groupAllowFrom whitelist before any expensive I/O (typing
+  // indicator, attachment downloads, quote resolution). Semantics are
+  // aligned with WhatsApp/Telegram/Discord (see `engine/access/`).
+  //
+  // When blocked, we return a minimal stub InboundContext and rely on
+  // the gateway handler to skip dispatch.
+  const access = resolveQQBotAccess({
+    isGroup: isGroupChat,
+    senderId: event.senderId,
+    allowFrom: account.config?.allowFrom,
+    groupAllowFrom: account.config?.groupAllowFrom,
+    dmPolicy: account.config?.dmPolicy,
+    groupPolicy: account.config?.groupPolicy,
+  });
+
+  const qualifiedTarget = isGroupChat
+    ? event.type === "guild"
+      ? `qqbot:channel:${event.channelId}`
+      : `qqbot:group:${event.groupOpenid}`
+    : event.type === "dm"
+      ? `qqbot:dm:${event.guildId}`
+      : `qqbot:c2c:${event.senderId}`;
+  const fromAddress = qualifiedTarget;
+
+  if (access.decision !== "allow") {
+    log?.info(
+      `Blocked qqbot inbound: decision=${access.decision} reasonCode=${access.reasonCode} ` +
+        `reason=${access.reason} senderId=${normalizeQQBotSenderId(event.senderId)} ` +
+        `accountId=${account.accountId} isGroup=${isGroupChat}`,
+    );
+    return buildBlockedInboundContext({
+      event,
+      route,
+      isGroupChat,
+      peerId,
+      qualifiedTarget,
+      fromAddress,
+      access,
+    });
+  }
 
   // ---- 2. System prompts ----
   const systemPrompts: string[] = [];
@@ -139,16 +187,6 @@ export async function buildInboundContext(
   const uniqueVoiceUrls = [...new Set(voiceAttachmentUrls)];
   const uniqueVoiceAsrReferTexts = [...new Set(voiceAsrReferTexts)].filter(Boolean);
 
-  // ---- 10. Addresses ----
-  const qualifiedTarget = isGroupChat
-    ? event.type === "guild"
-      ? `qqbot:channel:${event.channelId}`
-      : `qqbot:group:${event.groupOpenid}`
-    : event.type === "dm"
-      ? `qqbot:dm:${event.guildId}`
-      : `qqbot:c2c:${event.senderId}`;
-  const fromAddress = qualifiedTarget;
-
   // ---- 11. Quote part ----
   let quotePart = "";
   if (replyTo) {
@@ -178,11 +216,27 @@ export async function buildInboundContext(
   const qqbotSystemInstruction = systemPrompts.length > 0 ? systemPrompts.join("\n") : "";
   const groupSystemPrompt = qqbotSystemInstruction || undefined;
 
-  // ---- 15. Auth ----
-  const normalizedAllowFrom = formatAllowFrom({ allowFrom: account.config?.allowFrom ?? [] });
-  const normalizedSenderId = event.senderId.replace(/^qqbot:/i, "").toUpperCase();
-  const allowAll = normalizedAllowFrom.length === 0 || normalizedAllowFrom.some((e) => e === "*");
-  const commandAuthorized = allowAll || normalizedAllowFrom.includes(normalizedSenderId);
+  // ---- 15. Auth: commandAuthorized semantics ----
+  //
+  // `commandAuthorized=true` means the framework is allowed to honour
+  // `/xxx` directives (e.g. `/exec host=... ask=...`) from this sender.
+  //
+  // We treat the sender as authorized when one of the following holds:
+  //   - DM with policy=open  (the bot owner implicitly trusts DMs)
+  //   - DM with policy=allowlist and sender matched
+  //   - Group where the sender is explicitly in groupAllowFrom/allowFrom
+  //     (matches the `allowlist (allowlisted)` reason string).
+  //
+  // Notably, a group running in `policy=open` does NOT grant command
+  // authorization to arbitrary group members, aligning with the other
+  // channel plugins (Telegram/WhatsApp/Discord) which require explicit
+  // allowlist membership for command-level gating.
+  const commandAuthorized =
+    access.reasonCode === "dm_policy_open" ||
+    access.reasonCode === "dm_policy_allowlisted" ||
+    (access.reasonCode === "group_policy_allowed" &&
+      access.effectiveGroupAllowFrom.length > 0 &&
+      access.groupPolicy === "allowlist");
 
   // ---- 16. Media path classification ----
   const localMediaPaths: string[] = [];
@@ -229,8 +283,75 @@ export async function buildInboundContext(
     voiceTranscriptSources,
     replyTo,
     commandAuthorized,
+    blocked: false,
+    accessDecision: access.decision,
     typing: { keepAlive: typingResult.keepAlive },
     inputNotifyRefIdx,
+  };
+}
+
+/**
+ * Build a stub InboundContext for blocked (unauthorized) messages.
+ *
+ * The gateway handler inspects `blocked` and skips outbound dispatch,
+ * so most fields can be left empty. We still populate routing/peer
+ * fields so logs and metrics remain meaningful.
+ */
+function buildBlockedInboundContext(params: {
+  event: QueuedMessage;
+  route: { sessionKey: string; accountId: string; agentId?: string };
+  isGroupChat: boolean;
+  peerId: string;
+  qualifiedTarget: string;
+  fromAddress: string;
+  access: QQBotAccessResult;
+}): InboundContext {
+  const emptyProcessed: InboundContext["attachments"] = {
+    attachmentInfo: "",
+    imageUrls: [],
+    imageMediaTypes: [],
+    voiceAttachmentPaths: [],
+    voiceAttachmentUrls: [],
+    voiceAsrReferTexts: [],
+    voiceTranscripts: [],
+    voiceTranscriptSources: [],
+    attachmentLocalPaths: [],
+  };
+
+  return {
+    event: params.event,
+    route: params.route,
+    isGroupChat: params.isGroupChat,
+    peerId: params.peerId,
+    qualifiedTarget: params.qualifiedTarget,
+    fromAddress: params.fromAddress,
+    parsedContent: "",
+    userContent: "",
+    quotePart: "",
+    dynamicCtx: "",
+    userMessage: "",
+    agentBody: "",
+    body: "",
+    systemPrompts: [],
+    groupSystemPrompt: undefined,
+    attachments: emptyProcessed,
+    localMediaPaths: [],
+    localMediaTypes: [],
+    remoteMediaUrls: [],
+    remoteMediaTypes: [],
+    uniqueVoicePaths: [],
+    uniqueVoiceUrls: [],
+    uniqueVoiceAsrReferTexts: [],
+    hasAsrReferFallback: false,
+    voiceTranscriptSources: [],
+    replyTo: undefined,
+    commandAuthorized: false,
+    blocked: true,
+    blockReason: params.access.reason,
+    blockReasonCode: params.access.reasonCode,
+    accessDecision: params.access.decision,
+    typing: { keepAlive: null },
+    inputNotifyRefIdx: undefined,
   };
 }
 

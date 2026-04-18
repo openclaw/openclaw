@@ -256,7 +256,10 @@ export interface GatewayAccount {
   markdownSupport: boolean;
   systemPrompt?: string;
   config: Record<string, unknown> & {
-    allowFrom?: unknown[];
+    allowFrom?: Array<string | number>;
+    groupAllowFrom?: Array<string | number>;
+    dmPolicy?: "open" | "allowlist" | "disabled";
+    groupPolicy?: "open" | "allowlist" | "disabled";
     streaming?: { mode?: string };
     audioFormatPolicy?: {
       uploadDirectFormats?: string[];

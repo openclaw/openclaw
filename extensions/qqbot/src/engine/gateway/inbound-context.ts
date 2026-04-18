@@ -8,6 +8,7 @@
  * reads from this object but never mutates it.
  */
 
+import type { QQBotAccessDecision, QQBotAccessReasonCode } from "../access/index.js";
 import type { QueuedMessage } from "./message-queue.js";
 import type {
   GatewayAccount,
@@ -79,6 +80,22 @@ export interface InboundContext {
 
   // ---- Auth ----
   commandAuthorized: boolean;
+  /**
+   * Whether the inbound message should be blocked outright (i.e. the bot
+   * neither routes it to an agent nor replies). Set when the sender is
+   * not matched by the configured `allowFrom`/`groupAllowFrom` list
+   * under the active `dmPolicy` / `groupPolicy`.
+   */
+  blocked: boolean;
+  /** Human-readable reason for `blocked`, for logging only. */
+  blockReason?: string;
+  /**
+   * Structured reason code for `blocked`, suitable for metrics and
+   * activity indicators.
+   */
+  blockReasonCode?: QQBotAccessReasonCode;
+  /** The raw access decision produced by the policy engine. */
+  accessDecision?: QQBotAccessDecision;
 
   // ---- Typing ----
   typing: { keepAlive: TypingKeepAlive | null };
