@@ -58,7 +58,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
-import { downloadVideoTool } from "./tools/download-video.js";
+import { downloadVideoTool, setTrustedWorkspaceRoot } from "./tools/download-video.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -362,6 +362,11 @@ export function createOpenClawCodingTools(options?: {
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
+  
+  // FIX: Set trusted workspace root for security-sensitive tools (e.g., download_video)
+  // This ensures the tool never reads workspaceRoot from untrusted tool-call JSON
+  setTrustedWorkspaceRoot(workspaceRoot);
+  
   const workspaceOnly = fsPolicy.workspaceOnly;
   const applyPatchConfig = execConfig.applyPatch;
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;

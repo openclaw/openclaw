@@ -37,7 +37,19 @@ let trustedWorkspaceRoot: string | null = null;
  * This should be called by the agent runtime when initializing the session
  */
 export function setTrustedWorkspaceRoot(workspaceRoot: string): void {
-  trustedWorkspaceRoot = workspaceRoot;
+  // Validate workspace root before setting
+  if (!workspaceRoot || typeof workspaceRoot !== 'string') {
+    throw new Error('Invalid workspace root provided');
+  }
+  
+  const resolvedPath = path.resolve(workspaceRoot);
+  
+  // Basic security checks
+  if (resolvedPath.includes('..') || resolvedPath.includes('./')) {
+    throw new Error('Workspace root contains relative path segments');
+  }
+  
+  trustedWorkspaceRoot = resolvedPath;
 }
 
 /**
@@ -492,6 +504,17 @@ async function ensureFfmpeg(): Promise<void> {
 async function resolveWorkspaceRoot(): Promise<string> {
   // Priority 1: Use trusted workspace root set by runtime context
   if (trustedWorkspaceRoot) {
+    // Validate the trusted workspace root is still safe
+    const resolved = path.resolve(trustedWorkspaceRoot);
+    const homeDir = os.homedir();
+    
+    // Additional security: Ensure workspace is within user's home directory
+    if (!resolved.startsWith(homeDir) && !resolved.startsWith(path.resolve('/tmp'))) {
+      console.error(`Security: Trusted workspace root "${resolved}" is outside safe directories`);
+      throw new Error('Trusted workspace root is outside safe directories');
+    }
+    
+    // Ensure directory exists
     await fs.mkdir(trustedWorkspaceRoot, { recursive: true });
     return trustedWorkspaceRoot;
   }
@@ -499,17 +522,28 @@ async function resolveWorkspaceRoot(): Promise<string> {
   // Priority 2: Check environment variables (controlled by runtime, not user)
   const envWorkspace = process.env.OPENCLAW_WORKSPACE || process.env.AGENT_WORKSPACE;
   if (envWorkspace) {
-    try {
-      await fs.mkdir(envWorkspace, { recursive: true });
-      return envWorkspace;
-    } catch {
-      // Fall through to fallback if env workspace is invalid
+    const resolved = path.resolve(envWorkspace);
+    const homeDir = os.homedir();
+    
+    // Validate environment workspace is safe (must be within home or tmp)
+    if (resolved.startsWith(homeDir) || resolved.startsWith(path.resolve('/tmp'))) {
+      try {
+        await fs.mkdir(resolved, { recursive: true });
+        console.log(`Using workspace from environment: ${resolved}`);
+        return resolved;
+      } catch (error) {
+        console.warn(`Failed to create environment workspace directory: ${resolved}`, error);
+        // Fall through to fallback if env workspace is invalid
+      }
+    } else {
+      console.warn(`Security: Environment workspace "${resolved}" is outside safe directories, ignoring`);
     }
   }
   
   // Priority 3: Fallback to safe home directory workspace (never user-controllable)
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
+  console.log(`Using fallback workspace: ${fallback}`);
   return fallback;
 }
 
@@ -541,21 +575,42 @@ function sanitizeFilename(title: string): string {
  * The gateway media handler expects: /__openclaw__/assistant-media?source=<encodedPath>
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
-  const relativePath = path.relative(workspaceRoot, filePath);
-  const posixPath = relativePath.split(path.sep).join('/');
-  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
+  // Ensure paths are absolute and resolved
+  const resolvedWorkspace = path.resolve(workspaceRoot);
+  const resolvedFilePath = path.resolve(filePath);
   
-  // If gateway origin is provided (e.g., from environment or request context), use the correct media route
-  if (gatewayOrigin) {
-    // Remove trailing slash if present
-    const baseOrigin = gatewayOrigin.replace(/\/$/, '');
-    // FIX: Use query parameter format that matches gateway media handler
-    // The handler in src/gateway/control-ui.ts expects ?source= parameter
-    return `${baseOrigin}/__openclaw__/assistant-media?source=${encodedPath}`;
+  // Calculate relative path from workspace root
+  let relativePath = path.relative(resolvedWorkspace, resolvedFilePath);
+  
+  // Handle case where file is exactly the workspace root
+  if (relativePath === '') {
+    relativePath = path.basename(resolvedFilePath);
   }
   
-  // Fallback to localhost for development/local deployments
-  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
+  // Convert Windows backslashes to forward slashes for URLs
+  const posixPath = relativePath.split(path.sep).join('/');
+  
+  // Encode each path segment for URL safety (spaces, special chars, etc.)
+  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
+  
+  // Determine the base origin
+  let baseOrigin: string;
+  if (gatewayOrigin) {
+    baseOrigin = gatewayOrigin.replace(/\/$/, '');
+  } else {
+    baseOrigin = `http://localhost:${MEDIA_SERVER_PORT}`;
+  }
+  
+  // Construct direct file URL
+  const mediaUrl = `${baseOrigin}/${encodedPath}`;
+  
+  // Log for debugging (remove in production if needed)
+  console.log(`Media URL constructed: ${mediaUrl}`);
+  console.log(`  Workspace: ${resolvedWorkspace}`);
+  console.log(`  File: ${resolvedFilePath}`);
+  console.log(`  Relative: ${relativePath}`);
+  
+  return mediaUrl;
 }
 
 export const downloadVideoTool = {
@@ -599,12 +654,20 @@ export const downloadVideoTool = {
       const ytDlpPath = await ensureYtDlp(abortController.signal);
       
       // FIX: SECURITY - workspace root MUST come from trusted runtime context
-      // The typedParams object is untrusted user input - DO NOT read workspaceRoot from it
-      // Instead, use the trusted workspace root set by the agent runtime
+      // DO NOT read workspaceRoot from typedParams - this is the security fix!
+      // The typedParams object is untrusted user input that could contain workspaceRoot injection
       const workspaceRoot = await resolveWorkspaceRoot();
       
       // Validate params structure
       const typedParams = params as Record<string, unknown>;
+      
+      // Explicitly check that workspaceRoot is NOT being passed from params
+      // This is a defensive check to detect injection attempts
+      if ('workspaceRoot' in typedParams && typedParams.workspaceRoot !== undefined) {
+        console.warn('Security: Attempted workspaceRoot injection detected and blocked');
+        // Silently ignore the injected parameter - do NOT use it
+      }
+      
       const videoUrl = typedParams.url as string;
       if (!videoUrl || typeof videoUrl !== 'string') {
         throw new Error('Invalid or missing URL parameter');
