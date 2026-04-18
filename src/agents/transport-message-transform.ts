@@ -49,13 +49,16 @@ export function transformTransportMessages(
     const content: typeof msg.content = [];
     for (const block of msg.content) {
       if (block.type === "thinking") {
-        if (block.redacted) {
-          if (isSameModel) {
-            content.push(block);
-          }
-          continue;
-        }
-        if (isSameModel && block.thinkingSignature) {
+        // Preserve signed or redacted thinking blocks verbatim across ALL
+        // model transitions, not just same-model replays. Anthropic's
+        // extended-thinking contract requires that any thinking block
+        // carrying a cryptographic signature (or the `redacted` marker) is
+        // passed back byte-for-byte unchanged; any mutation — including
+        // downgrading the block to a `text` block on cross-model replay —
+        // invalidates the signature and produces 400
+        // "thinking block cannot be modified" errors on retry. See issues
+        // #24612, #25347, #35023, #45010, #16825.
+        if (block.redacted || block.thinkingSignature) {
           content.push(block);
           continue;
         }
