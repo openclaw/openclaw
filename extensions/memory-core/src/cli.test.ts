@@ -1137,8 +1137,8 @@ describe("memory cli", () => {
         rem?: { bodyLines?: string[]; candidateTruths?: Array<{ snippet?: string }> };
         deep?: { candidates?: Array<{ snippet?: string }> };
       }>(writeJson);
-      expect(payload?.rem?.bodyLines?.[0]).toBe("## Reflections");
-      expect(payload?.rem?.bodyLines).toContain("## Possible Lasting Truths");
+      expect(payload?.rem?.bodyLines?.[0]).toBe("### Reflections");
+      expect(payload?.rem?.bodyLines).toContain("### Possible Lasting Truths");
       expect(payload?.rem?.candidateTruths?.[0]?.snippet).toContain("Always check weather");
       expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Always check weather");
       expect(close).toHaveBeenCalled();

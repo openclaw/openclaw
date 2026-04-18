@@ -334,15 +334,15 @@ describe("memory-core dreaming phases", () => {
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
-  it("renders rem preview section headings as h2", () => {
+  it("renders rem preview section headings as h3 for inline daily-note blocks", () => {
     const preview = previewRemDreaming({
       entries: [],
       limit: 10,
       minPatternStrength: 0.75,
     });
 
-    expect(preview.bodyLines[0]).toBe("## Reflections");
-    expect(preview.bodyLines).toContain("## Possible Lasting Truths");
+    expect(preview.bodyLines[0]).toBe("### Reflections");
+    expect(preview.bodyLines).toContain("### Possible Lasting Truths");
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
