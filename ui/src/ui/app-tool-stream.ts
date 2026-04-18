@@ -512,8 +512,22 @@ function maybeForwardLivePlanUpdate(host: PlanApprovalHost, payload: AgentEventP
   if (data.phase !== "start" && data.phase !== "result") {
     return;
   }
+  // PR-10 review fix (Codex P2 #3104743333 — option C selected):
+  // under `update_plan { merge: true }` the tool INPUT is a delta,
+  // not the merged result. Reading `data.args.plan` would refresh
+  // the sidebar with stale partial data. The fix path is on the
+  // separate `stream: "plan"` channel — see the new
+  // maybeForwardMergedPlanEvent handler below — which carries the
+  // structured `mergedSteps` field with the full merged plan.
+  // For non-merge calls, the input == output so the legacy path
+  // here still works as a fallback.
   const args = (data.args ?? data.params) as Record<string, unknown> | undefined;
   if (!args || typeof args !== "object") {
+    return;
+  }
+  // Skip the legacy refresh entirely on merge calls — the plan-event
+  // handler below has the authoritative merged result.
+  if ((args as { merge?: unknown }).merge === true) {
     return;
   }
   const rawPlan = (args as { plan?: unknown }).plan;
@@ -544,6 +558,55 @@ function maybeForwardLivePlanUpdate(host: PlanApprovalHost, payload: AgentEventP
     host.refreshLivePlanSidebar?.(plan, undefined);
   } catch {
     // ignore — sidebar refresh is best-effort
+  }
+}
+
+/**
+ * PR-10 review fix (Codex P2 #3104743333): authoritative live-plan
+ * sidebar refresh path that handles merge-mode correctly.
+ *
+ * Subscribes to `stream: "plan"` events (emitted by `update-plan-tool.ts`
+ * after `mergeSteps()` runs). The `mergedSteps` field carries the FULL
+ * merged plan with status/activeForm/criteria fields, so the sidebar
+ * refresh always reflects the actual post-merge state — never the
+ * delta-only tool input.
+ */
+function maybeForwardMergedPlanEvent(host: PlanApprovalHost, payload: AgentEventPayload): void {
+  if (payload.stream !== "plan") {
+    return;
+  }
+  const data = payload.data ?? {};
+  if (data.phase !== "update" && data.phase !== "completed") {
+    return;
+  }
+  const rawMerged = (data as { mergedSteps?: unknown }).mergedSteps;
+  if (!Array.isArray(rawMerged) || rawMerged.length === 0) {
+    return;
+  }
+  const plan: PlanApprovalRequest["plan"] = [];
+  for (const entry of rawMerged) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const step = (entry as Record<string, unknown>).step;
+    const status = (entry as Record<string, unknown>).status;
+    const activeForm = (entry as Record<string, unknown>).activeForm;
+    if (typeof step !== "string" || typeof status !== "string") {
+      continue;
+    }
+    plan.push({
+      step,
+      status,
+      ...(typeof activeForm === "string" && activeForm.trim() ? { activeForm } : {}),
+    });
+  }
+  if (plan.length === 0) {
+    return;
+  }
+  try {
+    host.refreshLivePlanSidebar?.(plan, undefined);
+  } catch {
+    // ignore — best-effort
   }
 }
 
@@ -730,6 +793,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // (boxes ticking off as the agent steps through after approval).
   // Runs alongside the normal tool-stream path; doesn't replace it.
   maybeForwardLivePlanUpdate(host as PlanApprovalHost, payload);
+  // PR-10 review fix (Codex P2 #3104743333): authoritative refresh
+  // for merge-mode plans via the agent_plan_event stream's
+  // `mergedSteps` field. See maybeForwardMergedPlanEvent for the why.
+  maybeForwardMergedPlanEvent(host as PlanApprovalHost, payload);
 
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
