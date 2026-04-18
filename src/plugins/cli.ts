@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { cliCommandCatalog } from "../cli/command-catalog.js";
+import { matchesCommandPath } from "../cli/command-path-matches.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -20,6 +22,12 @@ type RegisterPluginCliOptions = {
 };
 
 const logger = createPluginCliLogger();
+
+function isKnownCoreCommandPath(commandPath: string[]): boolean {
+  return cliCommandCatalog.some((entry) =>
+    matchesCommandPath(entry.commandPath.slice(), commandPath),
+  );
+}
 
 export const loadValidatedConfigForPluginRegistration =
   async (): Promise<OpenClawConfig | null> => {
@@ -47,28 +55,35 @@ export async function registerPluginCliCommands(
 ) {
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
-  const primaryPluginIds = resolvePrimaryCommandPluginIdsForCli({
-    cfg,
-    env,
-    logger,
-    primaryCommand: primary,
-  });
-  const entries =
-    mode === "lazy" && primaryPluginIds.length === 0
-      ? await loadPluginCliMetadataEntries({
+  const primaryPluginIds =
+    mode === "lazy" && primary
+      ? resolvePrimaryCommandPluginIdsForCli({
           cfg,
           env,
-          loaderOptions,
-          primaryCommand: primary,
           logger,
+          primaryCommand: primary,
         })
-      : await loadPluginCliRegistrationEntriesWithDefaults({
-          cfg,
-          env,
-          loaderOptions,
-          primaryCommand: primary,
-          logger,
-        });
+      : [];
+  const shouldUseMetadataOnlyEntries =
+    mode === "lazy" &&
+    !!primary &&
+    primaryPluginIds.length === 0 &&
+    isKnownCoreCommandPath([primary]);
+  const entries = shouldUseMetadataOnlyEntries
+    ? await loadPluginCliMetadataEntries({
+        cfg,
+        env,
+        loaderOptions,
+        primaryCommand: primary,
+        logger,
+      })
+    : await loadPluginCliRegistrationEntriesWithDefaults({
+        cfg,
+        env,
+        loaderOptions,
+        primaryCommand: primary,
+        logger,
+      });
 
   await registerPluginCliCommandGroups(program, entries, {
     mode,
