@@ -359,6 +359,24 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("does not classify session lock wait errors as model timeout failover", () => {
+    const sessionLockMessage =
+      "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock";
+    expect(
+      resolveFailoverReasonFromError({
+        message: sessionLockMessage,
+      }),
+    ).toBeNull();
+    expect(isTimeoutError({ message: sessionLockMessage })).toBe(false);
+
+    const wrappedLockError = Object.assign(new Error("operation timed out"), {
+      name: "AbortError",
+      cause: new Error(sessionLockMessage),
+    });
+    expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
+    expect(isTimeoutError(wrappedLockError)).toBe(false);
+  });
+
   it("classifies provider-scoped generic upstream errors for failover", () => {
     expect(
       resolveFailoverReasonFromError({
