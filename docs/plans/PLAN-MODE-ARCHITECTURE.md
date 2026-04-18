@@ -1,7 +1,7 @@
 # Plan-Mode Rollout — Architecture & Status
 
-**Last updated:** commit `c9287908eb` (PR-11 review pass 1 complete)
-**Live install:** `OpenClaw 2026.4.15` from `feat/plan-channel-parity`
+**Last updated:** commit `ef56f0f2cf` (PR-10/11 review pass 2 complete; Wave 1/2/3 triage scoped for next sprint)
+**Live install:** `OpenClaw 2026.4.15` from `feat/plan-channel-parity` @ `ef56f0f2cf`
 **Total PRs:** 10 (excluding deprecated #67518 Gemini)
 
 This document is the **single source of truth** for the plan-mode rollout. It survives Claude Code session compactions and is referenced by the umbrella issue + every PR's series-overview comment.
@@ -10,20 +10,27 @@ This document is the **single source of truth** for the plan-mode rollout. It su
 
 ## 1. The 10-PR series
 
-| Sprint    | Upstream PR                                               | Local branch                            | Latest head             | Net-new files                | Mergeable    | Comments status             |
-| --------- | --------------------------------------------------------- | --------------------------------------- | ----------------------- | ---------------------------- | ------------ | --------------------------- |
-| **PR-A**  | [#67512](https://github.com/openclaw/openclaw/pull/67512) | `final-sprint/gpt5-openai-prompt-stack` | `96e58ceedb`            | 6                            | ⚠️ CONFLICTS | not yet reviewed            |
-| **PR-B**  | [#67514](https://github.com/openclaw/openclaw/pull/67514) | `final-sprint/gpt5-task-system-parity`  | `c192d9ff49`            | 8                            | ✅           | not yet reviewed            |
-| **PR-C**  | [#67534](https://github.com/openclaw/openclaw/pull/67534) | `phase3/plan-rendering`                 | `6069a036fe`            | 2                            | ✅           | not yet reviewed            |
-| **PR-D**  | [#67538](https://github.com/openclaw/openclaw/pull/67538) | `phase3/plan-mode`                      | `4a3ddb98bc`            | 18                           | ✅           | not yet reviewed            |
-| **PR-E**  | [#67541](https://github.com/openclaw/openclaw/pull/67541) | `phase4/skill-plan-templates`           | `780aced7d2`            | 11                           | ✅           | not yet reviewed            |
-| **PR-F**  | [#67542](https://github.com/openclaw/openclaw/pull/67542) | `phase4/cross-session-plans`            | `689efe253b`            | 2                            | ✅           | not yet reviewed            |
-| **PR-7**  | [#67721](https://github.com/openclaw/openclaw/pull/67721) | `feat/ui-mode-switcher-plan-cards`      | `fb5a7fa05e`            | 16                           | ❓           | not yet reviewed            |
-| **PR-8**  | [#67840](https://github.com/openclaw/openclaw/pull/67840) | `feat/plan-mode-integration`            | `f866dfbb3c`            | 39                           | ❓           | not yet reviewed            |
-| **PR-10** | [#68440](https://github.com/openclaw/openclaw/pull/68440) | `feat/plan-archetype-and-questions`     | `1bf9d7b4e7`            | 115 cumulative / ~25 net-new | ❓           | **9/10 fixed**, 1 escalated |
-| **PR-11** | [#68441](https://github.com/openclaw/openclaw/pull/68441) | `feat/plan-channel-parity`              | **`c9287908eb`** ← LIVE | 127 cumulative / 32 net-new  | ⚠️ CONFLICTS | **13/13 fixed**             |
+| Sprint    | Upstream PR                                               | Local branch                            | Latest head             | Net-new files                | Mergeable    | Pass-1 status                       | Pass-2 status                                        | Pass-3+ scope (next sprint)                                                             |
+| --------- | --------------------------------------------------------- | --------------------------------------- | ----------------------- | ---------------------------- | ------------ | ----------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **PR-A**  | [#67512](https://github.com/openclaw/openclaw/pull/67512) | `final-sprint/gpt5-openai-prompt-stack` | `96e58ceedb`            | 6                            | ⚠️ CONFLICTS | not started — 16 unresolved threads | —                                                    | 2 REAL + 4 REAL-LARGE + 2 ESCALATE (security: regex flags + allowlist + multiline)      |
+| **PR-B**  | [#67514](https://github.com/openclaw/openclaw/pull/67514) | `final-sprint/gpt5-task-system-parity`  | `c192d9ff49`            | 8                            | ✅           | not started — 10 unresolved threads | —                                                    | 3 REAL + 1 FIXED-IN-CUMULATIVE + 1 WONT-FIX                                             |
+| **PR-C**  | [#67534](https://github.com/openclaw/openclaw/pull/67534) | `phase3/plan-rendering`                 | `6069a036fe`            | 2                            | ✅           | not started — 14 unresolved threads | —                                                    | 4 REAL + 3 REAL-LARGE + 1 ESCALATE (Slack escape alignment)                             |
+| **PR-D**  | [#67538](https://github.com/openclaw/openclaw/pull/67538) | `phase3/plan-mode`                      | `4a3ddb98bc`            | 29                           | ✅           | not started — 29 unresolved threads | —                                                    | ~5 REAL (test inversion, find -fprint, approval state machine)                          |
+| **PR-E**  | [#67541](https://github.com/openclaw/openclaw/pull/67541) | `phase4/skill-plan-templates`           | `780aced7d2`            | 11                           | ✅           | not started — 16 unresolved threads | —                                                    | ~3 REAL (docstring, test, snapshot fallback)                                            |
+| **PR-F**  | [#67542](https://github.com/openclaw/openclaw/pull/67542) | `phase4/cross-session-plans`            | `689efe253b`            | 2                            | ✅           | not started — 20 unresolved threads | —                                                    | 1 FIXED + 6 REAL + 5 REAL-LARGE + 2 ESCALATE (security: PID liveness + symlink)         |
+| **PR-7**  | [#67721](https://github.com/openclaw/openclaw/pull/67721) | `feat/ui-mode-switcher-plan-cards`      | `fb5a7fa05e`            | 16                           | ❓           | not started — 49 unresolved threads | —                                                    | 15 REAL + 8 FIXED + 4 WONT-FIX + 1 ESCALATE (i18n keyboard shortcuts)                   |
+| **PR-8**  | [#67840](https://github.com/openclaw/openclaw/pull/67840) | `feat/plan-mode-integration`            | `f866dfbb3c`            | 39                           | ⚠️ CONFLICTS | not started — 41 unresolved threads | —                                                    | 12 REAL/REAL-LARGE + 4 ESCALATE (planMode threading, autoEnableFor wiring, schema gaps) |
+| **PR-10** | [#68440](https://github.com/openclaw/openclaw/pull/68440) | `feat/plan-archetype-and-questions`     | `1bf9d7b4e7`            | 115 cumulative / ~25 net-new | ❓           | 9/10 fixed                          | **6/6 resolved** (`ef56f0f2cf`); **0 unresolved** ✅ | clean — ready for landing                                                               |
+| **PR-11** | [#68441](https://github.com/openclaw/openclaw/pull/68441) | `feat/plan-channel-parity`              | **`ef56f0f2cf`** ← LIVE | 127 cumulative / 32 net-new  | ⚠️ CONFLICTS | 13/13 fixed                         | **2/5 resolved**, **3 escalated** (cross-component)  | needs maintainer decision on escalation cluster + main rebase                           |
 
 (PR-9, PR-12, PR-13, PR-14 are internal sprint commits riding on `feat/plan-channel-parity`.)
+
+### PR-11 escalation cluster — pending maintainer decision
+
+Four threads on PR-11 share the same root cause: post-approval/answer state transitions on `sessions.patch` clear runtime fields needed downstream. See escalation comment #68441 (issuecomment-4273877823). Decision needed:
+
+- **`/plan answer` synthetic-message injection in non-webchat channels** (3 threads: #3105216364, #3105247854, #3105261556) — caller-side per-channel vs gateway-side single source of truth vs won't-fix-this-PR.
+- **Post-approval yield retry detection** (1 thread: #3105311664 from re-review) — `resolveYieldDuringApprovedPlanInstruction` predicates unreachable because `planMode → "normal"` clears state. Same root cause cluster.
 
 ### "Too many files" structural issue
 
