@@ -167,12 +167,13 @@ export function resolveRunnerMatrix(params) {
   ];
   return {
     include: runners.flatMap((runner) =>
-      suites.map((suite) => ({
-        ...runner,
-        suite,
-        suite_label: formatSuiteLabel(suite),
-        lane: suite.includes("upgrade") || suite === "dev-update" ? "upgrade" : "fresh",
-      })),
+      suites.map((suite) =>
+        Object.assign({}, runner, {
+          suite,
+          suite_label: formatSuiteLabel(suite),
+          lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
+        }),
+      ),
     ),
   };
 }
