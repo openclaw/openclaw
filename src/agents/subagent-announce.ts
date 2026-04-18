@@ -213,7 +213,7 @@ function hasUsableSessionEntry(entry: unknown): boolean {
   return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
-function sanitizeFallbackReply(text: string | undefined): string | null {
+function sanitizeAnnounceReply(text: string | undefined): string | null {
   const normalized = normalizeOptionalString(text);
   if (!normalized) {
     return null;
@@ -567,7 +567,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!childCompletionFindings) {
-      const fallbackReply = sanitizeFallbackReply(params.fallbackReply);
+      const fallbackReply = sanitizeAnnounceReply(params.fallbackReply);
       const fallbackIsSilent = !fallbackReply;
 
       if (!reply) {
@@ -608,7 +608,8 @@ export async function runSubagentAnnounceFlow(params: {
         }
       }
 
-      if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+      reply = sanitizeAnnounceReply(reply) ?? undefined;
+      if (!reply) {
         if (fallbackReply && !fallbackIsSilent) {
           reply = fallbackReply;
         } else {

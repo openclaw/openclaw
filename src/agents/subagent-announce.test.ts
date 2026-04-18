@@ -323,6 +323,40 @@ describe("subagent announce seam flow", () => {
     );
   });
 
+  it("strips mixed NO_REPLY markers from primary replies before announcing", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-primary-sanitize",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "NO_REPLYfinal summary NO_REPLY",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          message: expect.stringContaining("final summary"),
+        }),
+      }),
+    );
+    expect(agentSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          message: expect.stringContaining("NO_REPLY"),
+        }),
+      }),
+    );
+  });
+
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
