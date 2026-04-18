@@ -127,7 +127,7 @@
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
-- TypeScript checks: `pnpm tsgo` (prod graph), `pnpm tsgo:test` (test graph), `pnpm tsgo:all` (both; used by `pnpm check`)
+- TypeScript checks: `pnpm tsgo` (prod graph), `pnpm tsgo:test` (full colocated-test graph), `pnpm tsgo:all` (both; used by `pnpm check`). Targeted test graphs: `pnpm tsgo:test:src`, `pnpm tsgo:test:extensions`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
 - Lint/format: `pnpm check`
 - Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
 - Format check: `pnpm format:check` (oxfmt --check)
