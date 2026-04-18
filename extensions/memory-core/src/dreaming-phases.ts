@@ -1530,10 +1530,10 @@ export function previewRemDreaming(params: {
   }));
   const candidateKeys = [...new Set(candidateSelections.map((entry) => entry.key))];
   const bodyLines = [
-    "### Reflections",
+    "## Reflections",
     ...reflections,
     "",
-    "### Possible Lasting Truths",
+    "## Possible Lasting Truths",
     ...(candidateTruths.length > 0
       ? candidateTruths.map(
           (entry) =>
