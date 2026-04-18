@@ -72,6 +72,128 @@ const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
+const PHASE_COOLDOWN_RELATIVE_PATH = path.join("memory", ".dreams", "phase-cooldowns.json");
+
+// Safety margin: require at least 80% of the cron interval to have elapsed before re-running.
+const COOLDOWN_SAFETY_FACTOR = 0.8;
+
+// Fallback cooldown per phase when cron interval cannot be estimated.
+const DEFAULT_LIGHT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
+const DEFAULT_REM_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+type PhaseCooldownStore = {
+  version: 1;
+  phases: Record<string, { lastRunAtMs: number; lastRunAtIso: string }>;
+};
+
+function resolvePhaseCooldownPath(workspaceDir: string): string {
+  return path.join(workspaceDir, PHASE_COOLDOWN_RELATIVE_PATH);
+}
+
+async function readPhaseCooldownStore(workspaceDir: string): Promise<PhaseCooldownStore> {
+  try {
+    const raw = await fs.readFile(resolvePhaseCooldownPath(workspaceDir), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      if (record.version === 1 && record.phases && typeof record.phases === "object") {
+        return parsed as PhaseCooldownStore;
+      }
+    }
+  } catch {
+    // Missing or corrupt file — return empty store.
+  }
+  return { version: 1, phases: {} };
+}
+
+async function writePhaseCooldownStore(
+  workspaceDir: string,
+  store: PhaseCooldownStore,
+): Promise<void> {
+  const cooldownPath = resolvePhaseCooldownPath(workspaceDir);
+  await fs.mkdir(path.dirname(cooldownPath), { recursive: true });
+  const tmpPath = `${cooldownPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+  await fs.rename(tmpPath, cooldownPath);
+}
+
+async function recordPhaseRun(
+  workspaceDir: string,
+  phase: "light" | "rem",
+  nowMs: number,
+): Promise<void> {
+  const store = await readPhaseCooldownStore(workspaceDir);
+  store.phases[phase] = {
+    lastRunAtMs: nowMs,
+    lastRunAtIso: new Date(nowMs).toISOString(),
+  };
+  await writePhaseCooldownStore(workspaceDir, store);
+}
+
+function isPhaseOnCooldown(
+  store: PhaseCooldownStore,
+  phase: "light" | "rem",
+  nowMs: number,
+  cooldownMs: number,
+): boolean {
+  const entry = store.phases[phase];
+  if (!entry || !Number.isFinite(entry.lastRunAtMs)) {
+    return false;
+  }
+  const elapsedMs = nowMs - entry.lastRunAtMs;
+  return elapsedMs < cooldownMs * COOLDOWN_SAFETY_FACTOR;
+}
+
+/**
+ * Estimate the minimum interval in milliseconds for a 5-field cron expression.
+ * This is a best-effort heuristic — it handles common patterns like `* /N`,
+ * fixed hours, and day-of-week constraints. Returns `null` if the expression
+ * cannot be parsed.
+ */
+export function estimateCronIntervalMs(expr: string): number | null {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    return null;
+  }
+  const [minute, hour, _dom, _month, dow] = parts;
+
+  // Weekly: day-of-week is a specific value (not * or */N)
+  if (dow !== "*" && !dow.startsWith("*/")) {
+    return 7 * 24 * 60 * 60 * 1000;
+  }
+
+  // Every N hours: hour field is */N
+  const hourStep = hour.match(/^\*\/(\d+)$/);
+  if (hourStep) {
+    return parseInt(hourStep[1], 10) * 60 * 60 * 1000;
+  }
+
+  // Fixed hour(s): hour is a single number or comma-separated
+  if (/^\d+$/.test(hour)) {
+    return 24 * 60 * 60 * 1000; // daily
+  }
+  if (/^\d+(,\d+)+$/.test(hour)) {
+    const hours = hour
+      .split(",")
+      .map(Number)
+      .toSorted((a, b) => a - b);
+    let minGap = 24;
+    for (let i = 1; i < hours.length; i++) {
+      minGap = Math.min(minGap, hours[i] - hours[i - 1]);
+    }
+    // Also consider wrap-around gap
+    minGap = Math.min(minGap, 24 - hours[hours.length - 1] + hours[0]);
+    return minGap * 60 * 60 * 1000;
+  }
+
+  // Every N minutes: minute field is */N
+  const minuteStep = minute.match(/^\*\/(\d+)$/);
+  if (minuteStep) {
+    return parseInt(minuteStep[1], 10) * 60 * 1000;
+  }
+
+  return null;
+}
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
@@ -1664,29 +1786,38 @@ export async function runDreamingSweepPhases(params: {
 }): Promise<void> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
   const sweepNowMs: number = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const cooldownStore = await readPhaseCooldownStore(params.workspaceDir);
 
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
     cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
   });
   if (light.enabled && light.limit > 0) {
-    await runLightDreaming({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      config: light,
-      logger: params.logger,
-      subagent: params.subagent,
-      nowMs: sweepNowMs,
-    });
-    // Defensive cleanup: ensure the light-phase narrative session is deleted even if
-    // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
-    if (params.subagent) {
-      const lightSessionKey = buildNarrativeSessionKey({
+    const lightCooldownMs = estimateCronIntervalMs(light.cron) ?? DEFAULT_LIGHT_COOLDOWN_MS;
+    if (isPhaseOnCooldown(cooldownStore, "light", sweepNowMs, lightCooldownMs)) {
+      params.logger.info(
+        `memory-core: light dreaming skipped — still within cooldown period [workspace=${params.workspaceDir}].`,
+      );
+    } else {
+      await runLightDreaming({
         workspaceDir: params.workspaceDir,
-        phase: "light",
+        cfg: params.cfg,
+        config: light,
+        logger: params.logger,
+        subagent: params.subagent,
         nowMs: sweepNowMs,
       });
-      await deleteNarrativeSessionBestEffort(params.subagent, lightSessionKey);
+      await recordPhaseRun(params.workspaceDir, "light", sweepNowMs);
+      // Defensive cleanup: ensure the light-phase narrative session is deleted even if
+      // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
+      if (params.subagent) {
+        const lightSessionKey = buildNarrativeSessionKey({
+          workspaceDir: params.workspaceDir,
+          phase: "light",
+          nowMs: sweepNowMs,
+        });
+        await deleteNarrativeSessionBestEffort(params.subagent, lightSessionKey);
+      }
     }
   }
 
@@ -1695,22 +1826,30 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
   });
   if (rem.enabled && rem.limit > 0) {
-    await runRemDreaming({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      config: rem,
-      logger: params.logger,
-      subagent: params.subagent,
-      nowMs: sweepNowMs,
-    });
-    // Defensive cleanup: ensure the REM-phase narrative session is deleted.
-    if (params.subagent) {
-      const remSessionKey = buildNarrativeSessionKey({
+    const remCooldownMs = estimateCronIntervalMs(rem.cron) ?? DEFAULT_REM_COOLDOWN_MS;
+    if (isPhaseOnCooldown(cooldownStore, "rem", sweepNowMs, remCooldownMs)) {
+      params.logger.info(
+        `memory-core: rem dreaming skipped — still within cooldown period [workspace=${params.workspaceDir}].`,
+      );
+    } else {
+      await runRemDreaming({
         workspaceDir: params.workspaceDir,
-        phase: "rem",
+        cfg: params.cfg,
+        config: rem,
+        logger: params.logger,
+        subagent: params.subagent,
         nowMs: sweepNowMs,
       });
-      await deleteNarrativeSessionBestEffort(params.subagent, remSessionKey);
+      await recordPhaseRun(params.workspaceDir, "rem", sweepNowMs);
+      // Defensive cleanup: ensure the REM-phase narrative session is deleted.
+      if (params.subagent) {
+        const remSessionKey = buildNarrativeSessionKey({
+          workspaceDir: params.workspaceDir,
+          phase: "rem",
+          nowMs: sweepNowMs,
+        });
+        await deleteNarrativeSessionBestEffort(params.subagent, remSessionKey);
+      }
     }
   }
 }
@@ -1777,8 +1916,16 @@ export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
 
 export const __testing = {
   runPhaseIfTriggered,
+  readPhaseCooldownStore,
+  writePhaseCooldownStore,
+  recordPhaseRun,
+  isPhaseOnCooldown,
+  estimateCronIntervalMs,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,
+    COOLDOWN_SAFETY_FACTOR,
+    DEFAULT_LIGHT_COOLDOWN_MS,
+    DEFAULT_REM_COOLDOWN_MS,
   },
 };
