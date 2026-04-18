@@ -110,7 +110,7 @@ function setStdoutIsTTY(value: boolean): () => void {
       Object.defineProperty(stdout, "isTTY", previousIsTTYDescriptor);
       return;
     }
-    delete stdout.isTTY;
+    Reflect.deleteProperty(stdout as { isTTY?: boolean }, "isTTY");
   };
 }
 
