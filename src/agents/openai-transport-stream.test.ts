@@ -2193,4 +2193,78 @@ describe("openai transport stream", () => {
       },
     ]);
   });
+
+  it("preserves reasoning_details item order when visible text and thinking are interleaved", async () => {
+    const model = {
+      id: "openrouter/minimax/minimax-m2.7",
+      name: "MiniMax M2.7",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-minimax-order",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "response.output_text", text: "Visible first." },
+                { type: "reasoning.text", text: " Hidden second." },
+                { type: "response.text", text: " Visible third." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toMatchObject([
+      { type: "text", text: "Visible first." },
+      {
+        type: "thinking",
+        thinking: " Hidden second.",
+        thinkingSignature: "reasoning_details",
+      },
+      { type: "text", text: " Visible third." },
+    ]);
+  });
 });

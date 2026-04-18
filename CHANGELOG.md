@@ -128,7 +128,6 @@ Docs: https://docs.openclaw.ai
 - CLI/configure: re-read the persisted config hash after writes so config updates stop failing with stale-hash races. (#64188, #66528)
 - CLI/update: prune stale packaged `dist` chunks after npm upgrades and keep downgrade/verify inventory checks compat-safe so global upgrades stop failing on stale chunk imports. (#66959) Thanks @obviyus.
 - Onboarding/CLI: fix channel-selection crashes on globally installed CLI setups during onboarding. (#66736)
-- OpenRouter/streaming: treat `reasoning_details.response.output_text` and `reasoning_details.response.text` as visible assistant output on OpenRouter-compatible completions streams, while keeping `reasoning.text` hidden and refusing to surface ambiguous bare `text` items by default so visible replies, thinking blocks, and tool calls can coexist in the same chunk. (#67410) Thanks @neeravmakwana and @vincentkoc.
 - Video generation/live tests: bound provider polling for live video smoke, default to the fast non-FAL text-to-video path, and use a one-second lobster prompt so release validation no longer waits indefinitely on slow provider queues.
 - Memory-core/QMD `memory_get`: reject reads of arbitrary workspace markdown paths and only allow canonical memory files (`MEMORY.md`, `memory.md`, `DREAMS.md`, `dreams.md`, `memory/**`) plus exact paths of active indexed QMD workspace documents, so the QMD memory backend can no longer be used as a generic workspace-file read shim that bypasses `read` tool-policy denials. (#66026) Thanks @eleqtrizit.
 - Cron/agents: forward embedded-run tool policy and internal event params into the attempt layer so `--tools` allowlists, cron-owned message-tool suppression, explicit message targeting, and command-path internal events all take effect at runtime again. (#62675) Thanks @hexsprite.
@@ -171,6 +170,9 @@ Docs: https://docs.openclaw.ai
 - Webchat/security: reject remote-host `file://` URLs in the media embedding path. (#67293) Thanks @pgondhi987.
 - Dreaming/memory-core: use the ingestion day, not the source file day, for daily recall dedupe so repeat sweeps of the same daily note can increment `dailyCount` across days instead of stalling at `1`. (#67091) Thanks @Bartok9.
 - Node-host/tools.exec: let approval binding distinguish known native binaries from mutable shell payload files, while still fail-closing unknown or racy file probes so absolute-path node-host commands like `/usr/bin/whoami` no longer get rejected as unsafe interpreter/runtime commands. (#66731) Thanks @tmimmanuel.
+- Codex/gateway: fix gateway crash when the codex-acp subprocess terminates abruptly; an unhandled EPIPE on the child stdin stream now routes through graceful client shutdown, rejecting pending requests instead of propagating as an uncaught exception that crashes the entire gateway daemon and all connected channels. Fixes #67886. (#67947) thanks @openperf
+- Slack/streaming: resolve native streaming recipient teams from the inbound user when available, with a monitor-team fallback, so DM and shared-workspace streams target the right recipient more reliably.
+- OpenRouter/streaming: treat `reasoning_details.response.output_text` and `reasoning_details.response.text` as visible assistant output on OpenRouter-compatible completions streams, while keeping `reasoning.text` hidden and refusing to surface ambiguous bare `text` items by default so visible replies, thinking blocks, and tool calls can coexist in the same chunk. (#67410) Thanks @neeravmakwana.
 
 ## 2026.4.14
 

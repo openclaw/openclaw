@@ -1222,36 +1222,44 @@ function getCompletionsReasoningDeltas(
   visibleReasoningDetailTypes: readonly string[],
 ): CompletionsReasoningDelta[] {
   const output: CompletionsReasoningDelta[] = [];
+  const pushDelta = (next: CompletionsReasoningDelta) => {
+    const previous = output[output.length - 1];
+    if (!previous || previous.kind !== next.kind) {
+      output.push(next);
+      return;
+    }
+    if (next.kind === "thinking") {
+      if (previous.signature !== next.signature) {
+        output.push(next);
+        return;
+      }
+      previous.text += next.text;
+      return;
+    }
+    previous.text += next.text;
+  };
   const reasoningDetails = delta.reasoning_details;
   if (Array.isArray(reasoningDetails)) {
     const visibleTypes = new Set(visibleReasoningDetailTypes);
-    let thinkingText = "";
-    let visibleText = "";
     for (const item of reasoningDetails) {
       const detail = item as { type?: unknown; text?: unknown };
       if (typeof detail.text !== "string" || !detail.text) {
         continue;
       }
       if (detail.type === "reasoning.text") {
-        thinkingText += detail.text;
+        pushDelta({ kind: "thinking", signature: "reasoning_details", text: detail.text });
         continue;
       }
       if (typeof detail.type === "string" && visibleTypes.has(detail.type)) {
-        visibleText += detail.text;
+        pushDelta({ kind: "text", text: detail.text });
       }
-    }
-    if (thinkingText) {
-      output.push({ kind: "thinking", signature: "reasoning_details", text: thinkingText });
-    }
-    if (visibleText) {
-      output.push({ kind: "text", text: visibleText });
     }
   }
   const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
   for (const field of reasoningFields) {
     const value = delta[field];
     if (typeof value === "string" && value.length > 0) {
-      output.push({ kind: "thinking", signature: field, text: value });
+      pushDelta({ kind: "thinking", signature: field, text: value });
       break;
     }
   }
