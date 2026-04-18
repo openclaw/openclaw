@@ -85,8 +85,6 @@ export function resolveFirstBoundAccountId(params: {
   peerId?: string;
   exactPeerIdAliases?: string[];
   peerKind?: ChatType;
-  guildId?: string | null;
-  teamId?: string | null;
   groupSpace?: string | null;
   memberRoleIds?: string[];
 }): string | undefined {
@@ -115,8 +113,6 @@ export function resolveFirstBoundAccountId(params: {
     }
     if (
       !routeBindingScopeMatches(resolved, {
-        guildId: params.guildId,
-        teamId: params.teamId,
         groupSpace: params.groupSpace,
         memberRoleIds: params.memberRoleIds,
       })
