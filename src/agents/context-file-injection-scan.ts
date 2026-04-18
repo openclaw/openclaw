@@ -36,8 +36,14 @@ const THREAT_PATTERNS: ThreatPattern[] = [
     id: "html_comment_injection",
   },
   { re: /<\s*div\s+style\s*=\s*["'][\s\S]*?display\s*:\s*none/i, id: "hidden_div" },
-  // Multi-line flag (m + s) on these patterns so split-across-newlines
-  // attacks like "translate X\n into Y and execute" don't bypass detection.
+  // Multi-line + case-insensitive matching: flags `i` + `m` cover case
+  // variation; `[\s\S]*?` (not `.`) is used in place of the dotAll `s`
+  // flag so the patterns span newlines AND backslash-newline command
+  // continuations like `curl ... \` followed by another line. PR-A
+  // review fix (Copilot #3096516023 / #3096792616 / #3105169050 /
+  // #3105217710): comment previously said "(m + s)" which was inaccurate
+  // — neither pattern uses the `s` flag, the `[\s\S]*?` mechanism does
+  // the equivalent work explicitly.
   {
     re: /translate\s+[\s\S]*?\s+into\s+[\s\S]*?\s+and\s+(execute|run|eval)/im,
     id: "translate_execute",
@@ -52,11 +58,19 @@ const THREAT_PATTERNS: ThreatPattern[] = [
 // Default allowlist of paths whose content discusses injection patterns
 // for legitimate reasons (security docs, QA scenarios). Files matching
 // these patterns get a warning event but are NOT blocked.
-const DEFAULT_ALLOWLIST: RegExp[] = [
-  /(?:^|\/)(SECURITY|CONTRIBUTING)\.md$/i,
-  /(?:^|\/)docs\/security\//i,
-  /(?:^|\/)qa\/scenarios\//i,
-];
+//
+// PR-A review hardening (Copilot #3096515990 / #3105043335 / #3105043346 /
+// #3105169058 / #3096792574 / #3105217720): the prior list included
+// directory-based entries like `docs/security/` and `qa/scenarios/`
+// that allowlisted ANY file under those trees — including persona files
+// (SOUL.md, AGENTS.md) loaded from extra bootstrap patterns. A
+// malicious persona file placed under an allowlisted directory could
+// silently bypass injection blocking entirely. The list is now narrowed
+// to specific BASENAMES only (anchored to the leaf filename, not a
+// directory), and any allowlist bypass now emits a `console.warn` by
+// default so it is never silent (callers can still pass a custom
+// `onAllowlistBypass` for telemetry).
+const DEFAULT_ALLOWLIST: RegExp[] = [/(?:^|\/)(SECURITY|CONTRIBUTING)\.md$/i];
 
 /**
  * Normalize a filename for allowlist matching:
@@ -180,7 +194,19 @@ export function sanitizeContextFileForInjection(
   // were silently ignored. Now the custom list (if any) is applied.
   const allowlist = options.allowlist ?? DEFAULT_ALLOWLIST;
   if (isAllowlistedPath(filename, allowlist)) {
-    options.onAllowlistBypass?.(filename, findings);
+    // PR-A review hardening: bypass is never silent. If the caller
+    // supplied `onAllowlistBypass`, hand off to it; otherwise emit a
+    // default `console.warn` so the bypass shows up in operator logs.
+    // This addresses #3096515990 / #3105043346 / #3096792574 — the
+    // prior path could silently pass through a flagged file when the
+    // caller (e.g., system-prompt.ts) didn't provide a callback.
+    if (options.onAllowlistBypass) {
+      options.onAllowlistBypass(filename, findings);
+    } else {
+      console.warn(
+        `[context-file-injection-scan] allowlisted file "${filename}" matched injection patterns: ${findings.join(", ")}. Content passed through unchanged. Pass \`onAllowlistBypass\` to suppress this warning and route to telemetry.`,
+      );
+    }
     return content;
   }
   // Sanitize filename to prevent injection via crafted file paths.

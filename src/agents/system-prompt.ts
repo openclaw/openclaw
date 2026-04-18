@@ -175,7 +175,11 @@ function buildProjectContextSection(params: {
     );
     // Sanitize file.path in the heading to prevent prompt-structure injection
     // via crafted filenames with control/bidi/zero-width chars.
-    const safePath = sanitizeForPromptLiteral(file.path);
+    // PR-A review fix (Copilot #3094483599): a filename composed entirely
+    // of bidi/zero-width/control chars trims to empty string, which
+    // would render a blank `##` heading and effectively hide which file
+    // the subsequent content came from. Fall back to a clear marker.
+    const safePath = sanitizeForPromptLiteral(file.path).trim() || "[unknown context file]";
     lines.push(`## ${safePath}`, "", sanitizedContent, "");
   }
   return lines;
