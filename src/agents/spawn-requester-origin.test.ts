@@ -3,6 +3,24 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 
 describe("resolveRequesterOriginForChild", () => {
+  function resolveAccount(params: {
+    cfg: OpenClawConfig;
+    targetAgentId?: string;
+    requesterAgentId?: string;
+    requesterChannel: string;
+    requesterAccountId?: string;
+    requesterTo: string;
+    requesterGroupSpace?: string | null;
+    requesterMemberRoleIds?: string[];
+  }) {
+    return resolveRequesterOriginForChild({
+      requesterAccountId: "bot-beta",
+      ...params,
+      targetAgentId: params.targetAgentId ?? "bot-alpha",
+      requesterAgentId: params.requesterAgentId ?? "main",
+    })?.accountId;
+  }
+
   it.each([
     ["channel:conversation-a", "channel:conversation-a", "channel"],
     ["dm:conversation-a", "dm:conversation-a", "direct"],
@@ -43,6 +61,199 @@ describe("resolveRequesterOriginForChild", () => {
       });
     },
   );
+
+  it.each([
+    {
+      name: "prefers peer-specific binding over channel-only binding",
+      requesterChannel: "matrix",
+      requesterTo: "!roomA:example.org",
+      expected: "bot-alpha-room-a",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "!roomA:example.org" },
+            accountId: "bot-alpha-room-a",
+          },
+        },
+      ],
+    },
+    {
+      name: "falls back to channel-only binding when peer does not match",
+      requesterChannel: "matrix",
+      requesterTo: "!roomB:example.org",
+      expected: "bot-alpha-default",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "!roomA:example.org" },
+            accountId: "bot-alpha-room-a",
+          },
+        },
+      ],
+    },
+    {
+      name: "treats wildcard peer binding as match-any and beats channel-only",
+      requesterChannel: "matrix",
+      requesterTo: "!anyRoom:example.org",
+      expected: "bot-alpha-wildcard",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "*" },
+            accountId: "bot-alpha-wildcard",
+          },
+        },
+      ],
+    },
+    {
+      name: "prefers exact peer binding over wildcard peer binding",
+      requesterChannel: "matrix",
+      requesterTo: "!roomA:example.org",
+      expected: "bot-alpha-room-a",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "*" },
+            accountId: "bot-alpha-wildcard",
+          },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "!roomA:example.org" },
+            accountId: "bot-alpha-room-a",
+          },
+        },
+      ],
+    },
+    {
+      name: "uses requester roles for role-scoped target-agent accounts",
+      requesterChannel: "discord",
+      requesterTo: "channel:ops",
+      requesterGroupSpace: "guild-current",
+      requesterMemberRoleIds: ["admin"],
+      expected: "bot-alpha-admin",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "discord", accountId: "bot-alpha-default" },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "discord",
+            guildId: "guild-current",
+            roles: ["admin"],
+            peer: { kind: "channel", id: "channel:ops" },
+            accountId: "bot-alpha-admin",
+          },
+        },
+      ],
+    },
+    {
+      name: "strips channel-side prefixes before bound-account lookup",
+      requesterChannel: "matrix",
+      requesterTo: "room:!exampleRoomId:example.org",
+      expected: "bot-alpha",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "!exampleRoomId:example.org" },
+            accountId: "bot-alpha",
+          },
+        },
+      ],
+    },
+    {
+      name: "classifies Matrix room:@user targets as direct, not channel",
+      requesterChannel: "matrix",
+      requesterTo: "room:@other-user:example.org",
+      expected: "bot-alpha-dm",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "@other-user:example.org" },
+            accountId: "bot-alpha-wrong-kind",
+          },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: { kind: "direct", id: "@other-user:example.org" },
+            accountId: "bot-alpha-dm",
+          },
+        },
+      ],
+    },
+    {
+      name: "preserves the caller account for same-agent subagent spawns",
+      requesterChannel: "matrix",
+      requesterAccountId: "bot-alpha-adhoc",
+      requesterAgentId: "bot-alpha",
+      requesterTo: "!someRoom:example.org",
+      expected: "bot-alpha-adhoc",
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "bot-alpha-default" },
+        },
+      ],
+    },
+  ] as const)("selects target account: $name", (scenario) => {
+    expect(
+      resolveAccount({
+        cfg: { bindings: [...scenario.bindings] } as OpenClawConfig,
+        requesterChannel: scenario.requesterChannel,
+        requesterAccountId: scenario.requesterAccountId,
+        requesterAgentId: scenario.requesterAgentId,
+        requesterTo: scenario.requesterTo,
+        requesterGroupSpace: scenario.requesterGroupSpace,
+        requesterMemberRoleIds: scenario.requesterMemberRoleIds
+          ? [...scenario.requesterMemberRoleIds]
+          : undefined,
+      }),
+    ).toBe(scenario.expected);
+  });
 
   it("preserves canonical peer ids that start with token-colon after a known wrapper", () => {
     const to = "conversation:a:1:team-thread";
