@@ -350,14 +350,14 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Context windows">
     For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it falls back to the default Ollama context window used by OpenClaw.
 
-    Modelfile `PARAMETER num_ctx <value>` overrides take precedence over the base model's native `context_length`, matching Ollama's own last-wins behavior at generation time. For example, given:
+    Modelfile `PARAMETER num_ctx <value>` is used when it would expand the reported capacity above the base model's native `context_length`. OpenClaw takes the larger of the two so custom Modelfiles that raise the context (for example `PARAMETER num_ctx 32768` on top of llama3's native 8192) are honored, while pulled base Modelfiles that ship a small default `num_ctx` cannot under-report large-context models. For example, given:
 
     ```text
     FROM llama3:latest
     PARAMETER num_ctx 32768
     ```
 
-    `ollama/llama3-32k:latest` is reported with a 32768-token context window instead of the base llama3 8192.
+    `ollama/llama3-32k:latest` is reported with a 32768-token context window instead of the base llama3 8192. If you want to clamp the reported context below the model's native capacity, set it explicitly in `models.providers.ollama.models[].contextWindow` below.
 
     You can still override `contextWindow` and `maxTokens` in explicit provider config:
 

@@ -227,7 +227,7 @@ describe("ollama provider models", () => {
     expect(emptyCapabilities.compat).toBeUndefined();
   });
 
-  it("prefers Modelfile PARAMETER num_ctx over the base model's context_length", async () => {
+  it("prefers Modelfile PARAMETER num_ctx when it expands the base context_length", async () => {
     const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];
     const fetchMock = vi.fn(async () =>
       jsonResponse({
@@ -241,6 +241,36 @@ describe("ollama provider models", () => {
     const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
 
     expect(enriched[0]?.contextWindow).toBe(32768);
+  });
+
+  it("keeps the larger base context_length when parameters reports a smaller num_ctx default", async () => {
+    const models: OllamaTagModel[] = [{ name: "llama3.3:70b" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: { "llama.context_length": 131072 },
+        parameters: 'stop "<|eot_id|>"\nnum_ctx 2048',
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(131072);
+  });
+
+  it("uses num_ctx when model_info has no context_length and the override is positive", async () => {
+    const models: OllamaTagModel[] = [{ name: "custom-model:latest" }];
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        model_info: {},
+        parameters: "num_ctx 16384",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0]?.contextWindow).toBe(16384);
   });
 
   it("uses the last Modelfile num_ctx override when parameters repeats the key", async () => {

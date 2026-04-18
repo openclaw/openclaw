@@ -158,11 +158,16 @@ export async function queryOllamaModelShowInfo(
           }
         }
       }
-      // Modelfile `PARAMETER num_ctx <value>` wins over the base model's
-      // native context_length: Ollama applies the override at generation time,
-      // so honor it here instead of reporting the smaller base value.
+      // Modelfile `PARAMETER num_ctx <value>` can raise the effective context
+      // above the base model's native `context_length` (e.g. a custom
+      // Modelfile with `PARAMETER num_ctx 32768` on top of llama3 8k). Use it
+      // only when it would expand capacity — pulled base Modelfiles sometimes
+      // ship a small default `num_ctx` that must not under-report models with
+      // a larger native `context_length`. Users who want a strictly lower
+      // context should configure it explicitly under
+      // `models.providers.ollama.models[].contextWindow`.
       const paramCtx = parseOllamaNumCtxParameter(data.parameters);
-      if (paramCtx !== undefined) {
+      if (paramCtx !== undefined && (contextWindow === undefined || paramCtx > contextWindow)) {
         contextWindow = paramCtx;
       }
 
