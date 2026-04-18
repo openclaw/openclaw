@@ -19,12 +19,13 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
+let claimInboundDedupe: typeof import("./inbound-dedupe.js").claimInboundDedupe;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
+    ({ claimInboundDedupe, resetInboundDedupe } = await import("./inbound-dedupe.js"));
   });
 
   beforeEach(() => {
@@ -92,9 +93,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },
     });
+    const ctx = { ...createHookCtx(), MessageSid: "reply-dispatch-handled-1" };
 
     const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
+      ctx,
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
       fastAbortResolver: async () => ({ handled: false, aborted: false }),
@@ -116,6 +118,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },
     });
+    expect(claimInboundDedupe(ctx)).toMatchObject({ status: "duplicate" });
   });
   it("still applies send-policy deny after an unhandled plugin dispatch", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({

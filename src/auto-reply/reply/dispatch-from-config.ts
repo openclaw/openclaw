@@ -271,6 +271,20 @@ export async function dispatchReplyFromConfig(
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
+  const completeDispatch = (
+    result: DispatchFromConfigResult,
+    opts?: {
+      reason?: string;
+      idleReason?: string;
+    },
+  ): DispatchFromConfigResult => {
+    if (inboundDedupeClaim.status === "claimed") {
+      commitInboundDedupe(inboundDedupeClaim.key);
+    }
+    recordProcessed("completed", opts?.reason ? { reason: opts.reason } : undefined);
+    markIdle(opts?.idleReason ?? "message_completed");
+    return result;
+  };
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -515,9 +529,13 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
-          markIdle("plugin_binding_dispatch");
-          recordProcessed("completed", { reason: "plugin-bound-handled" });
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return completeDispatch(
+            { queuedFinal: false, counts: dispatcher.getQueuedCounts() },
+            {
+              reason: "plugin-bound-handled",
+              idleReason: "plugin_binding_dispatch",
+            },
+          );
         }
         case "missing_plugin":
         case "no_handler": {
@@ -541,9 +559,13 @@ export async function dispatchReplyFromConfig(
             { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
             "terminal",
           );
-          markIdle("plugin_binding_declined");
-          recordProcessed("completed", { reason: "plugin-bound-declined" });
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return completeDispatch(
+            { queuedFinal: false, counts: dispatcher.getQueuedCounts() },
+            {
+              reason: "plugin-bound-declined",
+              idleReason: "plugin_binding_declined",
+            },
+          );
         }
         case "error": {
           logVerbose(
@@ -553,9 +575,13 @@ export async function dispatchReplyFromConfig(
             { text: buildPluginBindingErrorText(pluginOwnedBinding) },
             "terminal",
           );
-          markIdle("plugin_binding_error");
-          recordProcessed("completed", { reason: "plugin-bound-error" });
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+          return completeDispatch(
+            { queuedFinal: false, counts: dispatcher.getQueuedCounts() },
+            {
+              reason: "plugin-bound-error",
+              idleReason: "plugin_binding_error",
+            },
+          );
         }
       }
     }
@@ -624,9 +650,7 @@ export async function dispatchReplyFromConfig(
       }
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
-      recordProcessed("completed", { reason: "fast_abort" });
-      markIdle("message_completed");
-      return { queuedFinal, counts };
+      return completeDispatch({ queuedFinal, counts }, { reason: "fast_abort" });
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
@@ -692,9 +716,7 @@ export async function dispatchReplyFromConfig(
         }
         const counts = dispatcher.getQueuedCounts();
         counts.final += routedFinalCount;
-        recordProcessed("completed", { reason: "before_dispatch_handled" });
-        markIdle("message_completed");
-        return { queuedFinal, counts };
+        return completeDispatch({ queuedFinal, counts }, { reason: "before_dispatch_handled" });
       }
     }
 
@@ -724,10 +746,10 @@ export async function dispatchReplyFromConfig(
         },
       );
       if (replyDispatchResult?.handled) {
-        return {
+        return completeDispatch({
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
-        };
+        });
       }
     }
 
@@ -1025,10 +1047,10 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
-          return {
+          return completeDispatch({
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,
-          };
+          });
         }
       }
     }
@@ -1101,15 +1123,10 @@ export async function dispatchReplyFromConfig(
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
-    recordProcessed(
-      "completed",
+    return completeDispatch(
+      { queuedFinal, counts },
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
-    markIdle("message_completed");
-    return { queuedFinal, counts };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       releaseInboundDedupe(inboundDedupeClaim.key);
