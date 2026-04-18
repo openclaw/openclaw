@@ -4,6 +4,11 @@
 id: image-understanding-attachment
 title: Image understanding from attachment
 surface: image-understanding
+coverage:
+  primary:
+    - media.image-understanding
+  secondary:
+    - channels.qa-channel
 objective: Verify an attached image reaches the agent model and the agent can describe what it sees.
 successCriteria:
   - Agent receives at least one image attachment.

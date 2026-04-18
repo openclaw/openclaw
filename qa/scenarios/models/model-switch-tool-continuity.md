@@ -4,6 +4,11 @@
 id: model-switch-tool-continuity
 title: Model switch with tool continuity
 surface: models
+coverage:
+  primary:
+    - models.switching
+  secondary:
+    - runtime.tool-continuity
 objective: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
 successCriteria:
   - Alternate model is actually requested.

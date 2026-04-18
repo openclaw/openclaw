@@ -13,5 +13,6 @@ Key workflow:
 
 - `qa suite` is the executable frontier subset / regression loop.
 - `qa manual` is the scoped personality and style probe after the executable subset is green.
+- `qa coverage` prints the scenario coverage inventory from scenario frontmatter.
 
 Keep this folder in git. Add new scenarios here before wiring them into automation.
