@@ -1042,6 +1042,8 @@ async function processOpenAICompletionsStream(
   model: Model<Api>,
   stream: { push(event: unknown): void },
 ) {
+  const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
+  const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const compat = getCompat(model as OpenAIModeModel);
   let currentBlock:
     | { type: "text"; text: string }
@@ -1055,8 +1057,11 @@ async function processOpenAICompletionsStream(
       }
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
+  let pendingPostToolCallBytes = 0;
+  let currentToolCallArgumentBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
   const blockIndex = () => output.content.length - 1;
+  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
     if (!currentBlock) {
       return;
@@ -1071,6 +1076,11 @@ async function processOpenAICompletionsStream(
     }
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
+    const nextBytes = measureUtf8Bytes(next.text);
+    if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
+      throw new Error("Exceeded post-tool-call delta buffer limit");
+    }
+    pendingPostToolCallBytes += nextBytes;
     const previous = pendingPostToolCallDeltas[pendingPostToolCallDeltas.length - 1];
     if (!previous || previous.kind !== next.kind) {
       pendingPostToolCallDeltas.push(next);
@@ -1131,6 +1141,7 @@ async function processOpenAICompletionsStream(
     isFlushingPendingPostToolCallDeltas = true;
     const bufferedDeltas = pendingPostToolCallDeltas;
     pendingPostToolCallDeltas = [];
+    pendingPostToolCallBytes = 0;
     for (const delta of bufferedDeltas) {
       if (delta.kind === "text") {
         appendTextDeltaInternal(delta.text);
@@ -1214,6 +1225,7 @@ async function processOpenAICompletionsStream(
             arguments: {},
             partialArgs: "",
           };
+          currentToolCallArgumentBytes = 0;
           output.content.push(currentBlock);
           stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
         }
@@ -1227,6 +1239,14 @@ async function processOpenAICompletionsStream(
           currentBlock.name = toolCall.function.name;
         }
         if (toolCall.function?.arguments) {
+          const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
+          if (
+            currentToolCallArgumentBytes + nextArgumentBytes >
+            MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES
+          ) {
+            throw new Error("Exceeded tool-call argument buffer limit");
+          }
+          currentToolCallArgumentBytes += nextArgumentBytes;
           currentBlock.partialArgs += toolCall.function.arguments;
           currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
           stream.push({
