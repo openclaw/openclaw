@@ -285,14 +285,14 @@ function resolveAnthropicForwardCompatModel(
 }
 
 // All Claude Opus/Sonnet 4.6+ default to adaptive thinking.
-const ADAPTIVE_DEFAULT_PATTERN = /(opus|sonnet)-4[.-]([6-9]|\d{2,})/;
+const ADAPTIVE_DEFAULT_PATTERN = /(opus|sonnet)-4[.-]([6-9]|[1-9]\d)(?!\d)/;
 
 function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
   return ADAPTIVE_DEFAULT_PATTERN.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
 // Opus 4.7+ supports the native "xhigh" effort level.
-const OPUS_XHIGH_PATTERN = /opus-4[.-]([7-9]|\d{2,})/;
+const OPUS_XHIGH_PATTERN = /opus-4[.-]([7-9]|[1-9]\d)(?!\d)/;
 
 function isAnthropicOpusXHighModel(modelId: string): boolean {
   return OPUS_XHIGH_PATTERN.test(normalizeLowercaseStringOrEmpty(modelId));

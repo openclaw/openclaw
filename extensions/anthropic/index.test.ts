@@ -268,6 +268,26 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("adaptive");
   });
 
+  it("does not match date-stamped model IDs as xhigh-capable", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    expect(
+      provider.supportsXHighThinking?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-20250918",
+      } as never),
+    ).toBe(false);
+  });
+
+  it("does not return adaptive default for date-stamped model IDs", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    expect(
+      provider.resolveDefaultThinkingLevel?.({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-20250514",
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("resolves claude-cli synthetic oauth auth", async () => {
     readClaudeCliCredentialsForRuntimeMock.mockReset();
     readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
