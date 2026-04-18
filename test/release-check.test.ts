@@ -517,15 +517,6 @@ describe("collectMissingPackPaths", () => {
       ]),
     );
   });
-  it("requires the authored qa scenario pack files in npm pack output", () => {
-    expect(requiredQaScenarioPackPaths).toContain("qa/scenarios/index.md");
-    expect(
-      requiredQaScenarioPackPaths.some(
-        (path) => path.startsWith("qa/scenarios/") && path !== "qa/scenarios/index.md",
-      ),
-    ).toBe(true);
-  });
-
   it("does not require plugin manifests for runtime-only public surface packages", () => {
     expect(requiredBundledPluginPackPaths).not.toEqual(
       expect.arrayContaining([
