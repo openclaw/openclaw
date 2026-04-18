@@ -16,6 +16,13 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /**
+   * Names of tools available for this turn (after policy pipeline filtering).
+   * Empty on early/pre-assembly hook calls; populated on the full prompt-build call.
+   * Plugins can use this to dynamically select which tools to include via toolsAllow
+   * without maintaining hardcoded tool lists.
+   */
+  availableTools?: string[];
 };
 
 export type PluginHookBeforePromptBuildResult = {

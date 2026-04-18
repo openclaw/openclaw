@@ -36,7 +36,7 @@ type HookRunnerLike = {
     context: HookContext,
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
   runBeforePromptBuild(
-    input: { prompt: string; messages: unknown[] },
+    input: { prompt: string; messages: unknown[]; availableTools?: string[] },
     context: HookContext,
   ): Promise<{ toolsAllow?: string[] } | undefined>;
 };

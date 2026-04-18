@@ -1827,6 +1827,7 @@ export async function runEmbeddedAttempt(
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
+          availableTools: toolsRaw.map((tool) => tool.name),
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
