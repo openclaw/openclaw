@@ -259,6 +259,12 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
   }));
+  // Mirror the pi-embedded runEmbeddedPiAgent mock on the unified
+  // runtime-dispatch seam so the runAgent dispatch (claude-sdk default)
+  // routes back to the same test double.
+  vi.doMock("../../agents/runtime-dispatch.js", () => ({
+    runAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+  }));
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,

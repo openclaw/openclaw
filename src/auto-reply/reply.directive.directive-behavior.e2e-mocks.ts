@@ -14,6 +14,12 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
+// Mirror onto the unified dispatch seam so the claude-sdk default
+// routes through the same test double as the legacy embedded path.
+vi.mock("../agents/runtime-dispatch.js", () => ({
+  runAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+}));
+
 vi.mock("../agents/pi-embedded.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),

@@ -72,6 +72,10 @@ vi.mock("../../agents/pi-embedded.js", () => {
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActive(sessionId),
   };
 });
+vi.mock("../../agents/runtime-dispatch.js", () => ({
+  runAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+}));
+
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),

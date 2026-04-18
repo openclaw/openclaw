@@ -39,6 +39,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
 }));
+vi.mock("../../agents/runtime-dispatch.js", () => ({
+  runAgent: runEmbeddedPiAgentMock,
+}));
+
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: enqueueFollowupRunMock,

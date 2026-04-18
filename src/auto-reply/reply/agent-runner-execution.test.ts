@@ -18,6 +18,10 @@ const state = vi.hoisted(() => ({
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
+vi.mock("../../agents/runtime-dispatch.js", () => ({
+  runAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+}));
+
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),

@@ -48,7 +48,7 @@ export function getQueueEmbeddedPiMessageMock(): AnyMock {
   return piEmbeddedMocks.queueEmbeddedPiMessage;
 }
 
-const installPiEmbeddedMock = () =>
+const installPiEmbeddedMock = () => {
   vi.doMock("../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
     compactEmbeddedPiSession: (...args: unknown[]) =>
@@ -62,6 +62,12 @@ const installPiEmbeddedMock = () =>
     isEmbeddedPiRunStreaming: (...args: unknown[]) =>
       piEmbeddedMocks.isEmbeddedPiRunStreaming(...args),
   }));
+  // Mirror onto the unified dispatch seam so the claude-sdk default
+  // routes through the same test double as the legacy embedded path.
+  vi.doMock("../agents/runtime-dispatch.js", () => ({
+    runAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
+  }));
+};
 
 installPiEmbeddedMock();
 
