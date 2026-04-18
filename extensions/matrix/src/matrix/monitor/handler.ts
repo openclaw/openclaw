@@ -1210,12 +1210,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
         RawBody: bodyText,
-        CommandBody: stripMatrixMentionPrefix({
-          text: bodyText,
-          userId: selfUserId,
-          displayName: selfDisplayName,
-          mentionRegexes: agentMentionRegexes,
-        }),
+        CommandBody: bodyText,
         InboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,
