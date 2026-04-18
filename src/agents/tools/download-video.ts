@@ -600,14 +600,19 @@ export const downloadVideoTool = {
     // Create a child process controller that can properly kill yt-dlp
     const abortController = new AbortController();
     
+    // Track if we should re-throw abort error
+    let wasAborted = false;
+    
     try {
       // Link external signal to internal controller
       if (signal) {
         if (signal.aborted) {
           abortController.abort();
+          wasAborted = true;
         } else {
           signal.addEventListener('abort', () => {
             abortController.abort();
+            wasAborted = true;
           }, { once: true });
         }
       }
@@ -747,11 +752,9 @@ export const downloadVideoTool = {
     } catch (err: unknown) {
       const error = err as Error;
       
-      if (error.name === 'AbortError') {
-        return {
-          content: [{ type: "text", text: `⚠️ Download cancelled` }],
-          details: { error: 'Download cancelled by user', status: "cancelled" }
-        };
+      // FIX: Properly propagate abort errors instead of swallowing them
+      if (error.name === 'AbortError' || wasAborted || abortController.signal.aborted) {
+        throw error; // Re-throw abort error to preserve cancellation semantics
       }
       
       return {
