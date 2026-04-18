@@ -1,5 +1,5 @@
 ---
-summary: "Advanced setup and development workflows for OpenClaw"
+summary: "Advanced setup and development workflows for your OpenClaw assistant"
 read_when:
   - Setting up a new machine
   - You want “latest + greatest” without breaking your personal setup
@@ -16,7 +16,7 @@ For onboarding details, see [Onboarding (CLI)](/start/wizard).
 ## TL;DR
 
 - **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
-- **Stable workflow:** install the macOS app; let it run the bundled Gateway.
+- **Stable workflow:** install the macOS app; let it run the bundled Gateway behind your assistant.
 - **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)

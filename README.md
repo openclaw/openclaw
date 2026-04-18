@@ -19,7 +19,13 @@
 </p>
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the channels you already use, keeps context over time, and helps you stay on top of what matters. It can remind you, send useful summaries, alert you when something breaks, and help you take action through one interface. It can also speak and listen on macOS/iOS/Android, and render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+
+**One smart assistant instead of dashboards, alerts, and manual routine.**
+
+Reminders, summaries, notifications, and actions — in one interface.
+
+**Less manual checking. More clarity.**
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 

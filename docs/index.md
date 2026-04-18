@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw is a multi-channel gateway for AI agents that runs on any OS."
+summary: "OpenClaw is a personal AI assistant for your systems, tasks, and routines."
 read_when:
   - Introducing OpenClaw to newcomers
 title: "OpenClaw"
@@ -25,8 +25,8 @@ title: "OpenClaw"
 > _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
 
 <p align="center">
-  <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Run one Gateway across built-in channels, bundled channel plugins, WebChat, and mobile nodes.
+  <strong>One smart assistant instead of dashboards, alerts, and manual routine.</strong><br />
+  Reminders, summaries, notifications, and actions — in one interface.
 </p>
 
 <Columns>
@@ -43,12 +43,15 @@ title: "OpenClaw"
 
 ## What is OpenClaw?
 
-OpenClaw is a **self-hosted gateway** that connects your favorite chat apps and channel surfaces — built-in channels plus bundled or external channel plugins such as Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more — to AI coding agents like Pi. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
+OpenClaw is a **personal AI assistant** you run on your own machine (or server). Under the hood, it uses a self-hosted Gateway that connects your chat apps, channel surfaces, tools, and nodes — but the user-facing product is the assistant.
+
+It helps you remember what matters, stay informed with useful summaries, notice problems early, and react through one interface.
 
 **Who is it for?** Developers and power users who want a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
 
 **What makes it different?**
 
+- **Personal assistant first**: reminders, summaries, notifications, and actions in one interface
 - **Self-hosted**: runs on your hardware, your rules
 - **Multi-channel**: one Gateway serves built-in channels plus bundled or external channel plugins simultaneously
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing

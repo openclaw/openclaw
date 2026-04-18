@@ -1,5 +1,5 @@
 ---
-summary: "Get OpenClaw installed and run your first chat in minutes."
+summary: "Get OpenClaw installed and start using your personal AI assistant in minutes."
 read_when:
   - First time setup from zero
   - You want the fastest path to a working chat
@@ -8,9 +8,12 @@ title: "Getting Started"
 
 # Getting Started
 
-Install OpenClaw, run onboarding, and chat with your AI assistant — all in
+Install OpenClaw, run onboarding, and start using your AI assistant — all in
 about 5 minutes. By the end you will have a running Gateway, configured auth,
 and a working chat session.
+
+OpenClaw is built to give you one assistant interface for reminders, summaries,
+notifications, and actions.
 
 ## What you need
 

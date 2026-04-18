@@ -14,8 +14,9 @@ read_when:
 <div className="showcase-hero">
   <p className="showcase-kicker">Built in chats, terminals, browsers, and living rooms</p>
   <p className="showcase-lead">
-    OpenClaw projects are not toy demos. People are shipping PR review loops, mobile apps, home automation,
-    voice systems, devtools, and memory-heavy workflows from the channels they already use.
+    OpenClaw projects are not toy demos. People are building personal assistant workflows around reminders,
+    summaries, alerts, actions, PR review loops, mobile apps, home automation, voice systems, devtools,
+    and memory-heavy workflows from the channels they already use.
   </p>
   <div className="showcase-actions">
     <a href="#videos">Watch demos</a>
