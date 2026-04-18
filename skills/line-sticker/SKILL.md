@@ -52,7 +52,7 @@ Everything else is a judgment call — trust your read of the room.
 
 ## Sticker selection (Step 2)
 
-Read {baseDir}/package-{packageId}.json and select using these fields:
+Read {baseDir}/references/package-{packageId}.json and select using these fields:
 
 - **desc** (primary): Visual description with embedded context. Includes pose, expression, action, and usage scene. Match to the current conversational moment.
 - **text** (filter): Printed text on the sticker. Must match the conversation language or be absent.
@@ -62,5 +62,5 @@ If no sticker fits naturally, do not send one.
 
 ## Catalog location
 
-- {baseDir}/package-index.json
-- {baseDir}/package-{packageId}.json
+- {baseDir}/references/package-index.json
+- {baseDir}/references/package-{packageId}.json

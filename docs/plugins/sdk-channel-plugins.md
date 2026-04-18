@@ -633,3 +633,71 @@ surface unless you are maintaining that bundled plugin family directly.
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
+
+## Structured Payload Types
+
+### Two-layer payload architecture
+
+OpenClaw's outbound pipeline distinguishes between two categories of structured payload content:
+
+**Core-routed content** (`interactive`, `channelData`) is evaluated by the core pipeline without requiring per-channel capability declarations. When a channel adapter implements `sendPayload`, these fields may be routed through that path according to the adapter's implementation.
+
+**Capability-declared content** (`sticker`, and future types) varies by channel. Channel adapters can explicitly declare which of these types they support via `supportedPayloadTypes`. The pipeline uses this declaration when deciding whether capability-scoped payload content can be delivered through `sendPayload` or whether it should fall back to text/media delivery paths.
+
+This separation allows the core pipeline to keep routing rules for core-recognized structured fields, while leaving channel-specific capabilities explicit and extensible.
+
+### Declaring supported payload types
+
+Add `supportedPayloadTypes` to your channel's outbound adapter:
+
+```typescript
+import type { SupportedPayloadType } from "../channels/plugins/outbound.types.js";
+
+const outbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  supportedPayloadTypes: ["sticker"] as const,
+  // ...
+};
+```
+
+`SupportedPayloadType` is a closed union type. Currently defined values:
+
+| Type        | Description                                  | Standalone? |
+| ----------- | -------------------------------------------- | ----------- |
+| `"sticker"` | Sticker payload (for example, LINE stickers) | Yes         |
+
+"Standalone" means the payload type can be delivered on its own, without accompanying text or media content. Payload types that act only as delivery modifiers are not standalone and still require accompanying deliverable content.
+
+### How the pipeline uses this declaration
+
+1. **Capability extraction:** The pipeline extracts capability-declared payload types from the reply payload via `getCapabilityScopedPayloadTypes()`.
+
+2. **Support check:** If the payload contains capability-declared types, the pipeline checks whether all of them are included in the adapter's `supportedPayloadTypes` (with legacy sticker compatibility noted below).
+
+3. **Routing decision:** If all capability-declared types are supported and `sendPayload` is implemented, the payload may be routed through `sendPayload`. Otherwise, delivery falls back to text/media paths when possible.
+
+4. **Standalone preservation:** Payloads that contain only standalone capability-declared content (for example, sticker-only payloads with no text or media) are preserved by normalization so they remain deliverable through the payload path.
+
+5. **Unsupported capability handling:** If the payload contains only unsupported capability-declared content and no text/media fallback is available, the pipeline skips delivery and emits a warning.
+
+### Adding a new payload type
+
+To add a new capability-declared payload type to OpenClaw:
+
+1. Add the type string to the `SupportedPayloadType` union in `src/channels/plugins/outbound.types.ts`
+2. Add the corresponding field check in `getCapabilityScopedPayloadTypes()` in `src/plugin-sdk/reply-payload.ts`
+3. If the type can be delivered without text/media, add it to `STANDALONE_PAYLOAD_TYPES`
+4. Declare support in channel adapters that implement the capability
+5. Handle the type in the adapter's `sendPayload` implementation
+
+In the intended architecture, adding a new capability-declared payload type should usually not require introducing new payload-type-specific branching in the core delivery pipeline.
+
+### Backward compatibility
+
+The legacy `supportsStickerPayload` flag remains supported for sticker capability checks. If a channel adapter declares `supportsStickerPayload: true` without listing `"sticker"` in `supportedPayloadTypes`, the pipeline treats that adapter as sticker-capable for compatibility with existing plugins.
+
+New adapters should prefer `supportedPayloadTypes`. The legacy flag may be removed in a future major version.
+
+### Design note
+
+`supportedPayloadTypes` is intended only for channel-specific structured payload capabilities. It is not meant to enumerate every structured field that may appear in a reply payload.
