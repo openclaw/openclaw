@@ -51,6 +51,12 @@ steps:
       - assert:
           expr: "!message.text.includes('enter_plan_mode')"
           message: "Response should not mention entering plan mode — GPT-5 should act directly"
+      # PR-D review fix (Copilot #3105216710): explicit toolCalls assertion
+      # — message.text alone could pass even if the agent invoked the tool
+      # silently. Verify the tool was NOT actually called.
+      - assert:
+          expr: "!message.toolCalls?.some(tc => tc.name === 'enter_plan_mode') ?? true"
+          message: "Agent must NOT invoke enter_plan_mode for a simple task"
       - assert:
           expr: "message.toolCalls?.some(tc => tc.name === 'read') ?? false"
           message: "Agent must call read tool to check package.json, not guess the content"

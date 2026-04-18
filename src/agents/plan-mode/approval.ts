@@ -69,11 +69,17 @@ export function resolvePlanApproval(
   // they require a fresh exit_plan_mode call (which mints a new approvalId)
   // before any new action can apply. Rejected stays open for re-approval
   // or re-rejection.
-  if (
-    current.approval !== "pending" &&
-    current.approval !== "rejected" &&
-    current.approval !== "none"
-  ) {
+  //
+  // PR-D review fix (Codex P2 #3096560406 / Copilot #3105172000): also
+  // reject when `current.approval === "none"` AND no `expectedApprovalId`
+  // was supplied. The "none" state means there is no pending approval to
+  // act on — letting Approve/Edit/Reject through here would let an
+  // out-of-sequence callback (e.g. a delayed Reject after state reset)
+  // flip the session into a terminal state without a real
+  // exit_plan_mode call. The `expectedApprovalId` check above already
+  // handles the case where the caller has a token (rejected by the
+  // approvalId mismatch). This adds a no-token defense.
+  if (current.approval !== "pending" && current.approval !== "rejected") {
     return current;
   }
   if (action === "timeout" && current.approval !== "pending") {
