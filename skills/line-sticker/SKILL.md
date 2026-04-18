@@ -12,11 +12,31 @@ not a decoration, but a genuine social gesture.
 
 ## Output format
 
-```
+```text
+<brief intent text>
 STICKER:packageId:stickerId
 ```
 
-Send stickers alone. Do not combine with text in the same reply.
+Always include a brief natural-language line describing the sticker's intent before the directive.
+Do not output the sticker directive alone.
+
+This text helps preserve conversational intent and context for downstream processing and transcript history.
+The final user-visible output depends on channel delivery behavior.
+
+Guidelines for the intent text:
+
+- Keep it brief and natural (1-2 sentences).
+- Describe the communicative intent of the sticker, not an explanation of the system.
+- Write in the conversation language.
+- Do not mention internal mechanics, directives, transcripts, or implementation details.
+- Do not add extra text after the STICKER: line.
+
+Example:
+
+```text
+おはようの気持ちをこめて、明るいスタンプで返します。
+STICKER:8515:16581260
+```
 
 ## When not to use a sticker
 
