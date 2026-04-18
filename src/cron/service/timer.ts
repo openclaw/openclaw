@@ -74,30 +74,105 @@ type StartupCatchupPlan = {
   deferredJobIds: string[];
 };
 
+/**
+ * Default hard wall-clock kill for cron-spawned agentTurn sessions when no
+ * explicit `runTimeoutSeconds` is supplied: 30 minutes. Chosen so the ceiling
+ * is comfortably above any reasonable agentTurn budget but bounded enough to
+ * guarantee a wedged session cannot outlive its parent schedule on hourly or
+ * more frequent cadences.
+ *
+ * This default is only applied to agentTurn payloads; systemEvent payloads and
+ * payloads that don't resolve a job timeout continue to run unbounded.
+ */
+export const DEFAULT_CRON_RUN_TIMEOUT_MS = 30 * 60_000;
+
+function resolveRunTimeoutMs(job: CronJob, jobTimeoutMs: number | undefined): number | undefined {
+  if (job.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const raw = job.payload.runTimeoutSeconds;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw) * 1000;
+  }
+  const minimum = typeof jobTimeoutMs === "number" ? jobTimeoutMs * 2 : 0;
+  return Math.max(minimum, DEFAULT_CRON_RUN_TIMEOUT_MS);
+}
+
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-  if (typeof jobTimeoutMs !== "number") {
+  const runTimeoutMs = resolveRunTimeoutMs(job, jobTimeoutMs);
+  if (typeof jobTimeoutMs !== "number" && typeof runTimeoutMs !== "number") {
     return await executeJobCore(state, job);
   }
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let hardKillId: NodeJS.Timeout | undefined;
+  let hardKilled = false;
   try {
     return await Promise.race([
       executeJobCore(state, job, runAbortController.signal),
       new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          runAbortController.abort(timeoutErrorMessage());
-          reject(new Error(timeoutErrorMessage()));
-        }, jobTimeoutMs);
+        if (typeof jobTimeoutMs === "number") {
+          timeoutId = setTimeout(() => {
+            try {
+              runAbortController.abort(timeoutErrorMessage());
+            } catch {
+              // ignore: aborting a non-abortable controller is benign
+            }
+            reject(new Error(timeoutErrorMessage()));
+          }, jobTimeoutMs);
+        }
+        if (typeof runTimeoutMs === "number") {
+          hardKillId = setTimeout(() => {
+            hardKilled = true;
+            try {
+              runAbortController.abort("cron: run wall-clock timeout (runTimeoutSeconds) exceeded");
+            } catch {
+              // ignore
+            }
+            try {
+              state.deps.log.warn(
+                { jobId: job.id, runTimeoutMs },
+                "cron: runTimeoutSeconds wall-clock kill fired",
+              );
+            } catch {
+              // ignore
+            }
+            reject(new Error(timeoutErrorMessage()));
+          }, runTimeoutMs);
+        }
       }),
     ]);
+  } catch (err) {
+    // Forensic breadcrumb so timeouts can be correlated with task ledger state.
+    try {
+      state.deps.log.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          jobTimeoutMs: jobTimeoutMs ?? null,
+          runTimeoutMs: runTimeoutMs ?? null,
+          hardKilled,
+          err: String((err as Error | undefined)?.message ?? err),
+        },
+        hardKilled
+          ? "cron: wall-clock timeout aborted run"
+          : "cron: payload.timeoutSeconds aborted run",
+      );
+    } catch {
+      // ignore log failures
+    }
+    throw err;
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
+    }
+    if (hardKillId) {
+      clearTimeout(hardKillId);
     }
   }
 }
@@ -759,13 +834,40 @@ export async function onTimer(state: CronServiceState) {
           { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
           `cron: job failed: ${errorText}`,
         );
+        const endedAt = state.deps.nowMs();
+        // Belt-and-suspenders: proactively close the task ledger row now. The
+        // locked() apply-outcome pass below normally handles this, but if the
+        // lock contends or the worker pool tears down unexpectedly (e.g. a
+        // runTimeoutSeconds wall-clock kill interrupts a wedged job) we can
+        // leave a ledger row open, resulting in stale `running` task rows and
+        // session registry entries. Closing here is idempotent because
+        // tryFinishCronTaskRun looks up by runId and the subsequent
+        // applyOutcomeToStoredJob call will be a no-op when the row is
+        // already terminal. See #68634 / OPENCLAW_CRON_TIMEOUT_REGISTRY_PATCH_V1.
+        try {
+          tryFinishCronTaskRun(state, {
+            taskRunId,
+            status: "error",
+            error: errorText,
+            endedAt,
+          });
+        } catch (closeErr) {
+          try {
+            state.deps.log.warn(
+              { jobId: id, err: String(closeErr) },
+              "cron: proactive ledger close failed",
+            );
+          } catch {
+            // ignore log failures
+          }
+        }
         return {
           jobId: id,
           taskRunId,
           status: "error",
           error: errorText,
           startedAt,
-          endedAt: state.deps.nowMs(),
+          endedAt,
         };
       }
     };
