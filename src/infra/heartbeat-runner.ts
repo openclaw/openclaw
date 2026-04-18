@@ -748,8 +748,41 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
  */
 export function buildActivePlanNudge(
   planMode: import("../config/sessions/types.js").SessionEntry["planMode"],
+  opts?: {
+    /** Wall-clock now (ms). Defaults to Date.now(); injectable for tests. */
+    nowMs?: number;
+    /**
+     * Suppress the nudge when planMode.updatedAt is more recent than
+     * (now - idleThresholdMs). Defaults to 5 minutes — covers the
+     * normal "agent is mid-conversation, don't interrupt" case.
+     * Set to 0 to disable the idle guard.
+     */
+    idleThresholdMs?: number;
+  },
 ): string | null {
   if (!planMode || planMode.mode !== "plan") {
+    return null;
+  }
+  // PR-12 Bug A2: suppress the nudge when there's an active pending
+  // approval. Otherwise the cron fires an agent turn that interrupts
+  // the user's resolve-the-card flow (Approve/Reject/Edit popup gets
+  // clobbered by the agent re-engaging mid-prompt).
+  if (planMode.approval === "pending") {
+    return null;
+  }
+  // PR-12 Bug A3: suppress the nudge when the agent has been active
+  // recently. `planMode.updatedAt` advances on every plan-mode state
+  // change (enter, approval transitions, update_plan snapshots).
+  // Default: 5 minutes — short enough that genuinely-stuck sessions
+  // still get nudged, long enough that mid-conversation users aren't
+  // pestered.
+  const nowMs = opts?.nowMs ?? Date.now();
+  const idleThresholdMs = opts?.idleThresholdMs ?? 5 * 60 * 1000;
+  if (
+    idleThresholdMs > 0 &&
+    typeof planMode.updatedAt === "number" &&
+    nowMs - planMode.updatedAt < idleThresholdMs
+  ) {
     return null;
   }
   const steps = planMode.lastPlanSteps;

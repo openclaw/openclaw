@@ -118,3 +118,74 @@ describe("buildActivePlanNudge (Wave A1)", () => {
     expect(out).toContain("update_plan");
   });
 });
+
+describe("buildActivePlanNudge — PR-12 cron-suppression guards", () => {
+  it("PR-12 Bug A2: returns null when planMode.approval === 'pending'", () => {
+    // Pending approval card is on screen — firing a nudge here would
+    // interrupt the user's resolve-the-card flow. Suppressed.
+    const out = buildActivePlanNudge(
+      makePlanMode({
+        approval: "pending",
+        approvalId: "abc",
+        updatedAt: 0, // ancient — would otherwise pass the idle guard
+        lastPlanSteps: [{ step: "X", status: "in_progress" }],
+      }),
+    );
+    expect(out).toBeNull();
+  });
+
+  it("PR-12 Bug A3: returns null when agent was active in the idle window (default 5 min)", () => {
+    // updatedAt < 5 minutes ago → suppress.
+    const now = 1_000_000;
+    const out = buildActivePlanNudge(
+      makePlanMode({
+        approval: "approved",
+        updatedAt: now - 60_000, // 1 minute ago
+        lastPlanSteps: [{ step: "X", status: "in_progress" }],
+      }),
+      { nowMs: now },
+    );
+    expect(out).toBeNull();
+  });
+
+  it("PR-12 Bug A3: fires when idle window is exceeded", () => {
+    const now = 1_000_000;
+    const out = buildActivePlanNudge(
+      makePlanMode({
+        approval: "approved",
+        updatedAt: now - 10 * 60_000, // 10 minutes ago
+        lastPlanSteps: [{ step: "X", status: "in_progress" }],
+      }),
+      { nowMs: now },
+    );
+    expect(out).not.toBeNull();
+  });
+
+  it("PR-12 Bug A3: idleThresholdMs=0 disables the idle guard", () => {
+    const now = 1_000_000;
+    const out = buildActivePlanNudge(
+      makePlanMode({
+        approval: "approved",
+        updatedAt: now - 1, // basically just-now
+        lastPlanSteps: [{ step: "X", status: "in_progress" }],
+      }),
+      { nowMs: now, idleThresholdMs: 0 },
+    );
+    expect(out).not.toBeNull();
+  });
+
+  it("PR-12 Bug A3: missing updatedAt does NOT count as 'recently active' (degrades to allowed)", () => {
+    // If updatedAt is unset (legacy entry, never advanced), don't
+    // suppress — otherwise legacy plans would never get nudges.
+    const now = 1_000_000;
+    const out = buildActivePlanNudge(
+      makePlanMode({
+        approval: "approved",
+        updatedAt: undefined,
+        lastPlanSteps: [{ step: "X", status: "in_progress" }],
+      }),
+      { nowMs: now },
+    );
+    expect(out).not.toBeNull();
+  });
+});
