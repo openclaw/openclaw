@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
-const { loadEnabledBundlePiSettingsSnapshot } = await import("./pi-project-settings.js");
+const { loadEnabledBundlePiSettingsSnapshot } = await import("./pi-project-settings-snapshot.js");
 
 const tempDirs = createTrackedTempDirs();
 
