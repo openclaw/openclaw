@@ -514,7 +514,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveDefaultThinkingLevel: ({ modelId }) =>
       isAnthropicOpusXHighModel(modelId)
         ? "off"
-        : matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
+        : shouldUseAnthropicAdaptiveThinkingDefault(modelId)
           ? "adaptive"
           : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

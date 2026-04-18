@@ -106,6 +106,8 @@ function isClaudeOpus46Model(modelId: string): boolean {
 // All Claude Opus/Sonnet 4.6+ use adaptive thinking (type: "adaptive" + output_config.effort)
 // instead of budget-based thinking (type: "enabled" + budget_tokens).
 const ADAPTIVE_THINKING_PATTERN = /(opus|sonnet)-4[.-]([6-9]|[1-9]\d)(?!\d)/;
+// Opus 4.7+ supports the native "xhigh" effort level.
+const OPUS_XHIGH_PATTERN = /opus-4[.-]([7-9]|[1-9]\d)(?!\d)/;
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return ADAPTIVE_THINKING_PATTERN.test(modelId);
@@ -124,7 +126,7 @@ function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): Anthro
         return "max";
       }
       // Opus 4.7+ supports native xhigh effort.
-      return /opus-4[.-]([7-9]|[1-9]\d)(?!\d)/.test(modelId) ? "xhigh" : "high";
+      return OPUS_XHIGH_PATTERN.test(modelId) ? "xhigh" : "high";
     default:
       return "high";
   }
