@@ -288,7 +288,6 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   isRefreshTokenReusedError,
-  isSafeToCopyOAuthIdentity,
 });
 
 export function resetOAuthRefreshQueuesForTest(): void {

@@ -151,6 +151,31 @@ function assertPathWithinRoot(rootDir: string, targetPath: string): void {
   }
 }
 
+function assertRealPathWithinRoot(rootDir: string, targetPath: string): void {
+  const relative = path.relative(rootDir, targetPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Private secret path must stay under ${rootDir}.`);
+  }
+}
+
+async function enforcePrivatePathMode(
+  resolvedPath: string,
+  expectedMode: number,
+  kind: "directory" | "file",
+): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  await fsp.chmod(resolvedPath, expectedMode);
+  const stat = await fsp.stat(resolvedPath);
+  const actualMode = stat.mode & 0o777;
+  if (actualMode !== expectedMode) {
+    throw new Error(
+      `Private secret ${kind} ${resolvedPath} has insecure permissions ${actualMode.toString(8)}.`,
+    );
+  }
+}
+
 async function ensurePrivateDirectory(rootDir: string, targetDir: string): Promise<void> {
   const resolvedRoot = path.resolve(rootDir);
   const resolvedTarget = path.resolve(targetDir);
@@ -163,12 +188,13 @@ async function ensurePrivateDirectory(rootDir: string, targetDir: string): Promi
     if (!rootStat.isDirectory()) {
       throw new Error(`Private secret root ${resolvedRoot} must be a directory.`);
     }
-    await fsp.chmod(resolvedRoot, PRIVATE_SECRET_DIR_MODE).catch(() => undefined);
+    await enforcePrivatePathMode(resolvedRoot, PRIVATE_SECRET_DIR_MODE, "directory");
     return;
   }
 
   assertPathWithinRoot(resolvedRoot, resolvedTarget);
   await ensurePrivateDirectory(resolvedRoot, resolvedRoot);
+  const resolvedRootReal = await fsp.realpath(resolvedRoot);
 
   let current = resolvedRoot;
   for (const segment of path
@@ -190,7 +216,9 @@ async function ensurePrivateDirectory(rootDir: string, targetDir: string): Promi
       }
       await fsp.mkdir(current, { mode: PRIVATE_SECRET_DIR_MODE });
     }
-    await fsp.chmod(current, PRIVATE_SECRET_DIR_MODE).catch(() => undefined);
+    const currentReal = await fsp.realpath(current);
+    assertRealPathWithinRoot(resolvedRootReal, currentReal);
+    await enforcePrivatePathMode(currentReal, PRIVATE_SECRET_DIR_MODE, "directory");
   }
 }
 
@@ -202,16 +230,21 @@ export async function writePrivateSecretFileAtomic(params: {
   const resolvedRoot = path.resolve(params.rootDir);
   const resolvedFile = path.resolve(params.filePath);
   assertPathWithinRoot(resolvedRoot, resolvedFile);
-  const parentDir = path.dirname(resolvedFile);
-  await ensurePrivateDirectory(resolvedRoot, parentDir);
+  const intendedParentDir = path.dirname(resolvedFile);
+  await ensurePrivateDirectory(resolvedRoot, intendedParentDir);
+  const resolvedRootReal = await fsp.realpath(resolvedRoot);
+  const parentDir = await fsp.realpath(intendedParentDir);
+  assertRealPathWithinRoot(resolvedRootReal, parentDir);
+  const fileName = path.basename(resolvedFile);
+  const finalFilePath = path.join(parentDir, fileName);
 
   try {
-    const stat = await fsp.lstat(resolvedFile);
+    const stat = await fsp.lstat(finalFilePath);
     if (stat.isSymbolicLink()) {
-      throw new Error(`Private secret file ${resolvedFile} must not be a symlink.`);
+      throw new Error(`Private secret file ${finalFilePath} must not be a symlink.`);
     }
     if (!stat.isFile()) {
-      throw new Error(`Private secret file ${resolvedFile} must be a regular file.`);
+      throw new Error(`Private secret file ${finalFilePath} must be a regular file.`);
     }
   } catch (error) {
     if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
@@ -232,10 +265,14 @@ export async function writePrivateSecretFileAtomic(params: {
     } finally {
       await handle.close();
     }
-    await fsp.chmod(tempPath, PRIVATE_SECRET_FILE_MODE).catch(() => undefined);
-    await fsp.rename(tempPath, resolvedFile);
+    await enforcePrivatePathMode(tempPath, PRIVATE_SECRET_FILE_MODE, "file");
+    const refreshedParentReal = await fsp.realpath(intendedParentDir);
+    if (refreshedParentReal !== parentDir) {
+      throw new Error(`Private secret parent directory changed during write for ${finalFilePath}.`);
+    }
+    await fsp.rename(tempPath, finalFilePath);
     createdTemp = false;
-    await fsp.chmod(resolvedFile, PRIVATE_SECRET_FILE_MODE).catch(() => undefined);
+    await enforcePrivatePathMode(finalFilePath, PRIVATE_SECRET_FILE_MODE, "file");
   } finally {
     if (createdTemp) {
       await fsp.unlink(tempPath).catch(() => undefined);
