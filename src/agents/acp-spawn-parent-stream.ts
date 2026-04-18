@@ -72,6 +72,12 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+// Discord hard-limits a single message to 2000 chars; webhook execute posts
+// reject longer bodies. We split final_reply bodies under this to keep the
+// webhook identity path functional for long assistant replies. Reserved
+// headroom (~100 chars) accommodates mention rewriting and a small
+// continuation indicator without hitting the wall.
+const DIRECT_POST_CHUNK_MAX_CHARS = 1_900;
 
 // Phase 2 Discord Surface Overhaul: provider-agnostic allowlists describing
 // which streams the relay is allowed to surface to the parent session. Events
@@ -121,6 +127,53 @@ function truncate(value: string, maxChars: number): string {
     return value.slice(0, maxChars);
   }
   return `${value.slice(0, maxChars - 1)}…`;
+}
+
+// Split a long final_reply body into chunks that fit under Discord's 2000-char
+// message limit. Prefers paragraph boundaries ("\n\n"), then line boundaries,
+// then word boundaries, and finally a hard slice when a single word exceeds the
+// chunk budget. Returns the input unchanged when it already fits. Chunks are
+// trimmed of trailing whitespace but internal newlines are preserved so the
+// assistant's formatting survives across splits.
+export function splitLongFinalReply(text: string, maxChars: number): string[] {
+  const limit = Math.max(1, Math.floor(maxChars));
+  const body = text ?? "";
+  if (!body) {
+    return [];
+  }
+  if (body.length <= limit) {
+    return [body];
+  }
+  const chunks: string[] = [];
+  let remaining = body;
+  while (remaining.length > limit) {
+    // Prefer a paragraph break ("\n\n") within the budget; fall back to the
+    // last newline, then the last whitespace, then a hard slice.
+    const window = remaining.slice(0, limit);
+    let splitAt = window.lastIndexOf("\n\n");
+    if (splitAt <= 0) {
+      splitAt = window.lastIndexOf("\n");
+    }
+    if (splitAt <= 0) {
+      // Last whitespace before the limit so we don't tear words apart.
+      const wsMatch = window.match(/\s[^\s]*$/);
+      if (wsMatch && typeof wsMatch.index === "number" && wsMatch.index > 0) {
+        splitAt = wsMatch.index;
+      }
+    }
+    if (splitAt <= 0) {
+      splitAt = limit;
+    }
+    const head = remaining.slice(0, splitAt).replace(/\s+$/, "");
+    if (head) {
+      chunks.push(head);
+    }
+    remaining = remaining.slice(splitAt).replace(/^\s+/, "");
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks;
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
@@ -324,18 +377,34 @@ export function startAcpSpawnParentStreamRelay(params: {
       return false;
     }
     const threadIdForPost = ctx.threadId;
-    void sendMessage({
-      channel: surface.channel,
-      to: surface.to,
-      content: text,
-      accountId: surface.accountId,
-      ...(typeof threadIdForPost === "number"
+    // Discord hard-rejects single webhook messages > 2000 chars. The webhook
+    // path in the discord plugin does NOT pre-chunk, so long assistant replies
+    // would silently fail here. Split across sequential sends, preserving
+    // paragraph/line boundaries where possible. Short replies take the
+    // single-send fast path below.
+    const chunks = splitLongFinalReply(text, DIRECT_POST_CHUNK_MAX_CHARS);
+    const threadOption =
+      typeof threadIdForPost === "number"
         ? { threadId: threadIdForPost }
         : typeof threadIdForPost === "string" && threadIdForPost
           ? { threadId: threadIdForPost }
-          : {}),
-      bestEffort: true,
-    }).catch((err: unknown) => {
+          : {};
+    const dispatch = async () => {
+      for (const chunk of chunks) {
+        if (!chunk) {
+          continue;
+        }
+        await sendMessage({
+          channel: surface.channel,
+          to: surface.to,
+          content: chunk,
+          accountId: surface.accountId,
+          ...threadOption,
+          bestEffort: true,
+        });
+      }
+    };
+    void dispatch().catch((err: unknown) => {
       relayLog.warn("acp-spawn parent-stream direct final_reply post failed", {
         runId,
         parentSessionKey,
@@ -513,22 +582,38 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!pendingText) {
       return;
     }
-    const snippet = truncate(compactWhitespace(pendingText), STREAM_SNIPPET_MAX_CHARS);
+    const buffered = pendingText;
     const phase = pendingAssistantPhase;
     pendingText = "";
     pendingAssistantPhase = undefined;
-    if (!snippet) {
-      return;
-    }
     const effectivePhase: "commentary" | "final_answer" | undefined =
       options?.terminal && phase !== "commentary" ? "final_answer" : phase;
     const messageClass = classifyRelayStreamEmission({
       stream: "assistant",
       assistantPhase: effectivePhase,
     });
+    // Production bug fix: final_reply content reaches the bound Discord thread
+    // verbatim via directPostFinalReply (and, when no thread is bound, is
+    // spliced into the parent's next turn). Previously we squashed EVERY
+    // assistant flush to a 220-char snippet and prefixed it with the relay
+    // label, which meant long-form Claude/Codex replies never reached the
+    // user — only a truncated 220-char preview with a redundant "codex: "
+    // prefix (the webhook persona "⚙ codex" already conveys identity). For
+    // final_reply we now preserve the full buffered text (trimmed, newlines
+    // intact) and skip the relay-label prefix; directPostFinalReply handles
+    // Discord's 2000-char hard limit by splitting across sequential posts.
+    // progress-class flushes keep the snippet+label format so parent session-
+    // queue summaries stay compact.
+    const body =
+      messageClass === "final_reply"
+        ? buffered.trim()
+        : `${relayLabel}: ${truncate(compactWhitespace(buffered), STREAM_SNIPPET_MAX_CHARS)}`;
+    if (!body) {
+      return;
+    }
     const contextKey =
       messageClass === "final_reply" ? `${contextPrefix}:final_reply` : `${contextPrefix}:progress`;
-    emit(`${relayLabel}: ${snippet}`, contextKey, messageClass);
+    emit(body, contextKey, messageClass);
   };
 
   const scheduleFlush = () => {
@@ -663,7 +748,23 @@ export function startAcpSpawnParentStreamRelay(params: {
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
       }
-      if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
+      // Production bug fix: for phase-less streams (Claude ACP deltas omit
+      // `phase`) the SIZE-based immediate flush would split the full assistant
+      // reply into truncated 220-char `progress` snippets, leaving lifecycle-
+      // end with nothing to promote to `final_reply`. Defer size-triggered
+      // flushes until an explicit phase is observed or the buffer truly
+      // overflows STREAM_BUFFER_MAX_CHARS (already tail-sliced above). The
+      // `"\n\n"` boundary-triggered flush is retained so operators can still
+      // receive mid-stream progress summaries from Codex-style (phased)
+      // streams; the timer-flush deferral in `scheduleFlush` covers the time
+      // axis symmetrically for phase-less streams.
+      const sizeTriggered = pendingText.length >= STREAM_SNIPPET_MAX_CHARS;
+      const boundaryTriggered = delta.includes("\n\n");
+      if (sizeTriggered && !observedExplicitPhase) {
+        scheduleFlush();
+        return;
+      }
+      if (sizeTriggered || boundaryTriggered) {
         flushPending();
         return;
       }

@@ -123,7 +123,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
+    // Production bug fix: final_reply emissions no longer carry the "codex: "
+    // relay-label prefix — the webhook persona conveys identity, and for the
+    // enqueue fallback path the child's full reply is preferred verbatim.
+    expect(texts.some((text) => text.includes("hello from child"))).toBe(true);
+    expect(texts.some((text) => text.startsWith("codex: hello from child"))).toBe(false);
     expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
     expect(
       enqueueSystemEventMock.mock.calls.every(
@@ -182,7 +186,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
       (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass === "final_reply",
     );
     expect(finalCalls.length).toBeGreaterThan(0);
-    expect(String(finalCalls[0][0])).toContain("codex: This is the final answer.");
+    // Production bug fix: final_reply no longer prefixes the relay label.
+    expect(String(finalCalls[0][0])).toContain("This is the final answer.");
+    expect(String(finalCalls[0][0]).startsWith("codex:")).toBe(false);
     relay.dispose();
   });
 
@@ -264,7 +270,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("resumed output."))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: resumed output"))).toBe(true);
+    // Production bug fix: final_reply no longer prefixes the relay label.
+    expect(texts.some((text) => text.includes("resumed output"))).toBe(true);
 
     emitAgentEvent({
       runId: "run-2",
@@ -391,7 +398,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    // Production bug fix: final_reply no longer prefixes the relay label.
+    expect(texts.some((text) => text.includes("hello world"))).toBe(true);
+    expect(texts.some((text) => text.startsWith("codex: hello world"))).toBe(false);
     relay.dispose();
   });
 
@@ -451,7 +460,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
-    expect(texts.some((text) => text.includes("codex: final answer ready"))).toBe(true);
+    // Production bug fix: final_reply no longer prefixes the relay label.
+    expect(texts.some((text) => text.includes("final answer ready"))).toBe(true);
+    expect(texts.some((text) => text.startsWith("codex: final answer ready"))).toBe(false);
     relay.dispose();
   });
 
@@ -674,6 +685,210 @@ describe("startAcpSpawnParentStreamRelay", () => {
       | undefined;
     expect(postArgs?.threadId).toBe("thread-g5a");
     expect(postArgs?.content).toContain("Claude's in-progress answer fragment");
+    relay.dispose();
+  });
+
+  // Production bug fix (Phase 2.5/3.5 follow-up): the operator report was that
+  // long-form assistant replies never reached the thread. Before the fix,
+  // flushPending squashed ALL assistant deltas to a 220-char snippet + relay-
+  // label prefix, so the direct-post webhook path received a truncated preview
+  // instead of the real reply.
+  it("preserves full assistant text on final_reply flush (no 220-char snippet truncation)", () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-long",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-long",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:claude:acp:long",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 5_000,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // 600-char assistant answer — comfortably longer than STREAM_SNIPPET_MAX_CHARS
+    // (220) but well under the per-Discord-message chunk budget (~1900).
+    const longReply = `Here is the full analysis you asked for. ${"Detail ".repeat(80)}Conclusion.`;
+    emitAgentEvent({
+      runId: "run-long",
+      stream: "assistant",
+      data: { delta: longReply },
+    });
+    emitAgentEvent({
+      runId: "run-long",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    const postArgs = sendMessageMock.mock.calls[0]?.[0] as
+      | { threadId?: string | number; content?: string }
+      | undefined;
+    expect(postArgs?.threadId).toBe("thread-long");
+    // Full body survives end-to-end — no "…" truncation suffix, no relay label.
+    expect(postArgs?.content?.length ?? 0).toBeGreaterThan(500);
+    expect(postArgs?.content).toContain("Here is the full analysis");
+    expect(postArgs?.content).toContain("Conclusion.");
+    expect(postArgs?.content?.startsWith("claude:")).toBe(false);
+    relay.dispose();
+  });
+
+  it("splits very long final_reply content across multiple webhook posts under the Discord 2000-char limit", async () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-split",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-split",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:claude:acp:split",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 5_000,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // ~300-char paragraph; 8 paragraphs + intro + final = ~2700 chars, well
+    // under STREAM_BUFFER_MAX_CHARS (4000) and well over the 1900-char chunk
+    // budget, so we expect 2 output chunks. Pieces carry paragraph breaks as
+    // leading/trailing "\n" baked into each content delta — whitespace-only
+    // deltas are dropped by the relay's early-exit, so "\n\n" must
+    // accumulate across consecutive non-empty deltas.
+    const paragraph = "Lorem ipsum ".repeat(25); // ~300 chars
+    const pieces = [
+      "Intro paragraph.\n",
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      `\n${paragraph}\n`,
+      "\nFinal paragraph.",
+    ];
+    for (const piece of pieces) {
+      emitAgentEvent({
+        runId: "run-split",
+        stream: "assistant",
+        data: { delta: piece },
+      });
+    }
+    emitAgentEvent({
+      runId: "run-split",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    // Flush microtasks so the sequential awaits inside directPostFinalReply's
+    // async dispatcher complete before we assert on the mock's call count.
+    vi.runAllTicks();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Multiple sequential sendMessage posts, each under the hard Discord limit.
+    expect(sendMessageMock.mock.calls.length).toBeGreaterThan(1);
+    for (const call of sendMessageMock.mock.calls) {
+      const args = call[0] as { content?: string; threadId?: string | number };
+      expect(args.threadId).toBe("thread-split");
+      expect(args.content?.length ?? 0).toBeLessThanOrEqual(2_000);
+    }
+    // Concatenated chunks should include both the intro and final paragraphs.
+    const combined = sendMessageMock.mock.calls
+      .map((c) => (c[0] as { content?: string } | undefined)?.content ?? "")
+      .join("\n");
+    expect(combined).toContain("Intro paragraph.");
+    expect(combined).toContain("Final paragraph.");
+    relay.dispose();
+  });
+
+  it("keeps progress-class flushes snippet-formatted with the relay-label prefix", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-progress",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:progress",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // Phase-less delta under STREAM_SNIPPET_MAX_CHARS (220) with a trailing
+    // "\n\n" paragraph-boundary trigger. Size-based deferral does not apply
+    // (sizeTriggered=false), so the boundary-triggered flush still ships as
+    // progress for phase-less streams — mirroring the real-world case where
+    // a mid-stream paragraph completes and we surface a snippet summary.
+    const shortProgress = `${"A".repeat(180)}\n\n`;
+    emitAgentEvent({
+      runId: "run-progress",
+      stream: "assistant",
+      data: { delta: shortProgress },
+    });
+    vi.advanceTimersByTime(15);
+
+    const progressEmissions = enqueueSystemEventMock.mock.calls.filter(
+      (call) => (call[1] as { messageClass?: string } | undefined)?.messageClass === "progress",
+    );
+    expect(progressEmissions.length).toBeGreaterThan(0);
+    const body = String(progressEmissions[0][0]);
+    // progress stays prefixed AND bounded by the snippet length (label + up
+    // to 220 chars) so parent session-queue summaries stay compact.
+    expect(body.startsWith("codex: ")).toBe(true);
+    expect(body.length).toBeLessThanOrEqual("codex: ".length + 220);
+    relay.dispose();
+  });
+
+  it("preserves newlines in final_reply bodies (does not squash paragraph breaks)", () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-fmt",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-fmt",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:claude:acp:fmt",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 5_000,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // Stream the reply so no single delta contains "\n\n" (which would
+    // trigger the phase-less boundary-flush-as-progress path) AND each delta
+    // has some non-whitespace content (deltas that trim to "" are dropped by
+    // the relay early-exit). The buffered text accumulates, and lifecycle-end
+    // promotes it to final_reply with paragraph breaks intact.
+    for (const piece of ["First line.\n", "\nSecond line.\n", "\nThird line."]) {
+      emitAgentEvent({
+        runId: "run-fmt",
+        stream: "assistant",
+        data: { delta: piece },
+      });
+    }
+    emitAgentEvent({
+      runId: "run-fmt",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(sendMessageMock).toHaveBeenCalled();
+    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as { content?: string } | undefined;
+    // Paragraph breaks survive — compactWhitespace would have collapsed these
+    // into single spaces, which is unusable for Discord rendering.
+    expect(postArgs?.content).toContain("First line.\n\nSecond line.");
+    expect(postArgs?.content).toContain("Third line.");
     relay.dispose();
   });
 });
