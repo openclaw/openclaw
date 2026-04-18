@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/io.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
@@ -221,13 +221,20 @@ describe("exec approvals", () => {
   let previousUserProfile: string | undefined;
   let previousBundledPluginsDir: string | undefined;
   let previousDisableBundledPlugins: string | undefined;
+  let tempRoot = "";
+  let tempCaseIndex = 0;
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  });
 
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
     previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
+    await fs.mkdir(tempDir, { recursive: true });
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
@@ -260,6 +267,12 @@ describe("exec approvals", () => {
       delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     } else {
       process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
+    }
+  });
+
+  afterAll(async () => {
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 
