@@ -479,7 +479,7 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 
 ---
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
 not under `agents.defaults.memorySearch`.
