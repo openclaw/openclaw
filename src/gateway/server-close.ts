@@ -15,6 +15,7 @@ const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
+const SESSION_MCP_RUNTIME_DISPOSE_ALL_TIMEOUT_MS = 10_000;
 
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -189,7 +190,19 @@ export function createGatewayCloseHandler(params: {
         }
       }
       params.chatRunState.clear();
-      await disposeAllSessionMcpRuntimes().catch(() => {});
+      const sessionMcpDisposeTimeout = createTimeoutRace(
+        SESSION_MCP_RUNTIME_DISPOSE_ALL_TIMEOUT_MS,
+        () => {
+          shutdownLog.warn(
+            `session MCP runtime disposal exceeded ${SESSION_MCP_RUNTIME_DISPOSE_ALL_TIMEOUT_MS}ms; continuing shutdown`,
+          );
+        },
+      );
+      await Promise.race([
+        disposeAllSessionMcpRuntimes().catch(() => {}),
+        sessionMcpDisposeTimeout.promise,
+      ]);
+      sessionMcpDisposeTimeout.clear();
       for (const c of params.clients) {
         try {
           c.socket.close(1012, "service restart");

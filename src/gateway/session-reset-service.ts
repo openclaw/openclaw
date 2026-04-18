@@ -49,6 +49,7 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+const SESSION_MCP_RUNTIME_DISPOSE_TIMEOUT_MS = 5_000;
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -258,11 +259,6 @@ async function ensureSessionRuntimeCleanup(params: {
   }
   clearSessionQueues([...queueKeys]);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
-  if (params.sessionId) {
-    await disposeSessionMcpRuntime(params.sessionId).catch((err) => {
-      logVerbose(`bundle-mcp cleanup failed for session ${params.sessionId}: ${String(err)}`);
-    });
-  }
   if (!params.sessionId) {
     clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
@@ -272,6 +268,25 @@ async function ensureSessionRuntimeCleanup(params: {
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
+    let disposeTimer: ReturnType<typeof setTimeout> | undefined;
+    const disposeOutcome = await Promise.race([
+      disposeSessionMcpRuntime(params.sessionId)
+        .then(() => "disposed" as const)
+        .catch((err: unknown) => {
+          logVerbose(`bundle-mcp cleanup failed for session ${params.sessionId}: ${String(err)}`);
+          return "error" as const;
+        }),
+      new Promise<"timeout">((resolve) => {
+        disposeTimer = setTimeout(() => resolve("timeout"), SESSION_MCP_RUNTIME_DISPOSE_TIMEOUT_MS);
+        disposeTimer.unref?.();
+      }),
+    ]);
+    if (disposeTimer) {
+      clearTimeout(disposeTimer);
+    }
+    if (disposeOutcome === "timeout") {
+      logVerbose(`bundle-mcp cleanup timed out for session ${params.sessionId}`);
+    }
     await closeTrackedBrowserTabs();
     return undefined;
   }
