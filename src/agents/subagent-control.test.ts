@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as sessions from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -18,6 +18,20 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
+
+function setSubagentControlDepsForTest(
+  overrides: Parameters<typeof __testing.setDepsForTest>[0] = {},
+) {
+  __testing.setDepsForTest({
+    abortEmbeddedPiRun: () => false,
+    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+    ...overrides,
+  });
+}
+
+beforeEach(() => {
+  setSubagentControlDepsForTest();
+});
 
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
@@ -71,7 +85,7 @@ describe("sendControlledSubagentMessage", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent") {
           throw new Error("gateway unavailable");
@@ -170,7 +184,7 @@ describe("sendControlledSubagentMessage", () => {
       outcome: { status: "ok" },
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "chat.history") {
           return { messages: [] } as T;
@@ -245,7 +259,7 @@ describe("sendControlledSubagentMessage", () => {
       outcome: { status: "ok" },
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "chat.history") {
           return { messages: [] } as T;
@@ -314,7 +328,7 @@ describe("sendControlledSubagentMessage", () => {
       content: [{ type: "text", text: "older reply from a previous run" }],
     };
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "chat.history") {
           historyCalls += 1;
@@ -1101,7 +1115,7 @@ describe("steerControlledSubagentRun", () => {
       .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
       .mockReturnValue(false);
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
@@ -1153,7 +1167,7 @@ describe("steerControlledSubagentRun", () => {
   });
 
   it("rejects steering runs that are no longer tracked in the registry", async () => {
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async () => {
         throw new Error("gateway should not be called");
       },
@@ -1227,7 +1241,7 @@ describe("steerControlledSubagentRun", () => {
       startedAt: Date.now() - 500,
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
