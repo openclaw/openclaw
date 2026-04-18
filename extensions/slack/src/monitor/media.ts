@@ -5,6 +5,7 @@ import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -447,7 +448,10 @@ export async function resolveSlackThreadStarter(params: {
     });
     evictThreadStarterCache();
     return starter;
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `slack thread starter fetch failed channel=${params.channelId} ts=${params.threadTs}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -539,7 +543,10 @@ export async function resolveSlackThreadHistory(params: {
       ts: msg.ts,
       files: msg.files,
     }));
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `slack thread history fetch failed channel=${params.channelId} ts=${params.threadTs}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return [];
   }
 }
