@@ -4,6 +4,11 @@
 id: thread-follow-up
 title: Threaded follow-up
 surface: thread
+coverage:
+  primary:
+    - channels.threads
+  secondary:
+    - channels.qa-channel
 objective: Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.
 successCriteria:
   - Agent creates or uses a thread for deeper work.

@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
 type RunMessageActionParams = {
+  cfg?: unknown;
   action: string;
   params: Record<string, unknown>;
 };

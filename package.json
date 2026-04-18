@@ -29,6 +29,7 @@
     "dist/",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
@@ -212,6 +213,10 @@
       "types": "./dist/plugin-sdk/channel-reply-pipeline.d.ts",
       "default": "./dist/plugin-sdk/channel-reply-pipeline.js"
     },
+    "./plugin-sdk/channel-reply-options-runtime": {
+      "types": "./dist/plugin-sdk/channel-reply-options-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-reply-options-runtime.js"
+    },
     "./plugin-sdk/channel-runtime": {
       "types": "./dist/plugin-sdk/channel-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-runtime.js"
@@ -283,6 +288,10 @@
     "./plugin-sdk/thread-bindings-runtime": {
       "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
+    },
+    "./plugin-sdk/thread-bindings-session-runtime": {
+      "types": "./dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
+      "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
     },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
@@ -419,6 +428,10 @@
     "./plugin-sdk/account-resolution": {
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
+    },
+    "./plugin-sdk/account-resolution-runtime": {
+      "types": "./dist/plugin-sdk/account-resolution-runtime.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
     "./plugin-sdk/agent-config-primitives": {
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
@@ -628,6 +641,10 @@
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
     },
+    "./plugin-sdk/channel-pairing-paths": {
+      "types": "./dist/plugin-sdk/channel-pairing-paths.d.ts",
+      "default": "./dist/plugin-sdk/channel-pairing-paths.js"
+    },
     "./plugin-sdk/channel-policy": {
       "types": "./dist/plugin-sdk/channel-policy.d.ts",
       "default": "./dist/plugin-sdk/channel-policy.js"
@@ -676,6 +693,10 @@
       "types": "./dist/plugin-sdk/session-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-binding-runtime.js"
     },
+    "./plugin-sdk/session-key-runtime": {
+      "types": "./dist/plugin-sdk/session-key-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-key-runtime.js"
+    },
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
@@ -695,6 +716,10 @@
     "./plugin-sdk/global-singleton": {
       "types": "./dist/plugin-sdk/global-singleton.d.ts",
       "default": "./dist/plugin-sdk/global-singleton.js"
+    },
+    "./plugin-sdk/directory-config-runtime": {
+      "types": "./dist/plugin-sdk/directory-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/directory-config-runtime.js"
     },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",

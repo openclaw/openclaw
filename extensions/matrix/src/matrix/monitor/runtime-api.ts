@@ -15,8 +15,10 @@ export {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
-export { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-reply-pipeline";
-export { createTypingCallbacks } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export {
+  createReplyPrefixOptions,
+  createTypingCallbacks,
+} from "openclaw/plugin-sdk/channel-reply-options-runtime";
 export { formatLocationText, toLocationContext } from "openclaw/plugin-sdk/channel-location";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 export { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-logging";

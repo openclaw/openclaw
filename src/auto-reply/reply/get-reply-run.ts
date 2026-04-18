@@ -15,7 +15,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { isAcpSessionKey, isSubagentSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";

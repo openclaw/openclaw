@@ -182,6 +182,29 @@ function shouldUseStreaming(params: {
   return true;
 }
 
+export async function resolveSlackStreamRecipientTeamId(params: {
+  client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
+  token: string;
+  userId?: PreparedSlackMessage["message"]["user"];
+  fallbackTeamId?: string;
+}): Promise<string | undefined> {
+  if (params.userId) {
+    try {
+      const info = await params.client.users.info({
+        token: params.token,
+        user: params.userId,
+      });
+      const teamId = info.user?.team_id ?? info.user?.profile?.team;
+      if (teamId) {
+        return teamId;
+      }
+    } catch (err) {
+      logVerbose(`slack-stream: users.info team lookup failed (${String(err)})`);
+    }
+  }
+  return params.fallbackTeamId;
+}
+
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
@@ -490,7 +513,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
-          teamId: ctx.teamId,
+          teamId: await resolveSlackStreamRecipientTeamId({
+            client: ctx.app.client,
+            token: ctx.botToken,
+            userId: message.user,
+            fallbackTeamId: ctx.teamId,
+          }),
           userId: message.user,
         });
         observedReplyDelivery = true;

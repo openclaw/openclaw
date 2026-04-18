@@ -51,6 +51,44 @@ const qaScenarioExecutionSchema = z.object({
   config: qaScenarioConfigSchema.optional(),
 });
 
+const qaCoverageIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
+    message: "coverage ids must use lowercase dotted or dashed tokens",
+  });
+
+const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
+
+const qaScenarioCoverageSchema = z
+  .object({
+    primary: qaCoverageIdListSchema,
+    secondary: qaCoverageIdListSchema.optional(),
+  })
+  .superRefine((coverage, ctx) => {
+    const seen = new Set<string>();
+    const coverageEntries = [
+      ["primary", coverage.primary],
+      ["secondary", coverage.secondary],
+    ] as const;
+    for (const [intent, ids] of coverageEntries) {
+      if (!ids) {
+        continue;
+      }
+      for (const [index, id] of ids.entries()) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          continue;
+        }
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [intent, index],
+          message: `duplicate coverage id: ${id}`,
+        });
+      }
+    }
+  });
+
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
 });
@@ -138,6 +176,9 @@ const qaSeedScenarioSchema = z.object({
   title: z.string().trim().min(1),
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
+  coverage: qaScenarioCoverageSchema.optional(),
+  surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
+  risk: z.enum(["low", "medium", "high"]).optional(),
   capabilities: z.array(z.string().trim().min(1)).optional(),
   lane: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
   riskLevel: z.string().trim().min(1).optional(),
