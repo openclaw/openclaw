@@ -1,37 +1,39 @@
-import { Type } from "@sinclair/typebox";
+import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
-  enablePluginInConfig,
-  getScopedCredentialValue,
-  readNumberParam,
-  readStringParam,
-  setScopedCredentialValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { runDuckDuckGoSearch } from "./ddg-client.js";
+} from "openclaw/plugin-sdk/provider-web-search-contract";
 
-const DuckDuckGoSearchSchema = Type.Object(
-  {
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: 10,
-      }),
-    ),
-    region: Type.Optional(
-      Type.String({
-        description: "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
-      }),
-    ),
-    safeSearch: Type.Optional(
-      Type.String({
-        description: "SafeSearch level: strict, moderate, or off.",
-      }),
-    ),
+type DuckDuckGoClientModule = typeof import("./ddg-client.js");
+
+let duckDuckGoClientModulePromise: Promise<DuckDuckGoClientModule> | undefined;
+
+function loadDuckDuckGoClientModule(): Promise<DuckDuckGoClientModule> {
+  duckDuckGoClientModulePromise ??= import("./ddg-client.js");
+  return duckDuckGoClientModulePromise;
+}
+
+const DuckDuckGoSearchSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Search query string." },
+    count: {
+      type: "number",
+      description: "Number of results to return (1-10).",
+      minimum: 1,
+      maximum: 10,
+    },
+    region: {
+      type: "string",
+      description: "Optional DuckDuckGo region code such as us-en, uk-en, or de-de.",
+    },
+    safeSearch: {
+      type: "string",
+      description: "SafeSearch level: strict, moderate, or off.",
+    },
   },
-  { additionalProperties: false },
-);
+  additionalProperties: false,
+} satisfies Record<string, unknown>;
 
 export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -45,17 +47,18 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 100,
     credentialPath: "",
-    inactiveSecretPaths: [],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "duckduckgo"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "duckduckgo", value),
-    applySelectionConfig: (config) => enablePluginInConfig(config, "duckduckgo").config,
+    ...createWebSearchProviderContractFields({
+      credentialPath: "",
+      searchCredential: { type: "scoped", scopeId: "duckduckgo" },
+      selectionPluginId: "duckduckgo",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using DuckDuckGo. Returns titles, URLs, and snippets with no API key required.",
       parameters: DuckDuckGoSearchSchema,
-      execute: async (args) =>
-        await runDuckDuckGoSearch({
+      execute: async (args) => {
+        const { runDuckDuckGoSearch } = await loadDuckDuckGoClientModule();
+        return await runDuckDuckGoSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
           count: readNumberParam(args, "count", { integer: true }),
@@ -65,7 +68,8 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
             | "moderate"
             | "off"
             | undefined,
-        }),
+        });
+      },
     }),
   };
 }

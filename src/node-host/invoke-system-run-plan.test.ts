@@ -921,36 +921,31 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-script-binding-",
-      fileName: "run.sh",
-      body: "#!/bin/sh\necho SAFE\n",
-    });
-  });
-
-  it("keeps fail-closed behavior for empty shell payload files", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-empty-binding-",
-      fileName: "empty",
-      body: "",
-    });
-  });
-
-  it("does not treat weak MZ text headers as native binaries", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-mz-text-binding-",
-      fileName: "mz-script",
-      body: "MZ not really a PE file\n",
-    });
-  });
-
-  it("keeps fail-closed behavior for unknown NUL-bearing headers", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-nul-header-binding-",
-      fileName: "nul-script",
-      body: "SAFE\u0000maybe-binary\n",
-    });
+  it("keeps fail-closed behavior for mutable or ambiguous shell payload files", () => {
+    for (const testCase of [
+      {
+        tmpPrefix: "openclaw-shell-script-binding-",
+        fileName: "run.sh",
+        body: "#!/bin/sh\necho SAFE\n",
+      },
+      {
+        tmpPrefix: "openclaw-shell-empty-binding-",
+        fileName: "empty",
+        body: "",
+      },
+      {
+        tmpPrefix: "openclaw-shell-mz-text-binding-",
+        fileName: "mz-script",
+        body: "MZ not really a PE file\n",
+      },
+      {
+        tmpPrefix: "openclaw-shell-nul-header-binding-",
+        fileName: "nul-script",
+        body: "SAFE\u0000maybe-binary\n",
+      },
+    ]) {
+      expectShellPayloadApprovalDenied(testCase);
+    }
   });
 
   it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
@@ -1052,55 +1047,44 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
-  it("allows pnpm dlx package binaries that do not bind a mutable local file", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = createFixtureDir("openclaw-pnpm-dlx-package-bin-");
-        expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "hello"], tmp);
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with data-like runtime names", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = createFixtureDir("openclaw-pnpm-dlx-package-runtime-token-");
-        expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node"], tmp);
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with multi-token data-like runtime names", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = createFixtureDir("openclaw-pnpm-dlx-package-runtime-token-multi-");
-        expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node", "hello"], tmp);
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with local file arguments", () => {
+  it("allows pnpm dlx package binaries that do not bind mutable local files", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],
       run: () => {
-        const tmp = createFixtureDir("openclaw-pnpm-dlx-package-file-");
-        fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
-        fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
-        expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "eslint", "src/index.ts"], tmp);
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with interpreter-like data tails", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = createFixtureDir("openclaw-pnpm-dlx-package-data-tail-");
-        fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
-        expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "tsx", "./run.ts"], tmp);
+        const cases = [
+          {
+            prefix: "openclaw-pnpm-dlx-package-bin-",
+            command: ["pnpm", "dlx", "cowsay", "hello"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-runtime-token-",
+            command: ["pnpm", "dlx", "cowsay", "node"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-runtime-token-multi-",
+            command: ["pnpm", "dlx", "cowsay", "node", "hello"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-file-",
+            command: ["pnpm", "dlx", "eslint", "src/index.ts"],
+            setup: (tmp: string) => {
+              fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
+              fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
+            },
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-data-tail-",
+            command: ["pnpm", "dlx", "cowsay", "tsx", "./run.ts"],
+            setup: (tmp: string) => {
+              fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
+            },
+          },
+        ];
+        for (const testCase of cases) {
+          const tmp = createFixtureDir(testCase.prefix);
+          testCase.setup?.(tmp);
+          expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
+        }
       },
     });
   });

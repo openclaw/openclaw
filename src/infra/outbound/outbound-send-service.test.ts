@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
 const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
@@ -145,9 +145,11 @@ describe("executeSendAction", () => {
     });
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
+  });
+
+  beforeEach(() => {
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();

@@ -227,14 +227,7 @@ describe("plugin activation boundary", () => {
       loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(
         ([params]) => params.artifactBasename,
       ),
-    ).toEqual([
-      "browser-host-inspection.js",
-      "browser-control-auth.js",
-      "browser-profiles.js",
-      "browser-profiles.js",
-      "browser-host-inspection.js",
-      "browser-host-inspection.js",
-    ]);
+    ).toEqual(["browser-host-inspection.js", "browser-control-auth.js", "browser-profiles.js"]);
 
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
     await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);

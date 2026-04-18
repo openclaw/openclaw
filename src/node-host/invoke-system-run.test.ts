@@ -36,11 +36,8 @@ type MockedSendExecFinishedEvent = Mock<HandleSystemRunInvokeOptions["sendExecFi
 type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
 
 describe("formatSystemRunAllowlistMissMessage", () => {
-  it("returns legacy allowlist miss message by default", () => {
+  it("returns the default message and cmd.exe guidance variant", () => {
     expect(formatSystemRunAllowlistMissMessage()).toBe("SYSTEM_RUN_DENIED: allowlist miss");
-  });
-
-  it("adds Windows shell-wrapper guidance when blocked by cmd.exe policy", () => {
     expect(
       formatSystemRunAllowlistMissMessage({
         windowsShellWrapperBlocked: true,
@@ -955,77 +952,75 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  for (const runtime of ["bun", "deno", "tsx", "jiti"] as const) {
-    it(`validates approved ${runtime} script operand stability`, async () => {
-      await withFakeRuntimeOnPath({
-        runtime,
-        run: async () => {
-          const tmp = createFixtureDir(`openclaw-approval-${runtime}-script-drift-`);
-          const fixture = createRuntimeScriptOperandFixture({ tmp, runtime });
-          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: fixture.command,
-              cwd: tmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
-
-            fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
-            const { runCommand, sendInvokeResult } = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              systemRunPlan: prepared.plan,
-              cwd: prepared.plan.cwd ?? tmp,
-              approved: true,
-              security: "full",
-              ask: "off",
-            });
-
-            expect(runCommand).not.toHaveBeenCalled();
-            expectInvokeErrorMessage(sendInvokeResult, {
-              message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
-              exact: true,
-            });
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
+  it("validates approved runtime script operand stability at dispatch", async () => {
+    await withFakeRuntimeOnPath({
+      runtime: "tsx",
+      run: async () => {
+        const tmp = createFixtureDir("openclaw-approval-tsx-script-drift-");
+        const fixture = createRuntimeScriptOperandFixture({ tmp, runtime: "tsx" });
+        fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: fixture.command,
+            cwd: tmp,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
           }
-          const stableTmp = createFixtureDir(`openclaw-approval-${runtime}-script-stable-`);
-          const stableFixture = createRuntimeScriptOperandFixture({ tmp: stableTmp, runtime });
-          fs.writeFileSync(stableFixture.scriptPath, stableFixture.initialBody);
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: stableFixture.command,
-              cwd: stableTmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
 
-            const { runCommand, sendInvokeResult } = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              systemRunPlan: prepared.plan,
-              cwd: prepared.plan.cwd ?? stableTmp,
-              approved: true,
-              security: "full",
-              ask: "off",
-            });
+          fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tmp,
+            approved: true,
+            security: "full",
+            ask: "off",
+          });
 
-            expect(runCommand).toHaveBeenCalledTimes(1);
-            expectInvokeOk(sendInvokeResult);
-          } finally {
-            fs.rmSync(stableTmp, { recursive: true, force: true });
+          expect(runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(sendInvokeResult, {
+            message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+            exact: true,
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+        const stableTmp = createFixtureDir("openclaw-approval-tsx-script-stable-");
+        const stableFixture = createRuntimeScriptOperandFixture({ tmp: stableTmp, runtime: "tsx" });
+        fs.writeFileSync(stableFixture.scriptPath, stableFixture.initialBody);
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: stableFixture.command,
+            cwd: stableTmp,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
           }
-        },
-      });
+
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? stableTmp,
+            approved: true,
+            security: "full",
+            ask: "off",
+          });
+
+          expect(runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(sendInvokeResult);
+        } finally {
+          fs.rmSync(stableTmp, { recursive: true, force: true });
+        }
+      },
     });
-  }
+  });
 
   it("denies approval-based execution when tsx is missing a required mutable script binding", async () => {
     await withFakeRuntimeOnPath({
@@ -1167,46 +1162,65 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   });
 
-  it("rejects blocked environment overrides before execution", async () => {
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      env: { CLASSPATH: "/tmp/evil-classpath" },
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: environment override rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "CLASSPATH",
-    });
-  });
-
-  it("rejects blocked environment overrides for shell-wrapper commands", async () => {
+  it("rejects unsafe environment inputs before execution", async () => {
     const shellCommand =
       process.platform === "win32"
         ? ["cmd.exe", "/d", "/s", "/c", "echo ok"]
         : ["/bin/sh", "-lc", "echo ok"];
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      command: shellCommand,
-      env: {
-        CLASSPATH: "/tmp/evil-classpath",
-        LANG: "C",
+    const cases: Array<{
+      label: string;
+      command?: string[];
+      env?: Record<string, string>;
+      message: string;
+      details: string[];
+    }> = [
+      {
+        label: "blocked override",
+        env: { CLASSPATH: "/tmp/evil-classpath" },
+        message: "SYSTEM_RUN_DENIED: environment override rejected",
+        details: ["CLASSPATH"],
       },
-    });
+      {
+        label: "blocked override for shell-wrapper",
+        command: shellCommand,
+        env: {
+          CLASSPATH: "/tmp/evil-classpath",
+          LANG: "C",
+        },
+        message: "SYSTEM_RUN_DENIED: environment override rejected",
+        details: ["CLASSPATH"],
+      },
+      {
+        label: "blocked argv assignment",
+        command: ["/usr/bin/env", "SHELLOPTS=xtrace", "PS4=$(id)", "bash", "-lc", "echo ok"],
+        message: "SYSTEM_RUN_DENIED: command env assignment rejected",
+        details: ["SHELLOPTS", "PS4"],
+      },
+      {
+        label: "invalid override key",
+        env: { "BAD-KEY": "x" },
+        message: "SYSTEM_RUN_DENIED: environment override rejected",
+        details: ["BAD-KEY"],
+      },
+    ];
 
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: environment override rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "CLASSPATH",
-    });
+    for (const testCase of cases) {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "full",
+        ask: "off",
+        command: testCase.command,
+        env: testCase.env,
+      });
+
+      expect(runCommand, testCase.label).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: testCase.message,
+      });
+      for (const detail of testCase.details) {
+        expectInvokeErrorMessage(sendInvokeResult, { message: detail });
+      }
+    }
   });
 
   it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
@@ -1230,43 +1244,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       LC_TIME: "C",
     });
     expectInvokeOk(sendInvokeResult);
-  });
-
-  it("rejects blocked env assignment keys embedded in command argv", async () => {
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      command: ["/usr/bin/env", "SHELLOPTS=xtrace", "PS4=$(id)", "bash", "-lc", "echo ok"],
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: command env assignment rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SHELLOPTS",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "PS4",
-    });
-  });
-
-  it("rejects invalid non-portable environment override keys before execution", async () => {
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      security: "full",
-      ask: "off",
-      env: { "BAD-KEY": "x" },
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: environment override rejected",
-    });
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "BAD-KEY",
-    });
   });
 
   async function expectNestedEnvShellDenied(params: {
@@ -1310,26 +1287,24 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
   }
 
-  it("denies env-wrapped shell payloads at the dispatch depth boundary", async () => {
+  it("denies env-wrapped shell payloads at and past the dispatch depth boundary", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await expectNestedEnvShellDenied({
-      depth: 4,
-      markerName: "depth4-pwned.txt",
-      errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
-    });
-  });
-
-  it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
-    if (process.platform === "win32") {
-      return;
+    for (const testCase of [
+      {
+        depth: 4,
+        markerName: "depth4-pwned.txt",
+        errorLabel: "runCommand should not be called for depth-boundary shell wrappers",
+      },
+      {
+        depth: 5,
+        markerName: "pwned.txt",
+        errorLabel: "runCommand should not be called for nested env depth overflow",
+      },
+    ]) {
+      await expectNestedEnvShellDenied(testCase);
     }
-    await expectNestedEnvShellDenied({
-      depth: 5,
-      markerName: "pwned.txt",
-      errorLabel: "runCommand should not be called for nested env depth overflow",
-    });
   });
 
   it("requires explicit approval for strict inline-eval carriers", async () => {

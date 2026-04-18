@@ -136,6 +136,13 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
+let ciaoModulePromise: Promise<typeof import("@homebridge/ciao")> | null = null;
+
+async function loadCiaoModule(): Promise<typeof import("@homebridge/ciao")> {
+  ciaoModulePromise ??= import("@homebridge/ciao");
+  return ciaoModulePromise;
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
 ): Promise<GatewayBonjourAdvertiser> {
@@ -143,7 +150,7 @@ export async function startGatewayBonjourAdvertiser(
     return { stop: async () => {} };
   }
 
-  const { getResponder, Protocol } = await import("@homebridge/ciao");
+  const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
   try {
     // mDNS service instance names are single DNS labels; dots in hostnames (like

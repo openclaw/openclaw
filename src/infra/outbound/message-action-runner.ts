@@ -860,6 +860,7 @@ export async function runMessageAction(
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
     cfg,
     action,
+    args: params,
     channel,
     accountId,
     sessionKey: input.sessionKey,
