@@ -65,12 +65,16 @@ describe("buildPlanTemplatePayload", () => {
     expect(result!.droppedDuplicates).toEqual(["A"]);
   });
 
-  it("returns null when all entries are duplicates of an empty pre-set (impossible) — defensive case", () => {
-    // After dedup the template is non-empty, so this case still produces a payload.
-    // This sanity test ensures dedup of a 1-element array with no duplicates yields a payload.
+  // PR-E review fix (Copilot #3096524258 / #3096799640): test renamed
+  // to match the assertion intent. The original name claimed to test an
+  // "impossible all-duplicates" + "returns null" case but the body
+  // actually verifies single-step payload generation — misleading and
+  // hard to interpret on failure.
+  it("dedup of a single-step array with no duplicates produces a one-step payload", () => {
     const result = buildPlanTemplatePayload("solo", [{ step: "Lone" }]);
     expect(result).not.toBeNull();
     expect(result!.plan).toHaveLength(1);
+    expect(result!.plan[0]).toEqual({ step: "Lone", status: "pending" });
   });
 
   it("truncates templates exceeding maxSteps and flags `truncated: true`", () => {

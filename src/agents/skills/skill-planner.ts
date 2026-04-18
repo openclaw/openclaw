@@ -2,8 +2,18 @@
  * Skill plan template instantiation.
  *
  * When a skill with a `planTemplate` in its metadata is activated,
- * this module builds the initial `update_plan` call payload from
- * the template steps. All steps start as "pending".
+ * this module builds the initial plan SEED PAYLOAD from the template
+ * steps. All steps start as "pending".
+ *
+ * PR-E review fix (Copilot #3105170493 / #3096799587): the returned
+ * `PlanTemplatePayload` is NOT passed directly to the `update_plan`
+ * tool — it's wrapped into an `agent_plan_event` by
+ * `applySkillPlanTemplateSeed` (`src/agents/pi-embedded-runner/skills-runtime.ts`)
+ * so the UI/channel adapters see the seeded plan ahead of the first
+ * agent turn. The extra fields (`droppedDuplicates`, `truncated`,
+ * `maxSteps`) are diagnostic — used by the seeder to log
+ * `skill_plan_template_*` warnings but stripped before any downstream
+ * tool input.
  *
  * Phase 4.1 of the GPT 5.4 parity sprint.
  */

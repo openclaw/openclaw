@@ -199,10 +199,22 @@ function parsePlanTemplate(raw: unknown): SkillPlanTemplateStep[] {
     // Reject non-string steps (objects, arrays, numbers, booleans) instead
     // of coercing them via String() — coercion produces useless output
     // like "[object Object]" that the agent can't act on.
-    if (typeof record.step !== "string") {
+    //
+    // PR-E review fix (Copilot #3096524315 / #3105043896): also accept
+    // `content` as an alias for `step`. The PR description's example used
+    // `content:` which would have silently parsed as empty otherwise.
+    // `step` wins on conflict — it matches the canonical field name in
+    // `SkillPlanTemplateStep` and downstream `update_plan` schema.
+    const stepRaw =
+      typeof record.step === "string"
+        ? record.step
+        : typeof record.content === "string"
+          ? record.content
+          : undefined;
+    if (stepRaw === undefined) {
       continue;
     }
-    const step = record.step.trim();
+    const step = stepRaw.trim();
     if (step.length === 0) {
       continue;
     }
@@ -236,7 +248,16 @@ export function resolveOpenClawMetadata(
   // following the `primaryEnv`/`skillKey` camelCase convention would have
   // their templates silently ignored otherwise. Kebab-case wins on conflict
   // for backward compatibility with existing skills.
-  const planTemplate = parsePlanTemplate(metadataObj["plan-template"] ?? metadataObj.planTemplate);
+  //
+  // PR-E review fix (Copilot #3105043876): if kebab-case key is PRESENT
+  // but parses to an empty array (invalid shape — string, object,
+  // entries with non-string `step`, etc.), fall back to camelCase
+  // instead of returning empty. The prior `??` only fell through on
+  // null/undefined, so a malformed kebab-case key would silently
+  // shadow a valid camelCase template.
+  const kebabParsed = parsePlanTemplate(metadataObj["plan-template"]);
+  const camelParsed = parsePlanTemplate(metadataObj.planTemplate);
+  const planTemplate = kebabParsed.length > 0 ? kebabParsed : camelParsed;
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
