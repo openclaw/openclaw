@@ -7820,6 +7820,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                     title: "Web Fetch Max Download Size (bytes)",
+                    description: "Max download size before truncation.",
                   },
                   timeoutSeconds: {
                     type: "integer",
@@ -24581,6 +24582,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.web.fetch.maxResponseBytes": {
       label: "Web Fetch Max Download Size (bytes)",
+      help: "Max download size before truncation.",
       tags: ["performance", "tools"],
     },
     "tools.web.fetch.provider": {

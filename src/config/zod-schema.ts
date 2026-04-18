@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { resolveBundledDefaultMediaModel } from "../media-understanding/bundled-defaults.js";
 import { resolveEffectiveMediaEntryCapabilities } from "../media-understanding/entry-capabilities.js";
 import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
 import type { MediaUnderstandingCapability } from "../media-understanding/types.js";
-import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../plugins/contracts/inventory/bundled-capability-metadata.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -22,7 +22,6 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
-  formatLiteLLMMediaRoutingAliasMessage,
   getLiteLLMMediaRoutingAliasRef,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -185,11 +184,13 @@ function buildMediaAliasValidationProviderRegistry(
 ): Map<string, { capabilities?: MediaUnderstandingCapability[] }> {
   const registry = new Map<string, { capabilities?: MediaUnderstandingCapability[] }>();
 
-  for (const snapshot of BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS) {
-    for (const providerId of snapshot.mediaUnderstandingProviderIds) {
-      registry.set(normalizeMediaProviderId(providerId), {
-        capabilities: ["image"],
-      });
+  for (const model of cfg.tools?.media?.models ?? []) {
+    const providerId = normalizeMediaProviderId(model?.provider ?? "");
+    if (!providerId || registry.has(providerId)) {
+      continue;
+    }
+    if (resolveBundledDefaultMediaModel({ providerId, capability: "image" })) {
+      registry.set(providerId, { capabilities: ["image"] });
     }
   }
 
@@ -262,14 +263,13 @@ function addToolsMediaImageFallbackAliasIssues(
     return;
   }
   const addIssue = (path: Array<string | number>, ref: string | undefined) => {
-    const aliasModel = getLiteLLMMediaRoutingAliasRef(ref);
-    if (!aliasModel) {
+    if (!getLiteLLMMediaRoutingAliasRef(ref)) {
       return;
     }
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path,
-      message: `${formatLiteLLMMediaRoutingAliasMessage(aliasModel)} Media understanding image fallback may use this config when no explicit image-capable media models are set.`,
+      message: "Invalid media fallback model reference. Use a direct provider/model id instead.",
     });
   };
   if (typeof imageModel === "string") {

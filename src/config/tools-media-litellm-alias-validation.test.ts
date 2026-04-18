@@ -30,7 +30,7 @@ describe("tools.media LiteLLM alias validation", () => {
       ]),
     );
     expect(res.issues.map((issue) => issue.message).join("\n")).toContain(
-      "LiteLLM routing aliases are not allowed in tools.media",
+      "Invalid media model reference. Use a direct provider/model id instead.",
     );
   });
 
@@ -165,6 +165,41 @@ describe("tools.media LiteLLM alias validation", () => {
             {
               provider: "unknown-provider",
               model: "mystery-model",
+              type: "provider",
+            },
+          ],
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "litellm/vision",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel.primary",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects agents.defaults.imageModel aliases when shared bundled providers are audio-only", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "deepgram",
+              model: "nova-3",
               type: "provider",
             },
           ],
