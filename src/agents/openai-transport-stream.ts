@@ -1053,6 +1053,7 @@ async function processOpenAICompletionsStream(
         partialArgs: string;
       }
     | null = null;
+  let pendingThinkingDelta: { signature: string; text: string } | null = null;
   const blockIndex = () => output.content.length - 1;
   const finishCurrentBlock = () => {
     if (!currentBlock) {
@@ -1066,6 +1067,33 @@ async function processOpenAICompletionsStream(
       };
       output.content[blockIndex()] = completed;
     }
+  };
+  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+    if (!currentBlock || currentBlock.type !== "thinking") {
+      finishCurrentBlock();
+      currentBlock = {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: reasoningDelta.signature,
+      };
+      output.content.push(currentBlock);
+      stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.thinking += reasoningDelta.text;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: blockIndex(),
+      delta: reasoningDelta.text,
+      partial: output,
+    });
+  };
+  const flushPendingThinkingDelta = () => {
+    if (!pendingThinkingDelta) {
+      return;
+    }
+    const bufferedDelta = pendingThinkingDelta;
+    pendingThinkingDelta = null;
+    appendThinkingDelta(bufferedDelta);
   };
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
@@ -1091,6 +1119,7 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
+      flushPendingThinkingDelta();
       if (!currentBlock || currentBlock.type !== "text") {
         finishCurrentBlock();
         currentBlock = { type: "text", text: "" };
@@ -1106,26 +1135,17 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
-    const reasoningField = reasoningFields.find((field) => {
-      const value = (choice.delta as Record<string, unknown>)[field];
-      return typeof value === "string" && value.length > 0;
-    });
-    if (reasoningField) {
-      if (!currentBlock || currentBlock.type !== "thinking") {
-        finishCurrentBlock();
-        currentBlock = { type: "thinking", thinking: "", thinkingSignature: reasoningField };
-        output.content.push(currentBlock);
-        stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
+    if (reasoningDelta) {
+      if (currentBlock?.type === "toolCall") {
+        if (!pendingThinkingDelta) {
+          pendingThinkingDelta = { ...reasoningDelta };
+        } else {
+          pendingThinkingDelta.text += reasoningDelta.text;
+        }
+      } else {
+        appendThinkingDelta(reasoningDelta);
       }
-      currentBlock.thinking += String((choice.delta as Record<string, unknown>)[reasoningField]);
-      stream.push({
-        type: "thinking_delta",
-        contentIndex: blockIndex(),
-        delta: String((choice.delta as Record<string, unknown>)[reasoningField]),
-        partial: output,
-      });
-      continue;
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
@@ -1168,10 +1188,38 @@ async function processOpenAICompletionsStream(
     }
   }
   finishCurrentBlock();
+  flushPendingThinkingDelta();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+}
+
+function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
+  signature: string;
+  text: string;
+} | null {
+  const reasoningDetails = delta.reasoning_details;
+  if (Array.isArray(reasoningDetails)) {
+    let text = "";
+    for (const item of reasoningDetails) {
+      const detail = item as { type?: unknown; text?: unknown };
+      if (detail.type === "reasoning.text" && typeof detail.text === "string" && detail.text) {
+        text += detail.text;
+      }
+    }
+    if (text) {
+      return { signature: "reasoning_details", text };
+    }
+  }
+  const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+  for (const field of reasoningFields) {
+    const value = delta[field];
+    if (typeof value === "string" && value.length > 0) {
+      return { signature: field, text: value };
+    }
+  }
+  return null;
 }
 
 function detectCompat(model: OpenAIModeModel) {
