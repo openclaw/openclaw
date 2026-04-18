@@ -190,6 +190,29 @@ describe("external cli oauth resolution", () => {
         }),
       ).toBe(true);
     });
+
+    it("does not bootstrap across different known oauth identities", () => {
+      const imported = makeOAuthCredential({
+        provider: "openai-codex",
+        access: "fresh-cli-access",
+        refresh: "fresh-cli-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-external",
+      });
+
+      expect(
+        shouldBootstrapFromExternalCliCredential({
+          existing: makeOAuthCredential({
+            provider: "openai-codex",
+            access: "expired-local-access",
+            refresh: "expired-local-refresh",
+            expires: Date.now() - 60_000,
+            accountId: "acct-local",
+          }),
+          imported,
+        }),
+      ).toBe(false);
+    });
   });
 
   it("reads codex external cli credentials by profile id", () => {

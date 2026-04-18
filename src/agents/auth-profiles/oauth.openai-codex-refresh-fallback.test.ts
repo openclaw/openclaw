@@ -87,6 +87,9 @@ function createExpiredOauthStore(params: {
   profileId: string;
   provider: string;
   access?: string;
+  refresh?: string;
+  accountId?: string;
+  email?: string;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -95,8 +98,10 @@ function createExpiredOauthStore(params: {
         type: "oauth",
         provider: params.provider,
         access: params.access ?? "cached-access-token",
-        refresh: "refresh-token",
+        refresh: params.refresh ?? "refresh-token",
         expires: Date.now() - 60_000,
+        accountId: params.accountId,
+        email: params.email,
       },
     },
   };
@@ -360,6 +365,71 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     );
   });
 
+  it("ignores mismatched fresh Codex CLI credentials when canonical local auth is bound to another account", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        access: "expired-local-access-token",
+        refresh: "local-refresh-token",
+        accountId: "acct-local",
+      }),
+      agentDir,
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: Date.now() + 86_400_000,
+      accountId: "acct-external",
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => {
+        expect(params?.context).toMatchObject({
+          access: "expired-local-access-token",
+          refresh: "local-refresh-token",
+          accountId: "acct-local",
+        });
+        return {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fresh-local-access-token",
+          refresh: "fresh-local-refresh-token",
+          expires: Date.now() + 86_400_000,
+          accountId: "acct-local",
+        };
+      },
+    );
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).resolves.toEqual({
+      apiKey: "fresh-local-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const persisted = await readPersistedStore(agentDir);
+    expect(persisted.profiles[profileId]).toMatchObject({
+      access: "fresh-local-access-token",
+      refresh: "fresh-local-refresh-token",
+      accountId: "acct-local",
+    });
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        accountId: "acct-external",
+      }),
+    );
+  });
+
   it("keeps healthy local Codex OAuth over fresher imported CLI credentials", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
@@ -528,6 +598,70 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(persisted.profiles[profileId]).not.toEqual(
       expect.objectContaining({
         refresh: "stale-local-refresh-token",
+      }),
+    );
+  });
+
+  it("does not use mismatched imported Codex CLI refresh state as refresh context", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai-codex",
+        access: "expired-local-access-token",
+        refresh: "local-refresh-token",
+        accountId: "acct-local",
+      }),
+      agentDir,
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "expired-cli-access-token",
+      refresh: "external-refresh-token",
+      expires: Date.now() - 30_000,
+      accountId: "acct-external",
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => {
+        expect(params?.context).toMatchObject({
+          access: "expired-local-access-token",
+          refresh: "local-refresh-token",
+          accountId: "acct-local",
+        });
+        return {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fresh-local-access-token",
+          refresh: "fresh-local-refresh-token",
+          expires: Date.now() + 86_400_000,
+          accountId: "acct-local",
+        };
+      },
+    );
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).resolves.toEqual({
+      apiKey: "fresh-local-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const persisted = await readPersistedStore(agentDir);
+    expect(persisted.profiles[profileId]).toMatchObject({
+      access: "fresh-local-access-token",
+      refresh: "fresh-local-refresh-token",
+      accountId: "acct-local",
+    });
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        refresh: "external-refresh-token",
+        accountId: "acct-external",
       }),
     );
   });

@@ -32,6 +32,7 @@ import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
+  isSafeToUseExternalCliCredential,
   readExternalCliBootstrapCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./external-cli-sync.js";
@@ -651,20 +652,28 @@ async function doRefreshOAuthTokenWithLock(params: {
         });
         let refreshCred = cred;
         if (externallyManaged) {
-          const hasUsableExternalCredential = hasUsableOAuthCredential(externallyManaged);
-          const shouldAdoptExternalCredential =
-            shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
-            !areOAuthCredentialsEquivalent(cred, externallyManaged);
-          if (shouldAdoptExternalCredential) {
-            store.profiles[params.profileId] = externallyManaged;
-            saveAuthProfileStore(store, params.agentDir);
-            refreshCred = externallyManaged;
-          }
-          if (hasUsableExternalCredential) {
-            return {
-              apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
-              newCredentials: externallyManaged,
-            };
+          if (isSafeToUseExternalCliCredential(cred, externallyManaged)) {
+            const hasUsableExternalCredential = hasUsableOAuthCredential(externallyManaged);
+            const shouldAdoptExternalCredential =
+              shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
+              !areOAuthCredentialsEquivalent(cred, externallyManaged);
+            if (shouldAdoptExternalCredential) {
+              store.profiles[params.profileId] = externallyManaged;
+              saveAuthProfileStore(store, params.agentDir);
+              refreshCred = externallyManaged;
+            }
+            if (hasUsableExternalCredential) {
+              return {
+                apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
+                newCredentials: externallyManaged,
+              };
+            }
+          } else {
+            log.warn("refused to adopt external cli OAuth credential: identity mismatch", {
+              profileId: params.profileId,
+              provider: params.provider,
+              agentDir: params.agentDir,
+            });
           }
         }
 

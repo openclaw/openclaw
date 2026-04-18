@@ -41,6 +41,46 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+// Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+export function isSafeToUseExternalCliCredential(
+  existing: OAuthCredential | undefined,
+  imported: OAuthCredential,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+  if (existing.provider !== imported.provider) {
+    return false;
+  }
+
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const importedEmail = normalizeAuthEmailToken(imported.email);
+
+  if (existingAccountId !== undefined && importedAccountId !== undefined) {
+    return existingAccountId === importedAccountId;
+  }
+  if (existingEmail !== undefined && importedEmail !== undefined) {
+    return existingEmail === importedEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
+    return false;
+  }
+  return true;
+}
+
 function hasNewerStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -79,6 +119,9 @@ export function shouldBootstrapFromExternalCliCredential(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
+  if (!isSafeToUseExternalCliCredential(params.existing, params.imported)) {
+    return false;
+  }
   if (hasUsableOAuthCredential(params.existing, now)) {
     return false;
   }
@@ -148,6 +191,13 @@ export function resolveExternalCliAuthProfiles(
         provider: providerConfig.provider,
         localType: existing.type,
         localProvider: existing.provider,
+      });
+      continue;
+    }
+    if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
+      log.warn("refused external cli oauth bootstrap: identity mismatch", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
       });
       continue;
     }

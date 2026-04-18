@@ -200,4 +200,32 @@ describe("auth external oauth helpers", () => {
       key: "sk-local",
     });
   });
+
+  it("keeps expired local oauth when external cli belongs to a different account", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: createUsableOAuthExpiry(),
+        accountId: "acct-external",
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": createCredential({
+          access: "expired-local-access-token",
+          refresh: "expired-local-refresh-token",
+          expires: Date.now() - 60_000,
+          accountId: "acct-local",
+        }),
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      access: "expired-local-access-token",
+      refresh: "expired-local-refresh-token",
+      accountId: "acct-local",
+    });
+  });
 });
