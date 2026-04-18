@@ -31,8 +31,11 @@ export function shellEscapeRestartLogValue(value: string): string {
 export function renderPosixRestartLogSetup(env: GatewayServiceEnv): string {
   const logDir = path.dirname(resolveGatewayRestartLogPath(env));
   const logPath = resolveGatewayRestartLogPath(env);
-  return `mkdir -p '${shellEscapeRestartLogValue(logDir)}' 2>/dev/null || true
-exec >>'${shellEscapeRestartLogValue(logPath)}' 2>&1 || true`;
+  const escapedLogDir = shellEscapeRestartLogValue(logDir);
+  const escapedLogPath = shellEscapeRestartLogValue(logPath);
+  return `if mkdir -p '${escapedLogDir}' 2>/dev/null && : >>'${escapedLogPath}' 2>/dev/null; then
+  exec >>'${escapedLogPath}' 2>&1
+fi`;
 }
 
 export function renderCmdRestartLogSetup(env: GatewayServiceEnv): {
