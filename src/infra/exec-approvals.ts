@@ -263,7 +263,7 @@ function ensureDir(filePath: string, env: NodeJS.ProcessEnv = process.env) {
       throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
     }
     const realStat = fs.lstatSync(realDir);
-    if (!realStat.isDirectory() || realStat.isSymbolicLink()) {
+    if (!realStat.isDirectory()) {
       throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
     }
     return realDir;
