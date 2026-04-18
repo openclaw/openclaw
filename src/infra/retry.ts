@@ -138,13 +138,21 @@ export async function retryAsync<T>(
       // the thundering herd we are trying to avoid. In that case the server
       // contract is already unsatisfiable, so fall back to symmetric jitter
       // to preserve spread.
-      // Use strict `<` so the `retryAfterMs === maxDelayMs` boundary also
-      // falls back to symmetric jitter. Positive jitter on the boundary only
-      // produces values ≥ maxDelayMs, which the final clamp below collapses
-      // back to exactly maxDelayMs for every retry — the same thundering-herd
-      // shape the fallback is meant to avoid.
+      // Use `<=` so the `retryAfterMs === maxDelayMs` boundary keeps the
+      // positive-jitter contract. At the boundary, positive jitter followed by
+      // the final clamp collapses every retry to exactly maxDelayMs — clients
+      // do land in lockstep at that instant, which is thundering-herd-shaped
+      // locally. The trade-off is deliberate: symmetric jitter at the boundary
+      // would schedule roughly half the retries below maxDelayMs (=
+      // retryAfterMs), which is a *Retry-After contract violation* and invites
+      // upstream escalation (429 → extended cooldown / bans on Telegram,
+      // Discord, etc.). A synchronized retry at the exact server-cleared
+      // instant is strictly preferable to a spread that undercuts the server's
+      // hint. Only switch to symmetric when the hint exceeds our local cap
+      // (`retryAfterMs > maxDelayMs`), where the contract is already
+      // unsatisfiable and we gain spread without adding a violation.
       const canHonorRetryAfter =
-        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs < maxDelayMs;
+        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= maxDelayMs;
       delay = applyJitter(delay, jitter, canHonorRetryAfter ? "positive" : "symmetric");
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
 
