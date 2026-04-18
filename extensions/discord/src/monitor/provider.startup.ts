@@ -216,9 +216,12 @@ export async function fetchDiscordBotIdentity(params: {
   params.logStartupPhase("fetch-bot-identity:start");
   try {
     const botUser = await params.client.fetchUser("@me");
-    const botUserId = botUser?.id;
+    const botUserId = normalizeOptionalString(botUser?.id);
     const botUserName =
       normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
+    if (!botUserId) {
+      throw new Error("discord bot identity did not include a user id");
+    }
     params.logStartupPhase(
       "fetch-bot-identity:done",
       `botUserId=${botUserId ?? "<missing>"} botUserName=${botUserName ?? "<missing>"}`,
@@ -227,7 +230,7 @@ export async function fetchDiscordBotIdentity(params: {
   } catch (err) {
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     params.logStartupPhase("fetch-bot-identity:error", String(err));
-    return { botUserId: undefined, botUserName: undefined };
+    throw err;
   }
 }
 

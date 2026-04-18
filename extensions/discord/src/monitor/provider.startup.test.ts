@@ -70,7 +70,7 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: vi.fn(() => undefined),
 }));
 
-import { createDiscordMonitorClient } from "./provider.startup.js";
+import { createDiscordMonitorClient, fetchDiscordBotIdentity } from "./provider.startup.js";
 
 describe("createDiscordMonitorClient", () => {
   it("adds listener compat for legacy voice plugins", () => {
@@ -120,6 +120,59 @@ describe("createDiscordMonitorClient", () => {
     expect(registerVoiceClientSpy).toHaveBeenCalledTimes(1);
     expect(result.client.listeners).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "legacy-voice-listener" })]),
+    );
+  });
+});
+
+describe("fetchDiscordBotIdentity", () => {
+  it("throws when fetchUser('@me') fails", async () => {
+    const runtime = {
+      error: vi.fn(),
+    };
+    const logStartupPhase = vi.fn();
+
+    await expect(
+      fetchDiscordBotIdentity({
+        client: {
+          fetchUser: vi.fn(async () => {
+            throw new Error("boom");
+          }),
+        } as never,
+        runtime: runtime as never,
+        logStartupPhase,
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "discord: failed to fetch bot identity: Error: boom",
+    );
+    expect(logStartupPhase).toHaveBeenCalledWith("fetch-bot-identity:error", "Error: boom");
+  });
+
+  it("throws when fetchUser('@me') returns a user without an id", async () => {
+    const runtime = {
+      error: vi.fn(),
+    };
+    const logStartupPhase = vi.fn();
+
+    await expect(
+      fetchDiscordBotIdentity({
+        client: {
+          fetchUser: vi.fn(async () => ({
+            username: "openclaw",
+          })),
+        } as never,
+        runtime: runtime as never,
+        logStartupPhase,
+      }),
+    ).rejects.toThrow("discord bot identity did not include a user id");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "discord: failed to fetch bot identity: Error: discord bot identity did not include a user id",
+    );
+    expect(logStartupPhase).toHaveBeenCalledWith(
+      "fetch-bot-identity:error",
+      "Error: discord bot identity did not include a user id",
     );
   });
 });

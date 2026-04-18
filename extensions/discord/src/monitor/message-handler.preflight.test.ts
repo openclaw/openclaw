@@ -74,6 +74,7 @@ function createPreflightArgs(params: {
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
+  botUserId?: string;
 }): Parameters<typeof preflightDiscordMessage>[0] {
   return createDiscordPreflightArgs(params);
 }
@@ -1094,6 +1095,51 @@ describe("preflightDiscordMessage", () => {
       routeSpy.mockRestore();
       ensureSpy.mockRestore();
     }
+  });
+
+  it("drops guild message without mention when mention detection falls back to route patterns", async () => {
+    const channelId = "channel-no-bot-id";
+    const guildId = "guild-no-bot-id";
+    const message = createDiscordMessage({
+      id: "m-no-bot-id",
+      channelId,
+      content: "hello without mention",
+      author: { id: "user-1", bot: false, username: "alice" },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["\\bopenclaw\\b"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      botUserId: undefined,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 });
 
