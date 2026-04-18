@@ -1,22 +1,24 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  buildChannelKeyCandidates,
+  normalizeChannelSlug,
+  resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
+} from "openclaw/plugin-sdk/channel-targets";
+import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
 } from "../runtime-api.js";
-import {
-  buildChannelKeyCandidates,
-  evaluateMatchedGroupAccessForPolicy,
-  normalizeChannelSlug,
-  resolveChannelEntryMatchWithFallback,
-  resolveNestedAllowlistDecision,
-} from "../runtime-api.js";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
-  return normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, ""));
+  return raw
+    .trim()
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .toLowerCase();
 }
 
 export function normalizeNextcloudTalkAllowlist(
@@ -161,6 +163,7 @@ export function resolveNextcloudTalkMentionGate(params: {
   isGroup: boolean;
   requireMention: boolean;
   wasMentioned: boolean;
+  hasAnyMention?: boolean;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
   commandAuthorized: boolean;
@@ -169,6 +172,7 @@ export function resolveNextcloudTalkMentionGate(params: {
     facts: {
       canDetectMention: true,
       wasMentioned: params.wasMentioned,
+      hasAnyMention: params.hasAnyMention,
       implicitMentionKinds: [],
     },
     policy: {
