@@ -480,6 +480,7 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
             },
             opts.onOpenSidebar,
           ),
@@ -1463,7 +1464,7 @@ function renderGroupedMessage(
     isResizable ? "chat-bubble-resizable" : ""
   ].filter(Boolean).join(" ");
 
-  if (!markdown && hasToolCards && isToolResult && !hasMedia) {
+  if (!markdown && hasToolCards && isToolResult && !hasMedia && assistantAttachments.length === 0) {
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
