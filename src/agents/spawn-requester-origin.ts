@@ -83,6 +83,8 @@ export function resolveRequesterOriginForChild(params: {
   requesterAccountId?: string;
   requesterTo?: string;
   requesterThreadId?: string | number;
+  requesterGroupSpace?: string | null;
+  requesterMemberRoleIds?: string[];
 }) {
   const { peerId: normalizedPeerId, peerKind: inferredPeerKind } = extractRequesterPeer(
     params.requesterChannel,
@@ -102,6 +104,8 @@ export function resolveRequesterOriginForChild(params: {
           exactPeerIdAliases:
             rawPeerIdAlias && rawPeerIdAlias !== normalizedPeerId ? [rawPeerIdAlias] : undefined,
           peerKind: inferredPeerKind,
+          groupSpace: params.requesterGroupSpace,
+          memberRoleIds: params.requesterMemberRoleIds,
         })
       : undefined;
   return normalizeDeliveryContext({

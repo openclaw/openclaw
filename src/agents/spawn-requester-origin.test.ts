@@ -114,6 +114,56 @@ describe("resolveRequesterOriginForChild", () => {
     });
   });
 
+  it("uses requester group space before selecting a scoped target-agent account", () => {
+    const to = "channel:ops";
+    const cfg = {
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "discord",
+            guildId: "guild-other",
+            peer: {
+              kind: "channel",
+              id: to,
+            },
+            accountId: "bot-alpha-other-guild",
+          },
+        },
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "discord",
+            guildId: "guild-current",
+            peer: {
+              kind: "channel",
+              id: to,
+            },
+            accountId: "bot-alpha-current-guild",
+          },
+        },
+      ],
+    } as OpenClawConfig;
+
+    expect(
+      resolveRequesterOriginForChild({
+        cfg,
+        targetAgentId: "bot-alpha",
+        requesterAgentId: "main",
+        requesterChannel: "discord",
+        requesterAccountId: "main-current-guild",
+        requesterTo: to,
+        requesterGroupSpace: "guild-current",
+      }),
+    ).toMatchObject({
+      channel: "discord",
+      accountId: "bot-alpha-current-guild",
+      to,
+    });
+  });
+
   it("still peels channel id plus kind wrappers before peer lookup", () => {
     const to = "line:group:U123example";
     const cfg = {

@@ -4,6 +4,11 @@ import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeRouteBindingId,
+  normalizeRouteBindingRoles,
+  routeBindingScopeMatches,
+} from "./binding-scope.js";
 import { peerKindMatches } from "./peer-kind-match.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
@@ -22,6 +27,9 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   channelId: string;
   peerId?: string;
   peerKind?: ChatType;
+  guildId?: string | null;
+  teamId?: string | null;
+  roles?: string[] | null;
 } | null {
   if (!binding || typeof binding !== "object") {
     return null;
@@ -46,6 +54,9 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
     channelId,
     peerId: peerId || undefined,
     peerKind: peerKind ?? undefined,
+    guildId: normalizeRouteBindingId(match.guildId) || null,
+    teamId: normalizeRouteBindingId(match.teamId) || null,
+    roles: normalizeRouteBindingRoles(match.roles),
   };
 }
 
@@ -74,6 +85,10 @@ export function resolveFirstBoundAccountId(params: {
   peerId?: string;
   exactPeerIdAliases?: string[];
   peerKind?: ChatType;
+  guildId?: string | null;
+  teamId?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: string[];
 }): string | undefined {
   const normalizedChannel = normalizeBindingChannelId(params.channelId);
   if (!normalizedChannel) {
@@ -95,6 +110,16 @@ export function resolveFirstBoundAccountId(params: {
       !resolved ||
       resolved.channelId !== normalizedChannel ||
       resolved.agentId !== normalizedAgentId
+    ) {
+      continue;
+    }
+    if (
+      !routeBindingScopeMatches(resolved, {
+        guildId: params.guildId,
+        teamId: params.teamId,
+        groupSpace: params.groupSpace,
+        memberRoleIds: params.memberRoleIds,
+      })
     ) {
       continue;
     }

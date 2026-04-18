@@ -467,6 +467,7 @@ export async function spawnSubagentDirect(
     requesterAccountId: ctx.agentAccountId,
     requesterTo: ctx.agentTo,
     requesterThreadId: ctx.agentThreadId,
+    requesterGroupSpace: ctx.agentGroupSpace,
   });
   let childSessionOrigin = requesterOrigin;
   if (targetAgentId !== requesterAgentId) {

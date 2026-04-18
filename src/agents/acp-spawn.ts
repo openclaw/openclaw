@@ -106,6 +106,8 @@ export type SpawnAcpContext = {
   agentThreadId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
+  /** Group space label (guild/team id) from the originating channel context. */
+  agentGroupSpace?: string | null;
   sandboxed?: boolean;
 };
 
@@ -761,6 +763,7 @@ function resolveAcpSpawnRequesterState(params: {
       requesterAccountId: params.ctx.agentAccountId,
       requesterTo: params.ctx.agentTo,
       requesterThreadId: params.ctx.agentThreadId,
+      requesterGroupSpace: params.ctx.agentGroupSpace,
     }),
   };
 }

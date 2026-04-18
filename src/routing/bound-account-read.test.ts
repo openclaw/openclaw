@@ -375,4 +375,111 @@ describe("resolveFirstBoundAccountId", () => {
       }),
     ).toBe("bot-alpha-default");
   });
+
+  it("skips scoped bindings when the caller has no matching group space", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "discord",
+          guildId: "guild-other",
+          accountId: "bot-alpha-other-guild",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "discord", accountId: "bot-alpha-default" },
+      },
+    ]);
+
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "discord",
+        agentId: "bot-alpha",
+        groupSpace: "guild-current",
+      }),
+    ).toBe("bot-alpha-default");
+  });
+
+  it("matches scoped guild and team bindings against caller group space", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "discord",
+          guildId: "guild-current",
+          accountId: "bot-alpha-guild",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "slack",
+          teamId: "team-current",
+          accountId: "bot-alpha-team",
+        },
+      },
+    ]);
+
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "discord",
+        agentId: "bot-alpha",
+        groupSpace: "guild-current",
+      }),
+    ).toBe("bot-alpha-guild");
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "slack",
+        agentId: "bot-alpha",
+        groupSpace: "team-current",
+      }),
+    ).toBe("bot-alpha-team");
+  });
+
+  it("requires caller roles before selecting role-scoped bindings", () => {
+    const cfg = cfgWithBindings([
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: {
+          channel: "discord",
+          guildId: "guild-current",
+          roles: ["admin"],
+          accountId: "bot-alpha-admin",
+        },
+      },
+      {
+        type: "route",
+        agentId: "bot-alpha",
+        match: { channel: "discord", accountId: "bot-alpha-default" },
+      },
+    ]);
+
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "discord",
+        agentId: "bot-alpha",
+        groupSpace: "guild-current",
+        memberRoleIds: ["member"],
+      }),
+    ).toBe("bot-alpha-default");
+    expect(
+      resolveFirstBoundAccountId({
+        cfg,
+        channelId: "discord",
+        agentId: "bot-alpha",
+        groupSpace: "guild-current",
+        memberRoleIds: ["admin"],
+      }),
+    ).toBe("bot-alpha-admin");
+  });
 });
