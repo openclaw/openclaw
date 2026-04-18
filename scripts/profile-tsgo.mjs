@@ -24,11 +24,11 @@ const GRAPH_DEFINITIONS = {
   },
   "core-test-agents": {
     config: "tsconfig.core.test.agents.json",
-    description: "core agent colocated test graph",
+    description: "diagnostic slice: core agent colocated tests",
   },
   "core-test-non-agents": {
     config: "tsconfig.core.test.non-agents.json",
-    description: "core non-agent colocated test graph",
+    description: "diagnostic slice: core tests excluding agent test roots",
   },
   extensions: {
     config: "tsconfig.extensions.json",
