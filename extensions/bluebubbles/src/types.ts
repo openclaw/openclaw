@@ -1,3 +1,7 @@
+import {
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  type DispatcherAwareRequestInit,
+} from "openclaw/plugin-sdk/runtime-fetch";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -116,6 +120,17 @@ export type BlueBubblesAttachment = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+type BlueBubblesFetchGuard = (params: {
+  url: string;
+  init: RequestInit;
+  timeoutMs?: number;
+  policy?: SsrFPolicy;
+  auditContext?: string;
+}) => Promise<{
+  response: Response;
+  release: () => Promise<void>;
+}>;
+
 export function normalizeBlueBubblesServerUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -139,10 +154,10 @@ export function buildBlueBubblesApiUrl(params: {
 }
 
 // Overridable guard for testing; production code uses fetchWithSsrFGuard.
-let _fetchGuard = fetchWithSsrFGuard;
+let _fetchGuard: BlueBubblesFetchGuard = fetchWithSsrFGuard;
 
 /** @internal Replace the SSRF fetch guard in tests. */
-export function _setFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function _setFetchGuardForTesting(impl: BlueBubblesFetchGuard | null): void {
   _fetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
@@ -175,17 +190,22 @@ export async function blueBubblesFetchWithTimeout(
       await release();
     }
   }
+  const dispatcherAwareInit = (init ?? {}) as DispatcherAwareRequestInit;
   // Strip `dispatcher` from init — the SSRF guard may have attached a bundled-undici
   // dispatcher that is incompatible with Node 22+'s built-in undici backing globalThis.fetch().
-  // Passing it through causes a silent TypeError (invalid onRequestStart method).
-  // The SSRF validation already completed upstream in fetchWithSsrFGuard before calling
-  // this function as fetchImpl, so stripping the dispatcher does not weaken security. (#64105)
-  const { dispatcher: _dispatcher, ...safeInit } = (init ?? {}) as RequestInit & {
-    dispatcher?: unknown;
-  };
+  // Passing it through causes a silent TypeError (invalid onRequestStart method). When an
+  // upstream caller already attached a dispatcher (for example fetchRemoteMedia's SSRF guard),
+  // preserve it by routing through the runtime fetch that supports per-request dispatchers.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (dispatcherAwareInit.dispatcher !== undefined) {
+      return await fetchWithRuntimeDispatcherOrMockedGlobal(url, {
+        ...dispatcherAwareInit,
+        signal: controller.signal,
+      });
+    }
+    const { dispatcher: _dispatcher, ...safeInit } = dispatcherAwareInit;
     return await fetch(url, { ...safeInit, signal: controller.signal });
   } finally {
     clearTimeout(timer);
