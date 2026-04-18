@@ -232,7 +232,7 @@ async function readTextFileStreaming(
   });
 }
 
-// Helper function for bridge mode
+// Helper function for bridge mode - reads entire file but respects maxChars after
 async function readTextFileBridge(
   bridge: SandboxFsBridge,
   filePath: string,
@@ -248,20 +248,44 @@ async function readTextFileBridge(
     signal,
   });
   const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
-  const lines = text.split("\n");
+  
+  // Apply character limit after reading
+  let truncatedText = text;
+  let truncated = false;
+  if (text.length > maxChars) {
+    truncatedText = text.slice(0, maxChars);
+    truncated = true;
+  }
+  
+  const lines = truncatedText.split("\n");
   const totalLines = lines.length;
   
   const start = Math.max(0, Math.min(offset - 1, totalLines));
   const end = limit !== undefined ? Math.min(start + limit, totalLines) : totalLines;
   let content = lines.slice(start, end).join("\n");
   
-  let truncated = false;
-  if (content.length > maxChars) {
-    content = content.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
-    truncated = true;
+  if (truncated && content.length === maxChars) {
+    content += `\n\n... [Content truncated to ${maxChars} chars]`;
   }
   
   return { content, truncated, totalLines };
+}
+
+// Helper function to read limited bytes from bridge by reading and slicing
+async function readFileBytesWithLimit(
+  bridge: SandboxFsBridge,
+  filePath: string,
+  cwd: string,
+  maxBytes: number,
+  signal?: AbortSignal
+): Promise<Buffer> {
+  const result = await bridge.readFile({
+    filePath,
+    cwd,
+    signal,
+  });
+  const buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+  return buffer.slice(0, maxBytes);
 }
 
 // Helper function to detect if a WebM file is audio-only using bridge-aware reads
@@ -270,14 +294,10 @@ async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?:
     let buffer: Buffer;
     
     if (bridge && cwd) {
-      // Use bridge for sandboxed reads
-      const result = await bridge.readFile({
-        filePath,
-        cwd,
-      });
-      buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+      // Read only first 8KB for MIME detection
+      buffer = await readFileBytesWithLimit(bridge, filePath, cwd, 8192);
     } else {
-      // Use local filesystem
+      // Use local filesystem with byte limit
       const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
       buffer = localBuffer;
     }
@@ -759,7 +779,9 @@ async function readOptionalUtf8File(params: {
         cwd: params.sandbox.root,
         signal: params.signal,
       });
-      return buffer.toString("utf-8");
+      // Limit to 10MB for memory flush reads
+      const limitedBuffer = Buffer.isBuffer(buffer) ? buffer.slice(0, 10 * 1024 * 1024) : Buffer.from(buffer).slice(0, 10 * 1024 * 1024);
+      return limitedBuffer.toString("utf-8");
     }
     return await fs.readFile(params.absolutePath, "utf-8");
   } catch (error) {
@@ -978,26 +1000,29 @@ function getKindFromExtension(filePath: string): string {
   return "text";
 }
 
-// Helper function to detect media type from file bytes
+// Helper function to detect media type from file bytes with proper byte limits
 async function detectMediaTypeFromBytes(
   filePath: string,
   useBridge: boolean,
   bridge: SandboxFsBridge | undefined,
   cwd: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  maxBytesForSniffing: number = 8192 // Default to 8KB for MIME sniffing
 ): Promise<{ mimeType: string; kind: string; extension: string }> {
   try {
     let buffer: Buffer;
     
     if (useBridge && bridge) {
+      // Read file and slice to limit
       const result = await bridge.readFile({
         filePath,
         cwd,
         signal,
       });
-      buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+      const fullBuffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+      buffer = fullBuffer.slice(0, maxBytesForSniffing);
     } else {
-      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: maxBytesForSniffing });
       buffer = localBuffer;
     }
     
@@ -1015,6 +1040,26 @@ async function detectMediaTypeFromBytes(
     const kind = getKindFromExtension(filePath);
     return { mimeType, kind, extension: ext };
   }
+}
+
+// Helper function to resolve adaptive read max bytes based on file size
+function resolveAdaptiveReadMaxBytes(fileSize?: number): number | undefined {
+  // If file size is available, use adaptive limits
+  if (fileSize !== undefined) {
+    // For files under 1MB, allow full read
+    if (fileSize <= 1024 * 1024) {
+      return undefined; // No limit for small files
+    }
+    // For files between 1MB and 10MB, limit to 5MB
+    if (fileSize <= 10 * 1024 * 1024) {
+      return 5 * 1024 * 1024;
+    }
+    // For larger files, limit to 10MB
+    return 10 * 1024 * 1024;
+  }
+  
+  // Default: no limit (will be handled by streaming for text)
+  return undefined;
 }
 
 // Helper function to create text fallback for media results
@@ -1108,13 +1153,14 @@ export function createOpenClawReadTool(
           return result;
         }
 
-        // Detect media type from file bytes (not just extension)
+        // Detect media type from file bytes (limited to 8KB for MIME sniffing)
         const { mimeType, kind, extension: detectedExt } = await detectMediaTypeFromBytes(
           inputPath,
           useBridge,
           options?.bridge,
           rootDirResolved,
-          signal
+          signal,
+          8192 // Limit MIME sniffing to 8KB
         );
         
         const fileName = path.basename(inputPath);
@@ -1185,6 +1231,9 @@ export function createOpenClawReadTool(
             throw new Error("Read operation aborted");
           }
 
+          // Use adaptive max bytes for image reading
+          const maxBytesForImage = resolveAdaptiveReadMaxBytes(fileSize);
+          
           let fileBuffer: Buffer;
           if (useBridge) {
             const buffer = await options.bridge!.readFile({
@@ -1193,8 +1242,17 @@ export function createOpenClawReadTool(
               signal,
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+            // Apply byte limit after reading if needed
+            if (maxBytesForImage && fileBuffer.length > maxBytesForImage) {
+              fileBuffer = fileBuffer.slice(0, maxBytesForImage);
+            }
           } else {
-            fileBuffer = await fs.readFile(inputPath);
+            if (maxBytesForImage) {
+              const { buffer } = await readLocalFileSafely({ filePath: inputPath, maxBytes: maxBytesForImage });
+              fileBuffer = buffer;
+            } else {
+              fileBuffer = await fs.readFile(inputPath);
+            }
           }
 
           let finalMimeType = mimeType;
