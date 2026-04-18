@@ -13,6 +13,7 @@ const DEFAULT_API_KEY = "ollama-local";
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 
 type OllamaPluginConfig = {
+  baseUrl?: string;
   discovery?: {
     enabled?: boolean;
   };
@@ -141,6 +142,10 @@ async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
     ollamaKey.trim().length > 0 &&
     ollamaKey.trim() !== DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
+  const pluginBaseUrl =
+    typeof pluginConfig.baseUrl === "string" && pluginConfig.baseUrl.trim()
+      ? pluginConfig.baseUrl.trim()
+      : undefined;
   if (hasExplicitModels && explicit) {
     return {
       provider: {
@@ -148,7 +153,9 @@ async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
         baseUrl:
           typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
             ? resolveOllamaApiBase(explicit.baseUrl)
-            : OLLAMA_DEFAULT_BASE_URL,
+            : pluginBaseUrl
+              ? resolveOllamaApiBase(pluginBaseUrl)
+              : OLLAMA_DEFAULT_BASE_URL,
         api: explicit.api ?? "ollama",
         apiKey: resolveOllamaDiscoveryApiKey({
           env: ctx.env,
@@ -161,13 +168,14 @@ async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
   if (
     !hasRealOllamaKey &&
     !hasMeaningfulExplicitConfig &&
+    !pluginBaseUrl &&
     shouldSkipAmbientOllamaDiscovery(ctx.env)
   ) {
     return null;
   }
 
-  const provider = await buildOllamaProvider(explicit?.baseUrl, {
-    quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig,
+  const provider = await buildOllamaProvider(explicit?.baseUrl ?? pluginBaseUrl, {
+    quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig && !pluginBaseUrl,
   });
   if (provider.models?.length === 0 && !ollamaKey && !explicit?.apiKey) {
     return null;
