@@ -6,13 +6,13 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { withPathResolutionEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { loadWorkspaceSkillEntries } from "./skills.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "./skills/home-env.test-support.js";
 import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
+import { loadWorkspaceSkillEntries } from "./skills/workspace.js";
 import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -41,9 +41,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   await restoreMockSkillsHomeEnv(envSnapshot, async () => {
     if (fakeHome) {
       await fs.rm(fakeHome, { recursive: true, force: true });

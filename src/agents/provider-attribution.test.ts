@@ -709,6 +709,19 @@ describe("provider attribution", () => {
       endpointClass: "modelstudio-native",
       supportsNativeStreamingUsageCompat: true,
     });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-local",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "local",
+      supportsNativeStreamingUsageCompat: false,
+    });
   });
 
   it("treats native GitHub Copilot base URLs as known native endpoints", () => {

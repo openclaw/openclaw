@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
@@ -110,7 +110,12 @@ describe("OAuth credential adoption is identity-gated", () => {
     "PI_CODING_AGENT_DIR",
   ]);
   let tempRoot = "";
+  let caseIndex = 0;
   let mainAgentDir = "";
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-adopt-identity-"));
+  });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
@@ -119,9 +124,10 @@ describe("OAuth credential adoption is identity-gated", () => {
     formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
     formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-adopt-identity-"));
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    caseIndex += 1;
+    const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
+    process.env.OPENCLAW_STATE_DIR = caseRoot;
+    mainAgentDir = path.join(caseRoot, "agents", "main", "agent");
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
     process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     await fs.mkdir(mainAgentDir, { recursive: true });
@@ -133,6 +139,9 @@ describe("OAuth credential adoption is identity-gated", () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     resetOAuthRefreshQueuesForTest();
+  });
+
+  afterAll(async () => {
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }

@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/channels: route cross-agent subagent spawns through the target agent's bound channel account while preserving peer and workspace/role-scoped bindings, so child sessions no longer inherit the caller's account in shared rooms, workspaces, or multi-account setups. (#67508) Thanks @lukeboyett and @gumadeiras.
+- Telegram/callbacks: treat permanent callback edit errors as completed updates so stale command pagination buttons no longer wedge the update watermark and block newer Telegram updates. (#68588) Thanks @Lucenx9.
 
 ## 2026.4.18
 
@@ -78,6 +79,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/auth: reject gateway auth credentials that match published example placeholders at startup and secret reload, and keep cloud install snippets from publishing copy-paste gateway/keyring secrets. (#68404) Thanks @coygeek.
 - CLI/update: preserve macOS restart helper launchctl failures in the update restart log without letting log setup block the restart path. (#68492) Thanks @hclsys.
 - Slack/threads: keep file-only root messages as starter context so first thread replies can still hydrate starter media. (#68594) Thanks @martingarramon.
+- Google/Antigravity: resolve forward-compatible Gemini 3.1 Pro custom-tools and Flash variants from the bundled Google plugin templates, so `google-antigravity/gemini-3.1-pro-preview-customtools` no longer falls through to an unknown-model error. Fixes #35512.
+- Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
+- Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
 
 ## 2026.4.15
 

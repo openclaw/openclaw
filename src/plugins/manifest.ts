@@ -164,6 +164,16 @@ export type PluginManifest = {
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
+   * Provider or CLI backend refs whose plugin-owned synthetic auth hook should
+   * be probed during cold model discovery before the runtime registry exists.
+   */
+  syntheticAuthRefs?: string[];
+  /**
+   * Bundled-plugin-owned placeholder API key values that represent non-secret
+   * local, OAuth, or ambient credential state.
+   */
+  nonSecretAuthMarkers?: string[];
+  /**
    * Plugin-owned command aliases that should resolve to this plugin during
    * config diagnostics before runtime loads.
    */
@@ -701,6 +711,8 @@ export function loadPluginManifest(
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
+  const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
@@ -735,6 +747,8 @@ export function loadPluginManifest(
       providerDiscoveryEntry,
       modelSupport,
       cliBackends,
+      syntheticAuthRefs,
+      nonSecretAuthMarkers,
       commandAliases,
       providerAuthEnvVars,
       providerAuthAliases,

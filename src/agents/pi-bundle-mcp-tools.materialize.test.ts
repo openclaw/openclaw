@@ -1,15 +1,15 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createBundleMcpToolRuntime,
+  materializeBundleMcpToolsForRun,
+} from "./pi-bundle-mcp-materialize.js";
+import {
   cleanupBundleMcpHarness,
   makeTempDir,
   startSseProbeServer,
   writeBundleProbeMcpServer,
 } from "./pi-bundle-mcp-test-harness.js";
-import {
-  createBundleMcpToolRuntime,
-  materializeBundleMcpToolsForRun,
-} from "./pi-bundle-mcp-tools.js";
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 

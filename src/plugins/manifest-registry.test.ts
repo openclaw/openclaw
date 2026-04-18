@@ -382,6 +382,8 @@ describe("loadPluginManifestRegistry", () => {
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
+      syntheticAuthRefs: ["openai-cli"],
+      nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
         "openai-codex": "openai",
       },
@@ -407,6 +409,8 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
+    expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
       "openai-codex": "openai",
     });

@@ -2,19 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
-import * as channelPlugins from "../channels/plugins/index.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import * as sessionPaths from "../config/sessions/paths.js";
-import * as sessionStore from "../config/sessions/store.js";
-import * as sessionTranscript from "../config/sessions/transcript.js";
-import * as gatewayCall from "../gateway/call.js";
-import * as heartbeatWake from "../infra/heartbeat-wake.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -22,8 +15,6 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
-import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -55,12 +46,21 @@ const hoisted = vi.hoisted(() => {
   const sessionBindingListBySessionMock = vi.fn();
   const closeSessionMock = vi.fn();
   const initializeSessionMock = vi.fn();
+  const getAcpSessionManagerMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
+  const getChannelPluginMock = vi.fn();
+  const getLoadedChannelPluginMock = vi.fn();
+  const normalizeChannelIdMock = vi.fn((channelId: string) => {
+    const normalized = channelId.trim().toLowerCase();
+    return normalized || null;
+  });
+  const cleanupFailedAcpSpawnMock = vi.fn();
+  const createRunningTaskRunMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -72,31 +72,64 @@ const hoisted = vi.hoisted(() => {
     sessionBindingListBySessionMock,
     closeSessionMock,
     initializeSessionMock,
+    getAcpSessionManagerMock,
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
+    getChannelPluginMock,
+    getLoadedChannelPluginMock,
+    normalizeChannelIdMock,
+    cleanupFailedAcpSpawnMock,
+    createRunningTaskRunMock,
     state,
   };
 });
 
-const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
-const getChannelPluginSpy = vi.spyOn(channelPlugins, "getChannelPlugin");
-const getAcpSessionManagerSpy = vi.spyOn(acpSessionManager, "getAcpSessionManager");
-const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
-const resolveStorePathSpy = vi.spyOn(sessionPaths, "resolveStorePath");
-const resolveSessionTranscriptFileSpy = vi.spyOn(sessionTranscript, "resolveSessionTranscriptFile");
-const areHeartbeatsEnabledSpy = vi.spyOn(heartbeatWake, "areHeartbeatsEnabled");
-const startAcpSpawnParentStreamRelaySpy = vi.spyOn(
-  acpSpawnParentStream,
-  "startAcpSpawnParentStreamRelay",
-);
-const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
-  acpSpawnParentStream,
-  "resolveAcpSpawnStreamLogPath",
-);
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: hoisted.getAcpSessionManagerMock,
+}));
+
+vi.mock("../acp/control-plane/spawn.js", () => ({
+  cleanupFailedAcpSpawn: hoisted.cleanupFailedAcpSpawnMock,
+}));
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: hoisted.getChannelPluginMock,
+  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  normalizeChannelId: hoisted.normalizeChannelIdMock,
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: hoisted.resolveStorePathMock,
+}));
+
+vi.mock("../config/sessions/store.js", () => ({
+  loadSessionStore: hoisted.loadSessionStoreMock,
+}));
+
+vi.mock("../config/sessions/transcript.js", () => ({
+  resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: hoisted.callGatewayMock,
+}));
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  areHeartbeatsEnabled: hoisted.areHeartbeatsEnabledMock,
+}));
+
+vi.mock("../tasks/task-executor.js", () => ({
+  createRunningTaskRun: hoisted.createRunningTaskRunMock,
+}));
+
+vi.mock("./acp-spawn-parent-stream.js", () => ({
+  resolveAcpSpawnStreamLogPath: hoisted.resolveAcpSpawnStreamLogPathMock,
+  startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
+}));
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
@@ -350,9 +383,11 @@ function enableTelegramCurrentConversationBindings(): void {
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
-    resetTaskRegistryForTests();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
-    getChannelPluginSpy.mockReset().mockReturnValue(undefined);
+    hoisted.getChannelPluginMock.mockReset().mockReturnValue(undefined);
+    hoisted.getLoadedChannelPluginMock.mockReset().mockReturnValue(undefined);
+    hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.createRunningTaskRunMock.mockReset().mockReturnValue(undefined);
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -368,26 +403,16 @@ describe("spawnAcpDirect", () => {
       }
       return {};
     });
-    callGatewaySpy.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      return await hoisted.callGatewayMock(argsUnknown);
-    });
 
     hoisted.closeSessionMock.mockReset().mockResolvedValue({
       runtimeClosed: true,
       metaCleared: false,
     });
-    getAcpSessionManagerSpy.mockReset().mockReturnValue({
-      initializeSession: async (
-        params: Parameters<
-          ReturnType<typeof acpSessionManager.getAcpSessionManager>["initializeSession"]
-        >[0],
-      ) => await hoisted.initializeSessionMock(params),
-      closeSession: async (
-        params: Parameters<
-          ReturnType<typeof acpSessionManager.getAcpSessionManager>["closeSession"]
-        >[0],
-      ) => await hoisted.closeSessionMock(params),
-    } as unknown as ReturnType<typeof acpSessionManager.getAcpSessionManager>);
+    hoisted.getAcpSessionManagerMock.mockReset().mockReturnValue({
+      initializeSession: async (params: AcpInitializeSessionInput) =>
+        await hoisted.initializeSessionMock(params),
+      closeSession: async (params: unknown) => await hoisted.closeSessionMock(params),
+    });
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as AcpInitializeSessionInput;
       const runtimeSessionName = `${args.sessionKey}:runtime`;
@@ -464,19 +489,10 @@ describe("spawnAcpDirect", () => {
     hoisted.startAcpSpawnParentStreamRelayMock
       .mockReset()
       .mockImplementation(() => createRelayHandle());
-    startAcpSpawnParentStreamRelaySpy
-      .mockReset()
-      .mockImplementation((...args) => hoisted.startAcpSpawnParentStreamRelayMock(...args));
     hoisted.resolveAcpSpawnStreamLogPathMock
       .mockReset()
       .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
-    resolveAcpSpawnStreamLogPathSpy
-      .mockReset()
-      .mockImplementation((...args) => hoisted.resolveAcpSpawnStreamLogPathMock(...args));
     hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
-    resolveStorePathSpy
-      .mockReset()
-      .mockImplementation((store, opts) => hoisted.resolveStorePathMock(store, opts));
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<string, { sessionId: string; updatedAt: number }> = {};
       return new Proxy(store, {
@@ -488,9 +504,6 @@ describe("spawnAcpDirect", () => {
         },
       });
     });
-    loadSessionStoreSpy
-      .mockReset()
-      .mockImplementation((storePath) => hoisted.loadSessionStoreMock(storePath));
     hoisted.resolveSessionTranscriptFileMock
       .mockReset()
       .mockImplementation(async (params: unknown) => {
@@ -507,16 +520,9 @@ describe("spawnAcpDirect", () => {
           },
         };
       });
-    resolveSessionTranscriptFileSpy
-      .mockReset()
-      .mockImplementation(async (params) => await hoisted.resolveSessionTranscriptFileMock(params));
-    areHeartbeatsEnabledSpy
-      .mockReset()
-      .mockImplementation(() => hoisted.areHeartbeatsEnabledMock());
   });
 
   afterEach(() => {
-    resetTaskRegistryForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
   });
