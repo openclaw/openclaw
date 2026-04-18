@@ -54,6 +54,7 @@ describe("qa docker harness", () => {
     expect(compose).toContain("chmod 700 /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp");
     expect(compose).toContain("ln -snf /app /app/node_modules/openclaw");
     expect(compose).toContain("node --import tsx -e");
+    expect(compose).toContain("runQaProviderServerCommand('mock-openai'");
     expect(compose).toContain("18889:18789");
     expect(compose).toContain('      - "43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");

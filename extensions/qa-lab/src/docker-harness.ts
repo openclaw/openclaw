@@ -72,7 +72,7 @@ ${imageBlock}    pull_policy: never
         mkdir -p /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp &&
         chmod 700 /tmp/openclaw-qa-home /tmp/openclaw-qa-tmp &&
         ln -snf /app /app/node_modules/openclaw && exec node --import tsx -e
-        "import('/app/extensions/qa-lab/src/cli.runtime.ts').then((m)=>m.runQaMockOpenAiCommand({ host: '0.0.0.0', port: 44080 }))"
+        "import('/app/extensions/qa-lab/src/cli.runtime.ts').then((m)=>m.runQaProviderServerCommand('mock-openai', { host: '0.0.0.0', port: 44080 }))"
 ${
   params.includeQaLabUi
     ? `  qa-lab:
