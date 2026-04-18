@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
@@ -49,6 +50,113 @@ type ChannelIssueLike = {
   message: string;
   fix?: string;
 };
+
+type RecoveryGuidance = {
+  cause: string;
+  fix: string;
+};
+
+function extractOAuthRefreshFailureProvider(message: string): string | null {
+  const provider = message.match(/OAuth token refresh failed for ([^:]+):/i)?.[1]?.trim();
+  return provider && provider.length > 0 ? provider : null;
+}
+
+function buildOAuthRefreshLoginCommand(provider: string | null): string {
+  return provider
+    ? formatCliCommand(`openclaw models auth login --provider ${provider}`)
+    : formatCliCommand("openclaw models auth login");
+}
+
+function classifyGatewayLogRecovery(lastErr: string): RecoveryGuidance | null {
+  const lower = (normalizeOptionalString(lastErr) ?? "").toLowerCase();
+  if (!lower) {
+    return null;
+  }
+  if (
+    lower.includes("refusing to bind gateway") ||
+    lower.includes("failed to bind gateway socket")
+  ) {
+    return {
+      cause: "gateway startup is blocked by local port binding",
+      fix: `Free the configured gateway port, or change it, then restart the gateway (${formatCliCommand("openclaw gateway restart")}) and rerun status.`,
+    };
+  }
+  if (lower.includes("gateway auth mode")) {
+    return {
+      cause: "gateway auth configuration is invalid for the current mode",
+      fix: "Check the gateway.auth settings in config, restart the gateway, then rerun status.",
+    };
+  }
+  if (lower.includes("tailscale") && lower.includes("requires")) {
+    return {
+      cause: "the configured gateway path depends on Tailscale, but Tailscale is not ready",
+      fix: "Start or repair Tailscale, or switch the gateway back to local mode, then rerun status.",
+    };
+  }
+  if (lower.includes("gateway start blocked")) {
+    return {
+      cause: "gateway startup was blocked by a preflight check",
+      fix: "Resolve the blocking condition above, restart the gateway, then rerun status.",
+    };
+  }
+  return null;
+}
+
+function classifyGatewayHealthRecovery(params: {
+  healthErr: string;
+  gatewayReachable: boolean;
+}): RecoveryGuidance | null {
+  const clean = normalizeOptionalString(params.healthErr) ?? "";
+  const lower = clean.toLowerCase();
+  if (!lower) {
+    return null;
+  }
+
+  const oauthProvider = extractOAuthRefreshFailureProvider(clean);
+  if (/oauth token refresh failed/i.test(clean)) {
+    return {
+      cause: `provider auth refresh failed${oauthProvider ? ` (${oauthProvider})` : ""}`,
+      fix: `Re-authenticate the affected provider via ${buildOAuthRefreshLoginCommand(oauthProvider)} and rerun status.`,
+    };
+  }
+
+  if (
+    lower.includes("unauthorized") ||
+    lower.includes("forbidden") ||
+    lower.includes("401") ||
+    lower.includes("403")
+  ) {
+    return {
+      cause: "gateway health probing could not authenticate against the configured gateway",
+      fix: "Verify the configured gateway token/password matches the running gateway, then rerun status.",
+    };
+  }
+
+  if (
+    lower.includes("gateway unreachable") ||
+    lower.includes("econnrefused") ||
+    lower.includes("connection refused") ||
+    lower.includes("fetch failed") ||
+    lower.includes("timed out")
+  ) {
+    return params.gatewayReachable
+      ? {
+          cause: "the gateway answered the reachability probe, but the health RPC still failed",
+          fix: `Retry ${formatCliCommand("openclaw status --all")}; if it keeps failing, restart the gateway (${formatCliCommand("openclaw gateway restart")}) and rerun status.`,
+        }
+      : {
+          cause: "the configured gateway target is not responding",
+          fix: `Check whether the gateway is running with ${formatCliCommand("openclaw gateway status")}; if needed, start it with ${formatCliCommand("openclaw gateway start")}, then rerun status.`,
+        };
+  }
+
+  return params.gatewayReachable
+    ? {
+        cause: "the gateway health probe failed for an uncategorized reason",
+        fix: `Retry ${formatCliCommand("openclaw status --all")}; if it persists, inspect gateway logs and restart the gateway.`,
+      }
+    : null;
+}
 
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
@@ -107,6 +215,15 @@ export async function appendStatusAllDiagnosis(params: {
     if (uniqueIssues.length > 12) {
       lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
     }
+    if (!params.snap.exists) {
+      lines.push(
+        `  ${muted("Fix: create the config file or point OpenClaw at the intended config path, then rerun status.")}`,
+      );
+    } else if (!params.snap.valid && uniqueIssues.length > 0) {
+      lines.push(
+        `  ${muted("Fix: resolve the config issues above, save the config, then rerun status.")}`,
+      );
+    }
   } else {
     emitCheck("Config: read failed", "warn");
   }
@@ -143,6 +260,11 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push("");
     lines.push(muted("Gateway last log line:"));
     lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
+    const recovery = classifyGatewayLogRecovery(lastErrClean);
+    if (recovery) {
+      lines.push(`  ${muted(`Cause: ${recovery.cause}.`)}`);
+      lines.push(`  ${muted(`Fix: ${recovery.fix}`)}`);
+    }
   }
 
   if (params.portUsage) {
@@ -261,6 +383,19 @@ export async function appendStatusAllDiagnosis(params: {
       `Channel issues skipped (gateway ${params.gatewayReachable ? "query failed" : "unreachable"})`,
       "warn",
     );
+    if (params.gatewayReachable) {
+      lines.push(
+        `  ${muted("Cause: the gateway answered the reachability probe, but channel-status inspection still failed.")}`,
+      );
+      lines.push(
+        `  ${muted(`Fix: retry ${formatCliCommand("openclaw status --all")}; if it persists, restart the gateway (${formatCliCommand("openclaw gateway restart")}) and rerun status.`)}`,
+      );
+    } else {
+      lines.push(`  ${muted("Cause: the configured gateway target is not responding.")}`);
+      lines.push(
+        `  ${muted(`Fix: check the gateway with ${formatCliCommand("openclaw gateway status")}; if needed, start it with ${formatCliCommand("openclaw gateway start")}, then rerun status.`)}`,
+      );
+    }
   }
 
   const healthErr = (() => {
@@ -288,6 +423,14 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push("");
     lines.push(muted("Gateway health:"));
     lines.push(`  ${muted(redactSecrets(healthErr))}`);
+    const recovery = classifyGatewayHealthRecovery({
+      healthErr,
+      gatewayReachable: params.gatewayReachable,
+    });
+    if (recovery) {
+      lines.push(`  ${muted(`Cause: ${recovery.cause}.`)}`);
+      lines.push(`  ${muted(`Fix: ${recovery.fix}`)}`);
+    }
   }
 
   lines.push("");

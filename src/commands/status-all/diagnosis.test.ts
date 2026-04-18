@@ -61,6 +61,69 @@ function createBaseParams(
   };
 }
 
+describe("status-all diagnosis recovery guidance", () => {
+  it("adds a repair hint when the config is invalid", async () => {
+    const params = createBaseParams([]);
+    params.snap = {
+      exists: true,
+      valid: false,
+      path: "/Users/test/.openclaw/openclaw.json",
+      issues: [{ path: "gateway.remote.url", message: "expected a string" }],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Config: /Users/test/.openclaw/openclaw.json");
+    expect(output).toContain("gateway.remote.url");
+    expect(output).toContain(
+      "Fix: resolve the config issues above, save the config, then rerun status.",
+    );
+  });
+
+  it("classifies bind failures from the gateway last log line", async () => {
+    const params = createBaseParams([]);
+    params.lastErr = "refusing to bind gateway on 0.0.0.0:18789";
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Gateway last log line:");
+    expect(output).toContain("refusing to bind gateway on 0.0.0.0:18789");
+    expect(output).toContain("Cause: gateway startup is blocked by local port binding.");
+    expect(output).toContain("openclaw gateway restart");
+  });
+
+  it("adds cause and fix guidance when the gateway is unreachable", async () => {
+    const params = createBaseParams([]);
+    params.health = { error: "gateway unreachable" };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Channel issues skipped (gateway unreachable)");
+    expect(output).toContain("Cause: the configured gateway target is not responding.");
+    expect(output).toContain("openclaw gateway status");
+    expect(output).toContain("openclaw gateway start");
+    expect(output).toContain("Gateway health:");
+  });
+
+  it("turns OAuth refresh health failures into re-auth guidance", async () => {
+    const params = createBaseParams([]);
+    params.gatewayReachable = true;
+    params.health = {
+      error:
+        "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Cause: provider auth refresh failed (openai-codex).");
+    expect(output).toContain("openclaw models auth login --provider openai-codex");
+  });
+});
+
 describe("status-all diagnosis port checks", () => {
   it("treats same-process dual-stack loopback listeners as healthy", async () => {
     const params = createBaseParams([
