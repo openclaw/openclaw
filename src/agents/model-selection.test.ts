@@ -262,6 +262,12 @@ describe("model-selection", () => {
         expected: { provider: "openai", model: "gpt-5.4" },
       },
       {
+        name: "normalizes the openrouter:auto compatibility alias",
+        variants: ["openrouter:auto"],
+        defaultProvider: "anthropic",
+        expected: { provider: "openrouter", model: "openrouter/auto" },
+      },
+      {
         name: "preserves openrouter native model prefixes",
         variants: ["openrouter/aurora-alpha"],
         defaultProvider: "openai",
@@ -1117,6 +1123,87 @@ describe("model-selection", () => {
         setLoggerOverride(null);
         resetLogger();
       }
+    });
+
+    it("resolves openrouter:auto through the canonical OpenRouter auto model", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:auto" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openrouter", model: "openrouter/auto" });
+    });
+
+    it("resolves openrouter:free to the first configured concrete OpenRouter free model", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:free" },
+            models: {
+              "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b-instruct:free",
+      });
+    });
+
+    it("resolves openrouter:free from configured OpenRouter provider models when needed", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:free" },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [
+                {
+                  id: "deepseek/deepseek-r1-0528:free",
+                  name: "DeepSeek R1 Free",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        provider: "openrouter",
+        model: "deepseek/deepseek-r1-0528:free",
+      });
     });
   });
 

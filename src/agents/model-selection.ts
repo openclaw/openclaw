@@ -39,6 +39,8 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
   return log;
 }
 
+const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
 export type ModelAliasIndex = {
@@ -249,6 +251,67 @@ export function resolveAllowlistModelKey(raw: string, defaultProvider: string): 
   return modelKey(parsed.provider, parsed.model);
 }
 
+function isConcreteOpenRouterFreeModelRef(ref: ModelRef): boolean {
+  return ref.provider === "openrouter" && ref.model.includes("/") && ref.model.endsWith(":free");
+}
+
+function resolveConfiguredOpenRouterCompatFreeRef(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+  allowPluginNormalization?: boolean;
+}): ModelRef | null {
+  const configuredModels = params.cfg.agents?.defaults?.models ?? {};
+  for (const raw of Object.keys(configuredModels)) {
+    if (!raw.includes("/")) {
+      continue;
+    }
+    const parsed = parseModelRef(raw, params.defaultProvider, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+    if (parsed && isConcreteOpenRouterFreeModelRef(parsed)) {
+      return parsed;
+    }
+  }
+
+  const openrouterProviderConfig = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    "openrouter",
+  );
+  for (const entry of openrouterProviderConfig?.models ?? []) {
+    const modelId = entry?.id?.trim();
+    if (!modelId || !modelId.includes("/") || !modelId.endsWith(":free")) {
+      continue;
+    }
+    return normalizeModelRef("openrouter", modelId, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+  }
+
+  return null;
+}
+
+function resolveConfiguredOpenRouterCompatAlias(params: {
+  cfg: OpenClawConfig;
+  raw: string;
+  defaultProvider: string;
+  allowPluginNormalization?: boolean;
+}): ModelRef | null {
+  const normalized = normalizeLowercaseStringOrEmpty(params.raw);
+  if (normalized === "openrouter:auto") {
+    return parseModelRef("openrouter:auto", params.defaultProvider, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+  }
+  if (normalized !== OPENROUTER_COMPAT_FREE_ALIAS) {
+    return null;
+  }
+  return resolveConfiguredOpenRouterCompatFreeRef({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+}
+
 export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
@@ -419,6 +482,16 @@ export function resolveConfiguredModelRef(params: {
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
+      const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
+        cfg: params.cfg,
+        raw: trimmed,
+        defaultProvider: params.defaultProvider,
+        allowPluginNormalization: params.allowPluginNormalization,
+      });
+      if (openrouterCompatRef) {
+        return openrouterCompatRef;
+      }
+
       const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
