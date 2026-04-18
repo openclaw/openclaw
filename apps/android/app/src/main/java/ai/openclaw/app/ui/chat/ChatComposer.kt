@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,23 +47,58 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileHeadline
 import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileTextTertiary
 
+internal data class DraftApplication(
+  val input: String,
+  val lastAppliedDraft: String?,
+  val consumed: Boolean,
+)
+
+internal fun applyDraftText(
+  draftText: String?,
+  currentInput: String,
+  lastAppliedDraft: String?,
+): DraftApplication {
+  val draft =
+    draftText?.trim()?.ifEmpty { null } ?: return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = null,
+      consumed = false,
+    )
+  if (draft == lastAppliedDraft) {
+    return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = lastAppliedDraft,
+      consumed = false,
+    )
+  }
+  return DraftApplication(
+    input = draft,
+    lastAppliedDraft = draft,
+    consumed = true,
+  )
+}
+
 @Composable
 fun ChatComposer(
+  draftText: String?,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
+  onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
@@ -71,7 +107,17 @@ fun ChatComposer(
   onSend: (text: String) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
+  var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
+
+  LaunchedEffect(draftText) {
+    val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
+    input = next.input
+    lastAppliedDraft = next.lastAppliedDraft
+    if (next.consumed) {
+      onDraftApplied()
+    }
+  }
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
@@ -110,7 +156,7 @@ fun ChatComposer(
         Surface(
           onClick = { showThinkingMenu = true },
           shape = RoundedCornerShape(14.dp),
-          color = Color.White,
+          color = mobileCardSurface,
           border = BorderStroke(1.dp, mobileBorderStrong),
         ) {
           Row(
@@ -126,7 +172,15 @@ fun ChatComposer(
           }
         }
 
-        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
+        DropdownMenu(
+          expanded = showThinkingMenu,
+          onDismissRequest = { showThinkingMenu = false },
+          shape = RoundedCornerShape(16.dp),
+          containerColor = mobileCardSurface,
+          tonalElevation = 0.dp,
+          shadowElevation = 8.dp,
+          border = BorderStroke(1.dp, mobileBorder),
+        ) {
           ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
@@ -177,7 +231,7 @@ fun ChatComposer(
             disabledContainerColor = mobileBorderStrong,
             disabledContentColor = mobileTextTertiary,
           ),
-        border = BorderStroke(1.dp, if (canSend) Color(0xFF154CAD) else mobileBorderStrong),
+        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
       ) {
         if (sendBusy) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
@@ -211,9 +265,9 @@ private fun SecondaryActionButton(
     shape = RoundedCornerShape(14.dp),
     colors =
       ButtonDefaults.buttonColors(
-        containerColor = Color.White,
+        containerColor = mobileCardSurface,
         contentColor = mobileTextSecondary,
-        disabledContainerColor = Color.White,
+        disabledContainerColor = mobileCardSurface,
         disabledContentColor = mobileTextTertiary,
       ),
     border = BorderStroke(1.dp, mobileBorderStrong),
@@ -303,7 +357,7 @@ private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
       Surface(
         onClick = onRemove,
         shape = RoundedCornerShape(999.dp),
-        color = Color.White,
+        color = mobileCardSurface,
         border = BorderStroke(1.dp, mobileBorderStrong),
       ) {
         Text(

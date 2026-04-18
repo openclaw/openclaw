@@ -1,19 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSlackMessageHandler } from "./message-handler.js";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
+const { createSlackMessageHandler } = await import("./message-handler.js");
 
-vi.mock("../../../../src/auto-reply/inbound-debounce.js", () => ({
-  resolveInboundDebounceMs: () => 10,
-  createInboundDebouncer: () => ({
-    enqueue: (entry: unknown) => enqueueMock(entry),
-    flushKey: (key: string) => flushKeyMock(key),
-  }),
-}));
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    createChannelInboundDebouncer: () => ({
+      debounceMs: 10,
+      debouncer: {
+        enqueue: (entry: unknown) => enqueueMock(entry),
+        flushKey: (key: string) => flushKeyMock(key),
+      },
+    }),
+    shouldDebounceTextInbound: ({ hasMedia }: { hasMedia?: boolean }) => !hasMedia,
+  };
+});
 
 vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
@@ -23,6 +32,7 @@ vi.mock("./thread-resolution.js", () => ({
 
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   return {
     cfg: {},
@@ -33,11 +43,14 @@ function createContext(overrides?: {
     runtime: {},
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,
+    releaseSeenMessage: (channel: string | undefined, ts: string | undefined) =>
+      overrides?.releaseSeenMessage?.(channel, ts),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
 function createHandlerWithTracker(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   const trackEvent = vi.fn();
   const handler = createSlackMessageHandler({

@@ -1,161 +1,180 @@
 ---
-title: "Release Checklist"
-summary: "Step-by-step release checklist for npm + macOS app"
+title: "Release Policy"
+summary: "Public release channels, version naming, and cadence"
 read_when:
-  - Cutting a new npm release
-  - Cutting a new macOS app release
-  - Verifying metadata before publishing
+  - Looking for public release channel definitions
+  - Looking for version naming and cadence
 ---
 
-# Release Checklist (npm + macOS)
+# Release Policy
 
-Use `pnpm` from the repo root with Node 24 by default. Node 22 LTS, currently `22.16+`, remains supported for compatibility. Keep the working tree clean before tagging/publishing.
+OpenClaw has three public release lanes:
 
-## Operator trigger
+- stable: tagged releases that publish to npm `beta` by default, or to npm `latest` when explicitly requested
+- beta: prerelease tags that publish to npm `beta`
+- dev: the moving head of `main`
 
-When the operator says “release”, immediately do this preflight (no extra questions unless blocked):
-
-- Read this doc and `docs/platforms/mac/release.md`.
-- Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set (SPARKLE_PRIVATE_KEY_FILE should live in `~/.profile`).
-- Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
-
-## Versioning
-
-Current OpenClaw releases use date-based versioning.
+## Version naming
 
 - Stable release version: `YYYY.M.D`
   - Git tag: `vYYYY.M.D`
-  - Examples from repo history: `v2026.2.26`, `v2026.3.8`
+- Stable correction release version: `YYYY.M.D-N`
+  - Git tag: `vYYYY.M.D-N`
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
-  - Examples from repo history: `v2026.2.15-beta.1`, `v2026.3.8-beta.1`
-- Fallback correction tag: `vYYYY.M.D-N`
-  - Use only as a last-resort recovery tag when a published immutable release burned the original stable tag and you cannot reuse it.
-  - The npm package version stays `YYYY.M.D`; the `-N` suffix is only for the git tag and GitHub release.
-  - Prefer betas for normal pre-release iteration, then cut a clean stable tag once ready.
-- Use the same version string everywhere, minus the leading `v` where Git tags are not used:
-  - `package.json`: `2026.3.8`
-  - Git tag: `v2026.3.8`
-  - GitHub release title: `openclaw 2026.3.8`
-- Do not zero-pad month or day. Use `2026.3.8`, not `2026.03.08`.
-- Stable and beta are npm dist-tags, not separate release lines:
-  - `latest` = stable
-  - `beta` = prerelease/testing
-- Dev is the moving head of `main`, not a normal git-tagged release.
-- The tag-triggered preview run accepts stable, beta, and fallback correction tags, and rejects versions whose CalVer date is more than 2 UTC calendar days away from the release date.
+- Do not zero-pad month or day
+- `latest` means the current promoted stable npm release
+- `beta` means the current beta install target
+- Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
+- Every OpenClaw release ships the npm package and macOS app together
 
-Historical note:
+## Release cadence
 
-- Older tags such as `v2026.1.11-1`, `v2026.2.6-3`, and `v2.0.0-beta2` exist in repo history.
-- Treat correction tags as a fallback-only escape hatch. New releases should still use `vYYYY.M.D` for stable and `vYYYY.M.D-beta.N` for beta.
+- Releases move beta-first
+- Stable follows only after the latest beta is validated
+- Detailed release procedure, approvals, credentials, and recovery notes are
+  maintainer-only
 
-1. **Version & metadata**
+## Release preflight
 
-- [ ] Bump `package.json` version (e.g., `2026.1.29`).
-- [ ] Run `pnpm plugins:sync` to align extension package versions + changelogs.
-- [ ] Update CLI/version strings in [`src/version.ts`](https://github.com/openclaw/openclaw/blob/main/src/version.ts) and the Baileys user agent in [`src/web/session.ts`](https://github.com/openclaw/openclaw/blob/main/src/web/session.ts).
-- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs) for `openclaw`.
-- [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
+- Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
+  `dist/*` release artifacts and Control UI bundle exist for the pack
+  validation step
+- Run `pnpm release:check` before every tagged release
+- Release checks now run in a separate manual workflow:
+  `OpenClaw Release Checks`
+- Cross-OS install and upgrade runtime validation is dispatched from the
+  private caller workflow
+  `openclaw/releases-private/.github/workflows/openclaw-cross-os-release-checks.yml`,
+  which invokes the reusable public workflow
+  `.github/workflows/openclaw-cross-os-release-checks-reusable.yml`
+- This split is intentional: keep the real npm release path short,
+  deterministic, and artifact-focused, while slower live checks stay in their
+  own lane so they do not stall or block publish
+- Release checks must be dispatched from the `main` workflow ref so the
+  workflow logic and secrets stay canonical
+- That workflow accepts either an existing release tag or the current full
+  40-character `main` commit SHA
+- In commit-SHA mode it only accepts the current `origin/main` HEAD; use a
+  release tag for older release commits
+- `OpenClaw NPM Release` validation-only preflight also accepts the current
+  full 40-character `main` commit SHA without requiring a pushed tag
+- That SHA path is validation-only and cannot be promoted into a real publish
+- In SHA mode the workflow synthesizes `v<package.json version>` only for the
+  package metadata check; real publish still requires a real release tag
+- Both workflows keep the real publish and promotion path on GitHub-hosted
+  runners, while the non-mutating validation path can use the larger
+  Blacksmith Linux runners
+- That workflow runs
+  `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
+  using both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` workflow secrets
+- npm release preflight no longer waits on the separate release checks lane
+- Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
+  (or the matching beta/correction tag) before approval
+- After npm publish, run
+  `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
+  (or the matching beta/correction version) to verify the published registry
+  install path in a fresh temp prefix
+- Maintainer release automation now uses preflight-then-promote:
+  - real npm publish must pass a successful npm `preflight_run_id`
+  - stable npm releases default to `beta`
+  - stable npm publish can target `latest` explicitly via workflow input
+  - token-based npm dist-tag mutation now lives in
+    `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
+    for security, because `npm dist-tag add` still needs `NPM_TOKEN` while the
+    public repo keeps OIDC-only publish
+  - public `macOS Release` is validation-only
+  - real private mac publish must pass successful private mac
+    `preflight_run_id` and `validate_run_id`
+  - the real publish paths promote prepared artifacts instead of rebuilding
+    them again
+- For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
+  also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
+  so release corrections cannot silently leave older global installs on the
+  base stable payload
+- npm release preflight fails closed unless the tarball includes both
+  `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
+  so we do not ship an empty browser dashboard again
+- `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on
+  the candidate update tarball, so installer e2e catches accidental pack bloat
+  before the release publish path
+- If the release work touched CI planning, extension timing manifests, or
+  extension test matrices, regenerate and review the planner-owned
+  `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`
+  before approval so release notes do not describe a stale CI layout
+- Stable macOS release readiness also includes the updater surfaces:
+  - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
+  - `appcast.xml` on `main` must point at the new stable zip after publish
+  - the packaged app must keep a non-debug bundle id, a non-empty Sparkle feed
+    URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor
+    for that release version
 
-2. **Build & artifacts**
+## NPM workflow inputs
 
-- [ ] If A2UI inputs changed, run `pnpm canvas:a2ui:bundle` and commit any updated [`src/canvas-host/a2ui/a2ui.bundle.js`](https://github.com/openclaw/openclaw/blob/main/src/canvas-host/a2ui/a2ui.bundle.js).
-- [ ] `pnpm run build` (regenerates `dist/`).
-- [ ] Verify npm package `files` includes all required `dist/*` folders (notably `dist/node-host/**` and `dist/acp/**` for headless node + ACP CLI).
-- [ ] Confirm `dist/build-info.json` exists and includes the expected `commit` hash (CLI banner uses this for npm installs).
-- [ ] Optional: `npm pack --pack-destination /tmp` after the build; inspect the tarball contents and keep it handy for the GitHub release (do **not** commit it).
+`OpenClaw NPM Release` accepts these operator-controlled inputs:
 
-3. **Changelog & docs**
+- `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
+  `v2026.4.2-beta.1`; when `preflight_only=true`, it may also be the current
+  full 40-character `main` commit SHA for validation-only preflight
+- `preflight_only`: `true` for validation/build/package only, `false` for the
+  real publish path
+- `preflight_run_id`: required on the real publish path so the workflow reuses
+  the prepared tarball from the successful preflight run
+- `npm_dist_tag`: npm target tag for the publish path; defaults to `beta`
 
-- [ ] Update `CHANGELOG.md` with user-facing highlights (create the file if missing); keep entries strictly descending by version.
-- [ ] Ensure README examples/flags match current CLI behavior (notably new commands or options).
+`OpenClaw Release Checks` accepts these operator-controlled inputs:
 
-4. **Validation**
+- `ref`: existing release tag or the current full 40-character `main` commit
+  SHA to validate
 
-- [ ] `pnpm build`
-- [ ] `pnpm check`
-- [ ] `pnpm test` (or `pnpm test:coverage` if you need coverage output)
-- [ ] `pnpm release:check` (verifies npm pack contents)
-- [ ] If `pnpm config:docs:check` fails as part of release validation and the config-surface change is intentional, run `pnpm config:docs:gen`, review `docs/.generated/config-baseline.json` and `docs/.generated/config-baseline.jsonl`, commit the updated baselines, then rerun `pnpm release:check`.
-- [ ] `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` (Docker install smoke test, fast path; required before release)
-  - If the immediate previous npm release is known broken, set `OPENCLAW_INSTALL_SMOKE_PREVIOUS=<last-good-version>` or `OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1` for the preinstall step.
-- [ ] (Optional) Full installer smoke (adds non-root + CLI coverage): `pnpm test:install:smoke`
-- [ ] (Optional) Installer E2E (Docker, runs `curl -fsSL https://openclaw.ai/install.sh | bash`, onboards, then runs real tool calls):
-  - `pnpm test:install:e2e:openai` (requires `OPENAI_API_KEY`)
-  - `pnpm test:install:e2e:anthropic` (requires `ANTHROPIC_API_KEY`)
-  - `pnpm test:install:e2e` (requires both keys; runs both providers)
-- [ ] (Optional) Spot-check the web gateway if your changes affect send/receive paths.
+Rules:
 
-5. **macOS app (Sparkle)**
+- Stable and correction tags may publish to either `beta` or `latest`
+- Beta prerelease tags may publish only to `beta`
+- Full commit SHA input is allowed only when `preflight_only=true`
+- Release checks commit-SHA mode also requires the current `origin/main` HEAD
+- The real publish path must use the same `npm_dist_tag` used during preflight;
+  the workflow verifies that metadata before publish continues
 
-- [ ] Build + sign the macOS app, then zip it for distribution.
-- [ ] Generate the Sparkle appcast (HTML notes via [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)) and update `appcast.xml`.
-- [ ] Keep the app zip (and optional dSYM zip) ready to attach to the GitHub release.
-- [ ] Follow [macOS release](/platforms/mac/release) for the exact commands and required env vars.
-  - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
-  - If notarizing, use the `openclaw-notary` keychain profile created from App Store Connect API env vars (see [macOS release](/platforms/mac/release)).
+## Stable npm release sequence
 
-6. **Publish (npm)**
+When cutting a stable npm release:
 
-- [ ] Confirm git status is clean; commit and push as needed.
-- [ ] Confirm npm trusted publishing is configured for the `openclaw` package.
-- [ ] Do not rely on an `NPM_TOKEN` secret for this workflow; the publish job uses GitHub OIDC trusted publishing.
-- [ ] Push the matching git tag to trigger the preview run in `.github/workflows/openclaw-npm-release.yml`.
-- [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
-  - Stable tags publish to npm `latest`.
-  - Beta tags publish to npm `beta`.
-  - Fallback correction tags like `v2026.3.13-1` map to npm version `2026.3.13`.
-  - Both the preview run and the manual publish run reject tags that do not map back to `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
-  - If `openclaw@YYYY.M.D` is already published, a fallback correction tag is still useful for GitHub release and Docker recovery, but npm publish will not republish that version.
-- [ ] Verify the registry: `npm view openclaw version`, `npm view openclaw dist-tags`, and `npx -y openclaw@X.Y.Z --version` (or `--help`).
+1. Run `OpenClaw NPM Release` with `preflight_only=true`
+   - Before a tag exists, you may use the current full `main` commit SHA for a
+     validation-only dry run of the preflight workflow
+2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
+   when you intentionally want a direct stable publish
+3. Run `OpenClaw Release Checks` separately with the same tag or the
+   full current `main` commit SHA when you want live prompt cache coverage
+   - This is separate on purpose so live coverage stays available without
+     recoupling long-running or flaky checks to the publish workflow
+4. Save the successful `preflight_run_id`
+5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
+   `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
+6. If the release landed on `beta`, use the private
+   `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
+   workflow to promote that stable version from `beta` to `latest`
+7. If the release intentionally published directly to `latest` and `beta`
+   should follow the same stable build immediately, use that same private
+   workflow to point both dist-tags at the stable version, or let its scheduled
+   self-healing sync move `beta` later
 
-### Troubleshooting (notes from 2.0.0-beta2 release)
+The dist-tag mutation lives in the private repo for security because it still
+requires `NPM_TOKEN`, while the public repo keeps OIDC-only publish.
 
-- **npm pack/publish hangs or produces huge tarball**: the macOS app bundle in `dist/OpenClaw.app` (and release zips) get swept into the package. Fix by whitelisting publish contents via `package.json` `files` (include dist subdirs, docs, skills; exclude app bundles). Confirm with `npm pack --dry-run` that `dist/OpenClaw.app` is not listed.
-- **npm auth web loop for dist-tags**: use legacy auth to get an OTP prompt:
-  - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
-- **`npx` verification fails with `ECOMPROMISED: Lock compromised`**: retry with a fresh cache:
-  - `NPM_CONFIG_CACHE=/tmp/npm-cache-$(date +%s) npx -y openclaw@X.Y.Z --version`
-- **Tag needs recovery after a late fix**: if the original stable tag is tied to an immutable GitHub release, mint a fallback correction tag like `vX.Y.Z-1` instead of trying to force-update `vX.Y.Z`.
-  - Keep the npm package version at `X.Y.Z`; the correction suffix is for the git tag and GitHub release only.
-  - Use this only as a last resort. For normal iteration, prefer beta tags and then cut a clean stable release.
+That keeps the direct publish path and the beta-first promotion path both
+documented and operator-visible.
 
-7. **GitHub release + appcast**
+## Public references
 
-- [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
-  - Pushing the tag also triggers the npm release workflow.
-- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `openclaw X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.
-- [ ] Attach artifacts: `npm pack` tarball (optional), `OpenClaw-X.Y.Z.zip`, and `OpenClaw-X.Y.Z.dSYM.zip` (if generated).
-- [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
-- [ ] From a clean temp directory (no `package.json`), run `npx -y openclaw@X.Y.Z send --help` to confirm install/CLI entrypoints work.
-- [ ] Announce/share release notes.
+- [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
+- [`.github/workflows/openclaw-release-checks.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-checks.yml)
+- [`.github/workflows/openclaw-cross-os-release-checks-reusable.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-cross-os-release-checks-reusable.yml)
+- [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
+- [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
+- [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)
 
-## Plugin publish scope (npm)
-
-We only publish **existing npm plugins** under the `@openclaw/*` scope. Bundled
-plugins that are not on npm stay **disk-tree only** (still shipped in
-`extensions/**`).
-
-Process to derive the list:
-
-1. `npm search @openclaw --json` and capture the package names.
-2. Compare with `extensions/*/package.json` names.
-3. Publish only the **intersection** (already on npm).
-
-Current npm plugin list (update as needed):
-
-- @openclaw/bluebubbles
-- @openclaw/diagnostics-otel
-- @openclaw/discord
-- @openclaw/feishu
-- @openclaw/lobster
-- @openclaw/matrix
-- @openclaw/msteams
-- @openclaw/nextcloud-talk
-- @openclaw/nostr
-- @openclaw/voice-call
-- @openclaw/zalo
-- @openclaw/zalouser
-
-Release notes must also call out **new optional bundled plugins** that are **not
-on by default** (example: `tlon`).
+Maintainers use the private release docs in
+[`openclaw/maintainers/release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
+for the actual runbook.

@@ -1,22 +1,15 @@
-import {
-  hasConfiguredUnavailableCredentialStatus,
-  hasResolvedCredentialValue,
-} from "../../channels/account-snapshot-fields.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-import {
-  buildChannelAccountSnapshot,
-  buildReadOnlySourceChannelAccountSnapshot,
-} from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { withProgress } from "../../cli/progress.js";
-import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
@@ -24,6 +17,9 @@ import {
   formatChannelAccountLabel,
   requireValidConfigSnapshot,
 } from "./shared.js";
+import { formatConfigChannelsStatusLines } from "./status-config-format.js";
+
+export { formatConfigChannelsStatusLines } from "./status-config-format.js";
 
 export type ChannelsStatusOptions = {
   json?: boolean;
@@ -85,7 +81,7 @@ function buildChannelAccountLine(
   bits: string[],
 ): string {
   const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-  const name = typeof account.name === "string" ? account.name.trim() : "";
+  const name = normalizeOptionalString(account.name) ?? "";
   const labelText = formatChannelAccountLabel({
     channel: provider,
     accountId,
@@ -209,73 +205,6 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   return lines;
 }
 
-export async function formatConfigChannelsStatusLines(
-  cfg: OpenClawConfig,
-  meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig },
-): Promise<string[]> {
-  const lines: string[] = [];
-  lines.push(theme.warn("Gateway not reachable; showing config-only status."));
-  if (meta.path) {
-    lines.push(`Config: ${meta.path}`);
-  }
-  if (meta.mode) {
-    lines.push(`Mode: ${meta.mode}`);
-  }
-  if (meta.path || meta.mode) {
-    lines.push("");
-  }
-
-  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
-    accounts.map((account) => {
-      const bits: string[] = [];
-      appendEnabledConfiguredLinkedBits(bits, account);
-      appendModeBit(bits, account);
-      appendTokenSourceBits(bits, account);
-      appendBaseUrlBit(bits, account);
-      return buildChannelAccountLine(provider, account, bits);
-    });
-
-  const plugins = listChannelPlugins();
-  const sourceConfig = opts?.sourceConfig ?? cfg;
-  for (const plugin of plugins) {
-    const accountIds = plugin.config.listAccountIds(cfg);
-    if (!accountIds.length) {
-      continue;
-    }
-    const snapshots: ChannelAccountSnapshot[] = [];
-    for (const accountId of accountIds) {
-      const sourceSnapshot = await buildReadOnlySourceChannelAccountSnapshot({
-        plugin,
-        cfg: sourceConfig,
-        accountId,
-      });
-      const resolvedSnapshot = await buildChannelAccountSnapshot({
-        plugin,
-        cfg,
-        accountId,
-      });
-      snapshots.push(
-        sourceSnapshot &&
-          hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
-          (!hasResolvedCredentialValue(resolvedSnapshot) ||
-            (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
-          ? sourceSnapshot
-          : resolvedSnapshot,
-      );
-    }
-    if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin.id, snapshots));
-    }
-  }
-
-  lines.push("");
-  lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
-  );
-  return lines;
-}
-
 export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -301,7 +230,7 @@ export async function channelsStatusCommand(
         }),
     );
     if (opts.json) {
-      runtime.log(JSON.stringify(payload, null, 2));
+      writeRuntimeJson(runtime, payload);
       return;
     }
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
@@ -311,15 +240,13 @@ export async function channelsStatusCommand(
     if (!cfg) {
       return;
     }
-    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    const { resolvedConfig } = await resolveCommandConfigWithSecrets({
       config: cfg,
       commandName: "channels status",
       targetIds: getChannelsCommandSecretTargetIds(),
-      mode: "summary",
+      mode: "read_only_status",
+      runtime,
     });
-    for (const entry of diagnostics) {
-      runtime.log(`[secrets] ${entry}`);
-    }
     const snapshot = await readConfigFileSnapshot();
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
     runtime.log(

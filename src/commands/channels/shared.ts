@@ -1,17 +1,19 @@
 import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
-import {
-  type CommandSecretResolutionMode,
-  resolveCommandSecretRefsViaGateway,
-} from "../../cli/command-secret-gateway.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import type { CommandSecretResolutionMode } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { requireValidConfigSnapshot } from "../config-validation.js";
+import {
+  requireValidConfigFileSnapshot,
+  requireValidConfigSnapshot,
+} from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
 export { requireValidConfigSnapshot };
+export { requireValidConfigFileSnapshot };
 
 export async function requireValidConfig(
   runtime: RuntimeEnv = defaultRuntime,
@@ -24,16 +26,14 @@ export async function requireValidConfig(
   if (!cfg) {
     return null;
   }
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: secretResolution?.commandName ?? "channels",
     targetIds: getChannelsCommandSecretTargetIds(),
     mode: secretResolution?.mode,
+    runtime,
   });
-  for (const entry of diagnostics) {
-    runtime.log(`[secrets] ${entry}`);
-  }
-  return resolvedConfig;
+  return effectiveConfig;
 }
 
 export function formatAccountLabel(params: { accountId: string; name?: string }) {

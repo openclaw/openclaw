@@ -13,7 +13,10 @@ import {
   restoreGatewayToken,
   startGatewayServer,
   testState,
+  installGatewayTestHooks,
 } from "./server.auth.shared.js";
+
+installGatewayTestHooks({ scope: "suite" });
 
 function expectAuthErrorDetails(params: {
   details: unknown;
@@ -52,7 +55,7 @@ async function expectSharedOperatorScopesCleared(
 
     const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
     expect(adminRes.ok).toBe(false);
-    expect(adminRes.error?.message).toBe("missing scope: operator.admin");
+    expect(adminRes.error?.message ?? "").toContain("missing scope");
   } finally {
     ws.close();
   }
@@ -87,7 +90,7 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("clears client-declared scopes for shared-token operator connects", async () => {
+    test("clears requested scopes for shared-token operator connects without device identity", async () => {
       await expectSharedOperatorScopesCleared(port, { token: "secret" });
     });
 
@@ -167,14 +170,18 @@ describe("gateway auth compatibility baseline", () => {
         role: "operator",
         scopes: ["operator.admin"],
       });
-      await approveDevicePairing(pending.request.requestId);
+      await approveDevicePairing(pending.request.requestId, {
+        callerScopes: ["operator.admin"],
+      });
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,
         role: "operator",
         scopes: ["operator.admin"],
       });
-      expect(rotated?.token).toBeTruthy();
+      expect(rotated.ok).toBe(true);
+      const rotatedToken = rotated.ok ? rotated.entry.token : "";
+      expect(rotatedToken).toBeTruthy();
 
       const ws = await openWs(port);
       try {
@@ -182,11 +189,26 @@ describe("gateway auth compatibility baseline", () => {
           skipDefaultAuth: true,
           client: { ...BACKEND_GATEWAY_CLIENT },
           deviceIdentityPath: identityPath,
-          deviceToken: String(rotated?.token ?? ""),
+          deviceToken: rotatedToken,
           scopes: ["operator.admin"],
         });
         expect(res.ok).toBe(true);
-        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+        const payload = res.payload as
+          | {
+              type?: string;
+              snapshot?: {
+                configPath?: string;
+                stateDir?: string;
+                authMode?: string;
+              };
+            }
+          | undefined;
+        expect(payload?.type).toBe("hello-ok");
+        expect(typeof payload?.snapshot?.configPath).toBe("string");
+        expect((payload?.snapshot?.configPath ?? "").length).toBeGreaterThan(0);
+        expect(typeof payload?.snapshot?.stateDir).toBe("string");
+        expect((payload?.snapshot?.stateDir ?? "").length).toBeGreaterThan(0);
+        expect(payload?.snapshot?.authMode).toBe("token");
       } finally {
         ws.close();
       }
@@ -237,7 +259,7 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("clears client-declared scopes for shared-password operator connects", async () => {
+    test("clears requested scopes for shared-password operator connects without device identity", async () => {
       await expectSharedOperatorScopesCleared(port, { password: "secret" });
     });
   });

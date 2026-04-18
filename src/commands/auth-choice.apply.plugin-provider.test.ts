@@ -1,23 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
-import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import {
   applyAuthChoiceLoadedPluginProvider,
   applyAuthChoicePluginProvider,
   runProviderPluginAuthMethod,
-} from "./auth-choice.apply.plugin-provider.js";
+} from "../plugins/provider-auth-choice.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
-
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
 );
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../plugins/provider-wizard.js", () => ({
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
+  resolvePluginProviders,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
 }));
@@ -47,23 +44,20 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
-vi.mock("./onboard-auth.js", () => ({
+vi.mock("../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig,
 }));
 
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
-vi.mock("./oauth-env.js", () => ({
+const openUrl = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../plugins/setup-browser.js", () => ({
   isRemoteEnvironment,
+  openUrl,
 }));
 
 const createVpsAwareOAuthHandlers = vi.hoisted(() => vi.fn());
-vi.mock("./oauth-flow.js", () => ({
+vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers,
-}));
-
-const openUrl = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("./onboard-helpers.js", () => ({
-  openUrl,
 }));
 
 function buildProvider(): ProviderPlugin {
@@ -129,6 +123,89 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result).toEqual({
       config: {},
       agentModelOverride: "ollama/qwen3:4b",
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+  });
+
+  it("keeps provider config patches when default model application is deferred", async () => {
+    const provider: ProviderPlugin = {
+      id: "moonshot",
+      label: "Moonshot",
+      auth: [
+        {
+          id: "api-key-cn",
+          label: "Moonshot API key (.cn)",
+          kind: "api_key",
+          run: async () => ({
+            profiles: [
+              {
+                profileId: "moonshot:default",
+                credential: {
+                  type: "api_key",
+                  provider: "moonshot",
+                  key: "sk-moonshot-cn-test",
+                },
+              },
+            ],
+            configPatch: {
+              models: {
+                providers: {
+                  moonshot: {
+                    api: "openai-completions",
+                    baseUrl: "https://api.moonshot.cn/v1",
+                    models: [
+                      {
+                        id: "kimi-k2.5",
+                        name: "kimi-k2.5",
+                        input: ["text", "image"],
+                        reasoning: true,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128_000,
+                        maxTokens: 8192,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            defaultModel: "moonshot/kimi-k2.5",
+          }),
+        },
+      ],
+    };
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-6" },
+            },
+          },
+        },
+        setDefaultModel: false,
+      }),
+    );
+
+    expect(result?.agentModelOverride).toBe("moonshot/kimi-k2.5");
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+    });
+    expect(result?.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(result?.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
+    expect(upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "moonshot:default",
+      credential: {
+        type: "api_key",
+        provider: "moonshot",
+        key: "sk-moonshot-cn-test",
+      },
+      agentDir: "/tmp/agent",
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
   });
@@ -221,7 +298,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       config: {
         agents: {
           defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-5" },
+            model: { primary: "anthropic/claude-sonnet-4-6" },
           },
         },
       },
@@ -246,6 +323,66 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "Detected local Ollama runtime.\nPulled model metadata.",
       "Provider notes",
     );
+  });
+
+  it("replaces provider-owned default model maps during auth migrations", async () => {
+    const method: ProviderAuthMethod = {
+      id: "local",
+      label: "Local",
+      kind: "custom",
+      run: async () => ({
+        profiles: [],
+        configPatch: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "claude-cli/claude-sonnet-4-6",
+                fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
+              },
+              models: {
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+                "claude-cli/claude-opus-4-6": { alias: "Opus" },
+                "openai/gpt-5.2": {},
+              },
+            },
+          },
+        },
+        defaultModel: "claude-cli/claude-sonnet-4-6",
+      }),
+    };
+
+    const result = await runProviderPluginAuthMethod({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+            },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+              "anthropic/claude-opus-4-6": { alias: "Opus" },
+              "openai/gpt-5.2": {},
+            },
+          },
+        },
+      },
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "claude-cli/claude-sonnet-4-6",
+      fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
+    });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+      "claude-cli/claude-opus-4-6": { alias: "Opus" },
+      "openai/gpt-5.2": {},
+    });
   });
 
   it("returns an agent-scoped override for plugin auth choices when default model application is deferred", async () => {

@@ -8,6 +8,15 @@ const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
+const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
+  ok: true,
+  pid: process.pid,
+  signal: "SIGUSR1" as const,
+  delayMs: 0,
+  mode: "emit" as const,
+  coalesced: false,
+  cooldownMsApplied: 0,
+}));
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
@@ -21,6 +30,13 @@ const abortEmbeddedPiRun = vi.fn(
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
+const loadConfig = vi.fn(() => ({
+  gateway: {
+    reload: {
+      deferralTimeoutMs: 90_000,
+    },
+  },
+}));
 const gatewayLog = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -35,6 +51,8 @@ vi.mock("../../infra/restart.js", () => ({
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
+  scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
+    scheduleGatewaySigusr1Restart(opts),
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
@@ -55,12 +73,27 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
   waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
+vi.mock("../../config/config.js", () => ({
+  loadConfig: () => loadConfig(),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type LoopSignal = (typeof LOOP_SIGNALS)[number];
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: string) {
+  if (!originalPlatformDescriptor) {
+    return;
+  }
+  Object.defineProperty(process, "platform", {
+    ...originalPlatformDescriptor,
+    value: platform,
+  });
+}
 
 function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
   for (const listener of process.listeners(signal)) {
@@ -195,6 +228,13 @@ describe("runGatewayLoop", () => {
 
   it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
+    loadConfig.mockReturnValue({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 1_234,
+        },
+      },
+    });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
@@ -258,8 +298,8 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
-      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveTasks).toHaveBeenCalledWith(1_234);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(1_234);
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
@@ -292,6 +332,28 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("routes external SIGUSR1 through the restart scheduler before draining", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(true);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+        delayMs: 0,
+        reason: "SIGUSR1",
+      });
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
+    });
+  });
+
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
 
@@ -321,6 +383,33 @@ describe("runGatewayLoop", () => {
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
     });
+  });
+
+  it("waits briefly before exiting on launchd supervised restart", async () => {
+    vi.clearAllMocks();
+    try {
+      setPlatform("darwin");
+      process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+        mode: "supervised",
+      });
+
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const startedAt = Date.now();
+
+        sigusr1();
+        await expect(exited).resolves.toBe(0);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1400);
+      });
+    } finally {
+      delete process.env.LAUNCH_JOB_LABEL;
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
   });
 
   it("forwards lockPort to initial and restart lock acquisitions", async () => {
@@ -395,6 +484,7 @@ describe("gateway discover routing helpers", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       host: "10.0.0.2",
+      port: 18789,
       lanHost: "evil.example.com",
       tailnetDns: "evil.example.com",
     };
@@ -411,13 +501,13 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBe(18789);
   });
 
-  it("falls back to TXT host/port when resolve data is missing", () => {
+  it("fails closed when resolve data is missing", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       lanHost: "test-host.local",
       gatewayPort: 18789,
     };
-    expect(pickBeaconHost(beacon)).toBe("test-host.local");
-    expect(pickGatewayPort(beacon)).toBe(18789);
+    expect(pickBeaconHost(beacon)).toBeNull();
+    expect(pickGatewayPort(beacon)).toBeNull();
   });
 });

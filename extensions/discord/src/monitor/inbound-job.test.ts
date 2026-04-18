@@ -1,9 +1,35 @@
 import { Message } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
-import { buildDiscordInboundJob, materializeDiscordInboundJob } from "./inbound-job.js";
+import {
+  buildDiscordInboundJob,
+  materializeDiscordInboundJob,
+  resolveDiscordInboundJobQueueKey,
+} from "./inbound-job.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 describe("buildDiscordInboundJob", () => {
+  it("prefers route session key, then base session key, then channel id for queueing", async () => {
+    const routed = await createBaseDiscordMessageContext({
+      route: { sessionKey: "agent:main:discord:direct:routed" },
+      baseSessionKey: "agent:main:discord:direct:base",
+      messageChannelId: "channel-routed",
+    });
+    const baseOnly = await createBaseDiscordMessageContext({
+      route: { sessionKey: "" },
+      baseSessionKey: "agent:main:discord:direct:base-only",
+      messageChannelId: "channel-base",
+    });
+    const channelFallback = await createBaseDiscordMessageContext({
+      route: { sessionKey: "   " },
+      baseSessionKey: "   ",
+      messageChannelId: "channel-fallback",
+    });
+
+    expect(resolveDiscordInboundJobQueueKey(routed)).toBe("agent:main:discord:direct:routed");
+    expect(resolveDiscordInboundJobQueueKey(baseOnly)).toBe("agent:main:discord:direct:base-only");
+    expect(resolveDiscordInboundJobQueueKey(channelFallback)).toBe("channel-fallback");
+  });
+
   it("keeps live runtime references out of the payload", async () => {
     const ctx = await createBaseDiscordMessageContext({
       message: {
@@ -66,7 +92,7 @@ describe("buildDiscordInboundJob", () => {
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const job = buildDiscordInboundJob(ctx);
+    const job = buildDiscordInboundJob(ctx, { replayKeys: ["default:ch-1:m-1"] });
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
@@ -77,6 +103,7 @@ describe("buildDiscordInboundJob", () => {
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
+    expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
   });
 
   it("preserves Carbon message getters across queued jobs", async () => {

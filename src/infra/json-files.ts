@@ -2,6 +2,30 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+function getErrorCode(err: unknown): string | undefined {
+  return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+}
+
+async function replaceFileWithWindowsFallback(tempPath: string, filePath: string, mode: number) {
+  try {
+    await fs.rename(tempPath, filePath);
+    return;
+  } catch (err) {
+    const code = getErrorCode(err);
+    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EEXIST")) {
+      throw err;
+    }
+  }
+
+  await fs.copyFile(tempPath, filePath);
+  try {
+    await fs.chmod(filePath, mode);
+  } catch {
+    // best-effort; ignore on platforms without chmod
+  }
+  await fs.rm(tempPath, { force: true }).catch(() => undefined);
+}
+
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -37,15 +61,32 @@ export async function writeTextAtomic(
     mkdirOptions.mode = options.ensureDirMode;
   }
   await fs.mkdir(path.dirname(filePath), mkdirOptions);
+  const parentDir = path.dirname(filePath);
   const tmp = `${filePath}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(tmp, payload, { encoding: "utf8", mode });
+    const tmpHandle = await fs.open(tmp, "w", mode);
+    try {
+      await tmpHandle.writeFile(payload, { encoding: "utf8" });
+      await tmpHandle.sync();
+    } finally {
+      await tmpHandle.close().catch(() => undefined);
+    }
     try {
       await fs.chmod(tmp, mode);
     } catch {
       // best-effort; ignore on platforms without chmod
     }
-    await fs.rename(tmp, filePath);
+    await replaceFileWithWindowsFallback(tmp, filePath, mode);
+    try {
+      const dirHandle = await fs.open(parentDir, "r");
+      try {
+        await dirHandle.sync();
+      } finally {
+        await dirHandle.close().catch(() => undefined);
+      }
+    } catch {
+      // best-effort; some platforms/filesystems do not support syncing directories.
+    }
     try {
       await fs.chmod(filePath, mode);
     } catch {

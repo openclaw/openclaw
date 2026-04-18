@@ -1,63 +1,242 @@
-import path from "node:path";
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { STATE_DIR } from "../../../src/config/paths.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveChunkMode as resolveChunkModeRuntime } from "../../../src/auto-reply/chunk.js";
+import { resolveMarkdownTableMode as resolveMarkdownTableModeRuntime } from "../../../src/config/markdown-tables.js";
+import { resolveSessionStoreEntry as resolveSessionStoreEntryRuntime } from "../../../src/config/sessions/store.js";
+import { getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsRuntime } from "../../../src/media/local-roots.js";
+import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 
+type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
+  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+>[0];
+
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
-const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
+const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
+  vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
+);
 const deliverReplies = vi.hoisted(() => vi.fn());
+const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
+const createForumTopicTelegram = vi.hoisted(() => vi.fn());
+const deleteMessageTelegram = vi.hoisted(() => vi.fn());
+const editForumTopicTelegram = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
+const reactMessageTelegram = vi.hoisted(() => vi.fn());
+const sendMessageTelegram = vi.hoisted(() => vi.fn());
+const sendPollTelegram = vi.hoisted(() => vi.fn());
+const sendStickerTelegram = vi.hoisted(() => vi.fn());
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const readChannelAllowFromStore = vi.hoisted(() => vi.fn(async () => []));
+const upsertChannelPairingRequest = vi.hoisted(() =>
+  vi.fn(async () => ({
+    code: "PAIRCODE",
+    created: true,
+  })),
+);
+const enqueueSystemEvent = vi.hoisted(() => vi.fn());
+const buildModelsProviderData = vi.hoisted(() =>
+  vi.fn(async () => ({
+    byProvider: new Map<string, Set<string>>(),
+    providers: [],
+    resolvedDefault: { provider: "openai", model: "gpt-test" },
+    modelNames: new Map<string, string>(),
+  })),
+);
+const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
+const createChannelReplyPipeline = vi.hoisted(() =>
+  vi.fn(() => ({
+    responsePrefix: undefined,
+    responsePrefixContextProvider: () => ({ identityName: undefined }),
+    onModelSelected: () => undefined,
+  })),
+);
+const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
+const generateTopicLabel = vi.hoisted(() => vi.fn());
+const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
+const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
+const findModelInCatalog = vi.hoisted(() => vi.fn(() => null));
+const modelSupportsVision = vi.hoisted(() => vi.fn(() => false));
+const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
+const resolveDefaultModelForAgent = vi.hoisted(() =>
+  vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
+);
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
 }));
 
-vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher,
-}));
-
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  emitInternalMessageSentHook,
+}));
+
+vi.mock("./bot/delivery.replies.js", () => ({
+  deliverReplies,
+  emitInternalMessageSentHook,
 }));
 
 vi.mock("./send.js", () => ({
+  createForumTopicTelegram,
+  deleteMessageTelegram,
+  editForumTopicTelegram,
   editMessageTelegram,
+  reactMessageTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendStickerTelegram,
 }));
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
-  return {
-    ...actual,
-    loadSessionStore,
-    resolveStorePath,
-  };
-});
+vi.mock("./bot-message-dispatch.runtime.js", () => ({
+  generateTopicLabel,
+  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsRuntime,
+  loadSessionStore,
+  resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
+  resolveChunkMode: resolveChunkModeRuntime,
+  resolveMarkdownTableMode: resolveMarkdownTableModeRuntime,
+  resolveSessionStoreEntry: resolveSessionStoreEntryRuntime,
+  resolveStorePath,
+}));
+
+vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+}));
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
-  describeStickerImage: vi.fn(),
+  getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
+  describeStickerImage,
 }));
 
-import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+let getTelegramAbortFenceSizeForTests: typeof import("./bot-message-dispatch.js").getTelegramAbortFenceSizeForTests;
+let resetTelegramAbortFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramAbortFenceForTests;
+
+const telegramDepsForTest: TelegramBotDeps = {
+  loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
+  resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
+  loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
+  readChannelAllowFromStore:
+    readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
+  upsertChannelPairingRequest:
+    upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
+  enqueueSystemEvent: enqueueSystemEvent as TelegramBotDeps["enqueueSystemEvent"],
+  dispatchReplyWithBufferedBlockDispatcher:
+    dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+  buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
+  listSkillCommandsForAgents:
+    listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  createChannelReplyPipeline:
+    createChannelReplyPipeline as TelegramBotDeps["createChannelReplyPipeline"],
+  wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
+  createTelegramDraftStream:
+    createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
+  deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
+  emitInternalMessageSentHook:
+    emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
+  editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
+};
 
 describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
+  beforeAll(async () => {
+    ({
+      dispatchTelegramMessage,
+      getTelegramAbortFenceSizeForTests,
+      resetTelegramAbortFenceForTests,
+    } = await import("./bot-message-dispatch.js"));
+  });
+
   beforeEach(() => {
-    createTelegramDraftStream.mockClear();
-    dispatchReplyWithBufferedBlockDispatcher.mockClear();
-    deliverReplies.mockClear();
-    editMessageTelegram.mockClear();
-    loadSessionStore.mockClear();
-    resolveStorePath.mockClear();
+    resetTelegramAbortFenceForTests();
+    createTelegramDraftStream.mockReset();
+    dispatchReplyWithBufferedBlockDispatcher.mockReset();
+    deliverReplies.mockReset();
+    emitInternalMessageSentHook.mockReset();
+    createForumTopicTelegram.mockReset();
+    deleteMessageTelegram.mockReset();
+    editForumTopicTelegram.mockReset();
+    editMessageTelegram.mockReset();
+    reactMessageTelegram.mockReset();
+    sendMessageTelegram.mockReset();
+    sendPollTelegram.mockReset();
+    sendStickerTelegram.mockReset();
+    loadConfig.mockReset();
+    readChannelAllowFromStore.mockReset();
+    upsertChannelPairingRequest.mockReset();
+    enqueueSystemEvent.mockReset();
+    buildModelsProviderData.mockReset();
+    listSkillCommandsForAgents.mockReset();
+    createChannelReplyPipeline.mockReset();
+    wasSentByBot.mockReset();
+    loadSessionStore.mockReset();
+    resolveStorePath.mockReset();
+    generateTopicLabel.mockReset();
+    describeStickerImage.mockReset();
+    loadModelCatalog.mockReset();
+    findModelInCatalog.mockReset();
+    modelSupportsVision.mockReset();
+    resolveAgentDir.mockReset();
+    resolveDefaultModelForAgent.mockReset();
+    loadConfig.mockReturnValue({});
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    emitInternalMessageSentHook.mockResolvedValue(undefined);
+    createForumTopicTelegram.mockResolvedValue({ message_thread_id: 777 });
+    deleteMessageTelegram.mockResolvedValue(true);
+    editForumTopicTelegram.mockResolvedValue(true);
+    editMessageTelegram.mockResolvedValue({ ok: true });
+    reactMessageTelegram.mockResolvedValue(true);
+    sendMessageTelegram.mockResolvedValue({ message_id: 1001 });
+    sendPollTelegram.mockResolvedValue({ message_id: 1001 });
+    sendStickerTelegram.mockResolvedValue({ message_id: 1001 });
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({
+      code: "PAIRCODE",
+      created: true,
+    });
+    enqueueSystemEvent.mockResolvedValue(undefined);
+    buildModelsProviderData.mockResolvedValue({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-test" },
+      modelNames: new Map<string, string>(),
+    });
+    listSkillCommandsForAgents.mockReturnValue([]);
+    createChannelReplyPipeline.mockReturnValue({
+      responsePrefix: undefined,
+      responsePrefixContextProvider: () => ({ identityName: undefined }),
+      onModelSelected: () => undefined,
+    });
+    wasSentByBot.mockReturnValue(false);
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
+    generateTopicLabel.mockResolvedValue("Topic label");
+    describeStickerImage.mockResolvedValue(null);
+    loadModelCatalog.mockResolvedValue({});
+    findModelInCatalog.mockReturnValue(null);
+    modelSupportsVision.mockReturnValue(false);
+    resolveAgentDir.mockReturnValue("/tmp/agent");
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-test",
+    });
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -84,6 +263,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
       chatId: 123,
       isGroup: false,
+      groupConfig: undefined,
       resolvedThreadId: undefined,
       replyThreadId: 777,
       threadSpec: { id: 777, scope: "dm" },
@@ -121,9 +301,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function createBot(): Bot {
     return {
       api: {
-        sendMessage: vi.fn(),
-        editMessageText: vi.fn(),
+        sendMessage: vi.fn(async (_chatId, _text, params) => ({
+          message_id:
+            typeof params?.message_thread_id === "number" ? params.message_thread_id : 1001,
+        })),
+        editMessageText: vi.fn(async () => ({ message_id: 1001 })),
         deleteMessage: vi.fn().mockResolvedValue(true),
+        editForumTopic: vi.fn().mockResolvedValue(true),
       },
     } as unknown as Bot;
   }
@@ -143,6 +327,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     cfg?: Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
+    telegramDeps?: TelegramBotDeps;
     bot?: Bot;
   }) {
     const bot = params.bot ?? createBot();
@@ -155,6 +340,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
+      telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
     });
   }
@@ -198,7 +384,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
+        mediaLocalRoots: expect.arrayContaining([
+          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/u),
+        ]),
       }),
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
@@ -284,7 +472,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext(),
-      telegramCfg: { blockStreaming: true },
+      telegramCfg: { streaming: { block: { enabled: true } } },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
@@ -294,6 +482,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
           disableBlockStreaming: false,
           onPartialReply: undefined,
         }),
+      }),
+    );
+  });
+
+  it("sends error replies silently when silentErrorReplies is enabled", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
+  it("keeps error replies notifying by default", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: false,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
+  it("keeps fallback replies silent after an error reply is skipped", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.(
+        { text: "oops", isError: true },
+        { kind: "final", reason: "empty" },
+      );
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ text: expect.any(String) })],
       }),
     );
   });
@@ -358,6 +606,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
+  it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {
+    let seenReasoningCallback: unknown;
+    const answerDraftStream = createDraftStream(999);
+    createTelegramDraftStream.mockImplementationOnce(() => answerDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      seenReasoningCallback = replyOptions?.onReasoningStream;
+      await replyOptions?.onPartialReply?.({
+        text: "<think>internal chain of thought</think>Visible answer",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(seenReasoningCallback).toBeUndefined();
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
+  });
+
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -388,6 +655,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("emits only the internal message:sent hook when a final answer stays in preview", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Primary result" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Primary result",
+      expect.any(Object),
+    );
+    expect(emitInternalMessageSentHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeyForInternalHooks: "s1",
+        chatId: "123",
+        content: "Primary result",
+        success: true,
+        messageId: 999,
+      }),
+    );
   });
 
   it("keeps streamed preview visible when final text regresses after a tool warning", async () => {
@@ -423,7 +722,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it.each([
     { label: "default account config", telegramCfg: {} },
-    { label: "account blockStreaming override", telegramCfg: { blockStreaming: true } },
+    {
+      label: "account blockStreaming override",
+      telegramCfg: { streaming: { block: { enabled: true } } },
+    },
   ])("disables block streaming when streamMode is off ($label)", async ({ telegramCfg }) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
@@ -527,6 +829,82 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("preserves pre-rotation skip until queued message-start callbacks flush", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        await replyOptions?.onPartialReply?.({ text: "Message B early" });
+        void replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("does not double-rotate when assistant_message_start arrives after final delivery drains", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        await replyOptions?.onPartialReply?.({ text: "Message B early" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        await replyOptions?.onAssistantMessageStart?.();
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
       2,
       123,
@@ -788,6 +1166,245 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message B first chunk");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B second chunk");
+  });
+
+  it("does not rotate the streamed preview when compaction retries replay the same assistant message", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onCompactionStart?.();
+        await replyOptions?.onCompactionEnd?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onPartialReply?.({ text: "Message A partial extended" });
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+  });
+
+  it("clears the compaction replay skip after the retried message finalizes", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onCompactionStart?.();
+        await replyOptions?.onCompactionEnd?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message A partial extended" });
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("preserves the compaction replay flag until queued retry callbacks flush", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onCompactionStart?.();
+        await replyOptions?.onCompactionEnd?.();
+        void replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+  });
+
+  it("keeps the existing preview when the retried answer only arrives as final text", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onCompactionStart?.();
+        await replyOptions?.onCompactionEnd?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("keeps the transient preview when a local exec approval prompt is suppressed after compaction", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onCompactionStart?.();
+        await replyOptions?.onCompactionEnd?.();
+        await dispatcherOptions.deliver(
+          {
+            text: "Approval required.\n\n```txt\n/approve 7f423fdc allow-once\n```",
+            channelData: {
+              execApproval: {
+                approvalId: "7f423fdc-1111-2222-3333-444444444444",
+                approvalSlug: "7f423fdc",
+                allowedDecisions: ["allow-once", "allow-always", "deny"],
+              },
+            },
+          },
+          { kind: "tool" },
+        );
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      cfg: {
+        channels: {
+          telegram: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["12345"],
+              target: "dm",
+            },
+          },
+        },
+      },
+    });
+
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Message B final",
+      expect.any(Object),
+    );
+  });
+
+  it("rotates after a visible tool payload lands between compaction and the next assistant message", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Message A partial" });
+        await replyOptions?.onCompactionStart?.();
+        await replyOptions?.onCompactionEnd?.();
+        await dispatcherOptions.deliver(
+          { mediaUrl: "file:///tmp/tool-result.png" },
+          { kind: "tool" },
+        );
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ mediaUrl: "file:///tmp/tool-result.png" })],
+      }),
+    );
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      expect.any(Number),
+      "Message B final",
+      expect.any(Object),
+    );
   });
 
   it("finalizes multi-message assistant stream to matching preview messages in order", async () => {
@@ -1727,7 +2344,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(answerDraftStream.update).toHaveBeenCalledWith("3");
     expect(
-      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<think>")),
+      answerDraftStream.update.mock.calls.some((call) => (call[0] ?? "").includes("<think>")),
     ).toBe(false);
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "3", expect.any(Object));
   });
@@ -1757,9 +2374,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith(
       "Reasoning:\n_Counting letters in strawberry_",
     );
-    expect(
-      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<")),
-    ).toBe(false);
+    expect(answerDraftStream.update.mock.calls.some((call) => (call[0] ?? "").includes("<"))).toBe(
+      false,
+    );
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       999,
@@ -1914,7 +2531,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onSkip?.({ text: "" }, { reason: "no_reply", kind: "final" });
+      dispatcherOptions.onSkip?.({ text: "" }, { reason: "empty", kind: "final" });
       return { queuedFinal: false };
     });
     deliverReplies.mockResolvedValueOnce({ delivered: true });
@@ -1940,7 +2557,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError(err, { kind: "final" });
+        dispatcherOptions.onError?.(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -1968,7 +2585,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError(err, { kind: "final" });
+        dispatcherOptions.onError?.(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2032,7 +2649,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError(err, { kind: "final" });
+        dispatcherOptions.onError?.(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2102,6 +2719,615 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftA.clear).toHaveBeenCalledTimes(1);
     expect(draftB.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores stale answer finalization after an abort dispatch supersedes the same session", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+  });
+
+  it("discards hidden short partials instead of flushing a stale preview after abort", async () => {
+    let releaseFirstCleanup!: () => void;
+    const firstCleanupGate = new Promise<void>((resolve) => {
+      releaseFirstCleanup = resolve;
+    });
+    let resolveShortPartialQueued!: () => void;
+    const shortPartialQueued = new Promise<void>((resolve) => {
+      resolveShortPartialQueued = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      onUpdate: (text) => {
+        if (text === "tiny") {
+          resolveShortPartialQueued();
+        }
+      },
+      onStop: () => {
+        throw new Error("superseded cleanup should discard instead of stop");
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "tiny" });
+        await firstCleanupGate;
+        return { queuedFinal: false };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await shortPartialQueued;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstCleanup();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(firstAnswerDraft.discard).toHaveBeenCalledTimes(1);
+    expect(firstAnswerDraft.stop).not.toHaveBeenCalled();
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+  });
+
+  it("suppresses stale replies when abort lands during async pre-dispatch work", async () => {
+    let releaseCatalogLoad!: () => void;
+    const catalogLoadGate = new Promise<Record<string, never>>((resolve) => {
+      releaseCatalogLoad = () => resolve({});
+    });
+    let resolveCatalogLoadStarted!: () => void;
+    const catalogLoadStarted = new Promise<void>((resolve) => {
+      resolveCatalogLoadStarted = resolve;
+    });
+
+    loadModelCatalog.mockImplementationOnce(async () => {
+      resolveCatalogLoadStarted();
+      return await catalogLoadGate;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ ctx, dispatcherOptions }) => {
+        if (ctx.CommandBody === "abort") {
+          await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+          return { queuedFinal: true };
+        }
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+          MediaPath: "/tmp/sticker.png",
+          Sticker: {
+            fileId: "file-id",
+            fileUniqueId: "file-unique-id",
+          },
+        } as never,
+      }),
+    });
+
+    await catalogLoadStarted;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseCatalogLoad();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "Old reply final" }],
+      }),
+    );
+  });
+
+  it("releases the abort fence when pre-dispatch setup throws", async () => {
+    describeStickerImage.mockRejectedValueOnce(new Error("sticker setup failed"));
+
+    await expect(
+      dispatchWithContext({
+        context: createContext({
+          ctxPayload: {
+            SessionKey: "s1",
+            Body: "earlier request",
+            RawBody: "earlier request",
+            MediaPath: "/tmp/sticker.png",
+            Sticker: {
+              fileId: "file-id",
+              fileUniqueId: "file-unique-id",
+            },
+          } as never,
+        }),
+      }),
+    ).rejects.toThrow("sticker setup failed");
+
+    expect(getTelegramAbortFenceSizeForTests()).toBe(0);
+  });
+
+  it("keeps older answer finalization when abort targets a different session", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s2",
+          CommandTargetSessionKey: "s2",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+  });
+
+  it("finalizes stale status reactions when an abort supersedes the same session", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const statusReactionController = {
+      setQueued: vi.fn(),
+      setThinking: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      cancelPending: vi.fn(),
+      setError: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+    };
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        statusReactionController: statusReactionController as never,
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setError).not.toHaveBeenCalled();
+  });
+
+  it("keeps an existing preview when abort arrives during queued draft-lane cleanup", async () => {
+    let releaseMaterialize!: () => void;
+    const materializeGate = new Promise<void>((resolve) => {
+      releaseMaterialize = resolve;
+    });
+    let resolveMaterializeStarted!: () => void;
+    const materializeStarted = new Promise<void>((resolve) => {
+      resolveMaterializeStarted = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      clearMessageIdOnForceNew: true,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    firstAnswerDraft.materialize.mockImplementation(async () => {
+      resolveMaterializeStarted();
+      await materializeGate;
+      return 1001;
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    const bot = createBot();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        void replyOptions?.onAssistantMessageStart?.();
+        return { queuedFinal: false };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+      bot,
+    });
+
+    await previewVisible;
+    await materializeStarted;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+      bot,
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseMaterialize();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
+    expect(bot.api.deleteMessage as ReturnType<typeof vi.fn>).not.toHaveBeenCalledWith(123, 1001);
+  });
+
+  it("ignores stale answer finalization when abort targets the session via CommandTargetSessionKey", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const abortAnswerDraft = createDraftStream();
+    const abortReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => abortAnswerDraft)
+      .mockImplementationOnce(() => abortReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const abortPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "telegram:123:control",
+          CommandTargetSessionKey: "s1",
+          Body: "abort",
+          RawBody: "abort",
+          CommandBody: "abort",
+          CommandAuthorized: true,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "⚙️ Agent was aborted." }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, abortPromise]);
+
+    expect(editMessageTelegram).not.toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+    expect(firstAnswerDraft.clear).not.toHaveBeenCalled();
   });
 
   it("swallows post-connect network timeout on preview edit to prevent duplicate messages", async () => {
@@ -2218,5 +3444,120 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.setThinking.mock.invocationCallOrder[1],
     );
+  });
+
+  it("does not supersede the same session for unauthorized abort-looking commands", async () => {
+    let releaseFirstFinal!: () => void;
+    const firstFinalGate = new Promise<void>((resolve) => {
+      releaseFirstFinal = resolve;
+    });
+    let resolvePreviewVisible!: () => void;
+    const previewVisible = new Promise<void>((resolve) => {
+      resolvePreviewVisible = resolve;
+    });
+
+    const firstAnswerDraft = createTestDraftStream({
+      messageId: 1001,
+      onUpdate: (text) => {
+        if (text === "Old reply partial") {
+          resolvePreviewVisible();
+        }
+      },
+    });
+    const firstReasoningDraft = createDraftStream();
+    const unauthorizedAnswerDraft = createDraftStream();
+    const unauthorizedReasoningDraft = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => firstAnswerDraft)
+      .mockImplementationOnce(() => firstReasoningDraft)
+      .mockImplementationOnce(() => unauthorizedAnswerDraft)
+      .mockImplementationOnce(() => unauthorizedReasoningDraft);
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Old reply partial" });
+        await firstFinalGate;
+        await dispatcherOptions.deliver({ text: "Old reply final" }, { kind: "final" });
+        return { queuedFinal: true };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "Unauthorized stop" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    const firstPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "earlier request",
+          RawBody: "earlier request",
+        } as never,
+      }),
+    });
+
+    await previewVisible;
+
+    const unauthorizedPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          Body: "/stop",
+          RawBody: "/stop",
+          CommandBody: "/stop",
+          CommandAuthorized: false,
+        } as never,
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "Unauthorized stop" }],
+        }),
+      );
+    });
+
+    releaseFirstFinal();
+    await Promise.all([firstPromise, unauthorizedPromise]);
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      1001,
+      "Old reply final",
+      expect.any(Object),
+    );
+  });
+
+  it("uses resolved DM config for auto-topic-label overrides", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    loadSessionStore.mockReturnValue({ s1: {} });
+    const bot = createBot();
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          RawBody: "Need help with invoices",
+        } as TelegramMessageContext["ctxPayload"],
+        groupConfig: {
+          autoTopicLabel: false,
+        } as TelegramMessageContext["groupConfig"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+      cfg: {
+        channels: {
+          telegram: {
+            direct: {
+              "123": { autoTopicLabel: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(generateTopicLabel).not.toHaveBeenCalled();
+    expect(bot.api.editForumTopic).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -17,12 +17,17 @@ vi.mock("../subagent-spawn.js", () => ({
 vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
   ACP_SPAWN_STREAM_TARGETS: ["parent"],
+  isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
-const { createSessionsSpawnTool } = await import("./sessions-spawn-tool.js");
+let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
 describe("sessions_spawn tool", () => {
+  beforeAll(async () => {
+    ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  });
+
   beforeEach(() => {
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
@@ -79,6 +84,25 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("supports legacy timeoutSeconds alias", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-timeout-alias", {
+      task: "do thing",
+      timeoutSeconds: 2,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "do thing",
+        runTimeoutSeconds: 2,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -96,6 +120,42 @@ describe("sessions_spawn tool", () => {
         workspaceDir: "/parent/workspace",
       }),
     );
+  });
+
+  it("passes lightContext through to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-light", {
+      task: "summarize this",
+      lightContext: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "summarize this",
+        lightContext: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('rejects lightContext when runtime is not "subagent"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-light-acp", {
+        runtime: "acp",
+        task: "summarize this",
+        lightContext: true,
+      }),
+    ).rejects.toThrow("lightContext is only supported for runtime='subagent'.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {

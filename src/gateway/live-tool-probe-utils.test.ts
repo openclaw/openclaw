@@ -137,6 +137,30 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "retries conversational try-again output",
+        params: {
+          text: "Let me try reading the file again:",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "does not retry generic conversational text without tool-retry context",
+        params: {
+          text: "Let me try a different approach.",
+          nonceA: "nonce-a",
+          nonceB: "nonce-b",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: false,
+      },
+      {
         name: "retries mistral nonce marker echoes without parsed values",
         params: {
           text: "nonceA= nonceB=",
@@ -233,6 +257,50 @@ describe("live tool probe utils", () => {
           maxAttempts: 3,
         },
         expected: true,
+      },
+      {
+        name: "retries conversational try-again exec output",
+        params: {
+          text: "Let me try reading the file again:",
+          nonce: "nonce-c",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries eventual-consistency exec readback output",
+        params: {
+          text: "The file creation command succeeded, but the file wasn't found immediately after. Let me verify the file exists and read it again.",
+          nonce: "nonce-c",
+          provider: "mistral",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries file-not-found exec readback wording",
+        params: {
+          text: "The `exec` command ran successfully, but the file read failed because the file was not found. Let me verify the file creation and read it again.",
+          nonce: "nonce-c",
+          provider: "mistral",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "does not retry generic exec conversational text without tool-retry context",
+        params: {
+          text: "Let me try a different approach.",
+          nonce: "nonce-c",
+          provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: false,
       },
       {
         name: "does not special-case anthropic refusals for other providers",

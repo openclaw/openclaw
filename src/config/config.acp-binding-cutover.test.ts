@@ -25,13 +25,13 @@ describe("ACP binding cutover schema", () => {
         {
           type: "route",
           agentId: "main",
-          match: { channel: "discord", accountId: "default" },
+          match: { channel: "chat-a", accountId: "default" },
         },
         {
           type: "acp",
           agentId: "coding",
           match: {
-            channel: "discord",
+            channel: "chat-a",
             accountId: "default",
             peer: { kind: "channel", id: "1478836151241412759" },
           },
@@ -101,7 +101,7 @@ describe("ACP binding cutover schema", () => {
         {
           type: "acp",
           agentId: "codex",
-          match: { channel: "discord", accountId: "default" },
+          match: { channel: "chat-a", accountId: "default" },
         },
       ],
     });
@@ -109,14 +109,14 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("rejects ACP bindings on unsupported channels", () => {
+  it("accepts ACP bindings for arbitrary channel ids when the peer target is explicit", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
           type: "acp",
           agentId: "codex",
           match: {
-            channel: "slack",
+            channel: "plugin-chat",
             accountId: "default",
             peer: { kind: "channel", id: "C123456" },
           },
@@ -124,24 +124,51 @@ describe("ACP binding cutover schema", () => {
       ],
     });
 
-    expect(parsed.success).toBe(false);
+    expect(parsed.success).toBe(true);
   });
 
-  it("rejects non-canonical Telegram ACP topic peer IDs", () => {
+  it("accepts ACP bindings for generic direct and group peer kinds", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
           type: "acp",
           agentId: "codex",
           match: {
-            channel: "telegram",
+            channel: "plugin-chat",
             accountId: "default",
-            peer: { kind: "group", id: "42" },
+            peer: { kind: "direct", id: "peer-42" },
+          },
+        },
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "plugin-chat",
+            accountId: "default",
+            peer: { kind: "group", id: "group-42" },
           },
         },
       ],
     });
 
-    expect(parsed.success).toBe(false);
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts deprecated dm peer kind for backward compatibility", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "plugin-chat",
+            accountId: "default",
+            peer: { kind: "dm", id: "legacy-peer" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
   });
 });

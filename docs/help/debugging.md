@@ -29,6 +29,23 @@ Examples:
 
 `/debug reset` clears all overrides and returns to the on-disk config.
 
+## Session trace output
+
+Use `/trace` when you want to see plugin-owned trace/debug lines in one session
+without turning on full verbose mode.
+
+Examples:
+
+```text
+/trace
+/trace on
+/trace off
+```
+
+Use `/trace` for plugin diagnostics such as Active Memory debug summaries.
+Keep using `/verbose` for normal verbose status/tool output, and keep using
+`/debug` for runtime-only config overrides.
+
 ## Gateway watch mode
 
 For fast iteration, run the gateway under the file watcher:
@@ -40,11 +57,18 @@ pnpm gateway:watch
 This maps to:
 
 ```bash
-node --watch-path src --watch-path tsconfig.json --watch-path package.json --watch-preserve-output scripts/run-node.mjs gateway --force
+node scripts/watch-node.mjs gateway --force
 ```
 
-Add any gateway CLI flags after `gateway:watch` and they will be passed through
-on each restart.
+The watcher restarts on build-relevant files under `src/`, extension source files,
+extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,
+`package.json`, and `tsdown.config.ts`. Extension metadata changes restart the
+gateway without forcing a `tsdown` rebuild; source and config changes still
+rebuild `dist` first.
+
+Add any gateway CLI flags after `gateway:watch` and they will be passed through on
+each restart. Re-running the same watch command for the same repo/flag set now
+replaces the older watcher instead of leaving duplicate watcher parents behind.
 
 ## Dev profile + dev gateway (--dev)
 

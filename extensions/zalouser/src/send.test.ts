@@ -17,7 +17,7 @@ import {
   sendZaloTextMessage,
   sendZaloTypingEvent,
 } from "./zalo-js.js";
-import { TextStyle } from "./zca-client.js";
+import { TextStyle } from "./zca-constants.js";
 
 vi.mock("./zalo-js.js", () => ({
   sendZaloTextMessage: vi.fn(),
@@ -149,7 +149,7 @@ describe("zalouser send helpers", () => {
     expect(formatted.text.length).toBeGreaterThan(2000);
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expect(mockSendText.mock.calls.every((call) => (call[1] as string).length <= 2000)).toBe(true);
+    expect(mockSendText.mock.calls.every((call) => call[1].length <= 2000)).toBe(true);
     expect(result).toEqual({ ok: true, messageId: "mid-2c-2" });
   });
 

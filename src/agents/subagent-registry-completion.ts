@@ -1,5 +1,5 @@
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
@@ -65,6 +65,9 @@ export async function emitSubagentEndedHookOnce(params: {
   params.inFlightRunIds.add(runId);
   try {
     const hookRunner = getGlobalHookRunner();
+    if (!hookRunner) {
+      return false;
+    }
     if (hookRunner?.hasHooks("subagent_ended")) {
       await hookRunner.runSubagentEnded(
         {

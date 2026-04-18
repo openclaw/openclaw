@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
+import { gatherDaemonStatus } from "./status.gather.js";
 
-const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
+const callGatewayStatusProbe = vi.fn<
+  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+>(async (_opts?: unknown) => ({
+  ok: true,
+  url: "ws://127.0.0.1:19001",
+  error: null,
+}));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
   required: true,
@@ -50,6 +58,8 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
+const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
+const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonLoadedConfig: Record<string, unknown> = {
   gateway: {
     bind: "lan",
@@ -66,16 +76,26 @@ let cliLoadedConfig: Record<string, unknown> = {
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({ configPath }: { configPath: string }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
+    const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     return {
-      readConfigFileSnapshot: async () => ({
-        path: configPath,
-        exists: true,
-        valid: true,
-        issues: [],
-      }),
-      loadConfig: () => (isDaemon ? daemonLoadedConfig : cliLoadedConfig),
+      readConfigFileSnapshot: async () => {
+        readConfigFileSnapshotCalls(configPath);
+        return {
+          path: configPath,
+          exists: true,
+          valid: true,
+          issues: [],
+          runtimeConfig,
+          config: runtimeConfig,
+        };
+      },
+      loadConfig: () => {
+        loadConfigCalls(configPath);
+        return runtimeConfig;
+      },
     };
   },
+  loadConfig: () => cliLoadedConfig,
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
@@ -94,14 +114,12 @@ vi.mock("../../daemon/service-audit.js", () => ({
 }));
 
 vi.mock("../../daemon/service.js", () => ({
-  resolveGatewayService: () => ({
-    label: "LaunchAgent",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-    isLoaded: serviceIsLoaded,
-    readCommand: serviceReadCommand,
-    readRuntime: serviceReadRuntime,
-  }),
+  resolveGatewayService: () =>
+    createMockGatewayService({
+      isLoaded: serviceIsLoaded,
+      readCommand: serviceReadCommand,
+      readRuntime: serviceReadRuntime,
+    }),
 }));
 
 vi.mock("../../gateway/net.js", () => ({
@@ -130,8 +148,6 @@ vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
 
-const { gatherDaemonStatus } = await import("./status.gather.js");
-
 describe("gatherDaemonStatus", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -153,6 +169,8 @@ describe("gatherDaemonStatus", () => {
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    readConfigFileSnapshotCalls.mockClear();
+    loadConfigCalls.mockClear();
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -191,6 +209,56 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.ok).toBe(true);
   });
 
+  it("forwards requireRpc and configPath to the daemon probe", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requireRpc: true,
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
+  });
+
+  it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+    });
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(readConfigFileSnapshotCalls).toHaveBeenCalledTimes(1);
+    expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith("/tmp/openclaw-cli/openclaw.json");
+    expect(loadConfigCalls).not.toHaveBeenCalled();
+  });
+
+  it("defaults unset daemon bind mode to loopback for host-side status reporting", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
+    expect(status.gateway?.bindMode).toBe("loopback");
+  });
+
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
     const status = await gatherDaemonStatus({
       rpc: { url: "wss://override.example:18790" },
@@ -207,6 +275,36 @@ describe("gatherDaemonStatus", () => {
     );
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
     expect(status.rpc?.url).toBe("wss://override.example:18790");
+  });
+
+  it("uses fallback network details when interface discovery throws during status inspection", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "tailnet",
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+    resolveGatewayBindHost.mockImplementationOnce(async () => {
+      throw new Error("uv_interface_addresses failed");
+    });
+    pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.gateway).toMatchObject({
+      bindMode: "tailnet",
+      bindHost: "127.0.0.1",
+      probeUrl: "wss://127.0.0.1:19001",
+    });
+    expect(status.gateway?.probeNote).toContain("interface discovery failed");
+    expect(status.gateway?.probeNote).toContain("tailnet addresses");
   });
 
   it("reuses command environment when reading runtime status", async () => {
@@ -331,6 +429,73 @@ describe("gatherDaemonStatus", () => {
         password: undefined,
       }),
     );
+  });
+
+  it("degrades safely when daemon probe auth SecretRef is unresolved", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: undefined,
+        password: undefined,
+      }),
+    );
+    expect(status.rpc?.authWarning).toBeUndefined();
+  });
+
+  it("surfaces authWarning when daemon probe auth SecretRef is unresolved and probe fails", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      error: "gateway closed",
+      url: "wss://127.0.0.1:19001",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.authWarning).toContain(
+      "gateway.auth.token SecretRef is unresolved in this command path",
+    );
+    expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
   it("keeps remote probe auth strict when remote token is missing", async () => {

@@ -20,189 +20,67 @@ import {
   TextInput,
   Thumbnail,
   UserSelectMenu,
-  parseCustomId,
-  type ComponentParserResult,
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl,
+  buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
+  parseDiscordModalCustomIdForCarbon as parseDiscordModalCustomIdForCarbonImpl,
+} from "./component-custom-id.js";
+import type {
+  DiscordComponentBlock,
+  DiscordComponentBuildResult,
+  DiscordComponentButtonSpec,
+  DiscordComponentButtonStyle,
+  DiscordComponentEntry,
+  DiscordComponentMessageSpec,
+  DiscordComponentModalFieldType,
+  DiscordComponentSectionAccessory,
+  DiscordComponentSelectOption,
+  DiscordComponentSelectSpec,
+  DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
+  DiscordModalSpec,
+} from "./components.types.js";
+export type {
+  DiscordComponentBlock,
+  DiscordComponentBuildResult,
+  DiscordComponentButtonSpec,
+  DiscordComponentButtonStyle,
+  DiscordComponentEntry,
+  DiscordComponentMessageSpec,
+  DiscordComponentModalFieldType,
+  DiscordComponentSectionAccessory,
+  DiscordComponentSelectOption,
+  DiscordComponentSelectSpec,
+  DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
+  DiscordModalSpec,
+} from "./components.types.js";
+// Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
+// Keep dynamic form definitions loadable instead of crashing unrelated suites.
+const ModalBase: typeof Modal = Modal ?? (function ModalFallback() {} as unknown as typeof Modal);
 
-export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
-export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
-export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
-
-export type DiscordComponentSelectType = "string" | "user" | "role" | "mentionable" | "channel";
-
-export type DiscordComponentModalFieldType =
-  | "text"
-  | "checkbox"
-  | "radio"
-  | "select"
-  | "role-select"
-  | "user-select";
-
-export type DiscordComponentButtonSpec = {
-  label: string;
-  style?: DiscordComponentButtonStyle;
-  url?: string;
-  emoji?: {
-    name: string;
-    id?: string;
-    animated?: boolean;
-  };
-  disabled?: boolean;
-  /** Optional allowlist of users who can interact with this button (ids or names). */
-  allowedUsers?: string[];
-};
-
-export type DiscordComponentSelectOption = {
-  label: string;
-  value: string;
-  description?: string;
-  emoji?: {
-    name: string;
-    id?: string;
-    animated?: boolean;
-  };
-  default?: boolean;
-};
-
-export type DiscordComponentSelectSpec = {
-  type?: DiscordComponentSelectType;
-  placeholder?: string;
-  minValues?: number;
-  maxValues?: number;
-  options?: DiscordComponentSelectOption[];
-};
-
-export type DiscordComponentSectionAccessory =
-  | {
-      type: "thumbnail";
-      url: string;
-    }
-  | {
-      type: "button";
-      button: DiscordComponentButtonSpec;
-    };
-
 type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
-
-export type DiscordComponentBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "section";
-      text?: string;
-      texts?: string[];
-      accessory?: DiscordComponentSectionAccessory;
-    }
-  | {
-      type: "separator";
-      spacing?: DiscordComponentSeparatorSpacing;
-      divider?: boolean;
-    }
-  | {
-      type: "actions";
-      buttons?: DiscordComponentButtonSpec[];
-      select?: DiscordComponentSelectSpec;
-    }
-  | {
-      type: "media-gallery";
-      items: Array<{ url: string; description?: string; spoiler?: boolean }>;
-    }
-  | {
-      type: "file";
-      file: `attachment://${string}`;
-      spoiler?: boolean;
-    };
-
-export type DiscordModalFieldSpec = {
-  type: DiscordComponentModalFieldType;
-  name?: string;
-  label: string;
-  description?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: DiscordComponentSelectOption[];
-  minValues?: number;
-  maxValues?: number;
-  minLength?: number;
-  maxLength?: number;
-  style?: "short" | "paragraph";
-};
-
-export type DiscordModalSpec = {
-  title: string;
-  triggerLabel?: string;
-  triggerStyle?: DiscordComponentButtonStyle;
-  fields: DiscordModalFieldSpec[];
-};
-
-export type DiscordComponentMessageSpec = {
-  text?: string;
-  reusable?: boolean;
-  container?: {
-    accentColor?: string | number;
-    spoiler?: boolean;
-  };
-  blocks?: DiscordComponentBlock[];
-  modal?: DiscordModalSpec;
-};
-
-export type DiscordComponentEntry = {
-  id: string;
-  kind: "button" | "select" | "modal-trigger";
-  label: string;
-  selectType?: DiscordComponentSelectType;
-  options?: Array<{ value: string; label: string }>;
-  modalId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
-  allowedUsers?: string[];
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
-};
-
-export type DiscordModalFieldDefinition = {
-  id: string;
-  name: string;
-  label: string;
-  type: DiscordComponentModalFieldType;
-  description?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: DiscordComponentSelectOption[];
-  minValues?: number;
-  maxValues?: number;
-  minLength?: number;
-  maxLength?: number;
-  style?: "short" | "paragraph";
-};
-
-export type DiscordModalEntry = {
-  id: string;
-  title: string;
-  fields: DiscordModalFieldDefinition[];
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
-};
-
-export type DiscordComponentBuildResult = {
-  components: TopLevelComponents[];
-  entries: DiscordComponentEntry[];
-  modals: DiscordModalEntry[];
-};
+export {
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
+  buildDiscordComponentCustomId,
+  buildDiscordModalCustomId,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForCarbon,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForCarbon,
+} from "./component-custom-id.js";
+export { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
   ["row", "actions"],
@@ -294,7 +172,7 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
 }
 
 function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
-  switch ((style ?? "primary").toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(style ?? "primary")) {
     case "secondary":
       return ButtonStyle.Secondary;
     case "success":
@@ -314,7 +192,7 @@ function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
 }
 
 function normalizeBlockType(raw: string) {
-  const lowered = raw.trim().toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
   return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
 }
 
@@ -364,6 +242,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     label: readString(obj.label, `${label}.label`),
     style,
     url,
+    callbackData: readOptionalString(obj.callbackData),
     emoji:
       typeof obj.emoji === "object" && obj.emoji && !Array.isArray(obj.emoji)
         ? {
@@ -395,19 +274,20 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
   }
   return {
     type,
+    callbackData: readOptionalString(obj.callbackData),
     placeholder: readOptionalString(obj.placeholder),
     minValues: readOptionalNumber(obj.minValues),
     maxValues: readOptionalNumber(obj.maxValues),
     options: parseSelectOptions(obj.options, `${label}.options`),
+    allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
 }
 
 function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
   const obj = requireObject(raw, label);
-  const type = readString(
-    obj.type,
-    `${label}.type`,
-  ).toLowerCase() as DiscordComponentModalFieldType;
+  const type = normalizeLowercaseStringOrEmpty(
+    readString(obj.type, `${label}.type`),
+  ) as DiscordComponentModalFieldType;
   const supported: DiscordComponentModalFieldType[] = [
     "text",
     "checkbox",
@@ -441,7 +321,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
 
 function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock {
   const obj = requireObject(raw, label);
-  const typeRaw = readString(obj.type, `${label}.type`).toLowerCase();
+  const typeRaw = normalizeLowercaseStringOrEmpty(readString(obj.type, `${label}.type`));
   const type = normalizeBlockType(typeRaw);
   switch (type) {
     case "text":
@@ -461,10 +341,9 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       let accessory: DiscordComponentSectionAccessory | undefined;
       if (obj.accessory !== undefined) {
         const accessoryObj = requireObject(obj.accessory, `${label}.accessory`);
-        const accessoryType = readString(
-          accessoryObj.type,
-          `${label}.accessory.type`,
-        ).toLowerCase();
+        const accessoryType = normalizeLowercaseStringOrEmpty(
+          readString(accessoryObj.type, `${label}.accessory.type`),
+        );
         if (accessoryType === "thumbnail") {
           accessory = {
             type: "thumbnail",
@@ -578,8 +457,10 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     );
     modal = {
       title: readString(modalObj.title, "components.modal.title"),
+      callbackData: readOptionalString(modalObj.callbackData),
       triggerLabel: readOptionalString(modalObj.triggerLabel),
       triggerStyle: readOptionalString(modalObj.triggerStyle) as DiscordComponentButtonStyle,
+      allowedUsers: readOptionalStringArray(modalObj.allowedUsers, "components.modal.allowedUsers"),
       fields,
     };
   }
@@ -602,74 +483,6 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     blocks,
     modal,
   };
-}
-
-export function buildDiscordComponentCustomId(params: {
-  componentId: string;
-  modalId?: string;
-}): string {
-  const base = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:cid=${params.componentId}`;
-  return params.modalId ? `${base};mid=${params.modalId}` : base;
-}
-
-export function buildDiscordModalCustomId(modalId: string): string {
-  return `${DISCORD_MODAL_CUSTOM_ID_KEY}:mid=${modalId}`;
-}
-
-export function parseDiscordComponentCustomId(
-  id: string,
-): { componentId: string; modalId?: string } | null {
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
-    return null;
-  }
-  const componentId = parsed.data.cid;
-  if (typeof componentId !== "string" || !componentId.trim()) {
-    return null;
-  }
-  const modalId = parsed.data.mid;
-  return {
-    componentId,
-    modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
-  };
-}
-
-export function parseDiscordModalCustomId(id: string): string | null {
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
-    return null;
-  }
-  const modalId = parsed.data.mid;
-  if (typeof modalId !== "string" || !modalId.trim()) {
-    return null;
-  }
-  return modalId;
-}
-
-function isDiscordComponentWildcardRegistrationId(id: string): boolean {
-  return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
-}
-
-export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
-    return { key: "*", data: {} };
-  }
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
-    return parsed;
-  }
-  return { key: "*", data: parsed.data };
-}
-
-export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
-    return { key: "*", data: {} };
-  }
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
-    return parsed;
-  }
-  return { key: "*", data: parsed.data };
 }
 
 function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
@@ -701,10 +514,16 @@ function createButtonComponent(params: {
     return { component: new DynamicLinkButton() };
   }
   const componentId = params.componentId ?? createShortId("btn_");
-  const customId = buildDiscordComponentCustomId({
-    componentId,
-    modalId: params.modalId,
-  });
+  const internalCustomId =
+    typeof params.spec.internalCustomId === "string" && params.spec.internalCustomId.trim()
+      ? params.spec.internalCustomId.trim()
+      : undefined;
+  const customId =
+    internalCustomId ??
+    buildDiscordComponentCustomIdImpl({
+      componentId,
+      modalId: params.modalId,
+    });
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
@@ -712,12 +531,18 @@ function createButtonComponent(params: {
     emoji = params.spec.emoji;
     disabled = params.spec.disabled ?? false;
   }
+  if (internalCustomId) {
+    return {
+      component: new DynamicButton(),
+    };
+  }
   return {
     component: new DynamicButton(),
     entry: {
       id: componentId,
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
+      callbackData: params.spec.callbackData,
       modalId: params.modalId,
       allowedUsers: params.spec.allowedUsers,
     },
@@ -736,9 +561,11 @@ function createSelectComponent(params: {
     | ChannelSelectMenu;
   entry: DiscordComponentEntry;
 } {
-  const type = (params.spec.type ?? "string").toLowerCase() as DiscordComponentSelectType;
+  const type = normalizeLowercaseStringOrEmpty(
+    params.spec.type ?? "string",
+  ) as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
-  const customId = buildDiscordComponentCustomId({ componentId });
+  const customId = buildDiscordComponentCustomIdImpl({ componentId });
   if (type === "string") {
     const options = params.spec.options ?? [];
     if (options.length === 0) {
@@ -758,8 +585,10 @@ function createSelectComponent(params: {
         id: componentId,
         kind: "select",
         label: params.spec.placeholder ?? "select",
+        callbackData: params.spec.callbackData,
         selectType: "string",
         options: options.map((option) => ({ value: option.value, label: option.label })),
+        allowedUsers: params.spec.allowedUsers,
       },
     };
   }
@@ -777,7 +606,9 @@ function createSelectComponent(params: {
         id: componentId,
         kind: "select",
         label: params.spec.placeholder ?? "user select",
+        callbackData: params.spec.callbackData,
         selectType: "user",
+        allowedUsers: params.spec.allowedUsers,
       },
     };
   }
@@ -795,7 +626,9 @@ function createSelectComponent(params: {
         id: componentId,
         kind: "select",
         label: params.spec.placeholder ?? "role select",
+        callbackData: params.spec.callbackData,
         selectType: "role",
+        allowedUsers: params.spec.allowedUsers,
       },
     };
   }
@@ -813,7 +646,9 @@ function createSelectComponent(params: {
         id: componentId,
         kind: "select",
         label: params.spec.placeholder ?? "mentionable select",
+        callbackData: params.spec.callbackData,
         selectType: "mentionable",
+        allowedUsers: params.spec.allowedUsers,
       },
     };
   }
@@ -830,7 +665,9 @@ function createSelectComponent(params: {
       id: componentId,
       kind: "select",
       label: params.spec.placeholder ?? "channel select",
+      callbackData: params.spec.callbackData,
       selectType: "channel",
+      allowedUsers: params.spec.allowedUsers,
     },
   };
 }
@@ -1047,16 +884,19 @@ export function buildDiscordComponentMessage(params: {
     modals.push({
       id: modalId,
       title: params.spec.modal.title,
+      callbackData: params.spec.modal.callbackData,
       fields,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
       reusable: params.spec.reusable,
+      allowedUsers: params.spec.modal.allowedUsers,
     });
 
     const triggerSpec: DiscordComponentButtonSpec = {
       label: params.spec.modal.triggerLabel ?? "Open form",
       style: params.spec.modal.triggerStyle ?? "primary",
+      allowedUsers: params.spec.modal.allowedUsers,
     };
 
     const { component, entry } = createButtonComponent({
@@ -1098,16 +938,16 @@ export function buildDiscordComponentMessageFlags(
   return hasV2 ? MessageFlags.IsComponentsV2 : undefined;
 }
 
-export class DiscordFormModal extends Modal {
+export class DiscordFormModal extends ModalBase {
   title: string;
   customId: string;
   components: Array<Label | TextDisplay>;
-  customIdParser = parseDiscordModalCustomIdForCarbon;
+  customIdParser = parseDiscordModalCustomIdForCarbonImpl;
 
   constructor(params: { modalId: string; title: string; fields: DiscordModalFieldDefinition[] }) {
     super();
     this.title = params.title;
-    this.customId = buildDiscordModalCustomId(params.modalId);
+    this.customId = buildDiscordModalCustomIdImpl(params.modalId);
     this.components = params.fields.map((field) => {
       const component = createModalFieldComponent(field);
       class DynamicLabel extends Label {

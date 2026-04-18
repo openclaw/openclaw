@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -45,18 +45,18 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
     };
   });
 
+const mockedModuleIds = ["undici"] as const;
+
 vi.mock("undici", () => ({
   ProxyAgent,
   EnvHttpProxyAgent,
   fetch: undiciFetch,
 }));
 
-import {
-  getProxyUrlFromFetch,
-  makeProxyFetch,
-  PROXY_FETCH_PROXY_URL,
-  resolveProxyFetchFromEnv,
-} from "./proxy-fetch.js";
+let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
+let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
+let PROXY_FETCH_PROXY_URL: typeof import("./proxy-fetch.js").PROXY_FETCH_PROXY_URL;
+let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
 
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
@@ -75,7 +75,14 @@ function restoreProxyEnv(): void {
 }
 
 describe("makeProxyFetch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeAll(async () => {
+    ({ getProxyUrlFromFetch, makeProxyFetch, PROXY_FETCH_PROXY_URL, resolveProxyFetchFromEnv } =
+      await import("./proxy-fetch.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";
@@ -205,4 +212,10 @@ describe("resolveProxyFetchFromEnv", () => {
     });
     expect(fetchFn).toBeUndefined();
   });
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
 });

@@ -2,8 +2,8 @@ import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getChannelMessageAdapter,
   type CrossContextComponentsBuilder,
@@ -23,6 +23,7 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "thread-create",
   "thread-reply",
   "sticker",
@@ -34,6 +35,7 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "thread-reply",
   "sticker",
 ]);

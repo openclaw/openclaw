@@ -1,27 +1,36 @@
 import util from "node:util";
-import { createAccountActionGate } from "../../../src/channels/plugins/account-action-gate.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramAccountConfig, TelegramActionConfig } from "../../../src/config/types.js";
-import { isTruthyEnvValue } from "../../../src/infra/env.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import {
-  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
-  resolveAccountWithDefaultFallback,
-} from "../../../src/plugin-sdk/account-resolution.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import {
-  listBoundAccountIds,
-  resolveDefaultAgentBoundAccountId,
-} from "../../../src/routing/bindings.js";
-import { formatSetExplicitDefaultInstruction } from "../../../src/routing/default-account-warnings.js";
-import {
-  DEFAULT_ACCOUNT_ID,
+  createAccountActionGate,
   normalizeAccountId,
   normalizeOptionalAccountId,
-} from "../../../src/routing/session-key.js";
+  resolveAccountWithDefaultFallback,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-core";
+import type {
+  TelegramAccountConfig,
+  TelegramActionConfig,
+} from "openclaw/plugin-sdk/config-runtime";
+import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
+import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { mergeTelegramAccountConfig, resolveTelegramAccountConfig } from "./account-config.js";
+import {
+  listTelegramAccountIds as listSelectedTelegramAccountIds,
+  resolveDefaultTelegramAccountSelection,
+} from "./account-selection.js";
+import type { TelegramTransport } from "./fetch.js";
 import { resolveTelegramToken } from "./token.js";
 
-const log = createSubsystemLogger("telegram/accounts");
+export { mergeTelegramAccountConfig, resolveTelegramAccountConfig } from "./account-config.js";
+
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
+
+function getLog() {
+  if (!log) {
+    log = createSubsystemLogger("telegram/accounts");
+  }
+  return log;
+}
 
 function formatDebugArg(value: unknown): string {
   if (typeof value === "string") {
@@ -36,7 +45,7 @@ function formatDebugArg(value: unknown): string {
 const debugAccounts = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS)) {
     const parts = args.map((arg) => formatDebugArg(arg));
-    log.warn(parts.join(" ").trim());
+    getLog().warn(parts.join(" ").trim());
   }
 };
 
@@ -49,22 +58,18 @@ export type ResolvedTelegramAccount = {
   config: TelegramAccountConfig;
 };
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  return listConfiguredAccountIdsFromSection({
-    accounts: cfg.channels?.telegram?.accounts,
-    normalizeAccountId,
-  });
-}
+export type TelegramMediaRuntimeOptions = {
+  token: string;
+  transport?: TelegramTransport;
+  apiRoot?: string;
+  trustedLocalFileRoots?: readonly string[];
+  dangerouslyAllowPrivateNetwork?: boolean;
+};
 
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = Array.from(
-    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
-  );
+  const ids = listSelectedTelegramAccountIds(cfg);
   debugAccounts("listTelegramAccountIds", ids);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
+  return ids;
 }
 
 let emittedMissingDefaultWarn = false;
@@ -75,77 +80,47 @@ export function resetMissingDefaultWarnFlag(): void {
 }
 
 export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
-  const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "telegram");
-  if (boundDefault) {
-    return boundDefault;
-  }
-  const preferred = normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount);
-  if (
-    preferred &&
-    listTelegramAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
-  ) {
-    return preferred;
-  }
-  const ids = listTelegramAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  if (ids.length > 1 && !emittedMissingDefaultWarn) {
+  const selection = resolveDefaultTelegramAccountSelection(cfg);
+  if (selection.shouldWarnMissingDefault && !emittedMissingDefaultWarn) {
     emittedMissingDefaultWarn = true;
-    log.warn(
-      `channels.telegram: accounts.default is missing; falling back to "${ids[0]}". ` +
+    getLog().warn(
+      `channels.telegram: accounts.default is missing; falling back to "${selection.accountId}". ` +
         `${formatSetExplicitDefaultInstruction("telegram")} to avoid routing surprises in multi-account setups.`,
     );
   }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
-
-export function resolveTelegramAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): TelegramAccountConfig | undefined {
-  const normalized = normalizeAccountId(accountId);
-  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
-}
-
-export function mergeTelegramAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): TelegramAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    groups: channelGroups,
-    ...base
-  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
-
-  // In multi-account setups, channel-level `groups` must NOT be inherited by
-  // accounts that don't have their own `groups` config.  A bot that is not a
-  // member of a configured group will fail when handling group messages, and
-  // this failure disrupts message delivery for *all* accounts.
-  // Single-account setups keep backward compat: channel-level groups still
-  // applies when the account has no override.
-  // See: https://github.com/openclaw/openclaw/issues/30673
-  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
-  const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
-
-  return { ...base, ...account, groups };
+  return selection.accountId;
 }
 
 export function createTelegramActionGate(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
   return createAccountActionGate({
     baseActions: params.cfg.channels?.telegram?.actions,
     accountActions: resolveTelegramAccountConfig(params.cfg, accountId)?.actions,
   });
+}
+
+export function resolveTelegramMediaRuntimeOptions(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  token: string;
+  transport?: TelegramTransport;
+}): TelegramMediaRuntimeOptions {
+  const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
+  const accountCfg = normalizedAccountId
+    ? mergeTelegramAccountConfig(params.cfg, normalizedAccountId)
+    : params.cfg.channels?.telegram;
+  return {
+    token: params.token,
+    transport: params.transport,
+    apiRoot: accountCfg?.apiRoot,
+    trustedLocalFileRoots: accountCfg?.trustedLocalFileRoots,
+    dangerouslyAllowPrivateNetwork: accountCfg?.network?.dangerouslyAllowPrivateNetwork,
+  };
 }
 
 export type TelegramPollActionGateState = {
@@ -185,7 +160,7 @@ export function resolveTelegramAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: tokenResolution.token,
       tokenSource: tokenResolution.source,
       config: merged,

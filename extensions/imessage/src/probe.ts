@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "../../../src/channels/plugins/types.js";
-import { detectBinary } from "../../../src/commands/onboard-helpers.js";
-import { loadConfig } from "../../../src/config/config.js";
-import { runCommandWithTimeout } from "../../../src/process/exec.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { detectBinary } from "openclaw/plugin-sdk/setup";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
@@ -35,7 +36,7 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
   try {
     const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
-    const normalized = combined.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(combined);
     if (normalized.includes("unknown command") && normalized.includes("rpc")) {
       const fatal = {
         supported: false,

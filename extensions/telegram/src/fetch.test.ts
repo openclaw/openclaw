@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveFetch } from "../../../src/infra/fetch.js";
-import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const loggerInfo = vi.hoisted(() => vi.fn());
+const loggerDebug = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
@@ -56,6 +56,74 @@ vi.mock("undici", () => ({
   setGlobalDispatcher,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerInfo,
+    debug: loggerDebug,
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => ({
+      info: loggerInfo,
+      debug: loggerDebug,
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
+  }),
+  isTruthyEnvValue: (value?: string) => {
+    if (typeof value !== "string") {
+      return false;
+    }
+    switch (value.trim().toLowerCase()) {
+      case "":
+      case "0":
+      case "false":
+      case "no":
+      case "off":
+        return false;
+      default:
+        return true;
+    }
+  },
+  isWSL2Sync: () => false,
+}));
+
+let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
+let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+
+type TelegramDispatcherPolicy = NonNullable<
+  ReturnType<typeof resolveTelegramTransport>["dispatcherAttempts"]
+>[number]["dispatcherPolicy"];
+
+beforeAll(async () => {
+  ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
+  ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  for (const key of [
+    "OPENCLAW_DEBUG_PROXY_ENABLED",
+    "OPENCLAW_DEBUG_PROXY_URL",
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+  loggerInfo.mockReset();
+  loggerDebug.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function resolveTelegramFetchOrThrow(
   proxyFetch?: typeof fetch,
   options?: { network?: { autoSelectFamily?: boolean; dnsResultOrder?: "ipv4first" | "verbatim" } },
@@ -74,6 +142,7 @@ function getDispatcherFromUndiciCall(nth: number) {
         options?: {
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
+          requestTls?: Record<string, unknown>;
         };
       }
     | undefined;
@@ -119,10 +188,11 @@ function expectStickyAutoSelectDispatcher(
         options?: {
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
+          requestTls?: Record<string, unknown>;
         };
       }
     | undefined,
-  field: "connect" | "proxyTls" = "connect",
+  field: "connect" | "proxyTls" | "requestTls" = "connect",
 ): void {
   expect(dispatcher?.options?.[field]).toEqual(
     expect.objectContaining({
@@ -152,6 +222,24 @@ function expectPinnedIpv4ConnectDispatcher(args: {
   }
 }
 
+function expectPinnedFallbackIpDispatcher(callIndex: number) {
+  const dispatcher = getDispatcherFromUndiciCall(callIndex);
+  expect(dispatcher?.options?.connect).toEqual(
+    expect.objectContaining({
+      family: 4,
+      autoSelectFamily: false,
+      lookup: expect.any(Function),
+    }),
+  );
+  const callback = vi.fn();
+  (
+    dispatcher?.options?.connect?.lookup as
+      | ((hostname: string, callback: (err: null, address: string, family: number) => void) => void)
+      | undefined
+  )?.("api.telegram.org", callback);
+  expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
+}
+
 function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unknown) {
   for (const callIndex of callIndexes) {
     const callInit = undiciFetch.mock.calls[callIndex - 1]?.[1] as
@@ -164,7 +252,7 @@ function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unkn
 async function expectNoStickyRetryWithSameDispatcher(params: {
   resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
-  field: "connect" | "proxyTls";
+  field: "connect" | "proxyTls" | "requestTls";
 }) {
   await expect(params.resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
     "fetch failed",
@@ -190,7 +278,6 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
-  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -241,8 +328,17 @@ describe("resolveTelegramFetch", () => {
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
+  it("emits default transport decisions at debug level", () => {
+    resolveTelegramFetchOrThrow();
+
+    expect(loggerInfo).not.toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerInfo).not.toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("autoSelectFamily=true (default-node22)");
+    expect(loggerDebug).toHaveBeenCalledWith("dnsResultOrder=ipv4first (default-node22)");
+  });
+
   it("uses EnvHttpProxyAgent dispatcher when proxy env is configured", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -272,8 +368,24 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
+  it("uses the OpenClaw debug proxy URL when no explicit proxy fetch is provided", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7777");
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetch(undefined);
+    await resolved("https://api.telegram.org/botTOKEN/getMe");
+
+    expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(ProxyAgentCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uri: "http://127.0.0.1:7777",
+      }),
+    );
+  });
+
   it("pins env-proxy transport policy onto proxyTls for proxied HTTPS requests", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -324,9 +436,61 @@ describe("resolveTelegramFetch", () => {
         uri: "http://127.0.0.1:7890",
       }),
     );
-    expect(dispatcher?.options?.proxyTls).toEqual(
+    expect(dispatcher?.options?.requestTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: false,
+      }),
+    );
+  });
+
+  it("exports fallback dispatcher attempts for Telegram media downloads", () => {
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(transport.sourceFetch).toBeDefined();
+    expect(transport.fetch).not.toBe(transport.sourceFetch);
+    expect(transport.dispatcherAttempts).toHaveLength(3);
+
+    const [defaultAttempt, ipv4Attempt, pinnedAttempt] = transport.dispatcherAttempts as Array<{
+      dispatcherPolicy?: TelegramDispatcherPolicy;
+    }>;
+
+    expect(defaultAttempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        connect: expect.objectContaining({
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+    expect(ipv4Attempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        connect: expect.objectContaining({
+          family: 4,
+          autoSelectFamily: false,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+    expect(pinnedAttempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        pinnedHostname: {
+          hostname: "api.telegram.org",
+          addresses: ["149.154.167.220"],
+        },
+        connect: expect.objectContaining({
+          family: 4,
+          autoSelectFamily: false,
+          lookup: expect.any(Function),
+        }),
       }),
     );
   });
@@ -347,12 +511,12 @@ describe("resolveTelegramFetch", () => {
     await expectNoStickyRetryWithSameDispatcher({
       resolved,
       expectedAgentCtor: ProxyAgentCtor,
-      field: "proxyTls",
+      field: "requestTls",
     });
   });
 
   it("does not blind-retry when sticky IPv4 fallback is disallowed for env proxy paths", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     primeStickyFallbackRetry("EHOSTUNREACH", 1);
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
@@ -395,7 +559,7 @@ describe("resolveTelegramFetch", () => {
       pinnedCall: 2,
       followupCall: 3,
     });
-    expect(transport.pinnedDispatcherPolicy).toEqual(
+    expect(transport.dispatcherAttempts?.[0]?.dispatcherPolicy).toEqual(
       expect.objectContaining({
         mode: "direct",
       }),
@@ -403,7 +567,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("arms sticky IPv4 fallback when env proxy init falls back to direct Agent", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {
       throw new Error("invalid proxy config");
     });
@@ -421,8 +585,8 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("arms sticky IPv4 fallback when NO_PROXY bypasses telegram under env proxy", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
-    vi.stubEnv("NO_PROXY", "api.telegram.org");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
+    vi.stubEnv("no_proxy", "api.telegram.org");
     await runDefaultStickyIpv4FallbackProbe();
 
     expect(undiciFetch).toHaveBeenCalledTimes(3);
@@ -437,7 +601,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("uses no_proxy over NO_PROXY when deciding env-proxy bypass", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     vi.stubEnv("NO_PROXY", "");
     vi.stubEnv("no_proxy", "api.telegram.org");
     await runDefaultStickyIpv4FallbackProbe();
@@ -447,7 +611,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("matches whitespace and wildcard no_proxy entries like EnvHttpProxyAgent", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     vi.stubEnv("no_proxy", "localhost *.telegram.org");
     await runDefaultStickyIpv4FallbackProbe();
 
@@ -474,7 +638,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("falls back to Agent when env proxy dispatcher initialization fails", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7890");
     EnvHttpProxyAgentCtor.mockImplementationOnce(function ThrowingEnvProxyAgent() {
       throw new Error("invalid proxy config");
     });
@@ -531,6 +695,34 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamily: false,
       }),
     );
+  });
+
+  it("escalates from IPv4 fallback to pinned Telegram IP and keeps it sticky", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(4);
+
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+    const fourthDispatcher = getDispatcherFromUndiciCall(4);
+
+    expect(secondDispatcher).not.toBe(thirdDispatcher);
+    expect(thirdDispatcher).toBe(fourthDispatcher);
+    expectPinnedFallbackIpDispatcher(3);
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

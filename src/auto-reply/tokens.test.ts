@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -9,6 +15,11 @@ describe("isSilentReplyText", () => {
   it("returns true for token with surrounding whitespace", () => {
     expect(isSilentReplyText("  NO_REPLY  ")).toBe(true);
     expect(isSilentReplyText("\nNO_REPLY\n")).toBe(true);
+  });
+
+  it("returns true for mixed-case token", () => {
+    expect(isSilentReplyText("no_reply")).toBe(true);
+    expect(isSilentReplyText("  No_RePlY  ")).toBe(true);
   });
 
   it("returns false for undefined/empty", () => {
@@ -70,6 +81,28 @@ describe("stripSilentToken", () => {
 
   it("works with custom token", () => {
     expect(stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
+  });
+});
+
+describe("stripLeadingSilentToken", () => {
+  it("strips glued leading token text", () => {
+    expect(stripLeadingSilentToken("NO_REPLYThe user is saying")).toBe("The user is saying");
+  });
+});
+
+describe("startsWithSilentToken", () => {
+  it("matches leading glued silent tokens case-insensitively", () => {
+    expect(startsWithSilentToken("NO_REPLYThe user is saying")).toBe(true);
+    expect(startsWithSilentToken("No_RePlYThe user is saying")).toBe(true);
+    expect(startsWithSilentToken("no_replyThe user is saying")).toBe(true);
+  });
+
+  it("rejects separated substantive prefixes and exact-token-only text", () => {
+    expect(startsWithSilentToken("NO_REPLY -- nope")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY: explanation")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY—note")).toBe(false);
+    expect(startsWithSilentToken("NO_REPLY")).toBe(false);
+    expect(startsWithSilentToken("  NO_REPLY  ")).toBe(false);
   });
 });
 

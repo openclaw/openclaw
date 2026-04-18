@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
@@ -12,8 +12,8 @@ type SpawnCall = {
 
 const spawnCalls: SpawnCall[] = [];
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: (command: string, args: string[]) => {
@@ -42,8 +42,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("./skills.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./skills.js")>();
+vi.mock("./skills.js", async () => {
+  const actual = await vi.importActual<typeof import("./skills.js")>("./skills.js");
   return {
     ...actual,
     syncSkillsToWorkspace: vi.fn(async () => undefined),
@@ -119,7 +119,8 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
 }
 
 describe("Agent-specific sandbox config", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     const [configModule, contextModule, runtimeModule] = await Promise.all([
       import("./sandbox/config.js"),
       import("./sandbox/context.js"),
@@ -128,9 +129,6 @@ describe("Agent-specific sandbox config", () => {
     ({ resolveSandboxConfigForAgent } = configModule);
     ({ resolveSandboxContext } = contextModule);
     ({ resolveSandboxRuntimeStatus } = runtimeModule);
-  });
-
-  beforeEach(() => {
     spawnCalls.length = 0;
   });
 

@@ -5,15 +5,17 @@
 #
 # Multi-stage build produces a minimal runtime image without build tools,
 # source code, or Bun. Works with Docker, Buildx, and Podman.
-# The ext-deps stage extracts only the package.json files we need from
-# extensions/, so the main build layer is not invalidated by unrelated
-# extension source changes.
+# The ext-deps stage extracts only the package.json files we need from the
+# bundled plugin workspace tree, so the main build layer is not invalidated by
+# unrelated plugin source changes.
 #
 # Two runtime variants:
 #   Default (bookworm):      docker build .
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
+ARG OPENCLAW_DOCKER_APT_UPGRADE=1
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -26,18 +28,20 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f3411
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
-COPY extensions /tmp/extensions
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 # Copy package.json for opted-in extensions so pnpm resolves their deps.
 RUN mkdir -p /out && \
     for ext in $OPENCLAW_EXTENSIONS; do \
-      if [ -f "/tmp/extensions/$ext/package.json" ]; then \
+      if [ -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
         mkdir -p "/out/$ext" && \
-        cp "/tmp/extensions/$ext/package.json" "/out/$ext/package.json"; \
+        cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/$ext/package.json"; \
       fi; \
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 # Install Bun (required for build scripts). Retry the whole bootstrap flow to
 # tolerate transient 5xx failures from bun.sh/GitHub during CI image builds.
@@ -58,21 +62,29 @@ RUN corepack enable
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
 
-COPY --from=ext-deps /out/ ./extensions/
+COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
+# pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
+# paths. Fail fast here if the Matrix native binding did not materialize after install.
+RUN echo "==> Verifying critical native addons..." && \
+    find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q . || \
+    (echo "ERROR: matrix-sdk-crypto native addon missing (pnpm install may have silently failed on this arch)" >&2 && exit 1)
+
 COPY . .
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
-RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \
       if [ -d "$dir" ]; then \
         find "$dir" -type d -exec chmod 755 {} +; \
         find "$dir" -type f -exec chmod 644 {} +; \
@@ -92,11 +104,25 @@ RUN pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
+RUN pnpm qa:lab:build
 
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
-RUN CI=true pnpm prune --prod && \
+ARG OPENCLAW_EXTENSIONS
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+# Keep the install layer frozen, but allow prune to run against the full copied
+# workspace tree subset used during `pnpm install`. The build stage only copied
+# the root, `ui`, and opted-in plugin manifests into the install layer, so
+# prune must not rediscover unrelated workspaces from the later full source
+# copy.
+RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
+    for ext in $OPENCLAW_EXTENSIONS; do \
+      printf '  - %s/%s\n' "$OPENCLAW_BUNDLED_PLUGIN_DIR" "$ext" >> /tmp/pnpm-workspace.runtime.yaml; \
+    done && \
+    cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml && \
+    CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \
+    node scripts/postinstall-bundled-plugins.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────
@@ -113,6 +139,8 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-sli
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_DOCKER_APT_UPGRADE
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -129,12 +157,16 @@ WORKDIR /app
 
 # Install system utilities present in bookworm but missing in bookworm-slim.
 # On the full bookworm image these are already installed (apt-get is a no-op).
+# Smoke workflows can opt out of distro upgrades to cut repeated CI time while
+# keeping the default runtime image behavior unchanged.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && \
+    if [ "${OPENCLAW_DOCKER_APT_UPGRADE}" != "0" ]; then \
+      DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
+    fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl gosu
+      procps hostname curl git lsof openssl
 
 RUN chown node:node /app
 
@@ -142,26 +174,10 @@ COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-# Copy extensions that work on Fly.io shared-cpu machines.
-# WhatsApp: Baileys 7.x is pure JS (no native bindings) — safe to include.
-#   Pre-compiled .js files load without Jiti. Deps installed via OPENCLAW_EXTENSIONS=whatsapp.
-# signal + imessage: not active channels but src/ has hardcoded imports to them.
-COPY --from=runtime-assets --chown=node:node /app/extensions/telegram ./extensions/telegram
-COPY --from=runtime-assets --chown=node:node /app/extensions/discord ./extensions/discord
-COPY --from=runtime-assets --chown=node:node /app/extensions/slack ./extensions/slack
-COPY --from=runtime-assets --chown=node:node /app/extensions/whatsapp ./extensions/whatsapp
-COPY --from=runtime-assets --chown=node:node /app/extensions/signal ./extensions/signal
-COPY --from=runtime-assets --chown=node:node /app/extensions/imessage ./extensions/imessage
-COPY --from=runtime-assets --chown=node:node /app/extensions/shared ./extensions/shared
+COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-# Extensions (telegram, discord, slack, etc.) are loaded as TypeScript at runtime via Jiti.
-# They import from relative paths like "../../../src/infra/outbound/send-deps.js", which
-# Jiti resolves to /app/src/. Without src/ here, all extension plugins fail to load.
-COPY --from=runtime-assets --chown=node:node /app/src ./src
-# WhatsApp plugin transitively imports tool-display.json from the shared iOS/macOS resources.
-# Without this path, the whatsapp extension fails to load at runtime.
-COPY --from=runtime-assets --chown=node:node /app/apps/shared/OpenClawKit/Sources/OpenClawKit/Resources ./apps/shared/OpenClawKit/Sources/OpenClawKit/Resources
+COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
@@ -190,32 +206,20 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
     fi
 
-# Install Blink Claw extended tools: bun (JS runtime), uv (Python pkg manager).
-# nano-pdf (AI PDF editor). Requires python3-pip in OPENCLAW_DOCKER_APT_PACKAGES.
-ARG OPENCLAW_INSTALL_BLINK_TOOLS=""
-RUN if [ -n "$OPENCLAW_INSTALL_BLINK_TOOLS" ]; then \
-      npm install -g bun && \
-      (pip3 install uv nano-pdf linkedin-api 2>/dev/null || pip install uv nano-pdf linkedin-api 2>/dev/null || true); \
-    fi
-
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
-# Persist the Playwright browser cache path so playwright-core finds Chromium at runtime.
-# Without this, the path is only set during the install RUN command and lost afterwards.
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       mkdir -p /home/node/.cache/ms-playwright && \
+      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright && \
-      PW_EXE=$(node -e "const {chromium}=require('/app/node_modules/playwright-core');process.stdout.write(chromium.executablePath())") && \
-      [ -f "$PW_EXE" ] && ln -sf "$PW_EXE" /usr/bin/chromium || true; \
+      chown -R node:node /home/node/.cache/ms-playwright; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
@@ -250,56 +254,29 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
-# Install Blink CLI — required for blink-* skill scripts (image, video, speech, transcribe, connectors)
-# Uses @latest so every Docker image rebuild ships the newest CLI automatically.
-# No manual version bumps needed — publishing a new CLI version is sufficient.
-RUN npm install -g @blinkdotnew/cli@latest
-
-# Install ClawHub CLI — the public skill registry for OpenClaw.
-# Pre-installed so agents can run `clawhub install <skill>` to extend capabilities.
-# Skills install to CLAWHUB_WORKDIR (/data/workspace) on the persistent Fly volume.
-RUN npm install -g clawhub@latest
-ENV CLAWHUB_WORKDIR=/data/workspace
-
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
 ENV NODE_ENV=production
 
-# Redirect npm global installs to the Fly.io persistent volume (/data).
-# This allows the non-root `node` user to run `npm install -g <pkg>` at runtime
-# without permission errors. Installed packages survive container restarts.
-ENV NPM_CONFIG_PREFIX=/data/npm-global
-ENV PATH="/data/npm-global/bin:${PATH}"
+# Security hardening: Run as non-root user
+# The node:24-bookworm image includes a 'node' user (uid 1000)
+# This reduces the attack surface by preventing container escape via root privileges
+USER node
 
-# Pre-warm Jiti cache: boot the gateway once with WhatsApp enabled so Jiti
-# compiles all TypeScript extensions during Docker build (not at runtime).
-# Without this, WhatsApp/Baileys Jiti compilation takes 90-300s on shared CPUs.
-# The compiled cache at node_modules/.cache/jiti/ bakes into the image layer.
-RUN mkdir -p /tmp/oc-warmup/workspace/.whatsapp /tmp/oc-warmup/agents/main/agent && \
-    printf '%s' '{"agents":{"defaults":{"workspace":"/tmp/oc-warmup/workspace"}},"gateway":{"auth":{"mode":"token"}},"browser":{"noSandbox":true},"channels":{"whatsapp":{"accounts":{"default":{"authDir":"/tmp/oc-warmup/workspace/.whatsapp"}}}}}' \
-      > /tmp/oc-warmup/openclaw.json && \
-    OPENCLAW_STATE_DIR=/tmp/oc-warmup \
-    OPENCLAW_HEADLESS=true \
-    OPENCLAW_GATEWAY_TOKEN=warmup \
-    timeout 180 node openclaw.mjs gateway --allow-unconfigured 2>&1 & \
-    GW_PID=$! && \
-    for i in $(seq 1 60); do \
-      if curl -sf http://127.0.0.1:18789/healthz > /dev/null 2>&1; then break; fi; \
-      sleep 3; \
-    done && \
-    kill $GW_PID 2>/dev/null; wait $GW_PID 2>/dev/null || true && \
-    rm -rf /tmp/oc-warmup && \
-    chown -R node:node /app/node_modules/.cache 2>/dev/null || true && \
-    echo "Jiti cache warmed (WhatsApp + all extensions pre-compiled)"
-
-# Blink entrypoint: runs as root to prepare fresh Fly volumes (/data),
-# then drops to node user via gosu before exec'ing the gateway.
-COPY blink-entrypoint.sh /app/blink-entrypoint.sh
-RUN chmod +x /app/blink-entrypoint.sh
-
+# Start gateway server with default config.
+# Binds to loopback (127.0.0.1) by default for security.
+#
+# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
+# makes the gateway unreachable from the host. Either:
+#   - Use --network host, OR
+#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
+#
+# Built-in probe endpoints for container health checks:
+#   - GET /healthz (liveness) and GET /readyz (readiness)
+#   - aliases: /health and /ready
+# For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-ENTRYPOINT ["/app/blink-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]

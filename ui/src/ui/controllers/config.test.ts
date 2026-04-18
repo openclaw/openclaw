@@ -110,6 +110,21 @@ describe("applyConfigSnapshot", () => {
     expect(state.configRawOriginal).toBe('{ "original": true }');
     expect(state.configFormOriginal).toEqual({ original: true });
   });
+
+  it("forces form mode when the snapshot does not include raw text", () => {
+    const state = createState();
+    state.configFormMode = "raw";
+
+    applyConfigSnapshot(state, {
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: null,
+    });
+
+    expect(state.configFormMode).toBe("form");
+    expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
 });
 
 describe("updateConfigFormValue", () => {
@@ -242,6 +257,7 @@ describe("applyConfig", () => {
     state.configRaw = '{\n  agent: { workspace: "~/openclaw" }\n}\n';
     state.configSnapshot = {
       hash: "hash-123",
+      raw: "{\n}\n",
     };
 
     await applyConfig(state);
@@ -370,5 +386,20 @@ describe("runUpdate", () => {
     expect(request).toHaveBeenCalledWith("update.run", {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
+  });
+
+  it("surfaces update errors returned in response payload", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "error", reason: "network unavailable" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "main";
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe("Update error: network unavailable");
   });
 });

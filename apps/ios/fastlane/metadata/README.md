@@ -36,6 +36,9 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 ## Notes
 
 - Locale files live under `metadata/en-US/`.
+- `release_notes.txt` is generated from `apps/ios/CHANGELOG.md`; after changelog updates, run `pnpm ios:version:sync`.
+- Release notes resolve from `## <pinned iOS version>` first, then fall back to `## Unreleased` while a TestFlight train is still in progress.
+- When starting a new production release train, pin the iOS version first with `pnpm ios:version:pin -- --from-gateway`.
 - `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
 - If app lookup fails in `deliver`, set one of:
   - `ASC_APP_IDENTIFIER` (bundle ID)

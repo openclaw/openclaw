@@ -1,6 +1,7 @@
-import { resolveFetch } from "../../../src/infra/fetch.js";
-import { generateSecureUuid } from "../../../src/infra/secure-random.js";
-import { fetchWithTimeout } from "../../../src/utils/fetch-timeout.js";
+import { generateSecureUuid } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -126,7 +127,7 @@ export async function signalCheck(
     return {
       ok: false,
       status: null,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

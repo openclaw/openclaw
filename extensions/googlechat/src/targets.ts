@@ -1,6 +1,10 @@
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage } from "./api.js";
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 export function normalizeGoogleChatTarget(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -12,23 +16,23 @@ export function normalizeGoogleChatTarget(raw?: string | null): string | undefin
     .replace(/^space:(spaces\/)?/i, "spaces/");
   if (isGoogleChatUserTarget(normalized)) {
     const suffix = normalized.slice("users/".length);
-    return suffix.includes("@") ? `users/${suffix.toLowerCase()}` : normalized;
+    return suffix.includes("@") ? `users/${normalizeLowercaseStringOrEmpty(suffix)}` : normalized;
   }
   if (isGoogleChatSpaceTarget(normalized)) {
     return normalized;
   }
   if (normalized.includes("@")) {
-    return `users/${normalized.toLowerCase()}`;
+    return `users/${normalizeLowercaseStringOrEmpty(normalized)}`;
   }
   return normalized;
 }
 
 export function isGoogleChatUserTarget(value: string): boolean {
-  return value.toLowerCase().startsWith("users/");
+  return normalizeLowercaseStringOrEmpty(value).startsWith("users/");
 }
 
 export function isGoogleChatSpaceTarget(value: string): boolean {
-  return value.toLowerCase().startsWith("spaces/");
+  return normalizeLowercaseStringOrEmpty(value).startsWith("spaces/");
 }
 
 function stripMessageSuffix(target: string): string {

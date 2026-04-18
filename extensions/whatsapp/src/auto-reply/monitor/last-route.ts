@@ -1,20 +1,22 @@
-import type { MsgContext } from "../../../../../src/auto-reply/templating.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
-import { resolveStorePath, updateLastRoute } from "../../../../../src/config/sessions.js";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { formatError } from "../../session.js";
+import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
+
+type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
 
 export function trackBackgroundTask(
   backgroundTasks: Set<Promise<unknown>>,
   task: Promise<unknown>,
 ) {
   backgroundTasks.add(task);
-  void task.finally(() => {
+  const cleanup = () => {
     backgroundTasks.delete(task);
-  });
+  };
+  task.then(cleanup, cleanup);
 }
 
 export function updateLastRouteInBackground(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   backgroundTasks: Set<Promise<unknown>>;
   storeAgentId: string;
   sessionKey: string;

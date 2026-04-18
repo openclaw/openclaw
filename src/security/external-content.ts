@@ -1,4 +1,14 @@
 import { randomBytes } from "node:crypto";
+export {
+  isExternalHookSession,
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+  type HookExternalContentSource,
+} from "./external-content-source.js";
+import {
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+} from "./external-content-source.js";
 
 /**
  * Security utilities for handling untrusted external content.
@@ -151,23 +161,46 @@ function foldMarkerChar(char: string): string {
   return char;
 }
 
-const MARKER_IGNORABLE_CHAR_RE = /\u200B|\u200C|\u200D|\u2060|\uFEFF|\u00AD/g;
-
-function foldMarkerText(input: string): string {
+function isMarkerIgnorableChar(char: string): boolean {
+  const code = char.charCodeAt(0);
   return (
-    input
-      // Strip invisible format characters that can split marker tokens without changing
-      // how downstream models interpret the apparent boundary text.
-      .replace(MARKER_IGNORABLE_CHAR_RE, "")
-      .replace(
-        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3]/g,
-        (char) => foldMarkerChar(char),
-      )
+    code === 0x200b ||
+    code === 0x200c ||
+    code === 0x200d ||
+    code === 0x2060 ||
+    code === 0xfeff ||
+    code === 0x00ad
   );
 }
 
+type FoldedMarkerMatch = {
+  folded: string;
+  originalStartByFoldedIndex: number[];
+  originalEndByFoldedIndex: number[];
+};
+
+function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
+  let folded = "";
+  const originalStartByFoldedIndex: number[] = [];
+  const originalEndByFoldedIndex: number[] = [];
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    if (isMarkerIgnorableChar(char)) {
+      continue;
+    }
+    const foldedChar = foldMarkerChar(char);
+    folded += foldedChar;
+    originalStartByFoldedIndex.push(index);
+    originalEndByFoldedIndex.push(index + 1);
+  }
+
+  return { folded, originalStartByFoldedIndex, originalEndByFoldedIndex };
+}
+
 function replaceMarkers(content: string): string {
-  const folded = foldMarkerText(content);
+  const { folded, originalStartByFoldedIndex, originalEndByFoldedIndex } =
+    foldMarkerTextWithIndexMap(content);
   // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
   // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
   if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
@@ -190,9 +223,14 @@ function replaceMarkers(content: string): string {
     pattern.regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.regex.exec(folded)) !== null) {
+      const foldedStart = match.index;
+      const foldedEnd = match.index + match[0].length;
       replacements.push({
-        start: match.index,
-        end: match.index + match[0].length,
+        start: originalStartByFoldedIndex[foldedStart] ?? foldedStart,
+        end:
+          originalEndByFoldedIndex[foldedEnd - 1] ??
+          originalStartByFoldedIndex[foldedEnd] ??
+          foldedEnd,
         value: pattern.value,
       });
     }
@@ -250,12 +288,13 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const sanitized = replaceMarkers(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
   const metadataLines: string[] = [`Source: ${sourceLabel}`];
+  const sanitizeMetadataValue = (value: string) => replaceMarkers(value).replace(/[\r\n]+/g, " ");
 
   if (sender) {
-    metadataLines.push(`From: ${sender}`);
+    metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
   }
   if (subject) {
-    metadataLines.push(`Subject: ${subject}`);
+    metadataLines.push(`Subject: ${sanitizeMetadataValue(subject)}`);
   }
 
   const metadata = metadataLines.join("\n");
@@ -311,32 +350,11 @@ export function buildSafeExternalPrompt(params: {
 }
 
 /**
- * Checks if a session key indicates an external hook source.
- */
-export function isExternalHookSession(sessionKey: string): boolean {
-  const normalized = sessionKey.trim().toLowerCase();
-  return (
-    normalized.startsWith("hook:gmail:") ||
-    normalized.startsWith("hook:webhook:") ||
-    normalized.startsWith("hook:") // Generic hook prefix
-  );
-}
-
-/**
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  const normalized = sessionKey.trim().toLowerCase();
-  if (normalized.startsWith("hook:gmail:")) {
-    return "email";
-  }
-  if (normalized.startsWith("hook:webhook:")) {
-    return "webhook";
-  }
-  if (normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return "unknown";
+  const source = resolveHookExternalContentSource(sessionKey);
+  return source ? mapHookExternalContentSource(source) : "unknown";
 }
 
 /**

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
@@ -64,6 +65,7 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private initialMessageInFlight = new Set<CallId>();
 
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
@@ -115,7 +117,7 @@ export class CallManager {
           ctx: this.getContext(),
           callId,
           onTimeout: async (id) => {
-            await endCallWithContext(this.getContext(), id);
+            await endCallWithContext(this.getContext(), id, { reason: "timeout" });
           },
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
@@ -256,6 +258,7 @@ export class CallManager {
       activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
+      initialMessageInFlight: this.initialMessageInFlight,
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
@@ -269,11 +272,39 @@ export class CallManager {
     processManagerEvent(this.getContext(), event);
   }
 
+  private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
+    if (!this.provider || this.provider.name !== "twilio" || !this.config.streaming.enabled) {
+      return false;
+    }
+
+    const streamAwareProvider = this.provider as VoiceCallProvider & {
+      isConversationStreamConnectEnabled?: () => boolean;
+    };
+    if (typeof streamAwareProvider.isConversationStreamConnectEnabled !== "function") {
+      return false;
+    }
+
+    return streamAwareProvider.isConversationStreamConnectEnabled();
+  }
+
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
-    const initialMessage =
-      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+    const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
 
     if (!initialMessage) {
+      return;
+    }
+
+    // Notify mode should speak as soon as the provider reports "answered".
+    // Conversation mode should defer only when the Twilio stream-connect path
+    // is actually available; otherwise speak immediately on answered.
+    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
+    if (mode === "conversation") {
+      const shouldWaitForStreamConnect =
+        this.shouldDeferConversationInitialMessageUntilStreamConnect();
+      if (shouldWaitForStreamConnect) {
+        return;
+      }
+    } else if (mode !== "notify") {
       return;
     }
 
