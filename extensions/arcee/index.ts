@@ -69,13 +69,6 @@ function buildArceeAuthMethods() {
   ];
 }
 
-function readConfiguredArceeCatalogEntries(config: ProviderCatalogContext["config"]) {
-  return readConfiguredProviderCatalogEntries({
-    config,
-    providerId: PROVIDER_ID,
-  });
-}
-
 async function resolveArceeCatalog(ctx: ProviderCatalogContext) {
   const directKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
   if (directKey) {
@@ -122,7 +115,11 @@ export default definePluginEntry({
       catalog: {
         run: resolveArceeCatalog,
       },
-      augmentModelCatalog: ({ config }) => readConfiguredArceeCatalogEntries(config),
+      augmentModelCatalog: ({ config }) =>
+        readConfiguredProviderCatalogEntries({
+          config,
+          providerId: PROVIDER_ID,
+        }),
       normalizeConfig: ({ providerConfig }) => {
         const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(providerConfig.baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
