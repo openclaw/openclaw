@@ -305,6 +305,10 @@
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
     },
+    "./plugin-sdk/codex-auth-bridge-runtime": {
+      "types": "./dist/plugin-sdk/codex-auth-bridge-runtime.d.ts",
+      "default": "./dist/plugin-sdk/codex-auth-bridge-runtime.js"
+    },
     "./plugin-sdk/simple-completion-runtime": {
       "types": "./dist/plugin-sdk/simple-completion-runtime.d.ts",
       "default": "./dist/plugin-sdk/simple-completion-runtime.js"

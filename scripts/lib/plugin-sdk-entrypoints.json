@@ -62,6 +62,7 @@
   "text-runtime",
   "text-chunking",
   "agent-runtime",
+  "codex-auth-bridge-runtime",
   "simple-completion-runtime",
   "speech-core",
   "plugin-runtime",

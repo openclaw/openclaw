@@ -185,7 +185,6 @@ export async function prepareCliRunContext(
     provider: params.provider,
     modelId,
     authProfileId: effectiveAuthProfileId,
-    authCredential,
   });
   const authEpoch = await resolveCliAuthEpoch({
     provider: params.provider,

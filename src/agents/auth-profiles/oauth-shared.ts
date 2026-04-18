@@ -131,6 +131,19 @@ export function isSafeToAdoptBootstrapOAuthIdentity(
   return hasMatchingOAuthIdentity(existing, incoming);
 }
 
+export function isSafeToAdoptMainStoreOAuthIdentity(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  if (!existing || existing.type !== "oauth") {
+    return false;
+  }
+  if (existing.provider !== incoming.provider) {
+    return false;
+  }
+  return hasMatchingOAuthIdentity(existing, incoming);
+}
+
 export function shouldBootstrapFromExternalCliCredential(params: {
   existing: OAuthCredential | undefined;
   imported: OAuthCredential;

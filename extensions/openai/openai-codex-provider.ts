@@ -284,7 +284,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
 
 async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
   const profile = readOpenAICodexCliOAuthProfile({
-    env: process.env,
+    env: ctx.env ?? process.env,
     store: ensureAuthProfileStore(ctx.agentDir, {
       allowKeychainPrompt: false,
     }),
