@@ -185,6 +185,21 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == markdown)
     }
 
+    @Test func preservesQuotedExecLinesWhenHiddenSystemStrippingIsDisabled() {
+        let markdown = """
+        System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m
+        System (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m
+
+        Can you help me read this log?
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(
+            markdown: markdown,
+            stripHiddenSystemEvents: false)
+
+        #expect(result.cleaned == markdown)
+    }
+
     @Test func preservesUntrustedContextHeaderWhenItIsUserContent() {
         let markdown = """
         User-visible text

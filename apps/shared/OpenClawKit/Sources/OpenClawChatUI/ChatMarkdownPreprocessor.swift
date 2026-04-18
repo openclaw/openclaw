@@ -46,11 +46,13 @@ enum ChatMarkdownPreprocessor {
         let images: [InlineImage]
     }
 
-    static func preprocess(markdown raw: String) -> Result {
+    static func preprocess(markdown raw: String, stripHiddenSystemEvents: Bool = true) -> Result {
         let withoutEnvelope = self.stripEnvelope(raw)
         let withoutMessageIdHints = self.stripMessageIdHints(withoutEnvelope)
         let withoutContextBlocks = self.stripInboundContextBlocks(withoutMessageIdHints)
-        let withoutHiddenSystemEvents = self.stripHiddenSystemEventBlocks(withoutContextBlocks)
+        let withoutHiddenSystemEvents = stripHiddenSystemEvents
+            ? self.stripHiddenSystemEventBlocks(withoutContextBlocks)
+            : withoutContextBlocks
         let withoutTimestamps = self.stripPrefixedTimestamps(withoutHiddenSystemEvents)
         guard let re = try? NSRegularExpression(pattern: self.markdownImagePattern) else {
             return Result(cleaned: self.normalize(withoutTimestamps), images: [])

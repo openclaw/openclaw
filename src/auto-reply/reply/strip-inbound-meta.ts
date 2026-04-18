@@ -201,6 +201,14 @@ function stripHiddenSystemEventBlocks(text: string): string {
   return result.join("\n");
 }
 
+function shouldStripInjectedHiddenSystemEvents(text: string): boolean {
+  return (
+    SENTINEL_FAST_RE.test(text) ||
+    text.includes(UNTRUSTED_CONTEXT_HEADER) ||
+    text.includes(ACTIVE_MEMORY_OPEN_TAG)
+  );
+}
+
 /**
  * Remove all injected inbound metadata prefix blocks from `text`.
  *
@@ -222,7 +230,9 @@ export function stripInboundMetadata(text: string): string {
   }
 
   const withoutTimestamp = text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
-  const withoutHiddenSystemEvents = stripHiddenSystemEventBlocks(withoutTimestamp);
+  const withoutHiddenSystemEvents = shouldStripInjectedHiddenSystemEvents(withoutTimestamp)
+    ? stripHiddenSystemEventBlocks(withoutTimestamp)
+    : withoutTimestamp;
   if (!SENTINEL_FAST_RE.test(withoutHiddenSystemEvents)) {
     return withoutHiddenSystemEvents === withoutTimestamp
       ? withoutHiddenSystemEvents

@@ -270,7 +270,10 @@ public final class OpenClawChatViewModel {
 
         let sanitizedContent = message.content.map { content -> OpenClawChatMessageContent in
             guard let text = content.text else { return content }
-            let cleaned = ChatMarkdownPreprocessor.preprocess(markdown: text).cleaned
+            let cleaned = ChatMarkdownPreprocessor.preprocess(
+                markdown: text,
+                stripHiddenSystemEvents: false
+            ).cleaned
             return OpenClawChatMessageContent(
                 type: content.type,
                 text: cleaned,
@@ -296,6 +299,11 @@ public final class OpenClawChatViewModel {
     }
 
     private static func shouldHideMessageFromDisplay(_ message: OpenClawChatMessage) -> Bool {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if role == "user" {
+            return false
+        }
+
         let hasNonTextVisibleContent = message.content.contains { content in
             let kind = (content.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             return kind != "" && kind != "text"

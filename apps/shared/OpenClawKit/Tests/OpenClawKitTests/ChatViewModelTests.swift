@@ -1673,6 +1673,29 @@ System (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m
         #expect(remaining == "正常回复")
     }
 
+    @Test func preservesUserQuotedExecNoiseInHistoryMessages() async throws {
+        let quoted = """
+System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m
+System (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m
+
+这是我贴的日志，帮我看看。
+"""
+        let history = historyPayload(messages: [
+            chatTextMessage(
+                role: "user",
+                text: quoted,
+                timestamp: Date().timeIntervalSince1970 * 1000),
+        ])
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("quoted history loaded") { await MainActor.run { vm.messages.count == 1 } }
+
+        let remaining = await MainActor.run { vm.messages.first?.content.first?.text }
+        #expect(remaining == quoted)
+    }
+
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)

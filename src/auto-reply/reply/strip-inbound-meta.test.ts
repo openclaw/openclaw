@@ -120,7 +120,7 @@ This is plain user text`;
   });
 
   it("strips hidden exec system event blocks before visible user text", () => {
-    const input = `System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m\nSystem (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m\n\nHello from user`;
+    const input = `System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m\nSystem (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m\n${SENDER_BLOCK}\n\nHello from user`;
     expect(stripInboundMetadata(input)).toBe("Hello from user");
   });
 
@@ -131,6 +131,11 @@ This is plain user text`;
 
   it("preserves user text that only looks like a system prefix", () => {
     const input = "System (untrusted): [2026-01-01] this is just quoted text";
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("preserves user-authored exec quote lines without injected metadata context", () => {
+    const input = `System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m\nSystem (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m\n\nCan you help me read this log?`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
