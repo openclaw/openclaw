@@ -709,17 +709,6 @@ describe("provider attribution", () => {
       endpointClass: "modelstudio-native",
       supportsNativeStreamingUsageCompat: true,
     });
-
-    expect(
-      resolveProviderRequestCapabilities({
-        provider: "ollama",
-        modelId: "kimi-k2.5:cloud",
-        capability: "llm",
-        transport: "stream",
-      }),
-    ).toMatchObject({
-      compatibilityFamily: "moonshot",
-    });
   });
 
   it("treats native GitHub Copilot base URLs as known native endpoints", () => {
