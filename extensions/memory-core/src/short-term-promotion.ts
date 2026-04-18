@@ -32,6 +32,9 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+// Maximum entries in the short-term recall store.  Older entries are evicted
+// when the store exceeds this cap, preventing unbounded file growth (#68379).
+const SHORT_TERM_MAX_ENTRIES = 4096;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
@@ -853,6 +856,21 @@ async function writePhaseSignalStore(
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+  const entries = store.entries;
+  const keys = Object.keys(entries);
+  if (keys.length > SHORT_TERM_MAX_ENTRIES) {
+    // Evict oldest (by lastRecalledAt) entries to cap store size (#68379).
+    const sorted = keys.toSorted(
+      (a, b) =>
+        Date.parse(entries[b].lastRecalledAt) - Date.parse(entries[a].lastRecalledAt),
+    );
+    const keep = new Set(sorted.slice(0, SHORT_TERM_MAX_ENTRIES));
+    for (const key of keys) {
+      if (!keep.has(key)) {
+        delete entries[key];
+      }
+    }
+  }
   const storePath = resolveStorePath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
