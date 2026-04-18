@@ -582,7 +582,6 @@ async function runProcess(
       cwd: options.cwd ?? ROOT,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === 'win32', 
     });
 
     let stdout = "";
