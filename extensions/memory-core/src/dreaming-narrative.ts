@@ -183,7 +183,12 @@ function buildNarrativeSessionKey(params: {
   nowMs: number;
 }): string {
   const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
-  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
+  // Use a day-based bucket instead of the raw timestamp so that sessions are
+  // reused within the same calendar day, preventing unbounded session growth
+  // (see #68379 — each heartbeat was creating a unique session because the
+  // key included millisecond-precision nowMs).
+  const dayBucket = new Date(params.nowMs).toISOString().slice(0, 10);
+  return `dreaming-narrative-${params.phase}-${workspaceHash}-${dayBucket}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -932,9 +937,19 @@ export async function generateAndAppendDreamNarrative(params: {
     try {
       await params.subagent.deleteSession({ sessionKey });
     } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
+      // Permission errors (e.g. "missing scope: operator.admin") should be
+      // logged at debug level instead of warning — they are expected when the
+      // plugin lacks admin scope and are not actionable by the user (#68379).
+      const errMsg = formatErrorMessage(cleanupErr);
+      if (errMsg.includes("missing scope") || errMsg.includes("permission")) {
+        params.logger.info(
+          `memory-core: narrative session cleanup skipped for ${params.data.phase} phase (insufficient scope): ${errMsg}`,
+        );
+      } else {
+        params.logger.warn(
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${errMsg}`,
+        );
+      }
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
