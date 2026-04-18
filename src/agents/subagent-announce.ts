@@ -1,4 +1,10 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -207,6 +213,31 @@ function hasUsableSessionEntry(entry: unknown): boolean {
   return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
+function sanitizeFallbackReply(text: string | undefined): string | null {
+  const normalized = normalizeOptionalString(text);
+  if (!normalized) {
+    return null;
+  }
+  if (isAnnounceSkip(normalized) || isSilentReplyText(normalized, SILENT_REPLY_TOKEN)) {
+    return null;
+  }
+
+  let cleaned = normalized;
+  const hadLeadingToken = startsWithSilentToken(cleaned, SILENT_REPLY_TOKEN);
+  if (hadLeadingToken) {
+    cleaned = stripLeadingSilentToken(cleaned, SILENT_REPLY_TOKEN);
+  }
+  if (hadLeadingToken || cleaned.toUpperCase().includes(SILENT_REPLY_TOKEN)) {
+    cleaned = stripSilentToken(cleaned, SILENT_REPLY_TOKEN);
+  }
+
+  cleaned = normalizeOptionalString(cleaned) ?? "";
+  if (!cleaned || isAnnounceSkip(cleaned) || isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+    return null;
+  }
+  return cleaned;
+}
+
 type ResolvedAnnounceTarget =
   | {
       kind: "resolved";
@@ -268,7 +299,9 @@ async function resolveSubagentAnnounceTarget(params: {
   const parentSessionEntry = loadSessionEntryByKey(requesterSessionKey);
   const requesterSessionEntry = loadRequesterSessionEntry(requesterSessionKey).entry;
   const parentSessionAlive =
-    hasUsableSessionEntry(parentSessionEntry) || hasUsableSessionEntry(requesterSessionEntry);
+    runtime.isSubagentSessionRunActive(requesterSessionKey) ||
+    hasUsableSessionEntry(parentSessionEntry) ||
+    hasUsableSessionEntry(requesterSessionEntry);
 
   if (!parentSessionAlive) {
     const fallback = runtime.resolveRequesterForChildSession(requesterSessionKey);
@@ -378,7 +411,8 @@ async function wakeSubagentRunAfterDescendants(params: {
     return false;
   }
 
-  const { replaceSubagentRunAfterSteer } = await loadSubagentRegistryRuntime();
+  const { replaceSubagentRunAfterSteer } =
+    await subagentAnnounceDeps.loadSubagentRegistryRuntime();
   return replaceSubagentRunAfterSteer({
     previousRunId: params.runId,
     nextRunId: wakeRunId,
@@ -452,10 +486,6 @@ export async function runSubagentAnnounceFlow(params: {
 
     if (!outcome) {
       outcome = { status: "unknown" };
-    }
-    const failedTerminalOutcome = outcome.status === "error";
-    if (failedTerminalOutcome) {
-      reply = undefined;
     }
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
@@ -536,11 +566,9 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
-    if (!childCompletionFindings && !failedTerminalOutcome) {
-      const fallbackReply = normalizeOptionalString(params.fallbackReply);
-      const fallbackIsSilent =
-        Boolean(fallbackReply) &&
-        (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
+    if (!childCompletionFindings) {
+      const fallbackReply = sanitizeFallbackReply(params.fallbackReply);
+      const fallbackIsSilent = !fallbackReply;
 
       if (!reply) {
         reply = await readSubagentOutput(params.childSessionKey, outcome);

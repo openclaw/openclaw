@@ -168,36 +168,11 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
-import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
-
-describe("subagent wait outcome timing", () => {
-  it.each([
-    { wait: { status: "ok" }, expected: { status: "ok" } },
-    { wait: { status: "timeout" }, expected: { status: "timeout" } },
-    {
-      wait: { status: "error", error: "boom" },
-      expected: { status: "error", error: "boom" },
-    },
-  ] as const)("adds timing to $wait.status outcomes", ({ wait, expected }) => {
-    const result = applySubagentWaitOutcome({
-      wait,
-      outcome: undefined,
-      startedAt: 1_000,
-      endedAt: 1_250,
-    });
-
-    expect(result.outcome).toEqual({
-      ...expected,
-      startedAt: 1_000,
-      endedAt: 1_250,
-      elapsedMs: 250,
-    });
-  });
-});
+import { __testing, runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 describe("subagent announce seam flow", () => {
   beforeEach(() => {
+    __testing.setDepsForTest();
     agentSpy.mockClear();
     sessionsDeleteSpy.mockClear();
     callGatewayMock.mockReset().mockImplementation(async (req: unknown) => {
@@ -280,6 +255,72 @@ describe("subagent announce seam flow", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("keeps internal announce routing on the active parent run when session-store entries are missing", async () => {
+    subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReturnValue(true);
+    loadSessionStoreMock.mockImplementation(() => ({}));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:leaf",
+      childRunId: "run-active-parent",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(subagentRegistryRuntimeMock.resolveRequesterForChildSession).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          sessionKey: "agent:main:subagent:orchestrator",
+          deliver: false,
+        }),
+      }),
+    );
+  });
+
+  it("strips mixed NO_REPLY markers before reusing fallback text", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-fallback-sanitize",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "NO_REPLY",
+      fallbackReply: "NO_REPLYfinal summary NO_REPLY",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          message: expect.stringContaining("final summary"),
+        }),
+      }),
+    );
+    expect(agentSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          message: expect.stringContaining("NO_REPLY"),
+        }),
+      }),
+    );
   });
 
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
