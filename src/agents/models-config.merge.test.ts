@@ -275,7 +275,6 @@ describe("models-config merge helpers", () => {
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(),
     });
 
     expect(merged.openrouter?.apiKey).toBe(preservedApiKey);
