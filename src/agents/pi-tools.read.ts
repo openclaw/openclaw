@@ -1067,7 +1067,7 @@ export function createOpenClawReadTool(
           // Apply image sanitization if configured
           if (options?.imageSanitization) {
             const maxBytes = options.imageSanitization.maxBytes ?? 5 * 1024 * 1024;
-            const maxDimensionPx = options.imageSanitization.maxDimensionPx ?? 3840;
+            const maxDimensionPx = options.imageSanitization.maxDimensionPx ?? 1200;
             
             // Check if sanitization is needed
             let needsSanitization = fileBuffer.length > maxBytes;
