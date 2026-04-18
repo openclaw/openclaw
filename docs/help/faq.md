@@ -1,5 +1,5 @@
 ---
-summary: "Frequently asked questions about OpenClaw setup, configuration, and usage"
+summary: "Frequently asked questions about setting up and using your OpenClaw assistant"
 read_when:
   - Answering common setup, install, onboarding, or runtime support questions
   - Triaging user-reported issues before deeper debugging
@@ -8,7 +8,7 @@ title: "FAQ"
 
 # FAQ
 
-Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/configuration).
+Quick answers plus deeper troubleshooting for real-world OpenClaw assistant setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/configuration).
 
 ## First 60 seconds if something is broken
 
@@ -143,7 +143,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="Recommended way to install and set up OpenClaw">
+  <Accordion title="Recommended way to install and set up your OpenClaw assistant">
     The repo recommends running from source and using onboarding:
 
     ```bash

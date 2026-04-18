@@ -1,5 +1,5 @@
 ---
-summary: "Overview of OpenClaw onboarding options and flows"
+summary: "Overview of onboarding options and flows for your OpenClaw assistant"
 read_when:
   - Choosing an onboarding path
   - Setting up a new environment
@@ -10,7 +10,7 @@ sidebarTitle: "Onboarding Overview"
 # Onboarding Overview
 
 OpenClaw has two onboarding paths. Both configure auth, the Gateway, and
-optional chat channels — they just differ in how you interact with the setup.
+optional chat channels for your assistant — they just differ in how you interact with the setup.
 
 ## Which path should I use?
 
@@ -23,7 +23,7 @@ optional chat channels — they just differ in how you interact with the setup.
 | **Command**    | `openclaw onboard`                     | Launch the app            |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
-you the most control.
+you the fastest path to a working assistant with the most control.
 
 ## What onboarding configures
 

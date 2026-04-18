@@ -1,5 +1,5 @@
 ---
-summary: "Quick start has moved to Getting Started."
+summary: "Quick start has moved to Getting Started for the fastest path to your OpenClaw assistant."
 read_when:
   - You are looking for the fastest setup steps
   - You were sent here from an older link
@@ -14,7 +14,7 @@ Quick start is now part of [Getting Started](/start/getting-started).
 
 <Columns>
   <Card title="Getting Started" href="/start/getting-started">
-    Install OpenClaw and run your first chat in minutes.
+    Install OpenClaw and start using your assistant in minutes.
   </Card>
   <Card title="Onboarding (CLI)" href="/start/wizard">
     Full CLI onboarding reference and advanced options.
