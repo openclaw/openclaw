@@ -3,7 +3,7 @@ import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   coerceSecretRef,
   normalizeResolvedSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+} from "openclaw/plugin-sdk/secret-input-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   requiresExplicitMatrixDefaultAccount,
@@ -351,6 +351,15 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
     return undefined;
   }
 
+  const ref = coerceSecretRef(configured.value, params.cfg.secrets?.defaults);
+  if (!ref) {
+    return normalizeResolvedSecretInputString({
+      value: configured.value,
+      path: configured.path,
+      defaults: params.cfg.secrets?.defaults,
+    });
+  }
+
   const { resolveConfiguredSecretInputString } = await loadMatrixSecretInputDeps();
   const resolved = await resolveConfiguredSecretInputString({
     config: params.cfg,
@@ -363,13 +372,9 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
     return resolved.value;
   }
 
-  if (coerceSecretRef(configured.value, params.cfg.secrets?.defaults)) {
-    throw new Error(
-      resolved.unresolvedRefReason ?? `${configured.path} SecretRef could not be resolved.`,
-    );
-  }
-
-  return undefined;
+  throw new Error(
+    resolved.unresolvedRefReason ?? `${configured.path} SecretRef could not be resolved.`,
+  );
 }
 
 function readMatrixBaseConfigField(

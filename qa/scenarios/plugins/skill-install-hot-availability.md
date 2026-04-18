@@ -4,6 +4,11 @@
 id: skill-install-hot-availability
 title: Skill install hot availability
 surface: skills
+coverage:
+  primary:
+    - plugins.skills
+  secondary:
+    - plugins.hot-install
 objective: Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.
 successCriteria:
   - Skill is absent before install.

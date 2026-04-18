@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai-codex:default"]),
     ),
+    setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
   };
 });
 
@@ -104,7 +105,7 @@ vi.mock("./onboard-skills.js", () => ({
 }));
 
 vi.mock("./onboard-channels.js", () => ({
-  setupChannels: vi.fn(),
+  setupChannels: mocks.setupChannels,
 }));
 
 vi.mock("./onboard-search.js", () => ({
@@ -323,6 +324,28 @@ describe("runConfigureWizard", () => {
             }),
           }),
         }),
+      }),
+    );
+  });
+
+  it("defers channel status checks until a channel is selected", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local", "configure"],
+      confirm: [],
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["channels"] }, createRuntime());
+
+    expect(mocks.setupChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({ mode: "local" }),
+      }),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        deferStatusUntilSelection: true,
+        skipStatusNote: true,
       }),
     );
   });

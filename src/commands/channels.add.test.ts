@@ -38,9 +38,15 @@ vi.mock("./channel-setup/discovery.js", () => ({
   isCatalogChannelInstalled: discoveryMocks.isCatalogChannelInstalled,
 }));
 
-vi.mock("../channels/plugins/bundled.js", () => ({
-  getBundledChannelPlugin: vi.fn(() => undefined),
-}));
+vi.mock("../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
+    "../channels/plugins/bundled.js",
+  );
+  return {
+    ...actual,
+    getBundledChannelPlugin: vi.fn(() => undefined),
+  };
+});
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 
