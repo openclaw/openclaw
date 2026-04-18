@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createBundleMcpTempHarness,
@@ -11,6 +11,15 @@ import { captureEnv } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 const tempHarness = createBundleMcpTempHarness();
+let bundleProbeHomeDir = "";
+let bundleProbeWorkspaceDir = "";
+let bundleProbeServerPath = "";
+
+beforeAll(async () => {
+  bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
+  bundleProbeWorkspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+  ({ serverPath: bundleProbeServerPath } = await createBundleProbePlugin(bundleProbeHomeDir));
+});
 
 afterAll(async () => {
   await tempHarness.cleanup();
@@ -28,7 +37,7 @@ describe("prepareCliBundleMcpConfig", () => {
         args: ["./fake-claude.mjs"],
       },
       workspaceDir,
-      config: {},
+      config: { plugins: { enabled: false } },
     });
 
     const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
@@ -47,11 +56,7 @@ describe("prepareCliBundleMcpConfig", () => {
   it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
     const env = captureEnv(["HOME"]);
     try {
-      const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
-      const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
-      process.env.HOME = homeDir;
-
-      const { serverPath } = await createBundleProbePlugin(homeDir);
+      process.env.HOME = bundleProbeHomeDir;
 
       const config: OpenClawConfig = {
         plugins: {
@@ -68,7 +73,7 @@ describe("prepareCliBundleMcpConfig", () => {
           command: "node",
           args: ["./fake-claude.mjs"],
         },
-        workspaceDir,
+        workspaceDir: bundleProbeWorkspaceDir,
         config,
       });
 
@@ -80,7 +85,7 @@ describe("prepareCliBundleMcpConfig", () => {
       const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
         mcpServers?: Record<string, { args?: string[] }>;
       };
-      expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(serverPath)]);
+      expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(bundleProbeServerPath)]);
       expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
 
       await prepared.cleanup?.();
@@ -147,11 +152,7 @@ describe("prepareCliBundleMcpConfig", () => {
   it("merges loopback overlay config with bundle MCP servers", async () => {
     const env = captureEnv(["HOME"]);
     try {
-      const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
-      const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
-      process.env.HOME = homeDir;
-
-      await createBundleProbePlugin(homeDir);
+      process.env.HOME = bundleProbeHomeDir;
 
       const config: OpenClawConfig = {
         plugins: {
@@ -168,7 +169,7 @@ describe("prepareCliBundleMcpConfig", () => {
           command: "node",
           args: ["./fake-claude.mjs"],
         },
-        workspaceDir,
+        workspaceDir: bundleProbeWorkspaceDir,
         config,
         additionalConfig: {
           mcpServers: {
@@ -209,7 +210,7 @@ describe("prepareCliBundleMcpConfig", () => {
         args: ["./fake-claude.mjs"],
       },
       workspaceDir,
-      config: {},
+      config: { plugins: { enabled: false } },
       env: {
         OPENCLAW_MCP_TOKEN: "loopback-token-123",
         OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
@@ -250,6 +251,7 @@ describe("prepareCliBundleMcpConfig", () => {
         resumeArgs: ["exec", "resume", "{sessionId}"],
       },
       workspaceDir: "/tmp/openclaw-bundle-mcp-codex",
+      config: { plugins: { enabled: false } },
       additionalConfig: {
         mcpServers: {
           openclaw: {
@@ -290,6 +292,7 @@ describe("prepareCliBundleMcpConfig", () => {
         args: ["--prompt", "{prompt}"],
       },
       workspaceDir: "/tmp/openclaw-bundle-mcp-gemini",
+      config: { plugins: { enabled: false } },
       additionalConfig: {
         mcpServers: {
           openclaw: {
