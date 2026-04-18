@@ -157,14 +157,10 @@ const SkillEntrySchema = z
   })
   .strict();
 
-function sharedMediaModelExplicitlyExcludesImage(
+function sharedMediaModelCanResolveForImage(
   model: { capabilities?: unknown[] } | undefined,
 ): boolean {
-  return (
-    Array.isArray(model?.capabilities) &&
-    model.capabilities.length > 0 &&
-    !model.capabilities.includes("image")
-  );
+  return Array.isArray(model?.capabilities) && model.capabilities.includes("image");
 }
 
 function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
@@ -192,14 +188,14 @@ function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
   if (sharedModels.length === 0) {
     return true;
   }
-  return sharedModels.every(sharedMediaModelExplicitlyExcludesImage);
+  return !sharedModels.some(sharedMediaModelCanResolveForImage);
 }
 
 function addToolsMediaImageFallbackAliasIssues(
   cfg: {
     tools?: {
       media?: {
-        models?: Array<{ capabilities?: unknown[] } | undefined>;
+        models?: Array<{ provider?: string; capabilities?: unknown[] } | undefined>;
         image?: {
           enabled?: boolean;
           models?: unknown[];

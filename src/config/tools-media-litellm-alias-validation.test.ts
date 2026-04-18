@@ -157,6 +157,41 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
+  it("rejects agents.defaults.imageModel aliases when shared media models have no image capability", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "unknown-provider",
+              model: "mystery-model",
+              type: "provider",
+            },
+          ],
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "litellm/vision",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel.primary",
+        }),
+      ]),
+    );
+  });
+
   it("accepts direct providers and concrete LiteLLM model ids", () => {
     const direct = validateConfigObject({
       tools: {
@@ -202,7 +237,6 @@ describe("tools.media LiteLLM alias validation", () => {
       },
       agents: { defaults: { imageModel: { primary: "litellm/vision" } } },
     });
-
     expect(direct.ok).toBe(true);
     expect(concreteLiteLLM.ok).toBe(true);
     expect(explicitImageModels.ok).toBe(true);
