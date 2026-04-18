@@ -22,6 +22,14 @@ const GRAPH_DEFINITIONS = {
     config: "tsconfig.core.test.json",
     description: "core colocated test graph",
   },
+  "core-test-agents": {
+    config: "tsconfig.core.test.agents.json",
+    description: "core agent colocated test graph",
+  },
+  "core-test-non-agents": {
+    config: "tsconfig.core.test.non-agents.json",
+    description: "core non-agent colocated test graph",
+  },
   extensions: {
     config: "tsconfig.extensions.json",
     description: "bundled extension production graph",

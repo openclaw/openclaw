@@ -305,6 +305,15 @@ function expectAgentGatewayCall(overrides: AgentCallParams): void {
   expect(agentCall?.params?.threadId).toBe(overrides.threadId);
 }
 
+function resolveMatrixRoomTargetForTest(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^(?:matrix:)?(?:channel:|room:)/iu, "").trim();
+  return normalized || undefined;
+}
+
 function enableMatrixAcpThreadBindings(): void {
   replaceSpawnConfig({
     ...hoisted.state.cfg,
@@ -318,6 +327,42 @@ function enableMatrixAcpThreadBindings(): void {
       },
     },
   });
+  const matrixPlugin = {
+    messaging: {
+      resolveDeliveryTarget: ({
+        conversationId,
+        parentConversationId,
+      }: {
+        conversationId: string;
+        parentConversationId?: string;
+      }) => {
+        const parent = resolveMatrixRoomTargetForTest(parentConversationId);
+        const child = conversationId.trim();
+        return parent ? { to: `room:${parent}`, threadId: child } : { to: `room:${child}` };
+      },
+      resolveInboundConversation: ({
+        to,
+        threadId,
+      }: {
+        to?: string;
+        threadId?: string | number;
+      }) => {
+        const parent = resolveMatrixRoomTargetForTest(to);
+        const thread = threadId != null ? String(threadId).trim() : "";
+        return thread && parent
+          ? { conversationId: thread, parentConversationId: parent }
+          : parent
+            ? { conversationId: parent }
+            : undefined;
+      },
+    },
+  };
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "matrix" ? matrixPlugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "matrix" ? matrixPlugin : undefined,
+  );
   registerSessionBindingAdapter({
     channel: "matrix",
     accountId: "default",
@@ -342,6 +387,28 @@ function enableLineCurrentConversationBindings(): void {
       },
     },
   });
+  const linePlugin = {
+    messaging: {
+      resolveInboundConversation: ({
+        conversationId,
+        to,
+      }: {
+        conversationId?: string;
+        to?: string;
+      }) => {
+        const source = (conversationId ?? to ?? "").trim();
+        const normalized =
+          source.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1]?.trim() ?? source;
+        return normalized ? { conversationId: normalized } : undefined;
+      },
+    },
+  };
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "line" ? linePlugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "line" ? linePlugin : undefined,
+  );
   registerSessionBindingAdapter({
     channel: "line",
     accountId: "default",
@@ -369,10 +436,45 @@ function enableTelegramCurrentConversationBindings(): void {
       },
     },
   });
+  const telegramPlugin = {
+    messaging: {
+      resolveInboundConversation: ({
+        conversationId,
+        to,
+        threadId,
+      }: {
+        conversationId?: string;
+        to?: string;
+        threadId?: string | number;
+      }) => {
+        const source = (conversationId ?? to ?? "").trim();
+        const normalized = source.replace(/^telegram:(?:group:|channel:|direct:)?/i, "");
+        const explicitThreadId = threadId == null ? "" : String(threadId).trim();
+        if (/^-?\d+$/.test(normalized) && /^\d+$/.test(explicitThreadId)) {
+          return { conversationId: `${normalized}:topic:${explicitThreadId}` };
+        }
+        const topicMatch = /^(-?\d+):topic:(\d+)$/i.exec(normalized);
+        if (topicMatch?.[1] && topicMatch[2]) {
+          return { conversationId: `${topicMatch[1]}:topic:${topicMatch[2]}` };
+        }
+        return /^-?\d+$/.test(normalized) ? { conversationId: normalized } : undefined;
+      },
+    },
+  };
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "telegram" ? telegramPlugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "telegram" ? telegramPlugin : undefined,
+  );
   registerSessionBindingAdapter({
     channel: "telegram",
     accountId: "default",
-    capabilities: createSessionBindingCapabilities(),
+    capabilities: {
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] satisfies SessionBindingPlacement[],
+    },
     bind: async (input) => await hoisted.sessionBindingBindMock(input),
     listBySession: (targetSessionKey) => hoisted.sessionBindingListBySessionMock(targetSessionKey),
     resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),

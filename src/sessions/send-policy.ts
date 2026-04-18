@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { deriveSessionChatType } from "./session-chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
@@ -63,17 +64,9 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   if (tokens.has("direct") || tokens.has("dm")) {
     return "direct";
   }
-  if (/^group:[^:]+$/u.test(normalizedKey)) {
-    return "group";
-  }
-  if (/^[0-9]+(?:-[0-9]+)*@g\.us$/u.test(normalizedKey)) {
-    return "group";
-  }
-  if (/^whatsapp:(?!.*:group:).+@g\.us$/u.test(normalizedKey)) {
-    return "group";
-  }
-  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/u.test(normalizedKey)) {
-    return "channel";
+  const derived = deriveSessionChatType(normalizedKey);
+  if (derived !== "unknown") {
+    return derived;
   }
   return undefined;
 }

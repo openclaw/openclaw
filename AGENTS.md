@@ -130,10 +130,11 @@
 - TypeScript checks are split by architecture boundary:
   - `pnpm tsgo` / `pnpm tsgo:core`: core production roots (`src/`, `ui/`, `packages/`; no `extensions/` include roots).
   - `pnpm tsgo:core:test`: core colocated tests.
+  - `pnpm tsgo:core:test:agents` / `pnpm tsgo:core:test:non-agents`: core test slices for isolating the heavy agent graph while debugging type-check performance.
   - `pnpm tsgo:extensions`: bundled extension production graph.
   - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
   - `pnpm tsgo:all`: every TypeScript graph above; this is what `pnpm check` runs.
-  - `pnpm tsgo:profile [core-test|extensions-test|--all]`: profile fresh graph cost into `.artifacts/tsgo-profile/`; if a core graph lists `extensions/<id>/`, treat that as boundary/perf debt from imports (usually plugin-sdk facades or shared helpers pulling extension sources).
+  - `pnpm tsgo:profile [core-test|core-test-agents|core-test-non-agents|extensions-test|--all]`: profile fresh graph cost into `.artifacts/tsgo-profile/`; if a core graph lists `extensions/<id>/`, treat that as boundary/perf debt from imports (usually plugin-sdk facades or shared helpers pulling extension sources).
   - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
 - Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
 - Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.

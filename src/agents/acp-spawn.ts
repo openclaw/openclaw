@@ -225,64 +225,10 @@ type AcpSpawnBootstrapDeliveryPlan = {
 };
 
 function resolvePlacementWithoutChannelPlugin(params: {
-  channel: string;
   capabilities: { placements: Array<"current" | "child"> };
 }): "current" | "child" {
-  switch (params.channel) {
-    case "discord":
-    case "matrix":
-      return params.capabilities.placements.includes("child") ? "child" : "current";
-    case "line":
-    case "telegram":
-      return "current";
-  }
   return params.capabilities.placements.includes("child") ? "child" : "current";
 }
-
-function normalizeLineConversationIdFallback(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1]?.trim() ?? trimmed;
-  return normalized ? normalized : undefined;
-}
-
-function normalizeTelegramConversationIdFallback(params: {
-  to?: string;
-  threadId?: string | number;
-  groupId?: string;
-}): string | undefined {
-  const explicitGroupId = normalizeOptionalString(params.groupId);
-  const explicitThreadId =
-    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
-  if (
-    explicitGroupId &&
-    explicitThreadId &&
-    /^-?\d+$/.test(explicitGroupId) &&
-    /^\d+$/.test(explicitThreadId)
-  ) {
-    return `${explicitGroupId}:topic:${explicitThreadId}`;
-  }
-
-  const trimmed = normalizeOptionalString(params.to) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.replace(/^telegram:(?:group:|channel:|direct:)?/i, "");
-  const topicMatch = /^(-?\d+):topic:(\d+)$/i.exec(normalized);
-  if (topicMatch?.[1] && topicMatch[2]) {
-    return `${topicMatch[1]}:topic:${topicMatch[2]}`;
-  }
-  return /^-?\d+$/.test(normalized) ? normalized : undefined;
-}
-
-const threadBindingFallbackConversationResolvers = {
-  line: (params: { to?: string; groupId?: string }) =>
-    normalizeLineConversationIdFallback(params.groupId ?? params.to),
-  telegram: (params: { to?: string; threadId?: string | number; groupId?: string }) =>
-    normalizeTelegramConversationIdFallback(params),
-} as const;
 
 function resolvePluginConversationRefForThreadBinding(params: {
   channelId: string;
@@ -559,7 +505,6 @@ function resolveConversationRefForThreadBinding(params: {
 }): { conversationId: string; parentConversationId?: string } | null {
   const channel = normalizeOptionalLowercaseString(params.channel);
   const normalizedChannelId = channel ? normalizeChannelId(channel) : null;
-  const channelKey = normalizedChannelId ?? channel ?? null;
   const pluginResolvedConversation = normalizedChannelId
     ? resolvePluginConversationRefForThreadBinding({
         channelId: normalizedChannelId,
@@ -570,15 +515,6 @@ function resolveConversationRefForThreadBinding(params: {
     : null;
   if (pluginResolvedConversation) {
     return pluginResolvedConversation;
-  }
-  const compatibilityConversationId =
-    channelKey && Object.hasOwn(threadBindingFallbackConversationResolvers, channelKey)
-      ? threadBindingFallbackConversationResolvers[
-          channelKey as keyof typeof threadBindingFallbackConversationResolvers
-        ](params)
-      : undefined;
-  if (compatibilityConversationId) {
-    return normalizeConversationTargetRef({ conversationId: compatibilityConversationId });
   }
   const parentConversationId = resolveConversationIdFromTargets({
     targets: [params.to],
@@ -682,7 +618,6 @@ function prepareAcpThreadBinding(params: {
   const placementToUse =
     pluginPlacement ??
     resolvePlacementWithoutChannelPlugin({
-      channel: policy.channel,
       capabilities,
     });
   if (!capabilities.bindSupported || !capabilities.placements.includes(placementToUse)) {
