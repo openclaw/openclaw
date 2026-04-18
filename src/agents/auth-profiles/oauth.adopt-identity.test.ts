@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -18,11 +19,10 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 // is refused (sub store keeps its own credential; main's creds do not
 // leak through).
 
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
+function resolveApiKeyForProfileInTest(
+  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
+) {
+  return resolveApiKeyForProfile({ cfg: {}, ...params });
 }
 
 const {
@@ -42,10 +42,30 @@ vi.mock("../cli-credentials.js", () => ({
   writeCodexCliCredentials: () => true,
 }));
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(async () => null),
+  getOAuthProviders: () => [{ id: "openai-codex" }, { id: "anthropic" }],
+}));
+
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
     formatProviderAuthProfileApiKeyWithPluginMock() ?? params?.context?.access,
   refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
+}));
+
+vi.mock("../../infra/file-lock.js", () => ({
+  resetFileLockStateForTest: () => undefined,
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
+
+vi.mock("../../plugin-sdk/file-lock.js", () => ({
+  resetFileLockStateForTest: () => undefined,
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
+
+vi.mock("./external-auth.js", () => ({
+  overlayExternalAuthProfiles: <T>(store: T) => store,
+  shouldPersistExternalAuthProfile: () => true,
 }));
 
 vi.mock("./doctor.js", () => ({
@@ -53,9 +73,19 @@ vi.mock("./doctor.js", () => ({
 }));
 
 vi.mock("./external-cli-sync.js", () => ({
-  syncExternalCliCredentials: () => false,
-  readManagedExternalCliCredential: () => null,
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
+    credential?.type === "oauth" &&
+    credential.access.trim().length > 0 &&
+    Number.isFinite(credential.expires) &&
+    credential.expires - now > 5 * 60 * 1000,
+  isSafeToUseExternalCliCredential: () => true,
+  readExternalCliBootstrapCredential: () => null,
+  readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
+  shouldBootstrapFromExternalCliCredential: () => false,
+  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
+    existing !== incoming,
 }));
 
 function oauthCred(params: {
@@ -74,7 +104,11 @@ function storeWith(profileId: string, cred: OAuthCredential): AuthProfileStore {
 }
 
 describe("OAuth credential adoption is identity-gated", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
   let tempRoot = "";
   let mainAgentDir = "";
 
@@ -88,8 +122,9 @@ describe("OAuth credential adoption is identity-gated", () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-adopt-identity-"));
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     await fs.mkdir(mainAgentDir, { recursive: true });
-    await loadOAuthModuleForTest();
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -97,9 +132,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    if (resetOAuthRefreshQueuesForTest) {
-      resetOAuthRefreshQueuesForTest();
-    }
+    resetOAuthRefreshQueuesForTest();
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -143,7 +176,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       mainAgentDir,
     );
 
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -212,7 +245,7 @@ describe("OAuth credential adoption is identity-gated", () => {
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -274,7 +307,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       mainAgentDir,
     );
 
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -331,7 +364,7 @@ describe("OAuth credential adoption is identity-gated", () => {
 
     // Plugin refresh must NOT be called — sub should adopt main's fresh
     // cred rather than performing its own refresh.
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -380,7 +413,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       mainAgentDir,
     );
 
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -444,7 +477,7 @@ describe("OAuth credential adoption is identity-gated", () => {
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -511,7 +544,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     // Catch-block main-inherit must refuse the non-overlapping cred and
     // propagate the original error rather than leaking main's credential.
     await expect(
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(subAgentDir),
         profileId,
         agentDir: subAgentDir,
@@ -574,7 +607,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       throw new Error("upstream 503 service unavailable");
     });
 
-    const result = await resolveApiKeyForProfile({
+    const result = await resolveApiKeyForProfileInTest({
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -643,7 +676,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     });
 
     await expect(
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(subAgentDir),
         profileId,
         agentDir: subAgentDir,

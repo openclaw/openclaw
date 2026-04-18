@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -11,11 +12,10 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
+function resolveApiKeyForProfileInTest(
+  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
+) {
+  return resolveApiKeyForProfile({ cfg: {}, ...params });
 }
 
 const {
@@ -35,20 +35,50 @@ vi.mock("../cli-credentials.js", () => ({
   writeCodexCliCredentials: () => true,
 }));
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(async () => null),
+  getOAuthProviders: () => [{ id: "openai-codex" }],
+}));
+
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
     formatProviderAuthProfileApiKeyWithPluginMock() ?? params?.context?.access,
   refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
 }));
 
+vi.mock("../../infra/file-lock.js", () => ({
+  resetFileLockStateForTest: () => undefined,
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
+
+vi.mock("../../plugin-sdk/file-lock.js", () => ({
+  resetFileLockStateForTest: () => undefined,
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
+
 vi.mock("./doctor.js", () => ({
   formatAuthDoctorHint: async () => undefined,
 }));
 
+vi.mock("./external-auth.js", () => ({
+  overlayExternalAuthProfiles: <T>(store: T) => store,
+  shouldPersistExternalAuthProfile: () => true,
+}));
+
 vi.mock("./external-cli-sync.js", () => ({
-  syncExternalCliCredentials: () => false,
-  readManagedExternalCliCredential: () => null,
   areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
+  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
+    credential?.type === "oauth" &&
+    credential.access.trim().length > 0 &&
+    Number.isFinite(credential.expires) &&
+    credential.expires - now > 5 * 60 * 1000,
+  isSafeToUseExternalCliCredential: () => true,
+  readExternalCliBootstrapCredential: () => null,
+  readManagedExternalCliCredential: () => null,
+  resolveExternalCliAuthProfiles: () => [],
+  shouldBootstrapFromExternalCliCredential: () => false,
+  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
+    existing !== incoming,
 }));
 
 function createExpiredOauthStore(params: {
@@ -70,7 +100,11 @@ function createExpiredOauthStore(params: {
 }
 
 describe("OAuth refresh in-process queue", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
   let tempRoot = "";
   let agentDir = "";
 
@@ -84,8 +118,9 @@ describe("OAuth refresh in-process queue", () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-queue-"));
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     agentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
     await fs.mkdir(agentDir, { recursive: true });
-    await loadOAuthModuleForTest();
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -93,9 +128,7 @@ describe("OAuth refresh in-process queue", () => {
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    if (resetOAuthRefreshQueuesForTest) {
-      resetOAuthRefreshQueuesForTest();
-    }
+    resetOAuthRefreshQueuesForTest();
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -127,17 +160,17 @@ describe("OAuth refresh in-process queue", () => {
 
     // Fire three resolves concurrently against the same agent+profile.
     const results = await Promise.all([
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
       }).catch((e) => e),
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
       }).catch((e) => e),
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
@@ -172,12 +205,12 @@ describe("OAuth refresh in-process queue", () => {
     });
 
     const [first, second] = await Promise.all([
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
       }).catch((e) => e),
-      resolveApiKeyForProfile({
+      resolveApiKeyForProfileInTest({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
@@ -239,7 +272,7 @@ describe("OAuth refresh in-process queue", () => {
 
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>
-        resolveApiKeyForProfile({
+        resolveApiKeyForProfileInTest({
           store: ensureAuthProfileStore(agentDir),
           profileId,
           agentDir,

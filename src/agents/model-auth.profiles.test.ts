@@ -5,7 +5,10 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+} from "./auth-profiles/store.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
@@ -13,69 +16,137 @@ import {
   resolveEnvApiKey,
 } from "./model-auth.js";
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/setup-registry.js", async () => {
+  const { readFileSync } = await import("node:fs");
   return {
-    ...actual,
-    buildProviderMissingAuthMessageWithPlugin: (params: {
-      provider: string;
-      context: { listProfileIds: (providerId: string) => string[] };
-    }) => {
-      if (
-        params.provider === "openai" &&
-        params.context.listProfileIds("openai-codex").length > 0
-      ) {
-        return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
-      }
-      return undefined;
-    },
-    formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
-    refreshProviderOAuthCredentialWithPlugin: async () => null,
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    resolveProviderSyntheticAuthWithPlugin: (params: {
-      provider: string;
-      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
-    }) => {
-      if (params.provider !== "ollama" && params.provider !== "demo-local") {
-        return undefined;
-      }
-      const providerConfig = params.context.providerConfig;
-      const hasMeaningfulOllamaConfig =
-        params.provider !== "ollama"
-          ? Boolean(providerConfig?.api?.trim()) ||
-            Boolean(providerConfig?.baseUrl?.trim()) ||
-            (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0)
-          : (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
-            Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
-            Boolean(
-              providerConfig?.baseUrl?.trim() &&
-              providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
-            );
-      if (!hasMeaningfulOllamaConfig) {
+    resolvePluginSetupProvider: ({ provider }: { provider: string; env: NodeJS.ProcessEnv }) => {
+      if (provider !== "anthropic-vertex") {
         return undefined;
       }
       return {
-        apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
-        source: `models.providers.${params.provider} (synthetic local key)`,
-        mode: "api-key" as const,
+        resolveConfigApiKey: ({ env }: { env: NodeJS.ProcessEnv }) => {
+          const metadataOptIn = env.ANTHROPIC_VERTEX_USE_GCP_METADATA?.trim().toLowerCase();
+          if (metadataOptIn === "1" || metadataOptIn === "true") {
+            return "gcp-vertex-credentials";
+          }
+          const credentialsPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+          if (!credentialsPath) {
+            return undefined;
+          }
+          try {
+            readFileSync(credentialsPath, "utf8");
+            return "gcp-vertex-credentials";
+          } catch {
+            return undefined;
+          }
+        },
       };
-    },
-    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
-      provider: string;
-      context: { resolvedApiKey?: string };
-    }) => {
-      const expectedMarker =
-        params.provider === "ollama"
-          ? "ollama-local"
-          : params.provider === "demo-local"
-            ? "demo-local"
-            : undefined;
-      return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
     },
   };
 });
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => {
+    const normalized = provider.trim().toLowerCase();
+    if (normalized === "modelstudio" || normalized === "qwencloud") {
+      return "qwen";
+    }
+    if (normalized === "z.ai" || normalized === "z-ai") {
+      return "zai";
+    }
+    if (normalized === "opencode-go-auth") {
+      return "opencode-go";
+    }
+    if (normalized === "bedrock" || normalized === "aws-bedrock") {
+      return "amazon-bedrock";
+    }
+    return normalized;
+  },
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  const candidates = {
+    anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+    ollama: ["OLLAMA_API_KEY"],
+    "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+    openai: ["OPENAI_API_KEY"],
+    qianfan: ["QIANFAN_API_KEY"],
+    qwen: ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+    synthetic: ["SYNTHETIC_API_KEY"],
+    "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+    voyage: ["VOYAGE_API_KEY"],
+    zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+  } as const;
+  return {
+    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+  };
+});
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: (params: {
+    provider: string;
+    context: { listProfileIds: (providerId: string) => string[] };
+  }) => {
+    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
+      return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
+    }
+    return undefined;
+  },
+  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
+  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderSyntheticAuthWithPlugin: (params: {
+    provider: string;
+    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+  }) => {
+    if (params.provider !== "ollama" && params.provider !== "demo-local") {
+      return undefined;
+    }
+    const providerConfig = params.context.providerConfig;
+    const hasMeaningfulOllamaConfig =
+      params.provider !== "ollama"
+        ? Boolean(providerConfig?.api?.trim()) ||
+          Boolean(providerConfig?.baseUrl?.trim()) ||
+          (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0)
+        : (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
+          Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
+          Boolean(
+            providerConfig?.baseUrl?.trim() &&
+            providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
+          );
+    if (!hasMeaningfulOllamaConfig) {
+      return undefined;
+    }
+    return {
+      apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key" as const,
+    };
+  },
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => {
+    const expectedMarker =
+      params.provider === "ollama"
+        ? "ollama-local"
+        : params.provider === "demo-local"
+          ? "demo-local"
+          : undefined;
+    return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
+  },
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
+}));
 
 vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
@@ -92,10 +163,14 @@ afterEach(() => {
 
 const envVar = (...parts: string[]) => parts.join("_");
 
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
+}
+
 const oauthFixture = {
   access: "access-token",
   refresh: "refresh-token",
-  expires: Date.now() + 60_000,
+  expires: createUsableOAuthExpiry(),
   accountId: "acct_123",
 };
 

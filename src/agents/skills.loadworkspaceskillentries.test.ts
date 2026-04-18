@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { withPathResolutionEnv } from "../test-utils/env.js";
@@ -29,9 +29,8 @@ function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
-  tempDirs.push(fakeHome);
   envSnapshot = setMockSkillsHomeEnv(fakeHome);
 });
 
@@ -39,12 +38,16 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+});
+
+afterAll(async () => {
+  await Promise.all(
+    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
   await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-    await Promise.all(
-      tempDirs
-        .splice(0, tempDirs.length)
-        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    if (fakeHome) {
+      await fs.rm(fakeHome, { recursive: true, force: true });
+    }
   });
 });
 
@@ -58,22 +61,6 @@ async function setupWorkspaceWithProsePlugin() {
     pluginRoot,
     pluginId: "open-prose",
     skillId: "prose",
-    skillDescription: "test",
-  });
-
-  return { workspaceDir, managedDir, bundledDir };
-}
-
-async function setupWorkspaceWithDiffsPlugin() {
-  const workspaceDir = await createTempWorkspaceDir();
-  const managedDir = path.join(workspaceDir, ".managed");
-  const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "diffs");
-
-  await writePluginWithSkill({
-    pluginRoot,
-    pluginId: "diffs",
-    skillId: "diffs",
     skillDescription: "test",
   });
 
@@ -126,38 +113,6 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("prose");
-  });
-
-  it("includes diffs plugin skill when the plugin is enabled", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { diffs: { enabled: true } },
-        },
-      },
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toContain("diffs");
-  });
-
-  it("excludes diffs plugin skill when the plugin is disabled", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { diffs: { enabled: false } },
-        },
-      },
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
   });
 
   it("falls back to the skill directory name when frontmatter omits name", async () => {

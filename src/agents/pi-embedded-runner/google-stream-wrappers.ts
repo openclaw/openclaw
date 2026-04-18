@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { stripInvalidGoogleThinkingBudget } from "../google-thinking-compat.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 function isGemini31Model(modelId: string): boolean {
@@ -76,11 +77,27 @@ export function sanitizeGoogleThinkingPayload(params: {
     return;
   }
   const payloadObj = params.payload as Record<string, unknown>;
-  const config = payloadObj.config;
-  if (!config || typeof config !== "object") {
+  sanitizeGoogleThinkingConfigContainer({
+    container: payloadObj.config,
+    modelId: params.modelId,
+    thinkingLevel: params.thinkingLevel,
+  });
+  sanitizeGoogleThinkingConfigContainer({
+    container: payloadObj.generationConfig,
+    modelId: params.modelId,
+    thinkingLevel: params.thinkingLevel,
+  });
+}
+
+function sanitizeGoogleThinkingConfigContainer(params: {
+  container: unknown;
+  modelId?: string;
+  thinkingLevel?: ThinkLevel;
+}): void {
+  if (!params.container || typeof params.container !== "object") {
     return;
   }
-  const configObj = config as Record<string, unknown>;
+  const configObj = params.container as Record<string, unknown>;
   const thinkingConfig = configObj.thinkingConfig;
   if (!thinkingConfig || typeof thinkingConfig !== "object") {
     return;
@@ -116,6 +133,16 @@ export function sanitizeGoogleThinkingPayload(params: {
   }
 
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
+
+  if (
+    stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
+  ) {
+    if (Object.keys(thinkingConfigObj).length === 0) {
+      delete configObj.thinkingConfig;
+    }
+    return;
+  }
+
   if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
     return;
   }
