@@ -76,7 +76,13 @@ export const REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path"], label: "path" }],
   write: [
     { keys: ["path"], label: "path" },
-    { keys: ["content"], label: "content" },
+    // `allowEmpty: true` because writing an empty or whitespace-only file is a
+    // legitimate operation — for example, initializing an empty JSONL append-log,
+    // creating a sentinel file, or truncating an existing file. Without this
+    // flag the validator rejects `content: ""` and `content: "\n"` as
+    // "missing required parameter" and the LLM gets stuck retrying with the
+    // same or slightly-different empty strings.
+    { keys: ["content"], label: "content", allowEmpty: true },
   ],
   edit: [
     { keys: ["path"], label: "path" },

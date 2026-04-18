@@ -127,3 +127,76 @@ describe("assertRequiredParams", () => {
     ).not.toThrow();
   });
 });
+
+describe("REQUIRED_PARAM_GROUPS.write", () => {
+  // The `write` tool's `content` group sets `allowEmpty: true` so that
+  // writing an empty or whitespace-only file (e.g. initializing an empty
+  // JSONL append-log, creating a sentinel file, truncating an existing
+  // file) is accepted. Without this flag, the model gets the validation
+  // error "Missing required parameter: content (received: content=<empty-string>)"
+  // on `content: ""` or `content: "\n"` and ends up stuck retrying the
+  // same input.
+
+  it('accepts content="" (empty file write)', () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "/tmp/a.txt", content: "" },
+        REQUIRED_PARAM_GROUPS.write,
+        "write",
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts content="\\n" (newline-only write)', () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "/tmp/a.txt", content: "\n" },
+        REQUIRED_PARAM_GROUPS.write,
+        "write",
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts content with only whitespace", () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "/tmp/a.txt", content: "   \t\n  " },
+        REQUIRED_PARAM_GROUPS.write,
+        "write",
+      ),
+    ).not.toThrow();
+  });
+
+  it("still rejects when content is entirely missing", () => {
+    expect(() =>
+      assertRequiredParams({ path: "/tmp/a.txt" }, REQUIRED_PARAM_GROUPS.write, "write"),
+    ).toThrow(/Missing required parameter: content/);
+  });
+
+  it("still rejects when content is a non-string type", async () => {
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute: vi.fn(),
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+    await expect(
+      tool.execute(
+        "id",
+        { path: "test.txt", content: { unexpected: true } },
+        new AbortController().signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(/Missing required parameter: content/);
+  });
+
+  it("still rejects when path is missing", () => {
+    expect(() =>
+      assertRequiredParams({ content: "hello" }, REQUIRED_PARAM_GROUPS.write, "write"),
+    ).toThrow(/Missing required parameter: path/);
+  });
+});
