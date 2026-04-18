@@ -662,7 +662,9 @@ function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: 
     baseOrigin = `http://localhost:${MEDIA_SERVER_PORT}`;
   }
   
-  // Construct direct file URL
+  // Construct direct file URL 
+  // The link is created for the included media server which can play the streaming media locally.
+  // __openclaw__/assistant-media?source= is not a valid path and gives a 404 error! 
   const mediaUrl = `${baseOrigin}/${encodedPath}`;
   
   // Log for debugging (remove in production if needed)
