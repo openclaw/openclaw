@@ -17,10 +17,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("../security/skill-scanner.js", async () => ({
-  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
-    "../security/skill-scanner.js",
-  )),
+vi.mock("../security/skill-scanner.js", () => ({
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 

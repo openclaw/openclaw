@@ -1,5 +1,8 @@
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
 import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -826,9 +829,6 @@ async function runVideoGenerate(params: { prompt: string; model?: string; output
           throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
         }
         if (params.output && response.body) {
-          const { pipeline } = await import("node:stream/promises");
-          const { Readable } = await import("node:stream");
-          const { createWriteStream } = await import("node:fs");
           const mimeType = normalizeMimeType(video.mimeType);
           const ext =
             extensionForMime(mimeType) ||

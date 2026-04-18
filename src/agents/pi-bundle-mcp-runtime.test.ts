@@ -109,37 +109,32 @@ describe("session MCP runtime", () => {
     ]);
   });
 
-  it("reuses the same session runtime across repeated materialization", async () => {
+  it("reuses repeated materialization and recreates after explicit disposal", async () => {
     const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
     const startupCounterPath = path.join(workspaceDir, "bundle-starts.txt");
     const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
     const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
     await writeBundleProbeMcpServer(serverScriptPath, { startupCounterPath });
     await writeClaudeBundle({ pluginRoot, serverScriptPath });
+    const cfg = {
+      plugins: {
+        entries: {
+          "bundle-probe": { enabled: true },
+        },
+      },
+    };
 
     const runtimeA = await getOrCreateSessionMcpRuntime({
       sessionId: "session-a",
       sessionKey: "agent:test:session-a",
       workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-      },
+      cfg,
     });
     const runtimeB = await getOrCreateSessionMcpRuntime({
       sessionId: "session-a",
       sessionKey: "agent:test:session-a",
       workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-      },
+      cfg,
     });
 
     const materializedA = await materializeBundleMcpToolsForRun({ runtime: runtimeA });
@@ -153,42 +148,18 @@ describe("session MCP runtime", () => {
     expect(materializedB.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("1");
     expect(__testing.getCachedSessionIds()).toEqual(["session-a"]);
-  });
 
-  it("recreates the session runtime after explicit disposal", async () => {
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
-    const startupCounterPath = path.join(workspaceDir, "bundle-starts.txt");
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
-    const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
-    await writeBundleProbeMcpServer(serverScriptPath, { startupCounterPath });
-    await writeClaudeBundle({ pluginRoot, serverScriptPath });
+    await disposeSessionMcpRuntime("session-a");
 
-    const cfg = {
-      plugins: {
-        entries: {
-          "bundle-probe": { enabled: true },
-        },
-      },
-    };
-
-    const runtimeA = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-b",
-      sessionKey: "agent:test:session-b",
+    const runtimeC = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-a",
+      sessionKey: "agent:test:session-a",
       workspaceDir,
       cfg,
     });
-    await materializeBundleMcpToolsForRun({ runtime: runtimeA });
-    await disposeSessionMcpRuntime("session-b");
+    await materializeBundleMcpToolsForRun({ runtime: runtimeC });
 
-    const runtimeB = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-b",
-      sessionKey: "agent:test:session-b",
-      workspaceDir,
-      cfg,
-    });
-    await materializeBundleMcpToolsForRun({ runtime: runtimeB });
-
-    expect(runtimeA).not.toBe(runtimeB);
+    expect(runtimeC).not.toBe(runtimeA);
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("2");
   });
 

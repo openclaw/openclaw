@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { withPathResolutionEnv } from "../test-utils/env.js";
@@ -29,9 +29,8 @@ function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
-  tempDirs.push(fakeHome);
   envSnapshot = setMockSkillsHomeEnv(fakeHome);
 });
 
@@ -39,12 +38,16 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  await Promise.all(
+    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
+
+afterAll(async () => {
   await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-    await Promise.all(
-      tempDirs
-        .splice(0, tempDirs.length)
-        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    if (fakeHome) {
+      await fs.rm(fakeHome, { recursive: true, force: true });
+    }
   });
 });
 
