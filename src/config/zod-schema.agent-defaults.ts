@@ -200,6 +200,14 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        /**
+         * PR-9 Tier 1: outer-loop turn budget for the embedded Pi runner.
+         * When set, fully replaces the default (which scales with auth-profile
+         * count and is now floored at 500). Use this to give long research /
+         * build runs more headroom. Range [1, 100_000]. Subagents keep a
+         * separate lower cap and ignore this setting.
+         */
+        maxIterations: z.number().int().min(1).max(100_000).optional(),
       })
       .strict()
       .optional(),

@@ -16,6 +16,7 @@ import {
   hasConfiguredModelFallbacks,
   resolveAgentAutoContinue,
   resolveAgentExecutionContract,
+  resolveAgentMaxIterations,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import {
@@ -89,6 +90,7 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
+  SUBAGENT_MAX_RUN_RETRY_ITERATIONS,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
@@ -459,7 +461,28 @@ export async function runEmbeddedPiAgent(
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      // PR-9 Tier 1: optional per-agent / per-defaults override for the
+      // outer-loop budget. Without it the new scaled formula (floor 500)
+      // applies — vastly higher than the old 32-160 cap that was
+      // cutting long research/build runs short.
+      //
+      // Subagents (lightContext) use a separate lower cap because they
+      // are typically narrow research tasks; if a subagent chews through
+      // 200 turns it's almost certainly stuck. Per-agent override can
+      // still raise both — but defaults to the subagent floor when
+      // lightweight bootstrap is in use and no explicit override is set.
+      const isLightweightSubagent = params.bootstrapContextMode === "lightweight";
+      const userMaxIterationsOverride = resolveAgentMaxIterations(
+        params.config,
+        sessionAgentId ?? params.agentId,
+      );
+      const effectiveMaxOverride =
+        userMaxIterationsOverride ??
+        (isLightweightSubagent ? SUBAGENT_MAX_RUN_RETRY_ITERATIONS : undefined);
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
+        profileCandidates.length,
+        effectiveMaxOverride,
+      );
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =

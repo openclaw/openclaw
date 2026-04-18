@@ -1178,17 +1178,14 @@ export class OpenClawApp extends LitElement {
    * approval arrives so the user sees the full plan immediately.
    */
   openPlanInSidebar(request: import("./app-tool-stream.ts").PlanApprovalRequest): void {
-    const stepLines = request.plan
-      .map((step, i) => {
-        const marker =
-          step.status === "completed" ? "[x]" : step.status === "cancelled" ? "[ ] ~~" : "[ ]";
-        const close = step.status === "cancelled" ? "~~" : "";
-        const label =
-          step.status === "in_progress" && step.activeForm ? step.activeForm : step.step;
-        return `${i + 1}. ${marker} ${label}${close}`;
-      })
-      .join("\n");
-    const md = `# ${request.summary || "Proposed plan"}\n\n${stepLines}\n`;
+    // PR-9 Tier 1: prefer the agent-supplied title (filtered the same
+    // way as the inline-card headline) over summary, then fall back to
+    // "Proposed plan" so pre-Tier-1 agents render unchanged.
+    const rawTitle = request.title?.trim();
+    const isGenericTitle =
+      !rawTitle || rawTitle === "Plan approval requested" || rawTitle.startsWith("Plan approval —");
+    const headerCandidate = !isGenericTitle ? rawTitle : request.summary || "Proposed plan";
+    const md = buildPlanViewMarkdown(request.plan, headerCandidate);
     this.handleOpenSidebar({ kind: "markdown", content: md });
   }
 

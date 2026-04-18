@@ -78,6 +78,11 @@ export function describeExitPlanModeTool(): string {
     // launched" as "research complete" as the exact bug this prevents.
     "WAIT FOR SPAWNED SUBAGENTS BEFORE CALLING THIS TOOL. If you used sessions_spawn during plan-mode investigation (research, adversarial review, etc.), wait for ALL of them to return their completion messages before calling exit_plan_mode. The runtime rejects submission with an error listing pending child run ids if any are still in flight. Treat unresolved children as a blocking dependency of the investigation phase — 'research launched' is not 'research complete.'",
     "Pass the full plan via `plan` using the same shape as update_plan (array of {step, status, activeForm?}).",
+    // PR-9 Tier 1: explicit title field. Without this, the agent's chat
+    // text leaked into the title slot ("I checked all five VMs..." as
+    // the plan title). Title belongs in the tool call, not in chat.
+    'ALSO PASS `title` (under 80 chars) — a concise plan name used as the approval-card header AND the persisted markdown filename slug. Examples: "Migrate VM provisioning to golden snapshot", "Fix websocket reconnect race in PR-67721". Do NOT put plan content in `title` — that goes in `plan` and `summary`.',
+    "Optionally pass `summary` (one sentence) — surfaced as the subtitle next to the title.",
     "The runtime emits an approval card; the user can Approve (mutations unlock and you proceed), Approve with edits (same), Reject with feedback (you stay in plan mode and revise; feedback arrives in your next turn as [PLAN_DECISION]), or let it Time Out.",
     "Calling this without an active plan-mode session is a no-op; calling it without `plan` content is rejected.",
   ].join(" ");
