@@ -25,6 +25,15 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import {
+  mapOpenAIReasoningEffortForModel,
+  resolveOpenAIReasoningEffortMap,
+} from "./openai-reasoning-compat.js";
+import {
+  normalizeOpenAIReasoningEffort,
+  type OpenAIApiReasoningEffort,
+  type OpenAIReasoningEffort,
+} from "./openai-reasoning-effort.js";
+import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
@@ -39,8 +48,6 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
-
-type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -739,8 +746,26 @@ function getPromptCacheRetention(
   return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
 }
 
-function resolveOpenAIReasoningEffort(options: OpenAIResponsesOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
+function resolveOpenAIReasoningEffort(
+  options: OpenAIResponsesOptions | undefined,
+): Exclude<OpenAIApiReasoningEffort, "none"> {
+  return normalizeOpenAIReasoningEffort(
+    options?.reasoningEffort ?? options?.reasoning ?? "high",
+  ) as Exclude<OpenAIApiReasoningEffort, "none">;
+}
+
+function coerceOpenAIApiReasoningEffort(effort: string): OpenAIApiReasoningEffort {
+  const normalized = normalizeOpenAIReasoningEffort(effort);
+  switch (normalized) {
+    case "none":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return normalized;
+    default:
+      return "high";
+  }
 }
 
 export function buildOpenAIResponsesParams(
@@ -788,8 +813,17 @@ export function buildOpenAIResponsesParams(
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
+      const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
+      const reasoningEffort = coerceOpenAIApiReasoningEffort(
+        mapOpenAIReasoningEffortForModel({
+          model,
+          effort: requestedReasoningEffort,
+        }) ?? requestedReasoningEffort,
+      );
+      const normalizedReasoningEffort: Exclude<OpenAIApiReasoningEffort, "none"> =
+        reasoningEffort === "none" ? "high" : reasoningEffort;
       params.reasoning = {
-        effort: resolveOpenAIReasoningEffort(options),
+        effort: normalizedReasoningEffort,
         summary: options?.reasoningSummary || "auto",
       };
       params.include = ["reasoning.encrypted_content"];
@@ -1008,6 +1042,9 @@ async function processOpenAICompletionsStream(
   model: Model<Api>,
   stream: { push(event: unknown): void },
 ) {
+  const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
+  const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
+  const compat = getCompat(model as OpenAIModeModel);
   let currentBlock:
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
@@ -1019,7 +1056,12 @@ async function processOpenAICompletionsStream(
         partialArgs: string;
       }
     | null = null;
+  let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
+  let pendingPostToolCallBytes = 0;
+  let currentToolCallArgumentBytes = 0;
+  let isFlushingPendingPostToolCallDeltas = false;
   const blockIndex = () => output.content.length - 1;
+  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
     if (!currentBlock) {
       return;
@@ -1032,6 +1074,90 @@ async function processOpenAICompletionsStream(
       };
       output.content[blockIndex()] = completed;
     }
+  };
+  const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
+    const nextBytes = measureUtf8Bytes(next.text);
+    if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
+      throw new Error("Exceeded post-tool-call delta buffer limit");
+    }
+    pendingPostToolCallBytes += nextBytes;
+    const previous = pendingPostToolCallDeltas[pendingPostToolCallDeltas.length - 1];
+    if (!previous || previous.kind !== next.kind) {
+      pendingPostToolCallDeltas.push(next);
+      return;
+    }
+    if (next.kind === "thinking" && previous.kind === "thinking") {
+      if (previous.signature !== next.signature) {
+        pendingPostToolCallDeltas.push(next);
+        return;
+      }
+      previous.text += next.text;
+      return;
+    }
+    previous.text += next.text;
+  };
+  const appendThinkingDeltaInternal = (reasoningDelta: { signature: string; text: string }) => {
+    if (!currentBlock || currentBlock.type !== "thinking") {
+      finishCurrentBlock();
+      currentBlock = {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: reasoningDelta.signature,
+      };
+      output.content.push(currentBlock);
+      stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.thinking += reasoningDelta.text;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: blockIndex(),
+      delta: reasoningDelta.text,
+      partial: output,
+    });
+  };
+  const appendTextDeltaInternal = (text: string) => {
+    if (!currentBlock || currentBlock.type !== "text") {
+      finishCurrentBlock();
+      currentBlock = { type: "text", text: "" };
+      output.content.push(currentBlock);
+      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.text += text;
+    stream.push({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: text,
+      partial: output,
+    });
+  };
+  const flushPendingPostToolCallDeltas = () => {
+    if (
+      isFlushingPendingPostToolCallDeltas ||
+      currentBlock?.type === "toolCall" ||
+      pendingPostToolCallDeltas.length === 0
+    ) {
+      return;
+    }
+    isFlushingPendingPostToolCallDeltas = true;
+    const bufferedDeltas = pendingPostToolCallDeltas;
+    pendingPostToolCallDeltas = [];
+    pendingPostToolCallBytes = 0;
+    for (const delta of bufferedDeltas) {
+      if (delta.kind === "text") {
+        appendTextDeltaInternal(delta.text);
+      } else {
+        appendThinkingDeltaInternal(delta);
+      }
+    }
+    isFlushingPendingPostToolCallDeltas = false;
+  };
+  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+    flushPendingPostToolCallDeltas();
+    appendThinkingDeltaInternal(reasoningDelta);
+  };
+  const appendTextDelta = (text: string) => {
+    flushPendingPostToolCallDeltas();
+    appendTextDeltaInternal(text);
   };
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
@@ -1057,41 +1183,27 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
-      if (!currentBlock || currentBlock.type !== "text") {
-        finishCurrentBlock();
-        currentBlock = { type: "text", text: "" };
-        output.content.push(currentBlock);
-        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
+      } else {
+        appendTextDelta(choice.delta.content);
       }
-      currentBlock.text += choice.delta.content;
-      stream.push({
-        type: "text_delta",
-        contentIndex: blockIndex(),
-        delta: choice.delta.content,
-        partial: output,
-      });
       continue;
     }
-    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
-    const reasoningField = reasoningFields.find((field) => {
-      const value = (choice.delta as Record<string, unknown>)[field];
-      return typeof value === "string" && value.length > 0;
-    });
-    if (reasoningField) {
-      if (!currentBlock || currentBlock.type !== "thinking") {
-        finishCurrentBlock();
-        currentBlock = { type: "thinking", thinking: "", thinkingSignature: reasoningField };
-        output.content.push(currentBlock);
-        stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    const reasoningDeltas = getCompletionsReasoningDeltas(
+      choice.delta as Record<string, unknown>,
+      compat.visibleReasoningDetailTypes,
+    );
+    for (const reasoningDelta of reasoningDeltas) {
+      if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta({ ...reasoningDelta });
+        continue;
       }
-      currentBlock.thinking += String((choice.delta as Record<string, unknown>)[reasoningField]);
-      stream.push({
-        type: "thinking_delta",
-        contentIndex: blockIndex(),
-        delta: String((choice.delta as Record<string, unknown>)[reasoningField]),
-        partial: output,
-      });
-      continue;
+      if (reasoningDelta.kind === "text") {
+        appendTextDelta(reasoningDelta.text);
+      } else {
+        appendThinkingDelta(reasoningDelta);
+      }
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
@@ -1100,7 +1212,12 @@ async function processOpenAICompletionsStream(
           currentBlock.type !== "toolCall" ||
           (toolCall.id && currentBlock.id !== toolCall.id)
         ) {
+          const switchingToolCall = currentBlock?.type === "toolCall";
           finishCurrentBlock();
+          if (switchingToolCall) {
+            currentBlock = null;
+            flushPendingPostToolCallDeltas();
+          }
           currentBlock = {
             type: "toolCall",
             id: toolCall.id || "",
@@ -1108,6 +1225,7 @@ async function processOpenAICompletionsStream(
             arguments: {},
             partialArgs: "",
           };
+          currentToolCallArgumentBytes = 0;
           output.content.push(currentBlock);
           stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
         }
@@ -1121,6 +1239,14 @@ async function processOpenAICompletionsStream(
           currentBlock.name = toolCall.function.name;
         }
         if (toolCall.function?.arguments) {
+          const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
+          if (
+            currentToolCallArgumentBytes + nextArgumentBytes >
+            MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES
+          ) {
+            throw new Error("Exceeded tool-call argument buffer limit");
+          }
+          currentToolCallArgumentBytes += nextArgumentBytes;
           currentBlock.partialArgs += toolCall.function.arguments;
           currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
           stream.push({
@@ -1132,12 +1258,81 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    flushPendingPostToolCallDeltas();
   }
   finishCurrentBlock();
+  if (currentBlock?.type === "toolCall") {
+    currentBlock = null;
+  }
+  flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+}
+
+type CompletionsReasoningDelta =
+  | {
+      kind: "thinking";
+      signature: string;
+      text: string;
+    }
+  | {
+      kind: "text";
+      text: string;
+    };
+
+function getCompletionsReasoningDeltas(
+  delta: Record<string, unknown>,
+  visibleReasoningDetailTypes: readonly string[],
+): CompletionsReasoningDelta[] {
+  const output: CompletionsReasoningDelta[] = [];
+  const pushDelta = (next: CompletionsReasoningDelta) => {
+    const previous = output[output.length - 1];
+    if (!previous || previous.kind !== next.kind) {
+      output.push(next);
+      return;
+    }
+    if (next.kind === "thinking" && previous.kind === "thinking") {
+      if (previous.signature !== next.signature) {
+        output.push(next);
+        return;
+      }
+      previous.text += next.text;
+      return;
+    }
+    previous.text += next.text;
+  };
+  const reasoningDetails = delta.reasoning_details;
+  let usedReasoningThinkingDetails = false;
+  if (Array.isArray(reasoningDetails)) {
+    const visibleTypes = new Set(visibleReasoningDetailTypes);
+    for (const item of reasoningDetails) {
+      const detail = item as { type?: unknown; text?: unknown };
+      if (typeof detail.text !== "string" || !detail.text) {
+        continue;
+      }
+      if (detail.type === "reasoning.text") {
+        usedReasoningThinkingDetails = true;
+        pushDelta({ kind: "thinking", signature: "reasoning_details", text: detail.text });
+        continue;
+      }
+      if (typeof detail.type === "string" && visibleTypes.has(detail.type)) {
+        pushDelta({ kind: "text", text: detail.text });
+      }
+    }
+  }
+  if (!usedReasoningThinkingDetails) {
+    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+    for (const field of reasoningFields) {
+      const value = delta[field];
+      if (typeof value === "string" && value.length > 0) {
+        pushDelta({ kind: "thinking", signature: field, text: value });
+        break;
+      }
+    }
+  }
+  return output;
 }
 
 function detectCompat(model: OpenAIModeModel) {
@@ -1167,6 +1362,7 @@ function detectCompat(model: OpenAIModeModel) {
     requiresAssistantAfterToolResult: false,
     requiresThinkingAsText: false,
     thinkingFormat: compatDefaults.thinkingFormat,
+    visibleReasoningDetailTypes: compatDefaults.visibleReasoningDetailTypes,
     openRouterRouting: {},
     vercelGatewayRouting: {},
     supportsStrictMode: compatDefaults.supportsStrictMode,
@@ -1188,6 +1384,7 @@ function getCompat(model: OpenAIModeModel): {
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
   requiresStringContent: boolean;
+  visibleReasoningDetailTypes: string[];
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -1202,9 +1399,7 @@ function getCompat(model: OpenAIModeModel): {
     supportsDeveloperRole:
       (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
-    reasoningEffortMap:
-      (compat.reasoningEffortMap as Record<string, string> | undefined) ??
-      detected.reasoningEffortMap,
+    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
     supportsUsageInStreaming:
       (compat.supportsUsageInStreaming as boolean | undefined) ?? detected.supportsUsageInStreaming,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
@@ -1223,6 +1418,9 @@ function getCompat(model: OpenAIModeModel): {
     supportsStrictMode:
       (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
     requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
+    visibleReasoningDetailTypes:
+      (compat.visibleReasoningDetailTypes as string[] | undefined) ??
+      detected.visibleReasoningDetailTypes,
   };
 }
 
@@ -1241,7 +1439,7 @@ type OpenAIResponsesRequestParams = {
   reasoning?:
     | { effort: "none" }
     | {
-        effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
+        effort: Exclude<OpenAIApiReasoningEffort, "none">;
         summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
       };
   include?: string[];
@@ -1253,6 +1451,13 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+function mapNativeOpenAIReasoningEffort(
+  effort: string,
+  reasoningEffortMap: Record<string, string>,
+): string {
+  return normalizeOpenAIReasoningEffort(mapReasoningEffort(effort, reasoningEffortMap));
 }
 
 function convertTools(
@@ -1328,7 +1533,7 @@ export function buildOpenAICompletionsParams(
       effort: mapReasoningEffort(completionsReasoningEffort, compat.reasoningEffortMap),
     };
   } else if (completionsReasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    params.reasoning_effort = mapReasoningEffort(
+    params.reasoning_effort = mapNativeOpenAIReasoningEffort(
       completionsReasoningEffort,
       compat.reasoningEffortMap,
     );

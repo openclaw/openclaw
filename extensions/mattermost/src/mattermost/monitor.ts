@@ -139,6 +139,16 @@ export class MattermostRetryableInboundError extends Error {
   }
 }
 
+export function buildMattermostModelPickerSelectMessageSid(params: {
+  postId: string;
+  provider: string;
+  model: string;
+}): string {
+  const provider = normalizeLowercaseStringOrEmpty(params.provider);
+  const model = normalizeLowercaseStringOrEmpty(params.model);
+  return `interaction:${params.postId}:select:${provider}/${model}`;
+}
+
 function buildMattermostInboundReplayKeys(params: {
   accountId: string;
   messageIds: string[];
@@ -698,6 +708,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     roomLabel: string;
     teamId?: string;
     postId: string;
+    messageSid?: string;
     effectiveReplyToId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
@@ -731,7 +742,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       SenderId: params.senderId,
       Provider: "mattermost" as const,
       Surface: "mattermost" as const,
-      MessageSid: `interaction:${params.postId}:${Date.now()}`,
+      MessageSid: params.messageSid ?? `interaction:${params.postId}:${Date.now()}`,
       ReplyToId: params.effectiveReplyToId,
       MessageThreadId: params.effectiveReplyToId,
       Timestamp: Date.now(),
@@ -1023,6 +1034,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           roomLabel,
           teamId,
           postId: params.payload.post_id,
+          messageSid: buildMattermostModelPickerSelectMessageSid({
+            postId: params.payload.post_id,
+            provider: pickerState.provider,
+            model: pickerState.model,
+          }),
           effectiveReplyToId: threadContext.effectiveReplyToId,
           deliverReplies: true,
         });

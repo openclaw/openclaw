@@ -17,6 +17,7 @@ export type OpenAICompletionsCompatDefaults = {
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
   thinkingFormat: "openai" | "openrouter" | "zai";
+  visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
 };
 
@@ -33,6 +34,7 @@ export function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
   const {
+    provider,
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat = false,
@@ -64,7 +66,8 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "chutes"));
+    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
+  const isOllamaCompatProvider = provider === "ollama";
 
   return {
     supportsStore:
@@ -76,9 +79,11 @@ export function resolveOpenAICompletionsCompatDefaults(
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
-      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
+      isOllamaCompatProvider ||
+      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
+    visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
 }

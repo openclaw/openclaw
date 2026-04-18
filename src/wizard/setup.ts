@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type {
+  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -57,9 +58,15 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   });
   const matchedProvider =
     resolvedChoice?.provider ??
-    (preferredProvider
-      ? providers.find((provider) => provider.id.trim() === preferredProvider.trim())
-      : undefined);
+    (() => {
+      const preferredId = preferredProvider?.trim();
+      if (!preferredId) {
+        return undefined;
+      }
+      return providers.find(
+        (provider) => typeof provider.id === "string" && provider.id.trim() === preferredId,
+      );
+    })();
   const setupPolicy =
     resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
 
@@ -484,7 +491,7 @@ export async function runSetupWizard(
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  let authChoice = opts.authChoice;
+  let authChoice: AuthChoice | undefined = opts.authChoice;
   if (authChoiceFromPrompt) {
     const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
     const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
@@ -498,6 +505,9 @@ export async function runSetupWizard(
       config: nextConfig,
       workspaceDir,
     });
+  }
+  if (authChoice === undefined) {
+    throw new WizardCancelledError("auth choice is required");
   }
 
   if (authChoice === "custom-api-key") {

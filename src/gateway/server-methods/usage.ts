@@ -15,6 +15,7 @@ import type {
 } from "../../infra/session-cost-usage.js";
 import {
   loadCostUsageSummary,
+  loadSessionLogs,
   loadSessionCostSummary,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
@@ -880,7 +881,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
-    const { loadSessionLogs } = await import("../../infra/session-cost-usage.js");
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,

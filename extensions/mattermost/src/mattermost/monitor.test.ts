@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
+  buildMattermostModelPickerSelectMessageSid,
   evaluateMattermostMentionGate,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
@@ -375,6 +376,41 @@ describe("processMattermostReplayGuardedPost", () => {
 
     expect(handlePost).toHaveBeenCalledTimes(1);
     expect(visibleSideEffect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("buildMattermostModelPickerSelectMessageSid", () => {
+  it("stays stable for the same picker selection", () => {
+    expect(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "OpenAI",
+        model: " GPT-5 ",
+      }),
+    ).toBe("interaction:post-1:select:openai/gpt-5");
+    expect(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "openai",
+        model: "gpt-5",
+      }),
+    ).toBe("interaction:post-1:select:openai/gpt-5");
+  });
+
+  it("keeps different model selections distinct", () => {
+    expect(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "openai",
+        model: "gpt-5",
+      }),
+    ).not.toBe(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "openai",
+        model: "gpt-4.1",
+      }),
+    );
   });
 });
 
