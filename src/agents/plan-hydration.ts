@@ -58,7 +58,14 @@ export function formatPlanForHydration(steps: PlanStep[]): string | null {
   const lines = ["[Your active plan was preserved across context compression]"];
   for (const s of active) {
     const marker = s.status === "in_progress" ? "[>]" : "[ ]";
-    lines.push(`- ${marker} ${s.step} (${s.status})`);
+    // PR-B review fix (Copilot #3094484901): normalize newlines in step
+    // text. Without this, a step containing `\n` (rare but possible from
+    // heterogeneous compaction snapshots / channel adapters / JSON
+    // imports) breaks the line-based bullet format and injects extra
+    // unintended bullets into the hydration text. Same single-line
+    // collapse pattern used by `src/agents/plan-render.ts:45`.
+    const normalizedStep = s.step.replace(/[\n\r]+/g, " ").trim();
+    lines.push(`- ${marker} ${normalizedStep} (${s.status})`);
   }
   return lines.join("\n");
 }
