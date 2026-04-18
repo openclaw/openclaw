@@ -30,14 +30,21 @@ function applyAbliterationProviderConfigInternal(cfg: OpenClawConfig): OpenClawC
         ]
       : catalogModels;
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+  const normalizedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey.trim() : existingApiKey;
 
   providers[providerId] = {
     ...existingProviderRest,
     api: ABLITERATION_PROVIDER_API,
     baseUrl: ABLITERATION_BASE_URL,
     authHeader: true,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    ...(typeof normalizedApiKey === "string"
+      ? normalizedApiKey
+        ? { apiKey: normalizedApiKey }
+        : {}
+      : normalizedApiKey != null
+        ? { apiKey: normalizedApiKey }
+        : {}),
     models: mergedModels.length > 0 ? mergedModels : catalogModels,
   };
 

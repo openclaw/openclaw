@@ -45,4 +45,22 @@ describe("abliteration onboard", () => {
     expect(ids).toContain("old-model");
     expect(ids).toContain(ABLITERATION_DEFAULT_MODEL_REF.replace(/^abliteration\//, ""));
   });
+
+  it("preserves SecretRef apiKey values when reapplying provider config", () => {
+    const apiKey = { source: "env", provider: "default", id: "ABLITERATION_API_KEY" } as const;
+    const next = applyAbliterationProviderConfig({
+      models: {
+        providers: {
+          abliteration: {
+            api: "openai-completions",
+            baseUrl: "https://legacy.abliteration.ai/v1",
+            apiKey,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(next.models?.providers?.abliteration?.apiKey).toEqual(apiKey);
+  });
 });
