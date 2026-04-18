@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { ensureActiveMemoryRuntime } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -220,6 +221,7 @@ async function runSyncedWikiCommandWithSummary<T>(params: {
   run: () => Promise<T>;
   render: (result: T) => string;
 }): Promise<T> {
+  ensureActiveMemoryRuntime(params.appConfig);
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   return runWikiCommandWithSummary(params);
 }
@@ -255,6 +257,7 @@ export async function runWikiStatus(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
+  ensureActiveMemoryRuntime(params.appConfig);
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   const status = await resolveMemoryWikiStatus(params.config, {
     appConfig: params.appConfig,
@@ -272,6 +275,7 @@ export async function runWikiDoctor(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
+  ensureActiveMemoryRuntime(params.appConfig);
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   const report = buildMemoryWikiDoctorReport(
     await resolveMemoryWikiStatus(params.config, {

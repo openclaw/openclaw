@@ -33,6 +33,10 @@ export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; 
   return ensureMemoryRuntime(params.cfg)?.resolveMemoryBackendConfig(params) ?? null;
 }
 
+export function ensureActiveMemoryRuntime(cfg?: OpenClawConfig): boolean {
+  return ensureMemoryRuntime(cfg) !== undefined;
+}
+
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
   void cfg;
   const runtime = getMemoryRuntime();

@@ -6,3 +6,4 @@ export type {
   MemoryCorpusSupplementRegistration,
 } from "../plugins/memory-state.js";
 export { listMemoryCorpusSupplements } from "../plugins/memory-state.js";
+export { ensureActiveMemoryRuntime } from "../plugins/memory-runtime.js";

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { ensureActiveMemoryRuntime } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig, OpenClawPluginApi } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -90,6 +91,7 @@ async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ) {
+  ensureActiveMemoryRuntime(appConfig);
   await syncMemoryWikiImportedSources({ config, appConfig });
 }
 
