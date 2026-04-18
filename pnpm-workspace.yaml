@@ -4,7 +4,7 @@ packages:
   - packages/*
   - extensions/*
 
-minimumReleaseAge: 2880
+minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
   - "acpx"
@@ -28,6 +28,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - '@copilotkit/aimock'
 
 onlyBuiltDependencies:
   - "@discordjs/opus"
