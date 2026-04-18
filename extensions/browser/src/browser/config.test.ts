@@ -343,7 +343,7 @@ describe("browser config", () => {
     });
   });
 
-  it("auto-allowlists hostnames from user-configured profile cdpUrls", () => {
+  it("keeps configured profile cdpUrls out of the shared browser SSRF policy", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
         remote: {
@@ -352,41 +352,7 @@ describe("browser config", () => {
         },
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({
-      allowedHostnames: ["172.29.128.1"],
-    });
-  });
-
-  it("merges configured profile cdpUrl hostnames with existing ssrfPolicy allowedHostnames", () => {
-    const resolved = resolveBrowserConfig({
-      ssrfPolicy: {
-        allowedHostnames: ["metadata.internal"],
-      },
-      profiles: {
-        remote: {
-          color: "#123456",
-          cdpUrl: "http://172.29.128.1:9223",
-        },
-      },
-    });
-    expect(resolved.ssrfPolicy?.allowedHostnames?.toSorted()).toEqual(
-      ["172.29.128.1", "metadata.internal"].toSorted(),
-    );
-  });
-
-  it("does not duplicate hostnames already in allowedHostnames", () => {
-    const resolved = resolveBrowserConfig({
-      ssrfPolicy: {
-        allowedHostnames: ["172.29.128.1"],
-      },
-      profiles: {
-        remote: {
-          color: "#123456",
-          cdpUrl: "http://172.29.128.1:9223",
-        },
-      },
-    });
-    expect(resolved.ssrfPolicy?.allowedHostnames).toEqual(["172.29.128.1"]);
+    expect(resolved.ssrfPolicy).toEqual({});
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {

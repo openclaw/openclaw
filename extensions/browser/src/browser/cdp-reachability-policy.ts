@@ -1,6 +1,24 @@
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+
+function withCdpHostnameAllowed(
+  profile: ResolvedBrowserProfile,
+  ssrfPolicy?: SsrFPolicy,
+): SsrFPolicy | undefined {
+  if (!ssrfPolicy || !profile.cdpHost) {
+    return ssrfPolicy;
+  }
+  if (isPrivateNetworkAllowedByPolicy(ssrfPolicy)) {
+    return ssrfPolicy;
+  }
+  return {
+    ...ssrfPolicy,
+    allowedHostnames: Array.from(
+      new Set([...(ssrfPolicy.allowedHostnames ?? []), profile.cdpHost]),
+    ),
+  };
+}
 
 export function resolveCdpReachabilityPolicy(
   profile: ResolvedBrowserProfile,
@@ -13,7 +31,7 @@ export function resolveCdpReachabilityPolicy(
   if (!capabilities.isRemote && profile.cdpIsLoopback && profile.driver === "openclaw") {
     return undefined;
   }
-  return ssrfPolicy;
+  return withCdpHostnameAllowed(profile, ssrfPolicy);
 }
 
 export const resolveCdpControlPolicy = resolveCdpReachabilityPolicy;
