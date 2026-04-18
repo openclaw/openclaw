@@ -635,15 +635,16 @@ async function doRefreshOAuthTokenWithLock(params: {
           profileId: params.profileId,
           credential: cred,
         });
+        let refreshCred = cred;
         if (externallyManaged) {
           const hasUsableExternalCredential = hasUsableOAuthCredential(externallyManaged);
-          if (
-            hasUsableExternalCredential &&
+          const shouldAdoptExternalCredential =
             shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
-            !areOAuthCredentialsEquivalent(cred, externallyManaged)
-          ) {
+            !areOAuthCredentialsEquivalent(cred, externallyManaged);
+          if (shouldAdoptExternalCredential) {
             store.profiles[params.profileId] = externallyManaged;
             saveAuthProfileStore(store, params.agentDir);
+            refreshCred = externallyManaged;
           }
           if (hasUsableExternalCredential) {
             return {
@@ -654,17 +655,17 @@ async function doRefreshOAuthTokenWithLock(params: {
         }
 
         const pluginRefreshed = await withRefreshCallTimeout(
-          `refreshProviderOAuthCredentialWithPlugin(${cred.provider})`,
+          `refreshProviderOAuthCredentialWithPlugin(${refreshCred.provider})`,
           OAUTH_REFRESH_CALL_TIMEOUT_MS,
           () =>
             refreshProviderOAuthCredentialWithPlugin({
-              provider: cred.provider,
-              context: cred,
+              provider: refreshCred.provider,
+              context: refreshCred,
             }),
         );
         if (pluginRefreshed) {
           const refreshedCredentials: OAuthCredential = {
-            ...cred,
+            ...refreshCred,
             ...pluginRefreshed,
             type: "oauth",
           };
@@ -685,19 +686,21 @@ async function doRefreshOAuthTokenWithLock(params: {
           };
         }
 
-        const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
+        const oauthCreds: Record<string, OAuthCredentials> = {
+          [refreshCred.provider]: refreshCred,
+        };
         const result =
-          cred.provider === "chutes"
+          refreshCred.provider === "chutes"
             ? await (async () => {
                 const newCredentials = await withRefreshCallTimeout(
-                  `refreshChutesTokens(${cred.provider})`,
+                  `refreshChutesTokens(${refreshCred.provider})`,
                   OAUTH_REFRESH_CALL_TIMEOUT_MS,
-                  () => refreshChutesTokens({ credential: cred }),
+                  () => refreshChutesTokens({ credential: refreshCred }),
                 );
                 return { apiKey: newCredentials.access, newCredentials };
               })()
             : await (async () => {
-                const oauthProvider = resolveOAuthProvider(cred.provider);
+                const oauthProvider = resolveOAuthProvider(refreshCred.provider);
                 if (!oauthProvider) {
                   return null;
                 }
@@ -714,7 +717,7 @@ async function doRefreshOAuthTokenWithLock(params: {
           return null;
         }
         const mergedCred: OAuthCredential = {
-          ...cred,
+          ...refreshCred,
           ...result.newCredentials,
           type: "oauth",
         };

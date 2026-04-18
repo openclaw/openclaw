@@ -467,6 +467,71 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     );
   });
 
+  it("adopts a fresher imported refresh token even when its access token is already expired", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "expired-local-access-token",
+            refresh: "stale-local-refresh-token",
+            expires: Date.now() - 120_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "newer-but-expired-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: Date.now() - 30_000,
+      accountId: "acct-cli",
+    });
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async (params?: { context?: unknown }) => {
+        expect(params?.context).toMatchObject({
+          access: "newer-but-expired-cli-access-token",
+          refresh: "fresh-cli-refresh-token",
+        });
+        return {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fresh-access-token",
+          refresh: "fresh-refresh-token",
+          expires: Date.now() + 86_400_000,
+        };
+      },
+    );
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).resolves.toEqual({
+      apiKey: "fresh-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+
+    const persisted = await readPersistedStore(agentDir);
+    expect(persisted.profiles[profileId]).toMatchObject({
+      access: "fresh-access-token",
+      refresh: "fresh-refresh-token",
+    });
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        refresh: "stale-local-refresh-token",
+      }),
+    );
+  });
+
   it("adopts fresher stored credentials after refresh_token_reused", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
