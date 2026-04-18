@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveHookModelSelection } from "./setup.js";
 
 describe("resolveHookModelSelection", () => {
-  it("extracts hookToolsAllow from before_prompt_build with precedence over legacy before_agent_start", async () => {
+  it("does not call before_prompt_build for early toolsAllow (moved to attempt phase)", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["before_model_resolve", "before_prompt_build", "before_agent_start"].includes(hookName),
@@ -20,15 +20,15 @@ describe("resolveHookModelSelection", () => {
       hookContext: { sessionId: "test-session", workspaceDir: "/tmp/test" },
     });
 
-    expect(result.hookToolsAllow).toEqual(["read", "exec"]);
+    // before_prompt_build is no longer called in setup — toolsAllow extraction
+    // happens in attempt.ts where availableTools is populated
+    expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+    // Legacy before_agent_start toolsAllow still flows through
+    expect(result.hookToolsAllow).toEqual(["write"]);
     expect(result.legacyBeforeAgentStartResult?.toolsAllow).toEqual(["write"]);
-    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
-      { prompt: "hello", messages: [] },
-      { sessionId: "test-session", workspaceDir: "/tmp/test" },
-    );
   });
 
-  it("falls back to legacy before_agent_start toolsAllow when before_prompt_build does not provide one", async () => {
+  it("falls back to legacy before_agent_start toolsAllow", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["before_prompt_build", "before_agent_start"].includes(hookName),
