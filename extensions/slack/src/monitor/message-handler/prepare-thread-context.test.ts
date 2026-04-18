@@ -100,8 +100,8 @@ describe("resolveSlackThreadContextData", () => {
 
     expect(result.threadStarterBody).toBeUndefined();
     expect(result.threadLabel).toBe("Slack thread #general");
-    expect(result.threadHistoryBody).toContain("assistant reply");
     expect(result.threadHistoryBody).toContain("allowed follow-up");
+    expect(result.threadHistoryBody).not.toContain("assistant reply");
     expect(result.threadHistoryBody).not.toContain("starter secret");
     expect(result.threadHistoryBody).not.toContain("blocked follow-up");
     expect(result.threadHistoryBody).not.toContain("current message");

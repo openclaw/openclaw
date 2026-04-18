@@ -157,9 +157,12 @@ export async function resolveSlackThreadContextData(params: {
         }),
       );
 
+      const threadHistoryWithoutBots = threadHistory.filter((historyMsg) => !historyMsg.botId);
+      const omittedBotHistoryCount = threadHistory.length - threadHistoryWithoutBots.length;
+
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
         filterSupplementalContextItems({
-          items: threadHistory,
+          items: threadHistoryWithoutBots,
           mode: params.contextVisibilityMode,
           kind: "thread",
           isSenderAllowed: (historyMsg) => {
@@ -173,9 +176,9 @@ export async function resolveSlackThreadContextData(params: {
             });
           },
         });
-      if (omittedHistoryCount > 0) {
+      if (omittedHistoryCount > 0 || omittedBotHistoryCount > 0) {
         logVerbose(
-          `slack: omitted ${omittedHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
+          `slack: omitted ${omittedHistoryCount + omittedBotHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
         );
       }
 

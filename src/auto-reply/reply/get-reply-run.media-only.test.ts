@@ -281,6 +281,47 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
   });
 
+  it("does not duplicate thread starter text with a plain-text prelude", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Thread starter (untrusted, for context):",
+        "```json",
+        '{"body":"starter message"}',
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadStarterBody: "starter message",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadStarterBody: "starter message",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain("Thread starter (untrusted, for context):");
+    expect(call?.followupRun.prompt).not.toContain("[Thread starter - for context]");
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({
