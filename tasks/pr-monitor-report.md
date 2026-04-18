@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-17 (run 27)
+**Date:** 2026-04-18 (run 28)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -29,18 +29,10 @@ Squash-merge by maintainer `obviyus`. No action required.
 
 ## PR #45584 — feat/cron-fresh-session-option
 
-**Status:** CLOSED without merge — **closed_at: 2026-04-17T02:10:17Z** (NEW this run)
+**Status:** CLOSED without merge — closed_at: 2026-04-17T02:10:17Z
 
-Was OPEN in run 25 (2026-04-16). Branch tip `46e2b30607303996c6423abd33ec854c42b57ac3` was
-unchanged since 2026-04-06. No maintainer review or approval was ever recorded.
-
-Prior outstanding issues now moot:
-- Upstream rebase was required (mergeable: dirty) — no longer actionable.
-- Monitoring artifact tip commit `46e2b30607` — no longer actionable.
-- CI was blocked by dirty state — no longer actionable.
-
-Close reason not visible from available API access (comment bodies inaccessible without full
-`openclaw/openclaw` MCP scope or `gh` CLI). Likely closed due to staleness or upstream conflict.
+Branch tip `46e2b30607303996c6423abd33ec854c42b57ac3` unchanged since 2026-04-06. No new activity
+since run 27. No maintainer review or approval was ever recorded before close.
 
 **No action required.**
 
@@ -61,20 +53,10 @@ No action required.
 
 ## PR #54730 — fix/subagent-identity-fallback
 
-**Status:** CLOSED without merge — **closed_at: 2026-04-17T02:10:15Z** (NEW this run)
+**Status:** CLOSED without merge — closed_at: 2026-04-17T02:10:15Z
 
-Was OPEN in run 25 (2026-04-16). Branch tip `f052129db44607fed72a0769dc5de6b919bcd5dc` was
-unchanged since 2026-04-06. No human maintainer review was ever recorded (only bot reviews,
-which were addressed).
-
-Prior outstanding issues now moot:
-- CI failures (security-fast, contracts-protocol, ext shards 2/3/4/6) — no longer actionable.
-- Monitoring artifact tip commits `d18c8771bb` + `f052129db4` — no longer actionable.
-- Pending maintainer review — moot; PR closed before review occurred.
-
-Close reason not visible from available API access (comment bodies inaccessible without full
-`openclaw/openclaw` MCP scope or `gh` CLI). Closed at ~02:10 UTC 2026-04-17, 2 seconds after
-#45584, suggesting a batch close by a maintainer.
+Branch tip `f052129db44607fed72a0769dc5de6b919bcd5dc` unchanged since 2026-04-06. No new activity
+since run 27.
 
 **No action required.**
 
@@ -82,34 +64,35 @@ Close reason not visible from available API access (comment bodies inaccessible 
 
 ---
 
-## Actions Taken This Run (run 27 — 2026-04-17)
+## Actions Taken This Run (run 28 — 2026-04-18)
 
-**GitHub API access:** BLOCKED — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI
-not installed; `openclaw/openclaw` PR/CI/review details are inaccessible via direct MCP calls.
-`search_pull_requests` and `search_issues` provide partial read access (state, closed_at,
-merged_at, comment counts, labels) but not comment/review bodies.
+**GitHub API access:** Partial — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI
+not installed; direct PR/CI/review details for `openclaw/openclaw` are inaccessible via MCP.
+`search_pull_requests` and `search_issues` provide read access to state, timestamps, comment
+counts, and labels.
 
-**Branch SHAs confirmed from fork (run 26 vs run 25):**
+**Branch SHAs confirmed from fork (run 28 vs run 27):**
 
-| Branch                                  | SHA (tip)                                  | Changed since run 25? |
+| Branch                                  | SHA (tip)                                  | Changed since run 27? |
 | --------------------------------------- | ------------------------------------------ | --------------------- |
 | fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No |
 | feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No |
 | fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No |
 | fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No |
 
-**Key changes since run 26:** None — all 4 monitored PRs remain in the same closed/merged state
-confirmed in run 26. Fork branch SHAs also unchanged. No new activity on any monitored branch.
+**Key changes since run 27:** None — all 4 monitored PRs remain in the same closed/merged state.
+Fork branch SHAs also unchanged. No new activity on any monitored branch.
 
-**New open PR activity noted (outside monitoring scope):**
-- #66544 and #66225 both had recent activity at ~02:13–02:16 UTC today (same time window as the
-  batch closes from run 26). Statuses unchanged from run 26 observation.
+**Open PR activity (outside monitoring scope):** No timestamp or comment count changes vs run 27.
+All four active PRs (#66544, #66225, #56978, #55787) last updated 2026-04-16/17.
 
-**Rebase:** Not attempted — all monitored PRs are closed; no further rebase needed.
+**Rebase:** Not attempted — all monitored PRs are closed; no rebase needed.
 
 **No code changes made this run.**
 
-**Other open PRs by suboss87 (outside monitoring scope — noted for awareness):**
+---
+
+## Open PRs by suboss87 (outside monitoring scope — noted for awareness)
 
 | PR | Title | Labels | Updated | Comments | Reactions |
 | --- | --- | --- | --- | --- | --- |
@@ -118,7 +101,7 @@ confirmed in run 26. Fork branch SHAs also unchanged. No new activity on any mon
 | #56978 | fix(whatsapp): exclude DM allowFrom from group policy sender bypass | channel: whatsapp-web, size: S | 2026-04-16T05:26:43Z | 4 | 👍×1 |
 | #55787 | fix: strip orphaned OpenAI reasoning blocks before responses API call | agents, size: XS | 2026-04-16T05:26:30Z | 5 | 👍×3 |
 
-Both #66544 and #66225 had activity at ~02:13–02:16 UTC today (same window as the batch closes).
+No activity change on any of these since run 27 (timestamps and comment counts identical).
 
 **Recently merged by suboss87 (for reference):**
 - openclaw/openclaw#67457 (`fix(ollama): strip provider prefix from model ID`) — merged 2026-04-16T05:45:38Z by `obviyus`
@@ -128,11 +111,12 @@ Both #66544 and #66225 had activity at ~02:13–02:16 UTC today (same window as 
 
 ## PRs Requiring Human Attention
 
-All four originally monitored PRs are now resolved (2 merged, 2 closed without merge). No
+All four originally monitored PRs are resolved (1 merged, 3 closed without merge). No
 items from the original monitoring scope require further human attention.
 
-The active open PRs (#66544, #66225, #56978, #55787) are outside the original monitoring
-scope; they are noted for awareness only.
+The four active open PRs (#66544, #66225, #56978, #55787) are outside the original monitoring
+scope. #56978 has an assignee (`mcaxtr`) — may be awaiting maintainer review. No blockers
+observed.
 
 ---
 
