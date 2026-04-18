@@ -38,10 +38,14 @@ function extractCompactInstructions(params: {
 }
 
 function estimateTokensFromSessionFile(sessionFile: string | undefined): number | undefined {
-  if (!sessionFile) return undefined;
+  if (!sessionFile) {
+    return undefined;
+  }
   try {
     const stat = statSync(sessionFile);
-    if (!stat.isFile() || stat.size <= 0) return undefined;
+    if (!stat.isFile() || stat.size <= 0) {
+      return undefined;
+    }
     return Math.floor(stat.size / 4);
   } catch {
     return undefined;
