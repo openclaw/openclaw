@@ -1387,7 +1387,7 @@
     "@aws-sdk/client-bedrock-runtime": "3.1028.0",
     "@aws-sdk/credential-provider-node": "3.972.30",
     "@aws/bedrock-token-generator": "^1.1.0",
-    "@buape/carbon": "^0.16.0",
+    "@buape/carbon": "0.15.0",
     "@clack/prompts": "^1.2.0",
     "@discordjs/voice": "0.19.2",
     "@google/genai": "^1.49.0",
