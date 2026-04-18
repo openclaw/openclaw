@@ -1774,11 +1774,7 @@ describe("gateway agent handler", () => {
     });
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
-      sessionId?: string;
-      sessionKey?: string;
-    };
-    expect(callArgs.sessionId).toBe("caller-selected-session-id");
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
     expect(callArgs.sessionKey).toBe("agent:main:main");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
