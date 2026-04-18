@@ -1,6 +1,6 @@
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
@@ -79,7 +79,7 @@ describe("xai web search config resolution", () => {
   });
 
   it("treats unresolved non-env SecretRefs as missing credentials instead of throwing", async () => {
-    await withEnv({ XAI_API_KEY: undefined }, async () => {
+    await withEnvAsync({ XAI_API_KEY: undefined }, async () => {
       const provider = createXaiWebSearchProvider();
       const maybeTool = provider.createTool({
         config: {

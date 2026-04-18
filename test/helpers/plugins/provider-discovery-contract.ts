@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
@@ -179,6 +179,7 @@ function installDiscoveryHooks(
   providerIds: readonly BundledProviderUnderTest[],
 ) {
   beforeAll(async () => {
+    vi.resetModules();
     vi.doMock("openclaw/plugin-sdk/agent-runtime", () => {
       return {
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
@@ -311,10 +312,13 @@ function installDiscoveryHooks(
         "cloudflare-ai-gateway",
       );
     }
-    setRuntimeAuthStore();
   });
 
   beforeEach(() => {
+    setRuntimeAuthStore();
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
     resolveCopilotApiTokenMock.mockReset();
     buildOllamaProviderMock.mockReset();

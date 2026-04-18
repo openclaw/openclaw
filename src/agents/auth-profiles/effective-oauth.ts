@@ -1,6 +1,7 @@
 import { log } from "./constants.js";
 import {
   hasUsableOAuthCredential,
+  isSafeToUseExternalCliCredential,
   readExternalCliBootstrapCredential,
   shouldBootstrapFromExternalCliCredential,
 } from "./external-cli-sync.js";
@@ -23,6 +24,13 @@ export function resolveEffectiveOAuthCredential(params: {
       provider: params.credential.provider,
       localExpires: params.credential.expires,
       externalExpires: imported.expires,
+    });
+    return params.credential;
+  }
+  if (!isSafeToUseExternalCliCredential(params.credential, imported)) {
+    log.warn("refused external cli oauth bootstrap: identity mismatch", {
+      profileId: params.profileId,
+      provider: params.credential.provider,
     });
     return params.credential;
   }
