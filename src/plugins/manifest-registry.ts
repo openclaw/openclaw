@@ -87,6 +87,7 @@ export type PluginManifestRecord = {
   modelSupport?: PluginManifestModelSupport;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
+  nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
@@ -330,6 +331,7 @@ function buildRecord(params: {
     modelSupport: params.manifest.modelSupport,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
+    nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
@@ -401,6 +403,7 @@ function buildBundleRecord(params: {
     providers: [],
     cliBackends: [],
     syntheticAuthRefs: [],
+    nonSecretAuthMarkers: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],

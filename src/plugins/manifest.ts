@@ -169,6 +169,11 @@ export type PluginManifest = {
    */
   syntheticAuthRefs?: string[];
   /**
+   * Bundled-plugin-owned placeholder API key values that represent non-secret
+   * local, OAuth, or ambient credential state.
+   */
+  nonSecretAuthMarkers?: string[];
+  /**
    * Plugin-owned command aliases that should resolve to this plugin during
    * config diagnostics before runtime loads.
    */
@@ -707,6 +712,7 @@ export function loadPluginManifest(
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
+  const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
@@ -742,6 +748,7 @@ export function loadPluginManifest(
       modelSupport,
       cliBackends,
       syntheticAuthRefs,
+      nonSecretAuthMarkers,
       commandAliases,
       providerAuthEnvVars,
       providerAuthAliases,
