@@ -28,6 +28,7 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("<pre>");
     expect(html).toContain("<code");
     expect(html).toContain("const value = 1");
+    expect(html).not.toContain("console.log(");
   });
 
   it("flattens remote markdown images into alt text", () => {
