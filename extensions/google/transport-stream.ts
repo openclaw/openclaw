@@ -618,13 +618,13 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
-        const fetch = buildGuardedModelFetch(model);
+        const guardedFetch = buildGuardedModelFetch(model);
         let params = buildGoogleGenerativeAiParams(model, context, options);
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as GoogleGenerateContentRequest;
         }
-        const response = await fetch(buildGoogleRequestUrl(model), {
+        const response = await guardedFetch(buildGoogleRequestUrl(model), {
           method: "POST",
           headers: buildGoogleHeaders(model, apiKey, options?.headers),
           body: JSON.stringify(params),
