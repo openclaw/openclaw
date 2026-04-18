@@ -117,6 +117,49 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("alerts by default when failureAlert is unset", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "wrong model id",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "default alert job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id }),
+        channel: "telegram",
+        to: "19098680",
+        text: expect.stringContaining('Cron job "default alert job" failed 2 times'),
+      }),
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("supports per-job failure alert override when global alerts are disabled", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);

@@ -312,7 +312,7 @@ function resolveFailureAlert(
   if (job.failureAlert === false) {
     return null;
   }
-  if (globalConfig?.enabled === false) {
+  if (!jobConfig && globalConfig?.enabled === false) {
     return null;
   }
 
