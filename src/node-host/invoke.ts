@@ -276,7 +276,16 @@ async function runCommand(
     child.on("error", (err) => {
       finalize(undefined, err.message);
     });
-    child.on("exit", (code) => {
+    child.on("exit", (code, signal) => {
+      // When a process is killed by a signal (e.g. SIGKILL from OOM pressure
+      // or debug.swd_panic watchpoints on macOS), `code` is null and `signal`
+      // carries the signal name.  Surface this as a structured error so callers
+      // can distinguish "process was killed" from "process exited with non-zero
+      // code" and apply appropriate retry / reporting logic.
+      if (code === null && signal) {
+        finalize(undefined, `process killed by signal ${signal}`);
+        return;
+      }
       finalize(code === null ? undefined : code, null);
     });
   });
