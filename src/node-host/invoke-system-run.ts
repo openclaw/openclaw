@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   addDurableCommandApproval,
@@ -20,7 +19,11 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { resolveShellWrapperTransportArgv } from "../infra/exec-wrapper-resolution.js";
+import {
+  extractEnvAssignmentKeysFromDispatchWrappers,
+  isShellWrapperInvocation,
+  resolveShellWrapperTransportArgv,
+} from "../infra/exec-wrapper-resolution.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
@@ -28,6 +31,7 @@ import {
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
@@ -78,6 +82,7 @@ type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 type SystemRunParsePhase = {
   argv: string[];
   shellPayload: string | null;
+  shellWrapperInvocation: boolean;
   commandText: string;
   commandPreview: string | null;
   approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
@@ -118,6 +123,7 @@ const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
 const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
+type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -139,6 +145,23 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     default:
       return "approval-required";
   }
+}
+
+function resolveAgentExecConfig(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+): ExecToolConfig | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const entry = cfg.agents?.list?.find(
+    (candidate) =>
+      candidate !== null &&
+      typeof candidate === "object" &&
+      normalizeAgentId(candidate.id) === normalizedAgentId,
+  );
+  return entry?.tools?.exec;
 }
 
 export type HandleSystemRunInvokeOptions = {
@@ -166,7 +189,16 @@ export type HandleSystemRunInvokeOptions = {
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
+  loadConfig?: () => OpenClawConfig;
 };
+
+async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
+  if (opts.loadConfig) {
+    return opts.loadConfig();
+  }
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
+}
 
 async function sendSystemRunDenied(
   opts: Pick<
@@ -242,6 +274,7 @@ async function parseSystemRunPhase(
   }
 
   const shellPayload = command.shellPayload;
+  const shellWrapperInvocation = isShellWrapperInvocation(command.argv);
   const commandText = command.commandText;
   const approvalPlan =
     opts.params.systemRunPlan === undefined
@@ -258,6 +291,27 @@ async function parseSystemRunPhase(
   const sessionKey = normalizeOptionalString(opts.params.sessionKey) ?? "node";
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
+  const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
+  const envAssignmentOverrides =
+    envAssignmentKeys.length > 0
+      ? Object.fromEntries(envAssignmentKeys.map((key) => [key, "1"]))
+      : undefined;
+  const envAssignmentDiagnostics = inspectHostExecEnvOverrides({
+    overrides: envAssignmentOverrides,
+    blockPathOverrides: true,
+  });
+  // `extractEnvAssignmentKeysFromDispatchWrappers` only emits keys that satisfy
+  // `isEnvAssignment` and therefore portable env-key syntax by construction.
+  if (envAssignmentDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `SYSTEM_RUN_DENIED: command env assignment rejected (blocked env assignment keys: ${envAssignmentDiagnostics.rejectedOverrideBlockedKeys.join(", ")})`,
+      },
+    });
+    return null;
+  }
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
     blockPathOverrides: true,
@@ -288,11 +342,12 @@ async function parseSystemRunPhase(
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
-    shellWrapper: shellPayload !== null,
+    shellWrapper: shellWrapperInvocation,
   });
   return {
     argv: command.argv,
     shellPayload,
+    shellWrapperInvocation,
     commandText,
     commandPreview: command.previewText,
     approvalPlan,
@@ -315,10 +370,8 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ): Promise<SystemRunPolicyPhase | null> {
-  const cfg = loadConfig();
-  const agentExec = parsed.agentId
-    ? resolveAgentConfig(cfg, parsed.agentId)?.tools?.exec
-    : undefined;
+  const cfg = await loadSystemRunConfig(opts);
+  const agentExec = resolveAgentExecConfig(cfg, parsed.agentId);
   const configuredSecurity = opts.resolveExecSecurity(
     agentExec?.security ?? cfg.tools?.exec?.security,
   );
@@ -384,6 +437,8 @@ async function evaluateSystemRunPolicyPhase(
     approved: parsed.approved,
     isWindows,
     cmdInvocation,
+    // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
+    // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
   });
   analysisOk = policy.analysisOk;

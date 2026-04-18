@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,13 +14,13 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
-import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
-import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
-import { runEmbeddedPiAgent } from "../pi-embedded.js";
+import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
+import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import { resolveFallbackRetryPrompt } from "./attempt-execution.helpers.js";
+import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -31,42 +31,6 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-export type PersistSessionEntryParams = {
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath: string;
-  entry: SessionEntry;
-  clearedFields?: string[];
-};
-
-export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
-      }
-    }
-    store[params.sessionKey] = merged;
-    return merged;
-  });
-  params.sessionStore[params.sessionKey] = persisted;
-}
-
-export function prependInternalEventContext(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  const renderedEvents = formatAgentInternalEventsForPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  return [renderedEvents, body].filter(Boolean).join("\n\n");
-}
 
 const ACP_TRANSCRIPT_USAGE = {
   input: 0,
@@ -83,7 +47,15 @@ const ACP_TRANSCRIPT_USAGE = {
   },
 } as const;
 
-export async function persistAcpTurnTranscript(params: {
+type TranscriptUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+type PersistTextTurnTranscriptParams = {
   body: string;
   finalText: string;
   sessionId: string;
@@ -94,7 +66,30 @@ export async function persistAcpTurnTranscript(params: {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
-}): Promise<SessionEntry | undefined> {
+  assistant: {
+    api: string;
+    provider: string;
+    model: string;
+    usage?: TranscriptUsage;
+  };
+};
+
+function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
+  if (!usage) {
+    return ACP_TRANSCRIPT_USAGE;
+  }
+  return buildUsageWithNoCost({
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.total,
+  });
+}
+
+async function persistTextTurnTranscript(
+  params: PersistTextTurnTranscriptParams,
+): Promise<SessionEntry | undefined> {
   const promptText = params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
@@ -135,10 +130,10 @@ export async function persistAcpTurnTranscript(params: {
     sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: replyText }],
-      api: "openai-responses",
-      provider: "openclaw",
-      model: "acp-runtime",
-      usage: ACP_TRANSCRIPT_USAGE,
+      api: params.assistant.api,
+      provider: params.assistant.provider,
+      model: params.assistant.model,
+      usage: resolveTranscriptUsage(params.assistant.usage),
       stopReason: "stop",
       timestamp: Date.now(),
     });
@@ -146,6 +141,77 @@ export async function persistAcpTurnTranscript(params: {
 
   emitSessionTranscriptUpdate(sessionFile);
   return sessionEntry;
+}
+
+function resolveCliTranscriptReplyText(result: EmbeddedPiRunResult): string {
+  const visibleText = result.meta.finalAssistantVisibleText?.trim();
+  if (visibleText) {
+    return visibleText;
+  }
+
+  return (result.payloads ?? [])
+    .filter((payload) => !payload.isError && !payload.isReasoning)
+    .map((payload) => payload.text?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export async function persistAcpTurnTranscript(params: {
+  body: string;
+  finalText: string;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionAgentId: string;
+  threadId?: string | number;
+  sessionCwd: string;
+}): Promise<SessionEntry | undefined> {
+  return await persistTextTurnTranscript({
+    ...params,
+    assistant: {
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "acp-runtime",
+    },
+  });
+}
+
+export async function persistCliTurnTranscript(params: {
+  body: string;
+  result: EmbeddedPiRunResult;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionAgentId: string;
+  threadId?: string | number;
+  sessionCwd: string;
+}): Promise<SessionEntry | undefined> {
+  const replyText = resolveCliTranscriptReplyText(params.result);
+  const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
+  const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+
+  return await persistTextTurnTranscript({
+    body: params.body,
+    finalText: replyText,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    sessionAgentId: params.sessionAgentId,
+    threadId: params.threadId,
+    sessionCwd: params.sessionCwd,
+    assistant: {
+      api: "cli",
+      provider,
+      model,
+      usage: params.result.meta.agentMeta?.usage,
+    },
+  });
 }
 
 export function runAgentAttempt(params: {
