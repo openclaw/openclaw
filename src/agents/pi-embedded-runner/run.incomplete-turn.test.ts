@@ -546,6 +546,46 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     );
   });
 
+  it("keeps the side-effect warning path instead of rotating fallback when the attempt is not replay-safe", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        didSendViaMessagingTool: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-side-effects-no-fallback",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["anthropic/claude-opus-4-6"],
+            },
+          },
+        },
+      }),
+    });
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("tool actions may have already been executed");
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("incomplete turn detected with fallbacks configured"),
+    );
+  });
+
   it("throws FailoverError after exhausting reasoning-only retries when fallbacks are configured", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(

@@ -1798,15 +1798,31 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
-          // If the same-model retries (reasoning-only, empty-response) have
-          // exhausted and we are about to surface "Agent couldn't generate a
-          // response", prefer rotating to the next configured fallback model
-          // instead. This turns a dead-end incomplete turn into a FailoverError
-          // that the outer model-fallback loop catches, so multi-model setups
-          // keep producing a real answer instead of the user-facing error.
-          // Callers without any configured fallback fall through to the
-          // existing error-payload path unchanged.
-          if (incompleteTurnText && !aborted && !timedOut && fallbackConfigured) {
+          // When same-model retries (reasoning-only, empty-response) cannot
+          // recover the turn and fallbacks are configured, rotate to the next
+          // fallback model instead of surfacing "Agent couldn't generate a
+          // response" to the user. Only fires when the attempt is replay-safe
+          // — `hadPotentialSideEffects` turns (messaging tool sends, mutating
+          // tool calls, successful cron adds) must preserve the existing
+          // "verify before retrying" warning path so a fallback retry does
+          // not duplicate already-executed external actions. Aborted / timed
+          // out flows keep their existing terminal branches. Callers without
+          // any configured fallback also fall through unchanged.
+          //
+          // Note: for toolUse-style incomplete terminal turns with no visible
+          // text, `resolveIncompleteTurnPayloadText` can return non-null on
+          // the first attempt (no per-turn retry instruction applies), so
+          // this branch can fire before the reasoning-only / empty-response
+          // retry ceilings are hit. Fallback is still the right move there —
+          // same-model retries are not defined for that case — but the
+          // replay-safe gate above keeps it safe.
+          if (
+            incompleteTurnText &&
+            !aborted &&
+            !timedOut &&
+            fallbackConfigured &&
+            attempt.replayMetadata.replaySafe
+          ) {
             const incompleteTurnDecision = resolveRunFailoverDecision({
               stage: "incomplete_turn",
               fallbackConfigured,
@@ -1827,8 +1843,8 @@ export async function runEmbeddedPiAgent(
               );
               throw new FailoverError(incompleteTurnText, {
                 reason: incompleteTurnDecision.reason,
-                provider,
-                model: modelId,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status: failoverStatus,
               });
