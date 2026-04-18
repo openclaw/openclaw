@@ -1791,6 +1791,8 @@ export async function runEmbeddedPiAgent(
             aborted,
             timedOut,
             attempt,
+            isCronTrigger: params.trigger === "cron",
+            messagesSnapshot: attempt.messagesSnapshot,
           });
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(

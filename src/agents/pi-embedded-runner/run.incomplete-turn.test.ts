@@ -16,6 +16,7 @@ import {
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
+  hasLatestSilentToolResult,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
@@ -24,6 +25,7 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveIncompleteTurnPayloadText,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -1102,5 +1104,213 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     });
 
     expect(result).toBeNull();
+  });
+});
+
+describe("hasLatestSilentToolResult", () => {
+  it("returns true when the latest tool result is exactly NO_REPLY", () => {
+    const messages = [
+      { role: "user", content: "hello", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "tts",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        isError: false,
+        timestamp: 2,
+      },
+    ];
+    expect(hasLatestSilentToolResult(messages as any)).toBe(true);
+  });
+
+  it("returns true when NO_REPLY has surrounding whitespace", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "  NO_REPLY  " }],
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+    expect(hasLatestSilentToolResult(messages as any)).toBe(true);
+  });
+
+  it("returns false when the latest tool result has substantive text", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "Command executed successfully" }],
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+    expect(hasLatestSilentToolResult(messages as any)).toBe(false);
+  });
+
+  it("returns false when the latest tool result is an error", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        isError: true,
+        timestamp: 1,
+      },
+    ];
+    expect(hasLatestSilentToolResult(messages as any)).toBe(false);
+  });
+
+  it("returns false for empty messagesSnapshot", () => {
+    expect(hasLatestSilentToolResult([])).toBe(false);
+    expect(hasLatestSilentToolResult(undefined)).toBe(false);
+  });
+
+  it("skips trailing assistant messages to find the latest tool result", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "tts",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        isError: false,
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ];
+    expect(hasLatestSilentToolResult(messages as any)).toBe(true);
+  });
+
+  it("returns false when tool result has mixed content including non-NO_REPLY text", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [
+          { type: "text", text: "NO_REPLY" },
+          { type: "text", text: " extra text" },
+        ],
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+    expect(hasLatestSilentToolResult(messages as any)).toBe(false);
+  });
+});
+
+describe("resolveIncompleteTurnPayloadText with cron trigger", () => {
+  const makeEmptyAttempt = (messagesSnapshot: any[] = []) => ({
+    assistantTexts: [] as string[],
+    clientToolCall: undefined,
+    currentAttemptAssistant: undefined,
+    yieldDetected: undefined,
+    didSendDeterministicApprovalPrompt: undefined,
+    lastToolError: undefined,
+    lastAssistant: {
+      role: "assistant" as const,
+      content: [],
+      stopReason: "stop" as const,
+      provider: "test",
+      model: "test-1",
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    replayMetadata: {
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    },
+    promptErrorSource: null,
+    timedOutDuringCompaction: false,
+    messagesSnapshot,
+  });
+
+  it("returns null for cron trigger when latest tool result is NO_REPLY", () => {
+    const messagesSnapshot = [
+      { role: "user", content: "check status", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        isError: false,
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        provider: "test",
+        model: "test-1",
+        timestamp: 3,
+      },
+    ];
+
+    const result = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeEmptyAttempt(messagesSnapshot),
+      isCronTrigger: true,
+      messagesSnapshot: messagesSnapshot as any,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns error text for non-cron trigger even when latest tool result is NO_REPLY", () => {
+    const messagesSnapshot = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const result = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeEmptyAttempt(messagesSnapshot),
+      isCronTrigger: false,
+      messagesSnapshot: messagesSnapshot as any,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toContain("couldn't generate a response");
+  });
+
+  it("returns error text for cron trigger when latest tool result is not NO_REPLY", () => {
+    const messagesSnapshot = [
+      {
+        role: "toolResult",
+        toolCallId: "tc-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "some real output" }],
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const result = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeEmptyAttempt(messagesSnapshot),
+      isCronTrigger: true,
+      messagesSnapshot: messagesSnapshot as any,
+    });
+
+    expect(result).not.toBeNull();
   });
 });

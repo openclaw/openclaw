@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
@@ -155,11 +156,52 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/**
+ * Returns true when the latest successful (non-error) tool result in the
+ * message snapshot contains exactly the NO_REPLY silent sentinel as its only
+ * text content.  This signals that the tool execution intentionally produced
+ * no user-visible output, so an empty assistant follow-up is expected — not
+ * an error (#68452).
+ */
+export function hasLatestSilentToolResult(messagesSnapshot: AgentMessage[] | undefined): boolean {
+  if (!messagesSnapshot?.length) {
+    return false;
+  }
+  // Walk backwards to find the most recent toolResult message.
+  for (let i = messagesSnapshot.length - 1; i >= 0; i--) {
+    const msg = messagesSnapshot[i] as unknown as Record<string, unknown> | undefined;
+    if (!msg || msg.role !== "toolResult") {
+      continue;
+    }
+    // Found the latest tool result.  An errored tool result is never a
+    // valid silent sentinel.
+    if (msg.isError === true) {
+      return false;
+    }
+    const content = msg.content as Array<{ type?: string; text?: string }> | undefined;
+    if (!Array.isArray(content) || content.length === 0) {
+      return false;
+    }
+    const textParts = content.filter((c) => c?.type === "text" && typeof c.text === "string");
+    if (textParts.length === 0) {
+      return false;
+    }
+    const combined = textParts
+      .map((c) => c.text ?? "")
+      .join("")
+      .trim();
+    return isSilentReplyText(combined);
+  }
+  return false;
+}
+
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  isCronTrigger?: boolean;
+  messagesSnapshot?: AgentMessage[];
 }): string | null {
   if (
     params.payloadCount !== 0 ||
@@ -191,6 +233,13 @@ export function resolveIncompleteTurnPayloadText(params: {
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
+    return null;
+  }
+
+  // When a cron run's latest successful tool result is the silent NO_REPLY
+  // sentinel, the agent correctly produced no user-visible output — treat
+  // this as a quiet success instead of an incomplete-turn error (#68452).
+  if (params.isCronTrigger && hasLatestSilentToolResult(params.messagesSnapshot)) {
     return null;
   }
 
