@@ -677,9 +677,10 @@ jobs:
               -c protocol.version=2 \
               -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target"
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA"
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
             echo "checkout attempt ${attempt}/2 succeeded"
           }
 

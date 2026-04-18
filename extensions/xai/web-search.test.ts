@@ -6,7 +6,8 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
-import { __testing, createXaiWebSearchProvider } from "./web-search.js";
+import { __testing } from "./test-api.js";
+import { createXaiWebSearchProvider } from "./web-search.js";
 
 const {
   extractXaiWebSearchContent,

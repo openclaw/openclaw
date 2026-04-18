@@ -142,6 +142,16 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         return false;
       }
     };
+    const refreshPublishedCrossSigningKeys = async (): Promise<void> => {
+      if (typeof crypto.userHasCrossSigningKeys !== "function") {
+        return;
+      }
+      try {
+        await crypto.userHasCrossSigningKeys(userId, true);
+      } catch {
+        // The normal bootstrap flow below handles missing or unavailable keys.
+      }
+    };
     const isCrossSigningReady = async (): Promise<boolean> => {
       if (typeof crypto.isCrossSigningReady !== "function") {
         return true;
@@ -212,6 +222,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     // First pass: preserve existing cross-signing identity and ensure public keys are uploaded.
     try {
+      await refreshPublishedCrossSigningKeys();
       await crypto.bootstrapCrossSigning({
         authUploadDeviceSigningKeys,
       });

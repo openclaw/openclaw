@@ -52,6 +52,10 @@ These commands sit beside the main test suites when you need QA-lab realism:
     gateway workers, up to 64 workers or the selected scenario count. Use
     `--concurrency <count>` to tune the worker count, or `--concurrency 1` for
     the older serial lane.
+  - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
+    `aimock` starts a local AIMock-backed provider server for experimental
+    fixture and protocol-mock coverage without replacing the scenario-aware
+    `mock-openai` lane.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
@@ -65,6 +69,9 @@ These commands sit beside the main test suites when you need QA-lab realism:
     `.artifacts/qa-e2e/...`.
 - `pnpm qa:lab:up`
   - Starts the Docker-backed QA site for operator-style QA work.
+- `pnpm openclaw qa aimock`
+  - Starts only the local AIMock provider server for direct protocol smoke
+    testing.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
   - This QA host is repo/dev-only today. Packaged OpenClaw installs do not ship
@@ -206,7 +213,7 @@ The minimum adoption bar for a new channel is:
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
    Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`.
    Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
-5. Author or adapt markdown scenarios under `qa/scenarios/`.
+5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
 
