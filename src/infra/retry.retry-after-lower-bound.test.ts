@@ -39,6 +39,39 @@ beforeEach(() => {
 });
 
 describe("retryAsync respects server-supplied Retry-After as a lower bound", () => {
+  it("preserves symmetric jitter when retryAfterMs equals maxDelayMs (boundary)", async () => {
+    // At the boundary `retryAfterMs === maxDelayMs`, positive jitter would only
+    // produce values >= maxDelayMs, which the final `Math.min(delay, maxDelayMs)`
+    // clamp collapses back to exactly maxDelayMs for every retry — the same
+    // thundering-herd shape the fallback is meant to avoid. Symmetric jitter is
+    // the right answer at and above the cap.
+    randomMocks.generateSecureFraction.mockReturnValue(0);
+
+    vi.useFakeTimers();
+    const delays: number[] = [];
+    const fn = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("429 retry-after at cap"))
+      .mockResolvedValueOnce("ok");
+
+    const promise = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 1,
+      maxDelayMs: 1_000,
+      jitter: 0.5,
+      retryAfterMs: () => 1_000, // exactly at cap
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBe("ok");
+
+    expect(delays).toHaveLength(1);
+    // With symmetric fallback (fraction=0 → offset=-0.5 → delay=500), the
+    // scheduled delay spreads below the cap. Without the strict-less-than
+    // fix, positive mode would have snapped every retry to exactly 1000.
+    expect(delays[0]).toBeLessThan(1_000);
+  });
+
   it("preserves symmetric jitter when retryAfterMs exceeds maxDelayMs (avoids thundering herd)", async () => {
     // When the server asks for a delay larger than our local maxDelayMs, the
     // Retry-After contract is already unsatisfiable. Using positive-only jitter

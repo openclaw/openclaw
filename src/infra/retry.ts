@@ -138,8 +138,13 @@ export async function retryAsync<T>(
       // the thundering herd we are trying to avoid. In that case the server
       // contract is already unsatisfiable, so fall back to symmetric jitter
       // to preserve spread.
+      // Use strict `<` so the `retryAfterMs === maxDelayMs` boundary also
+      // falls back to symmetric jitter. Positive jitter on the boundary only
+      // produces values ≥ maxDelayMs, which the final clamp below collapses
+      // back to exactly maxDelayMs for every retry — the same thundering-herd
+      // shape the fallback is meant to avoid.
       const canHonorRetryAfter =
-        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= maxDelayMs;
+        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs < maxDelayMs;
       delay = applyJitter(delay, jitter, canHonorRetryAfter ? "positive" : "symmetric");
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
 
