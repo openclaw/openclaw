@@ -330,6 +330,40 @@ function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): st
   return `${sessionKey}:acct:${accountId}`;
 }
 
+function resolveRequesterAnnounceQueueState(requesterSessionKey: string) {
+  const { cfg, entry } = loadRequesterSessionEntry(requesterSessionKey);
+  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
+  const sessionId = entry?.sessionId;
+  const queueSettings = resolveQueueSettings({
+    cfg,
+    channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
+    sessionEntry: entry,
+  });
+  const isActive = Boolean(sessionId) && isEmbeddedPiRunActive(sessionId);
+  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  const shouldFollowup =
+    queueSettings.mode === "followup" ||
+    queueSettings.mode === "collect" ||
+    queueSettings.mode === "steer-backlog" ||
+    queueSettings.mode === "interrupt";
+
+  return {
+    cfg,
+    entry,
+    canonicalKey,
+    sessionId,
+    queueSettings,
+    isActive,
+    shouldSteer,
+    shouldFollowup,
+  };
+}
+
+function shouldPreferQueuedCompletionAnnounce(requesterSessionKey: string): boolean {
+  const queueState = resolveRequesterAnnounceQueueState(requesterSessionKey);
+  return queueState.isActive && (queueState.shouldFollowup || queueState.shouldSteer);
+}
+
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   announceId?: string;
@@ -346,33 +380,17 @@ async function maybeQueueSubagentAnnounce(params: {
   if (params.signal?.aborted) {
     return "none";
   }
-  const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const sessionId = entry?.sessionId;
+  const { entry, canonicalKey, sessionId, queueSettings, isActive, shouldSteer, shouldFollowup } =
+    resolveRequesterAnnounceQueueState(params.requesterSessionKey);
   if (!sessionId) {
     return "none";
   }
-
-  const queueSettings = resolveQueueSettings({
-    cfg,
-    channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
-    sessionEntry: entry,
-  });
-  const isActive = isEmbeddedPiRunActive(sessionId);
-
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
     const steered = queueEmbeddedPiMessage(sessionId, params.steerMessage);
     if (steered) {
       return "steered";
     }
   }
-
-  const shouldFollowup =
-    queueSettings.mode === "followup" ||
-    queueSettings.mode === "collect" ||
-    queueSettings.mode === "steer-backlog" ||
-    queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     const didQueue = enqueueAnnounce({
@@ -542,6 +560,9 @@ export async function deliverSubagentAnnouncement(params: {
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
+    preferQueueFirstForCompletion:
+      params.expectsCompletionMessage &&
+      shouldPreferQueuedCompletionAnnounce(params.requesterSessionKey),
     signal: params.signal,
     queue: async () =>
       await maybeQueueSubagentAnnounce({

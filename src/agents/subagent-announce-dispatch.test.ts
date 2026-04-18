@@ -87,6 +87,65 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("uses queue-first ordering for active completion mode when requested", async () => {
+    const queue = vi.fn(async () => "queued" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      preferQueueFirstForCompletion: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result.path).toBe("queued");
+    expect(result.phases).toEqual([
+      { phase: "queue-primary", delivered: true, path: "queued", error: undefined },
+    ]);
+  });
+
+  it("falls through to direct delivery when active completion queue cannot deliver", async () => {
+    const queue = vi.fn(async () => "none" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      preferQueueFirstForCompletion: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(result.path).toBe("direct");
+    expect(result.phases).toEqual([
+      { phase: "queue-primary", delivered: false, path: "none", error: undefined },
+      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+    ]);
+  });
+
+  it("does not bypass drop-new queue policy in active completion mode", async () => {
+    const queue = vi.fn(async () => "dropped" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      preferQueueFirstForCompletion: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      path: "none",
+      phases: [{ phase: "queue-primary", delivered: false, path: "none", error: undefined }],
+    });
+  });
+
   it("falls back to queue when completion direct send fails", async () => {
     const queue = vi.fn(async () => "steered" as const);
     const direct = vi.fn(async () => ({
