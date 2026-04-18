@@ -15,7 +15,7 @@ type RegisterSlackHttpHandlerArgs = {
   accountId?: string;
 };
 
-const slackHttpRoutes = new Map<string, SlackHttpRequestHandler>();
+const slackHttpRoutes = globalThis.__slackHttpRoutes ?? (globalThis.__slackHttpRoutes = new Map<string, SlackHttpRequestHandler>());
 
 export function registerSlackHttpHandler(params: RegisterSlackHttpHandlerArgs): () => void {
   const normalizedPath = normalizeSlackWebhookPath(params.path);
