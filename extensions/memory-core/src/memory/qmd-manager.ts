@@ -1208,6 +1208,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const contextLimits = resolveAgentContextLimits(this.cfg, this.agentId);
     if (params.from !== undefined || params.lines !== undefined) {
+      // For daily memory files, read the full file and strip dreaming blocks
+      // before slicing so that line numbers are consistent with a full read
+      // and cross-session staging data is never exposed.  Daily files are
+      // small (a few KB) so the overhead of a full read is negligible.
+      // See openclaw/openclaw#68367.
+      if (isDailyMemoryPath(relPath)) {
+        const full = await this.readFullText(absPath);
+        if (full.missing) {
+          return { text: "", path: relPath };
+        }
+        const stripped = stripDreamingManagedBlocks(full.text);
+        return buildMemoryReadResult({
+          content: stripped,
+          relPath,
+          from: params.from,
+          lines: params.lines,
+          defaultLines: contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+          maxChars: contextLimits?.memoryGetMaxChars,
+          suggestReadFallback: isDefaultMemoryPath(relPath),
+        });
+      }
+      // Non-daily files: use efficient streaming partial read.
       const requestedCount = Math.max(
         1,
         params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
@@ -1216,11 +1238,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (partial.missing) {
         return { text: "", path: relPath };
       }
-      // TODO(#68367): partial reads of daily memory files still expose dreaming
-      // blocks.  Stripping here would shift line numbers relative to the raw
-      // file, which breaks callers that paginate with from/lines offsets.
-      // A future fix could read-then-strip the full file and re-slice, or
-      // introduce virtual line mapping.
       return buildMemoryReadResultFromSlice({
         selectedLines: partial.selectedLines,
         relPath,
