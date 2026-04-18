@@ -17,14 +17,14 @@ describe("resolveHookModelSelection", () => {
       provider: "openai",
       modelId: "gpt-5",
       hookRunner: hookRunner as never,
-      hookContext: {},
+      hookContext: { sessionId: "test-session", workspaceDir: "/tmp/test" },
     });
 
     expect(result.hookToolsAllow).toEqual(["read", "exec"]);
     expect(result.legacyBeforeAgentStartResult?.toolsAllow).toEqual(["write"]);
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
       { prompt: "hello", messages: [] },
-      {},
+      { sessionId: "test-session", workspaceDir: "/tmp/test" },
     );
   });
 
@@ -42,7 +42,7 @@ describe("resolveHookModelSelection", () => {
       provider: "openai",
       modelId: "gpt-5",
       hookRunner: hookRunner as never,
-      hookContext: {},
+      hookContext: { sessionId: "test-session", workspaceDir: "/tmp/test" },
     });
 
     expect(result.hookToolsAllow).toEqual(["read"]);
