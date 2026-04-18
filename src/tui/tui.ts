@@ -102,6 +102,16 @@ export function resolveLocalAuthCliInvocation(params?: {
     : { command, args: [runNodePath, "models", "auth", "login"] };
 }
 
+export function resolveLocalAuthSpawnOptions(params: {
+  command: string;
+  platform?: NodeJS.Platform;
+}): { shell?: true } {
+  const platform = params.platform ?? process.platform;
+  return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
+    ? { shell: true }
+    : {};
+}
+
 export function resolveTuiSessionKey(params: {
   raw?: string;
   sessionScope: SessionScope;
@@ -779,6 +789,7 @@ export async function runTui(opts: TuiOptions) {
                   cwd: process.cwd(),
                   env: process.env,
                   stdio: "inherit",
+                  ...resolveLocalAuthSpawnOptions({ command }),
                 });
                 child.once("error", reject);
                 child.once("exit", (exitCode, signal) => {

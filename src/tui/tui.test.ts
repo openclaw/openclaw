@@ -11,6 +11,7 @@ import {
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveLocalAuthCliInvocation,
+  resolveLocalAuthSpawnOptions,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -366,5 +367,40 @@ describe("resolveLocalAuthCliInvocation", () => {
       command: "/usr/bin/node",
       args: ["/repo/openclaw.mjs", "models", "auth", "login"],
     });
+  });
+});
+
+describe("resolveLocalAuthSpawnOptions", () => {
+  it("enables shell mode for Windows cmd shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("enables shell mode for Windows bat shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.bat",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("keeps direct execution for non-wrapper commands", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "/usr/local/bin/codex",
+        platform: "linux",
+      }),
+    ).toEqual({});
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.exe",
+        platform: "win32",
+      }),
+    ).toEqual({});
   });
 });
