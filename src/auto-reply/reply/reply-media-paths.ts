@@ -150,8 +150,18 @@ export function createReplyMediaPathNormalizer(params: {
     if (cached) {
       return await cached;
     }
+    // Preserve the friendly basename so downstream transports (WhatsApp,
+    // Matrix, Discord) can present `Plan - Detailed.docx` to the recipient
+    // instead of the staged `<uuid>.docx` filename — see #68536. The staging
+    // path under `~/.openclaw/media/outbound/<uuid>.<ext>` remains unchanged;
+    // only the metadata that transports consult for the user-visible name
+    // is threaded through.
+    const originalFilename = isLikelyLocalMediaSource(media)
+      ? path.basename(media)
+      : undefined;
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
       mediaAccess: resolveMediaAccessForSource(media),
+      originalFilename,
     })
       .then((saved) => saved.path)
       .catch((err) => {

@@ -9,6 +9,13 @@ export async function resolveOutboundAttachmentFromUrl(
     mediaAccess?: OutboundMediaAccess;
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
+    /**
+     * Friendly basename from the original source (e.g. `Plan - Detailed.docx`).
+     * Forwarded to `saveMediaBuffer` so downstream transports (WhatsApp, Matrix,
+     * Discord) can present the human-readable filename to the recipient instead
+     * of the staged `<uuid>.<ext>` staging name — see #68536.
+     */
+    originalFilename?: string;
   },
 ): Promise<{ path: string; contentType?: string }> {
   const media = await loadWebMedia(
@@ -25,6 +32,7 @@ export async function resolveOutboundAttachmentFromUrl(
     media.contentType ?? undefined,
     "outbound",
     maxBytes,
+    options?.originalFilename,
   );
   return { path: saved.path, contentType: saved.contentType };
 }

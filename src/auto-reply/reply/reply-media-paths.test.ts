@@ -57,6 +57,27 @@ describe("createReplyMediaPathNormalizer", () => {
         mediaAccess: expect.objectContaining({
           workspaceDir: "/tmp/agent-workspace",
         }),
+        originalFilename: "photo.png",
+      }),
+    );
+  });
+
+  it("forwards friendly basenames to outbound attachment staging for #68536", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    await normalize({
+      mediaUrls: ["./out/Plan - Detailed.docx"],
+    });
+
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
+      path.join("/tmp/agent-workspace", "out", "Plan - Detailed.docx"),
+      5 * 1024 * 1024,
+      expect.objectContaining({
+        originalFilename: "Plan - Detailed.docx",
       }),
     );
   });
