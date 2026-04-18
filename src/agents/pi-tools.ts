@@ -310,6 +310,8 @@ export function createOpenClawCodingTools(options?: {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  memberRoleIds?: string[];
   /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
   senderId?: string | null;
@@ -570,6 +572,7 @@ export function createOpenClawCodingTools(options?: {
       agentGroupId: options?.groupId ?? null,
       agentGroupChannel: options?.groupChannel ?? null,
       agentGroupSpace: options?.groupSpace ?? null,
+      agentMemberRoleIds: options?.memberRoleIds,
       agentDir: options?.agentDir,
       sandboxRoot,
       sandboxContainerWorkdir: sandbox?.containerWorkdir,
