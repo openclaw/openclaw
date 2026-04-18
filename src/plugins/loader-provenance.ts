@@ -207,13 +207,15 @@ export function warnWhenAllowlistIsOpen(params: {
   if (!params.pluginsEnabled) {
     return;
   }
-  if (params.allow.length > 0) {
-    return;
-  }
   const autoDiscoverable = params.discoverablePlugins.filter(
     (entry) => entry.origin === "workspace" || entry.origin === "global",
   );
   if (autoDiscoverable.length === 0) {
+    return;
+  }
+  const discoveredIds = new Set(autoDiscoverable.map((entry) => entry.id));
+  const allowHasMatch = params.allow.some((id) => discoveredIds.has(id));
+  if (params.allow.length > 0 && allowHasMatch) {
     return;
   }
   if (params.warningCache.hasOpenAllowlistWarning(params.warningCacheKey)) {
@@ -225,8 +227,21 @@ export function warnWhenAllowlistIsOpen(params: {
     .join(", ");
   const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
   params.warningCache.recordOpenAllowlistWarning(params.warningCacheKey);
+  if (params.allow.length === 0) {
+    params.logger.warn(
+      `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+    );
+    return;
+  }
+  const unmatchedEntries = params.allow.filter((id) => !discoveredIds.has(id));
+  const unmatchedPreview = unmatchedEntries
+    .slice(0, 6)
+    .map((id) => `"${id}"`)
+    .join(", ");
+  const unmatchedExtra =
+    unmatchedEntries.length > 6 ? ` (+${unmatchedEntries.length - 6} more)` : "";
   params.logger.warn(
-    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+    `[plugins] plugins.allow entries ${unmatchedPreview}${unmatchedExtra} do not match any discovered plugin ids; discovered non-bundled plugins: ${preview}${extra}. Use the plugin id (not a channel id or npm package name).`,
   );
 }
 

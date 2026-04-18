@@ -5986,6 +5986,65 @@ module.exports = {
     });
   });
 
+  it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-mismatch-allow-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // User configured a channel-style id that does not match the real plugin id.
+          allow: ["warn-mismatch-allow-channel"],
+        },
+      },
+    });
+    const emptyWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
+    const mismatchWarnings = warnings.filter((msg) =>
+      msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(emptyWarnings, "should not emit empty-allowlist warning").toHaveLength(0);
+    expect(mismatchWarnings, "should emit mismatch warning once").toHaveLength(1);
+    expect(mismatchWarnings[0]).toContain(`"warn-mismatch-allow-channel"`);
+    expect(mismatchWarnings[0]).toContain("warn-mismatch-allow-plugin");
+    expect(mismatchWarnings[0]).toContain("Use the plugin id");
+  });
+
+  it("stays quiet when plugins.allow contains at least one matching plugin id", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-partial-allow-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // Allow contains one real plugin id plus a stray channel-style entry.
+          allow: ["warn-partial-allow-plugin", "warn-partial-allow-channel"],
+        },
+      },
+    });
+    const openAllowWarnings = warnings.filter(
+      (msg) =>
+        msg.includes("plugins.allow is empty") ||
+        msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(openAllowWarnings, "should not emit allowlist warning when one id matches").toHaveLength(
+      0,
+    );
+  });
+
   it("handles workspace-discovered plugins according to trust and precedence", () => {
     useNoBundledPlugins();
     const scenarios = [
