@@ -55,6 +55,20 @@ function shouldWriteSeparate(storage: MemoryDreamingStorageConfig): boolean {
   return storage.mode === "separate" || storage.mode === "both" || storage.separateReports;
 }
 
+function adjustHeadingDepth(lines: string[], delta: number): string[] {
+  if (delta === 0) {
+    return [...lines];
+  }
+  return lines.map((line) => {
+    const match = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (!match) {
+      return line;
+    }
+    const nextLevel = Math.max(1, Math.min(6, match[1].length + delta));
+    return `${"#".repeat(nextLevel)} ${match[2]}`;
+  });
+}
+
 export async function writeDailyDreamingPhaseBlock(params: {
   workspaceDir: string;
   phase: Exclude<MemoryDreamingPhaseName, "deep">;
@@ -64,7 +78,11 @@ export async function writeDailyDreamingPhaseBlock(params: {
   storage: MemoryDreamingStorageConfig;
 }): Promise<{ inlinePath?: string; reportPath?: string }> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No notable updates.";
+  const inlineLines = params.bodyLines.length > 0 ? params.bodyLines : ["- No notable updates."];
+  const reportLines =
+    params.phase === "rem" ? adjustHeadingDepth(inlineLines, -1) : [...inlineLines];
+  const body = inlineLines.join("\n");
+  const reportBody = reportLines.join("\n");
   let inlinePath: string | undefined;
   let reportPath: string | undefined;
 
@@ -99,7 +117,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
     const report = [
       `# ${params.phase === "light" ? "Light Sleep" : "REM Sleep"}`,
       "",
-      body,
+      reportBody,
       "",
     ].join("\n");
     await fs.writeFile(reportPath, report, "utf-8");
