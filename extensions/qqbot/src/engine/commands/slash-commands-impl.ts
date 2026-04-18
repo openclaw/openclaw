@@ -114,16 +114,27 @@ registerCommand({
 });
 
 /**
- * /bot-version — show the OpenClaw framework version.
+ * /bot-version — show both the QQBot plugin version and the OpenClaw
+ * framework version. Aligned with the standalone `openclaw-qqbot`
+ * build so users see the same identification regardless of which
+ * distribution they run.
+ *
+ * Note: unlike the standalone build, the built-in plugin is released
+ * in-tree with the OpenClaw framework (same version), so an online
+ * npm dist-tag check is not applicable here and is intentionally
+ * omitted.
  */
 registerCommand({
   name: "bot-version",
-  description: "查看 OpenClaw 框架版本",
-  usage: [`/bot-version`, ``, `查看当前 OpenClaw 框架版本。`].join("\n"),
+  description: "查看 QQBot 插件版本和 OpenClaw 框架版本",
+  usage: [`/bot-version`, ``, `查看当前 QQBot 插件版本和 OpenClaw 框架版本。`].join("\n"),
   handler: async () => {
     const frameworkVersion = resolveRuntimeServiceVersion();
-    const lines = [`🦞 OpenClaw 版本：${frameworkVersion}`];
-    lines.push(`🌟 官方 GitHub 仓库：[点击前往](${QQBOT_PLUGIN_GITHUB_URL})`);
+    const lines = [
+      `🦞 OpenClaw 框架版本：${frameworkVersion}`,
+      `🤖 QQBot 插件版本：v${PLUGIN_VERSION}`,
+      `🌟 官方 GitHub 仓库：[点击前往](${QQBOT_PLUGIN_GITHUB_URL})`,
+    ];
     return lines.join("\n");
   },
 });
@@ -163,6 +174,7 @@ registerCommand({
       }
       lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
     }
+    lines.push(``, `> 插件版本 v${PLUGIN_VERSION}`);
     return lines.join("\n");
   },
 });

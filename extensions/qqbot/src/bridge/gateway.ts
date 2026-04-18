@@ -7,7 +7,6 @@
  * injected by the framework at startup).
  */
 
-import { createRequire } from "node:module";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -25,19 +24,17 @@ import { debugLog, debugError } from "../engine/utils/log.js";
 import { registerTextChunker } from "../engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "../types.js";
 import { setBridgeLogger } from "./logger.js";
+import { resolveQQBotPluginVersion } from "./plugin-version.js";
 import { getQQBotRuntimeForEngine } from "./runtime.js";
 
 // Register framework SDK version resolver for core/ slash commands.
 registerVersionResolver(resolveRuntimeServiceVersion);
 
-// Inject plugin + framework versions into sender (avoids dynamic require inside engine/).
-const _require = createRequire(import.meta.url);
-let _pluginVersion = "unknown";
-try {
-  _pluginVersion = _require("../../package.json").version ?? "unknown";
-} catch {
-  /* fallback */
-}
+// Inject plugin + framework versions into sender and into the slash
+// command registry. The plugin version is read from this plugin's own
+// `package.json` by walking up from this file's URL, which is robust
+// against source-vs-dist layout differences.
+const _pluginVersion = resolveQQBotPluginVersion(import.meta.url);
 initSender({
   pluginVersion: _pluginVersion,
   openclawVersion: resolveRuntimeServiceVersion(),
