@@ -427,6 +427,12 @@ export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
       threadBindingReady?: boolean;
+      deliveryOrigin?: {
+        channel?: string;
+        accountId?: string;
+        to?: string;
+        threadId?: string | number;
+      };
     }
   | {
       status: "error";
