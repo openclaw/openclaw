@@ -105,6 +105,24 @@ function isValidMedia(
   return false;
 }
 
+function isValidContinuationMedia(candidate: string, wasQuoted: boolean): boolean {
+  const hasSpaces = /\s/.test(candidate);
+  const allowSpaces =
+    wasQuoted ||
+    /^https?:\/\//i.test(candidate) ||
+    candidate.startsWith("file://") ||
+    looksLikeLocalFilePath(candidate);
+
+  if (hasSpaces && !allowSpaces) {
+    return false;
+  }
+
+  return isValidMedia(candidate, {
+    allowSpaces,
+    allowBareFilename: wasQuoted || !hasSpaces,
+  });
+}
+
 function unwrapQuoted(value: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed.length < 2) {
@@ -174,7 +192,8 @@ export function splitMediaFromOutput(raw: string): {
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     // Skip MEDIA extraction if this line is inside a fenced code block
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
@@ -192,7 +211,43 @@ export function splitMediaFromOutput(raw: string): {
     }
 
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
-    if (matches.length === 0) {
+    const isEmptyMediaDirective = matches.every((match) => (match[1] ?? "").trim() === "");
+    if (isEmptyMediaDirective) {
+      let nextLineOffset = lineOffset + line.length + 1;
+      const continuationSegments: ParsedMediaOutputSegment[] = [];
+      let consumedContinuationLines = 0;
+
+      for (let nextLineIndex = lineIndex + 1; nextLineIndex < lines.length; nextLineIndex += 1) {
+        const nextLine = lines[nextLineIndex];
+        if (hasFenceMarkers && isInsideFence(fenceSpans, nextLineOffset)) {
+          break;
+        }
+
+        const candidateText = nextLine.trim();
+        if (!candidateText) {
+          break;
+        }
+
+        const unwrapped = unwrapQuoted(candidateText);
+        const candidate = normalizeMediaSource(cleanCandidate(unwrapped ?? candidateText));
+        if (!isValidContinuationMedia(candidate, unwrapped !== undefined)) {
+          break;
+        }
+
+        media.push(candidate);
+        foundMediaToken = true;
+        continuationSegments.push({ type: "media", url: candidate });
+        consumedContinuationLines += 1;
+        nextLineOffset += nextLine.length + 1;
+      }
+
+      if (continuationSegments.length > 0) {
+        segments.push(...continuationSegments);
+        lineIndex += consumedContinuationLines;
+        lineOffset = nextLineOffset;
+        continue;
+      }
+
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline

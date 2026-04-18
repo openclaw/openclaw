@@ -92,6 +92,19 @@ describe("splitMediaFromOutput", () => {
     }
   });
 
+  it("accepts a media directive with the path on the next line", () => {
+    const result = splitMediaFromOutput("Before\nMEDIA:\n/tmp/screenshot.png\nAfter");
+
+    expect(result.text).toBe("Before\nAfter");
+    expect(result.mediaUrls).toEqual(["/tmp/screenshot.png"]);
+    expect(result.mediaUrl).toBe("/tmp/screenshot.png");
+    expect(result.segments).toEqual([
+      { type: "text", text: "Before" },
+      { type: "media", url: "/tmp/screenshot.png" },
+      { type: "text", text: "After" },
+    ]);
+  });
+
   it("returns ordered text and media segments while ignoring fenced MEDIA lines", () => {
     const result = splitMediaFromOutput(
       "Before\nMEDIA:https://example.com/a.png\n```text\nMEDIA:https://example.com/ignored.png\n```\nAfter",
