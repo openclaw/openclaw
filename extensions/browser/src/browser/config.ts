@@ -143,12 +143,14 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
-    // Return undefined when no ssrfPolicy is configured. The CDP fetch helpers
-    // treat undefined as "allow private network" (they default to
-    // { allowPrivateNetwork: true } via the `?? { allowPrivateNetwork: true }`
-    // fallback). Returning {} here instead causes assertCdpEndpointAllowed to
-    // run the SSRF check with an empty policy, which blocks private IPs such as
-    // those used in WSL→Windows remote CDP setups (e.g. 172.29.x.x).
+    // Return undefined when no ssrfPolicy is configured so that:
+    // 1. assertCdpEndpointAllowed short-circuits (its guard is `if (!ssrfPolicy) return`)
+    //    rather than running an SSRF check with an empty policy that blocks private IPs
+    //    (e.g. WSL→Windows remote CDP on 172.29.x.x).
+    // 2. Navigation guards (redactBlockedTabUrls, assertExistingSessionPostInteractionNavigation)
+    //    also short-circuit, which is correct — they only enforce restrictions when
+    //    dangerouslyAllowPrivateNetwork:false or allowedHostnames is explicitly set.
+    //    An empty `{}` policy would have passed those checks anyway; undefined is equivalent.
     return undefined;
   }
 
