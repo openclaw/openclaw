@@ -1137,14 +1137,30 @@ async function processOpenAICompletionsStream(
     }
     const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
     if (reasoningDelta) {
-      if (currentBlock?.type === "toolCall") {
+      if (reasoningDelta.kind === "text") {
+        flushPendingThinkingDelta();
+        if (!currentBlock || currentBlock.type !== "text") {
+          finishCurrentBlock();
+          currentBlock = { type: "text", text: "" };
+          output.content.push(currentBlock);
+          stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        }
+        currentBlock.text += reasoningDelta.text;
+        stream.push({
+          type: "text_delta",
+          contentIndex: blockIndex(),
+          delta: reasoningDelta.text,
+          partial: output,
+        });
+      } else if (currentBlock?.type === "toolCall") {
+        const thinkingBuffered = { signature: reasoningDelta.signature, text: reasoningDelta.text };
         if (!pendingThinkingDelta) {
-          pendingThinkingDelta = { ...reasoningDelta };
+          pendingThinkingDelta = thinkingBuffered;
         } else {
           pendingThinkingDelta.text += reasoningDelta.text;
         }
       } else {
-        appendThinkingDelta(reasoningDelta);
+        appendThinkingDelta({ signature: reasoningDelta.signature, text: reasoningDelta.text });
       }
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
@@ -1196,27 +1212,45 @@ async function processOpenAICompletionsStream(
 }
 
 function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
+  kind: "thinking" | "text";
   signature: string;
   text: string;
 } | null {
   const reasoningDetails = delta.reasoning_details;
   if (Array.isArray(reasoningDetails)) {
-    let text = "";
+    let thinkingText = "";
+    let visibleText = "";
     for (const item of reasoningDetails) {
       const detail = item as { type?: unknown; text?: unknown };
-      if (detail.type === "reasoning.text" && typeof detail.text === "string" && detail.text) {
-        text += detail.text;
+      if (typeof detail.text !== "string" || !detail.text) {
+        continue;
+      }
+      // Some OpenRouter upstreams (e.g. Gemini 2.5, Grok 4.x) deliver the
+      // assistant's visible answer inside `reasoning_details` using the
+      // OpenAI Responses-style content types rather than `choice.delta.content`.
+      // Treat those as visible text; keep `reasoning.*` items as thinking.
+      if (
+        detail.type === "response.output_text" ||
+        detail.type === "response.text" ||
+        detail.type === "text"
+      ) {
+        visibleText += detail.text;
+      } else if (detail.type === "reasoning.text") {
+        thinkingText += detail.text;
       }
     }
-    if (text) {
-      return { signature: "reasoning_details", text };
+    if (visibleText) {
+      return { kind: "text", signature: "reasoning_details", text: visibleText };
+    }
+    if (thinkingText) {
+      return { kind: "thinking", signature: "reasoning_details", text: thinkingText };
     }
   }
   const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
   for (const field of reasoningFields) {
     const value = delta[field];
     if (typeof value === "string" && value.length > 0) {
-      return { signature: field, text: value };
+      return { kind: "thinking", signature: field, text: value };
     }
   }
   return null;

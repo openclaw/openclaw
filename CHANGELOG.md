@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/display: escape raw control characters (including newline and carriage return) in the shared and macOS approval-prompt command sanitizers, so trailing command payloads no longer render on hidden extra lines in the approval UI. (#68198)
 - OpenAI Codex/OAuth + Pi: keep imported Codex CLI OAuth bootstrap, Pi auth export, and runtime overlay handling aligned so Codex sessions survive refresh and health checks without leaking transient CLI state into saved auth files. Thanks @vincentkoc.
 - Agents/TTS: report failed speech synthesis as a real tool error so unconfigured providers no longer feed successful TTS failure output back into agent loops. (#67980) Thanks @lawrence3699.
+- OpenRouter/reasoning_details: route visible-text items (`response.output_text`, `response.text`, `text`) inside OpenRouter `reasoning_details` to the user-visible text block so Gemini 2.5 Flash, Grok 4.x, and similar proxies that emit the final answer inside `reasoning_details` stop returning `stopReason=stop payloads=0`. (#68261)
 
 ## 2026.4.15
 
