@@ -90,6 +90,8 @@ const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
 const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+const GATEWAY_INVALID_REQUEST_ERROR_CODE = "INVALID_REQUEST";
+const MISSING_ADMIN_SCOPE_RE = /\bmissing scope:\s*operator\.admin\b/i;
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
@@ -110,6 +112,17 @@ function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
       err.name === "RequestScopedSubagentRuntimeError" &&
       extractErrorCode(err) === SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE)
   );
+}
+
+function isExpectedNarrativeCleanupScopeError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (code && code !== GATEWAY_INVALID_REQUEST_ERROR_CODE) {
+    return false;
+  }
+  // Gateway scope denials currently surface through the plugin runtime as
+  // INVALID_REQUEST, so keep the message fallback until the gateway exposes a
+  // dedicated scope-denied error code here.
+  return MISSING_ADMIN_SCOPE_RE.test(formatErrorMessage(err));
 }
 
 function formatFallbackWriteFailure(err: unknown): string {
@@ -932,9 +945,11 @@ export async function generateAndAppendDreamNarrative(params: {
     try {
       await params.subagent.deleteSession({ sessionKey });
     } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
+      if (!isExpectedNarrativeCleanupScopeError(cleanupErr)) {
+        params.logger.warn(
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+        );
+      }
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {

@@ -789,6 +789,31 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.deleteSession).toHaveBeenCalled();
   });
 
+  it("does not warn when dreaming cleanup lacks operator.admin in synthetic scope", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
+    subagent.deleteSession.mockRejectedValue(
+      Object.assign(new Error("missing scope: operator.admin"), {
+        code: "INVALID_REQUEST",
+      }),
+    );
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["memory fragment"] },
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("The repository whispered of forgotten endpoints.");
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed for light phase"),
+    );
+  });
+
   it("scrubs stale dreaming entries and orphan transcripts after cleanup", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const stateDir = await createTempWorkspace("openclaw-dreaming-state-");

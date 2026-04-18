@@ -292,7 +292,10 @@ async function dispatchGatewayMethod<T>(
     throw new Error(`Gateway method "${method}" completed without a response.`);
   }
   if (!result.ok) {
-    throw new Error(result.error?.message ?? `Gateway method "${method}" failed.`);
+    throw Object.assign(
+      new Error(result.error?.message ?? `Gateway method "${method}" failed.`),
+      result.error?.code ? { code: result.error.code } : {},
+    );
   }
   return result.payload as T;
 }

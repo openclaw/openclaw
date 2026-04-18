@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { extractErrorCode } from "../plugin-sdk/error-runtime.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -792,12 +793,19 @@ describe("loadGatewayPlugins", () => {
       opts.respond(true, {});
     });
 
-    await expect(
-      runtime.deleteSession({
+    let thrown: unknown;
+    try {
+      await runtime.deleteSession({
         sessionKey: "s-delete",
         deleteTranscript: true,
-      }),
-    ).rejects.toThrow("missing scope: operator.admin");
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("missing scope: operator.admin");
+    expect(extractErrorCode(thrown)).toBe("INVALID_REQUEST");
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
