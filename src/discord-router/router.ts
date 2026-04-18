@@ -129,11 +129,21 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             const authorId = d.author?.id;
             const isBot = d.author?.bot === true;
             const guildId = d.guild_id;
-            const content = d.content ?? "";
+            let content = d.content ?? "";
             const channelId = d.channel_id;
 
+            // Include reply context so the agent knows what message is being responded to
+            const ref = d.referenced_message;
+            if (ref && typeof ref === "object") {
+              const refAuthor = ref.author?.username ?? "unknown";
+              const refContent = (ref.content ?? "").slice(0, 500);
+              if (refContent) {
+                content = `[Replying to ${refAuthor}: "${refContent}"]\n${content}`;
+              }
+            }
+
             runtime.log(
-              `[router] MESSAGE_CREATE: author=${authorId} guild=${guildId ?? "dm"} content=${content.slice(0, 40)}`,
+              `[router] MESSAGE_CREATE: author=${authorId} guild=${guildId ?? "dm"} reply=${!!ref} content=${content.slice(0, 60)}`,
             );
 
             if (!authorId || isBot || guildId || !content.trim()) {
