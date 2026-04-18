@@ -14,6 +14,7 @@ import {
   steerControlledSubagentRun,
 } from "./subagent-control.js";
 import {
+  __testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -145,6 +146,21 @@ function writeSessionStoreFixture(label: string, store: Record<string, unknown>)
 
 beforeEach(() => {
   setSubagentControlDepsForTest();
+  subagentRegistryTesting.setDepsForTest({
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
+    ensureContextEnginesInitialized: () => {},
+    ensureRuntimePluginsLoaded: () => {},
+    resolveContextEngine: async () => ({
+      info: { id: "test", name: "Test" },
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      ingest: async () => ({ ingested: false }),
+    }),
+  });
+});
+
+afterEach(() => {
+  subagentRegistryTesting.setDepsForTest();
 });
 
 describe("sendControlledSubagentMessage", () => {
