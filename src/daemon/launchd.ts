@@ -35,6 +35,16 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const SERVICE_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+] as const;
 
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
@@ -58,6 +68,60 @@ function resolveLaunchAgentPlistPathForLabel(
 ): string {
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
+function readProxyEnvironment(
+  env: Record<string, string | undefined> | undefined,
+): Record<string, string> {
+  const proxyEnv: Record<string, string> = {};
+  if (!env) {
+    return proxyEnv;
+  }
+  for (const key of SERVICE_PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    proxyEnv[key] = trimmed;
+  }
+  return proxyEnv;
+}
+
+async function preserveExistingLaunchAgentProxyEnvironment(params: {
+  env: GatewayServiceEnv;
+  environment?: Record<string, string | undefined>;
+}): Promise<Record<string, string | undefined> | undefined> {
+  // launchd does not inherit the macOS system proxy, so a service refresh that
+  // rewrites the plist from a shell without HTTP(S)_PROXY would silently break
+  // previously working gateway egress. Preserve the existing proxy env unless
+  // the current install explicitly overrides it.
+  const label = resolveLaunchAgentLabel({ env: params.env });
+  const plistPath = resolveLaunchAgentPlistPathForLabel(params.env, label);
+  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  const preservedProxyEnv = readProxyEnvironment(existing?.environment);
+  if (Object.keys(preservedProxyEnv).length === 0) {
+    return params.environment;
+  }
+
+  const mergedEnvironment = { ...params.environment };
+  let changed = false;
+  for (const [key, value] of Object.entries(preservedProxyEnv)) {
+    const current = mergedEnvironment[key];
+    if (typeof current === "string" && current.trim()) {
+      continue;
+    }
+    mergedEnvironment[key] = value;
+    changed = true;
+  }
+
+  if (!changed) {
+    return params.environment;
+  }
+  return mergedEnvironment;
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -619,6 +683,10 @@ async function writeLaunchAgentPlist({
   await ensureSecureDirectory(path.dirname(plistPath));
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const mergedEnvironment = await preserveExistingLaunchAgentProxyEnvironment({
+    env,
+    environment,
+  });
   const plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
@@ -626,7 +694,7 @@ async function writeLaunchAgentPlist({
     workingDirectory,
     stdoutPath,
     stderrPath,
-    environment,
+    environment: mergedEnvironment,
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);

@@ -218,6 +218,14 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
+    readFile: vi.fn(async (p: string) => {
+      const key = p;
+      const value = state.files.get(key);
+      if (value !== undefined) {
+        return value;
+      }
+      throw new Error(`ENOENT: no such file or directory, open '${key}'`);
+    }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
@@ -455,6 +463,66 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>TMPDIR</key>");
     expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("preserves existing proxy environment when reinstalling without proxy vars", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://127.0.0.1:7890",
+        HTTPS_PROXY: "http://127.0.0.1:7890",
+        NO_PROXY: "127.0.0.1,localhost,::1,.local",
+      },
+    });
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>HTTP_PROXY</key>");
+    expect(plist).toContain("<string>http://127.0.0.1:7890</string>");
+    expect(plist).toContain("<key>HTTPS_PROXY</key>");
+    expect(plist).toContain("<key>NO_PROXY</key>");
+    expect(plist).toContain("<string>127.0.0.1,localhost,::1,.local</string>");
+  });
+
+  it("keeps explicit proxy overrides while filling missing proxy vars from the existing plist", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://127.0.0.1:7890",
+        HTTPS_PROXY: "http://127.0.0.1:7890",
+        NO_PROXY: "127.0.0.1,localhost,::1,.local",
+      },
+    });
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: {
+        HTTP_PROXY: "http://proxy.example:8080",
+      },
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>HTTP_PROXY</key>");
+    expect(plist).toContain("<string>http://proxy.example:8080</string>");
+    expect(plist).toContain("<key>HTTPS_PROXY</key>");
+    expect(plist).toContain("<string>http://127.0.0.1:7890</string>");
+    expect(plist).toContain("<key>NO_PROXY</key>");
+    expect(plist).toContain("<string>127.0.0.1,localhost,::1,.local</string>");
   });
 
   it("writes KeepAlive=true policy with restrictive umask", async () => {

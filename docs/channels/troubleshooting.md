@@ -28,6 +28,10 @@ Healthy baseline:
 - `RPC probe: ok`
 - Channel probe shows transport connected and, where supported, `works` or `audit ok`
 
+Proxy note:
+
+- On macOS, the LaunchAgent service does not read the system proxy from Network Settings. If OpenClaw needs a proxy, configure the channel/provider proxy directly or install/reinstall the gateway from a shell that exports `HTTP_PROXY` / `HTTPS_PROXY`.
+
 ## WhatsApp
 
 ### WhatsApp failure signatures
