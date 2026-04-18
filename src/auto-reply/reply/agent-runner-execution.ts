@@ -678,7 +678,8 @@ export async function runAgentTurnWithFallback(params: {
     // (cleanup override, subagent tracking) and incomplete-turn
     // detectors (yield-after-approval) can read them without a
     // session-store round-trip.
-    const planModeEntry = params.getActiveSessionEntry()?.planMode;
+    const activeSessionEntry = params.getActiveSessionEntry();
+    const planModeEntry = activeSessionEntry?.planMode;
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
@@ -686,6 +687,14 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
       inPlanMode: planModeEntry?.mode === "plan",
       ...(planModeEntry?.approval ? { planApproval: planModeEntry.approval } : {}),
+      // PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+      // mirror `SessionEntry.recentlyApprovedAt` (ROOT level, survives
+      // planMode deletion on approve/edit transition) so the
+      // yield-after-approval detector can fire within the post-approval
+      // grace window even after sessions.patch has cleared planMode.
+      ...(activeSessionEntry?.recentlyApprovedAt !== undefined
+        ? { recentlyApprovedAt: activeSessionEntry.recentlyApprovedAt }
+        : {}),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;

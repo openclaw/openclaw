@@ -918,20 +918,55 @@ type PlanApprovedYieldAttempt = Pick<
   | "replayMetadata"
 >;
 
+/**
+ * PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+ * grace window after approval during which the yield-retry detector
+ * remains active. 2 minutes covers the agent's natural response latency
+ * + tool-call overhead without keeping the retry loop armed
+ * indefinitely. Past this window the agent is "fully executing" and
+ * any yield is treated as normal task completion rather than a
+ * spurious post-approval stall.
+ */
+export const POST_APPROVAL_YIELD_GRACE_MS = 2 * 60_000;
+
 export function resolveYieldDuringApprovedPlanInstruction(params: {
   planModeActive?: boolean;
   /** Latest session-entry approval state: "approved" / "edited" trigger this detector. */
   planApproval?: string;
+  /**
+   * PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+   * epoch-ms timestamp from `SessionEntry.recentlyApprovedAt`. When
+   * `sessions.patch { planApproval: { action: "approve"/"edit" } }`
+   * fires, planMode gets deleted (mode → "normal") which clears both
+   * `planModeActive` and `planApproval` state that the old predicates
+   * relied on. `recentlyApprovedAt` survives that deletion (stored at
+   * SessionEntry ROOT), so the detector can still fire within the
+   * grace window post-approval.
+   */
+  recentlyApprovedAt?: number;
+  /** Now (ms) — injectable for tests. Defaults to Date.now(). */
+  nowMs?: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanApprovedYieldAttempt;
   /** 0 = first retry (standard tone), >=1 = firm */
   retryAttemptIndex: number;
 }): string | null {
-  if (!params.planModeActive) {
-    return null;
-  }
-  if (params.planApproval !== "approved" && params.planApproval !== "edited") {
+  // Two entry paths gate this detector:
+  //   A) Legacy: planModeActive + planApproval ∈ {approved, edited}.
+  //      Only fires BEFORE sessions.patch processes the transition
+  //      (narrow window — typically doesn't fire in production).
+  //   B) Post-transition: recentlyApprovedAt within grace window. This
+  //      is the production path — sessions.patch clears planMode on
+  //      approve/edit so we can't depend on the old predicates.
+  const now = params.nowMs ?? Date.now();
+  const withinGraceWindow =
+    params.recentlyApprovedAt !== undefined &&
+    now - params.recentlyApprovedAt < POST_APPROVAL_YIELD_GRACE_MS;
+  const legacyPathActive =
+    params.planModeActive &&
+    (params.planApproval === "approved" || params.planApproval === "edited");
+  if (!withinGraceWindow && !legacyPathActive) {
     return null;
   }
   if (params.aborted || params.timedOut) {

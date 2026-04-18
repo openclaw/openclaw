@@ -495,12 +495,26 @@ export async function applySessionsPatchToStore(params: {
       if (!answer) {
         return invalid('planApproval action="answer" requires `answer` text');
       }
-      // No state change. The actual injection happens via the existing
-      // approval-reply dispatch path (which the channel/UI will route
-      // separately as a synthetic user message). We accept the patch as
-      // a no-op so the client's optimistic dismissal succeeds.
-      // (PR-10 follow-up: wire the answer into the synthetic-user-msg
-      // pipeline. For now, the client handles the dispatch directly.)
+      // PR-11 review fix (Codex P1 cluster #3105216364 / #3105247854 /
+      // #3105261556): persist the synthetic `[QUESTION_ANSWER]: <text>`
+      // injection on the SessionEntry so the runtime sees it on the
+      // NEXT agent turn (regardless of which channel the
+      // `/plan answer` came from). Single source of truth — replaces
+      // the per-caller "inject via channel send" pattern that leaked
+      // the marker into user-visible chat history.
+      //
+      // The `[QUESTION_ANSWER]:` marker (with COLON) matches the
+      // canonical format documented in
+      // `src/agents/tool-description-presets.ts` and used by the
+      // webchat path at `ui/src/ui/app.ts:1118`.
+      //
+      // Mention-neutralize the answer before storing so an answer
+      // containing `@channel`/`@here`/`@everyone` can't ping the
+      // delivery channel when the synthetic message later renders.
+      const safeAnswer = answer
+        .replace(/@(channel|here|everyone)\b/gi, "@\u{FE6B}$1")
+        .replace(/<@/g, "<\u{200B}@");
+      next.pendingAgentInjection = `[QUESTION_ANSWER]: ${safeAnswer}`;
     } else if (action === "auto") {
       // PR-10 auto-mode toggle. Sets the session's autoApprove flag
       // without resolving any specific approval. When enabled, future
@@ -566,6 +580,17 @@ export async function applySessionsPatchToStore(params: {
         );
       }
       next.planMode = { ...resolved, updatedAt: now };
+      // PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+      // stamp `recentlyApprovedAt` at SessionEntry ROOT on the
+      // approve/edit transitions. This field SURVIVES the `planMode`
+      // deletion below (mode → "normal" clears planMode entirely),
+      // so downstream paths like
+      // `resolveYieldDuringApprovedPlanInstruction` can detect
+      // "just approved" within a grace window without depending on
+      // `planMode.approval` (which is reset/cleared on transition).
+      if (action === "approve" || action === "edit") {
+        next.recentlyApprovedAt = now;
+      }
       // Approve / edit transition the mode to "normal" — the approval
       // resolution unlocks mutations. Clear the per-session planMode entry
       // so subsequent reads see no active plan state (matches the

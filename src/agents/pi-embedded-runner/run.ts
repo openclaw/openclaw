@@ -2044,6 +2044,13 @@ export async function runEmbeddedPiAgent(
           const planApprovedYieldInstruction = resolveYieldDuringApprovedPlanInstruction({
             planModeActive: params.planMode === "plan",
             planApproval: yieldCtx?.planApproval,
+            // PR-11 review fix (Codex P2 #3105311664): forward the
+            // post-transition `recentlyApprovedAt` timestamp so the
+            // detector can fire within the grace window even after
+            // sessions.patch has cleared planMode on approve/edit.
+            ...(yieldCtx?.recentlyApprovedAt !== undefined
+              ? { recentlyApprovedAt: yieldCtx.recentlyApprovedAt }
+              : {}),
             aborted,
             timedOut,
             attempt,

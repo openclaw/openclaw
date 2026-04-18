@@ -268,6 +268,17 @@ export type AgentRunContext = {
    * "rejected" | "timed_out"`.
    */
   planApproval?: string;
+  /**
+   * PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+   * epoch-ms timestamp from `SessionEntry.recentlyApprovedAt`,
+   * mirrored at context-registration time. Lets the yield-after-approval
+   * detector fire within the post-approval grace window even AFTER
+   * sessions.patch has cleared planMode (mode → "normal" deletes the
+   * planMode object, so `planApproval` becomes undefined — this field
+   * survives that cleanup because it's written at the SessionEntry
+   * root level).
+   */
+  recentlyApprovedAt?: number;
 };
 
 type AgentEventState = {

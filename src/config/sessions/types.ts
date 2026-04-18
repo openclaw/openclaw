@@ -241,6 +241,40 @@ export type SessionEntry = {
      */
     autoApprove?: boolean;
   };
+  /**
+   * PR-11 review fix (Codex P2 #3105311664 — escalation cluster):
+   * timestamp (epoch ms) of the most-recent `approve`/`edit`
+   * transition. Stored at SessionEntry ROOT level (NOT under planMode)
+   * so it SURVIVES the `mode → "normal"` flip — sessions-patch.ts
+   * deletes the entire `planMode` object on close, which would lose
+   * any state stored within it.
+   *
+   * Downstream paths (e.g. `resolveYieldDuringApprovedPlanInstruction`
+   * in `pi-embedded-runner/run.ts`) detect "just approved" within a
+   * grace window by reading this field instead of depending on
+   * `planMode.approval` (cleared on transition).
+   *
+   * Cleared on the next `enter_plan_mode` cycle so a fresh approval
+   * cycle starts from scratch.
+   */
+  recentlyApprovedAt?: number;
+  /**
+   * PR-11 review fix (Codex P1 #3105216364 / #3105247854 / #3105261556 —
+   * escalation cluster): when set, this synthetic user-message text is
+   * prepended to the next agent turn's user input by the runtime, then
+   * cleared. Used by gateway-side handlers to inject signals like
+   * `[QUESTION_ANSWER]: <text>` into the agent's context after a
+   * `sessions.patch { planApproval: { action: "answer" } }` transition.
+   *
+   * Single source of truth for inject-on-next-turn signals — replaces
+   * the prior pattern where each caller (webchat / Telegram / Discord
+   * / Slack `/plan answer` paths) had to manually inject via the
+   * channel's message-send infrastructure (which leaked the synthetic
+   * marker into user-visible chat history).
+   *
+   * Cleared by the runtime on first read.
+   */
+  pendingAgentInjection?: string;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
