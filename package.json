@@ -1057,6 +1057,10 @@
       "types": "./dist/plugin-sdk/provider-stream-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
     },
+    "./plugin-sdk/provider-transport-runtime": {
+      "types": "./dist/plugin-sdk/provider-transport-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-transport-runtime.js"
+    },
     "./plugin-sdk/provider-stream": {
       "types": "./dist/plugin-sdk/provider-stream.d.ts",
       "default": "./dist/plugin-sdk/provider-stream.js"
