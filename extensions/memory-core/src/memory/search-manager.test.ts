@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 
 function createManagerStatus(params: {
-  backend: "qmd" | "builtin";
+  backend: "qmd" | "builtin" | "mem0" | "hybrid";
   provider: string;
   model: string;
   requestedProvider: string;
@@ -41,7 +41,7 @@ function nativePath(candidate: string): string {
 }
 
 function createManagerMock(params: {
-  backend: "qmd" | "builtin";
+  backend: "qmd" | "builtin" | "mem0" | "hybrid";
   provider: string;
   model: string;
   requestedProvider: string;
@@ -114,6 +114,15 @@ const mockCloseMemoryIndexManagersForAgent = vi.hoisted(() => vi.fn(async () => 
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
 );
+const mockMem0Manager = vi.hoisted(() => ({
+  ...createManagerMock({
+    backend: "mem0",
+    provider: "mem0",
+    model: "mem0",
+    requestedProvider: "mem0",
+  }),
+}));
+const createMem0ManagerMock = vi.hoisted(() => vi.fn(async () => mockMem0Manager));
 
 vi.mock("./qmd-manager.js", () => ({
   QmdMemoryManager: {
@@ -134,6 +143,13 @@ vi.mock("../../manager-runtime.js", () => ({
   closeMemoryIndexManagersForAgent: mockCloseMemoryIndexManagersForAgent,
 }));
 
+vi.mock("./mem0-manager.js", () => ({
+  Mem0MemoryManager: {
+    create: createMem0ManagerMock,
+  },
+}));
+
+import { Mem0MemoryManager } from "./mem0-manager.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
 import {
   closeAllMemorySearchManagers,
@@ -141,6 +157,7 @@ import {
   getMemorySearchManager,
 } from "./search-manager.js";
 const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
+const createMem0Manager = vi.mocked(Mem0MemoryManager["create"]);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
@@ -154,6 +171,28 @@ function createQmdCfg(
   return {
     memory: { backend: "qmd", qmd },
     agents: { list: [{ id: agentId, default: true, workspace }] },
+  };
+}
+
+function createMem0Cfg(agentId: string): OpenClawConfig {
+  return {
+    memory: { backend: "mem0", mem0: { baseUrl: "http://127.0.0.1:8000" } },
+    agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
+  };
+}
+
+function createHybridCfg(agentId: string): OpenClawConfig {
+  return {
+    memory: {
+      backend: "hybrid",
+      mem0: { baseUrl: "http://127.0.0.1:8000" },
+      qmd: {},
+      hybrid: {
+        read: { mode: "routed", order: ["mem0", "qmd"], maxResults: 6, dedupe: true },
+        write: { mode: "routed", successPolicy: "any" },
+      },
+    },
+    agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
   };
 }
 
@@ -287,6 +326,13 @@ beforeEach(async () => {
   fallbackManager.probeEmbeddingAvailability.mockClear();
   fallbackManager.probeVectorAvailability.mockClear();
   fallbackManager.close.mockClear();
+  mockMem0Manager.search.mockClear();
+  mockMem0Manager.readFile.mockClear();
+  mockMem0Manager.status.mockClear();
+  mockMem0Manager.sync.mockClear();
+  mockMem0Manager.probeEmbeddingAvailability.mockClear();
+  mockMem0Manager.probeVectorAvailability.mockClear();
+  mockMem0Manager.close.mockClear();
   mockCloseAllMemoryIndexManagers.mockClear();
   mockCloseMemoryIndexManagersForAgent.mockClear();
   mockMemoryIndexGet.mockClear();
@@ -294,9 +340,53 @@ beforeEach(async () => {
   checkQmdBinaryAvailability.mockClear();
   checkQmdBinaryAvailability.mockResolvedValue({ available: true });
   createQmdManagerMock.mockClear();
+  createMem0Manager.mockClear();
+  mockMem0Manager.search.mockResolvedValue([]);
+  mockMem0Manager.readFile.mockResolvedValue({ text: "", path: "mem0/default" });
+  mockMem0Manager.status.mockImplementation(() =>
+    createManagerStatus({
+      backend: "mem0",
+      provider: "mem0",
+      model: "mem0",
+      requestedProvider: "mem0",
+    }),
+  );
 });
 
 describe("getMemorySearchManager caching", () => {
+  it("reuses the same mem0 manager instance for repeated calls", async () => {
+    const cfg = createMem0Cfg("mem0-main");
+
+    const first = await getMemorySearchManager({ cfg, agentId: "mem0-main" });
+    const second = await getMemorySearchManager({ cfg, agentId: "mem0-main" });
+
+    expect(first.manager).toBe(second.manager);
+    expect(createMem0Manager.mock.calls).toHaveLength(1);
+    expect(requireManager(first).status().backend).toBe("mem0");
+  });
+
+  it("creates a hybrid manager and routes hot queries to mem0", async () => {
+    const cfg = createHybridCfg("hybrid-hot");
+    mockMem0Manager.search.mockResolvedValue([
+      {
+        path: "mem0/task",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "recent task",
+        source: "memory",
+      },
+    ]);
+
+    const result = await getMemorySearchManager({ cfg, agentId: "hybrid-hot" });
+    const manager = requireManager(result);
+    const searchResults = await manager.search("remember current urgent task");
+
+    expect(manager.status().backend).toBe("hybrid");
+    expect(searchResults[0]?.path).toBe("mem0/task");
+    expect(mockMem0Manager.search).toHaveBeenCalledTimes(1);
+  });
+
   it("repairs an invalid shared singleton cache shape before using qmd cache maps", async () => {
     await closeAllMemorySearchManagers();
     vi.resetModules();

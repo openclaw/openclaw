@@ -21,6 +21,8 @@ import {
   type MemorySearchRuntimeDebug,
   type MemorySource,
   type MemorySyncParams,
+  type ResolvedHybridConfig,
+  type ResolvedMem0Config,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -59,7 +61,7 @@ type MemorySearchManagerCacheState =
   | "recent-failure-cooldown";
 
 export type MemorySearchManagerDebug = {
-  backend?: "builtin" | "qmd";
+  backend?: "builtin" | "qmd" | "mem0" | "hybrid";
   purpose?: MemorySearchManagerPurpose;
   managerMs?: number;
   managerCacheState?: MemorySearchManagerCacheState;
@@ -71,39 +73,40 @@ type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, CachedQmdManagerEntry>;
   pendingQmdManagerCreates: Map<string, PendingQmdManagerCreate>;
   qmdManagerOpenFailures: Map<string, QmdManagerOpenFailure>;
+  mem0ManagerCache: Map<string, MemorySearchManager>;
+  hybridManagerCache: Map<string, MemorySearchManager>;
 };
-
-const QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS = 60_000;
-
-function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
-  return {
-    qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
-    pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
-    qmdManagerOpenFailures: new Map<string, QmdManagerOpenFailure>(),
-  };
-}
 
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
   const resolved = resolveGlobalSingleton<unknown>(
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
-    createMemorySearchManagerCacheStore,
+    () => ({
+      qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
+      pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
+      qmdManagerOpenFailures: new Map<string, QmdManagerOpenFailure>(),
+      mem0ManagerCache: new Map<string, MemorySearchManager>(),
+      hybridManagerCache: new Map<string, MemorySearchManager>(),
+    }),
   );
-  if (
-    typeof resolved === "object" &&
-    resolved !== null &&
-    (resolved as Partial<MemorySearchManagerCacheStore>).qmdManagerCache instanceof Map &&
-    (resolved as Partial<MemorySearchManagerCacheStore>).pendingQmdManagerCreates instanceof Map
-  ) {
-    const cacheStore = resolved as Partial<MemorySearchManagerCacheStore>;
-    if (!(cacheStore.qmdManagerOpenFailures instanceof Map)) {
-      cacheStore.qmdManagerOpenFailures = new Map<string, QmdManagerOpenFailure>();
-    }
-    return cacheStore as MemorySearchManagerCacheStore;
+  if (typeof resolved !== "object" || resolved === null) {
+    const repaired = {
+      qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
+      pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
+      qmdManagerOpenFailures: new Map<string, QmdManagerOpenFailure>(),
+      mem0ManagerCache: new Map<string, MemorySearchManager>(),
+      hybridManagerCache: new Map<string, MemorySearchManager>(),
+    };
+    (globalThis as Record<PropertyKey, unknown>)[MEMORY_SEARCH_MANAGER_CACHE_KEY] = repaired;
+    return repaired;
   }
-  const repaired = createMemorySearchManagerCacheStore();
-  (globalThis as Record<PropertyKey, unknown>)[MEMORY_SEARCH_MANAGER_CACHE_KEY] = repaired;
-  return repaired;
+  const cacheStore = resolved as Partial<MemorySearchManagerCacheStore>;
+  cacheStore.qmdManagerCache ??= new Map<string, CachedQmdManagerEntry>();
+  cacheStore.pendingQmdManagerCreates ??= new Map<string, PendingQmdManagerCreate>();
+  cacheStore.qmdManagerOpenFailures ??= new Map<string, QmdManagerOpenFailure>();
+  cacheStore.mem0ManagerCache ??= new Map<string, MemorySearchManager>();
+  cacheStore.hybridManagerCache ??= new Map<string, MemorySearchManager>();
+  return cacheStore as MemorySearchManagerCacheStore;
 }
 
 const log = createSubsystemLogger("memory");
@@ -111,6 +114,8 @@ const {
   qmdManagerCache: QMD_MANAGER_CACHE,
   pendingQmdManagerCreates: PENDING_QMD_MANAGER_CREATES,
   qmdManagerOpenFailures: QMD_MANAGER_OPEN_FAILURES,
+  mem0ManagerCache: MEM0_MANAGER_CACHE,
+  hybridManagerCache: HYBRID_MANAGER_CACHE,
 } = getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
 let qmdManagerModulePromise: Promise<typeof import("./qmd-manager.js")> | null = null;
@@ -126,47 +131,54 @@ function loadQmdManagerModule() {
 }
 
 export type MemorySearchManagerResult = {
-  manager: Maybe<MemorySearchManager>;
+  manager: MemorySearchManager | null;
   error?: string;
   debug?: MemorySearchManagerDebug;
 };
 
-export type MemorySearchManagerPurpose = "default" | "status" | "cli";
-
-function getActiveQmdManagerOpenFailure(
-  scopeKey: string,
-  identityKey: string,
-  nowMs = Date.now(),
-): QmdManagerOpenFailure | null {
-  const failure = QMD_MANAGER_OPEN_FAILURES.get(scopeKey);
-  if (!failure) {
+async function getOrCreateMem0Manager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  resolvedMem0?: ResolvedMem0Config;
+}): Promise<MemorySearchManager | null> {
+  if (!params.resolvedMem0?.enabled) {
     return null;
   }
-  if (failure.identityKey !== identityKey || failure.retryAfterMs <= nowMs) {
-    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
-    return null;
+  const cacheKey = `${params.agentId}:${JSON.stringify(params.resolvedMem0)}`;
+  const cached = MEM0_MANAGER_CACHE.get(cacheKey);
+  if (cached) {
+    return cached;
   }
-  return failure;
+  try {
+    const { Mem0MemoryManager } = await import("./mem0-manager.js");
+    const manager = await Mem0MemoryManager.create({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      resolved: params.resolvedMem0,
+    });
+    if (manager) {
+      MEM0_MANAGER_CACHE.set(cacheKey, manager);
+      return manager;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn(`mem0 memory unavailable; falling back to builtin: ${message}`);
+  }
+  return null;
 }
 
-function recordQmdManagerOpenFailure(
-  scopeKey: string,
-  identityKey: string,
-  reason: string,
-  nowMs = Date.now(),
-): void {
-  QMD_MANAGER_OPEN_FAILURES.set(scopeKey, {
-    identityKey,
-    reason,
-    retryAfterMs: nowMs + QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS,
-  });
-}
-
-function clearQmdManagerOpenFailure(scopeKey: string, identityKey: string): void {
-  const failure = QMD_MANAGER_OPEN_FAILURES.get(scopeKey);
-  if (failure?.identityKey === identityKey) {
-    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
-  }
+function buildHybridCacheKey(params: {
+  agentId: string;
+  qmd?: ResolvedQmdConfig;
+  mem0?: unknown;
+  hybrid?: ResolvedHybridConfig;
+  purpose?: "default" | "status";
+}): string {
+  return `${params.agentId}:${params.purpose ?? "default"}:${JSON.stringify({
+    qmd: params.qmd,
+    mem0: params.mem0,
+    hybrid: params.hybrid,
+  })}`;
 }
 
 function hashQmdManagerIdentity(identityKey: string): string {
@@ -192,7 +204,7 @@ function applyManagerDebug(
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: MemorySearchManagerPurpose;
+  purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const acquireStartedAt = Date.now();
   const purpose = params.purpose ?? "default";
@@ -206,6 +218,69 @@ export async function getMemorySearchManager(params: {
       ...debug,
     });
   const resolved = resolveMemoryBackendConfig(params);
+  if (resolved.backend === "mem0") {
+    const manager = await getOrCreateMem0Manager({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      resolvedMem0: resolved.mem0,
+    });
+    if (manager) {
+      return finish({ manager }, { backend: "mem0" });
+    }
+  }
+  if (resolved.backend === "hybrid") {
+    const cacheKey = buildHybridCacheKey({
+      agentId: params.agentId,
+      qmd: resolved.qmd,
+      mem0: resolved.mem0,
+      hybrid: resolved.hybrid,
+      purpose: params.purpose,
+    });
+    const cached = HYBRID_MANAGER_CACHE.get(cacheKey);
+    if (cached) {
+      return finish({ manager: cached }, { backend: "hybrid" });
+    }
+    const [qmdManager, mem0Manager] = await Promise.all([
+      resolved.qmd
+        ? getMemorySearchManager({
+            cfg: { ...params.cfg, memory: { ...params.cfg.memory, backend: "qmd" } },
+            agentId: params.agentId,
+            purpose: params.purpose,
+          }).then((result) => result.manager)
+        : Promise.resolve(null),
+      getOrCreateMem0Manager({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        resolvedMem0: resolved.mem0,
+      }),
+    ]);
+    if (qmdManager || mem0Manager) {
+      const { MemoryIndexManager } = await loadManagerRuntime();
+      const fallback = await MemoryIndexManager.get(params);
+      const { HybridMemoryManager } = await import("./hybrid-manager.js");
+      const manager = new HybridMemoryManager({
+        config: resolved.hybrid ?? {
+          readMode: "routed",
+          writeMode: "routed",
+          successPolicy: "any",
+          readOrder: ["mem0", "qmd"],
+          maxResults: 8,
+          dedupe: true,
+          routing: [],
+        },
+        qmd: qmdManager,
+        mem0: mem0Manager as MemorySearchManager & {
+          captureConversation?: (params: {
+            sessionKey?: string;
+            messages: unknown[];
+          }) => Promise<void>;
+        },
+        fallback,
+      });
+      HYBRID_MANAGER_CACHE.set(cacheKey, manager);
+      return finish({ manager }, { backend: "hybrid" });
+    }
+  }
   if (resolved.backend === "qmd" && resolved.qmd) {
     const qmdResolved = resolved.qmd;
     const normalizedAgentId = normalizeAgentId(params.agentId);
@@ -451,7 +526,7 @@ async function getBuiltinMemorySearchManager(params: {
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
-    const message = formatErrorMessage(err);
+    const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
   }
 }
@@ -497,10 +572,6 @@ class BorrowedMemoryManager implements MemorySearchManager {
     return await this.inner.probeEmbeddingAvailability();
   }
 
-  getCachedEmbeddingAvailability(): MemoryEmbeddingProbeResult | null {
-    return this.inner.getCachedEmbeddingAvailability?.() ?? null;
-  }
-
   async probeVectorAvailability() {
     return await this.inner.probeVectorAvailability();
   }
@@ -509,17 +580,31 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
-  const pendingCreates = Array.from(PENDING_QMD_MANAGER_CREATES.values(), (entry) => entry.promise);
-  await Promise.allSettled(pendingCreates);
-  const managers = Array.from(QMD_MANAGER_CACHE.values(), (entry) => entry.manager);
-  PENDING_QMD_MANAGER_CREATES.clear();
+  const managers = Array.from(QMD_MANAGER_CACHE.values());
   QMD_MANAGER_CACHE.clear();
-  QMD_MANAGER_OPEN_FAILURES.clear();
   for (const manager of managers) {
     try {
       await manager.close?.();
     } catch (err) {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+  const mem0Managers = Array.from(MEM0_MANAGER_CACHE.values());
+  MEM0_MANAGER_CACHE.clear();
+  for (const manager of mem0Managers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close mem0 memory manager: ${String(err)}`);
+    }
+  }
+  const hybridManagers = Array.from(HYBRID_MANAGER_CACHE.values());
+  HYBRID_MANAGER_CACHE.clear();
+  for (const manager of hybridManagers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close hybrid memory manager: ${String(err)}`);
     }
   }
   if (managerRuntimePromise !== null) {
@@ -555,7 +640,7 @@ export async function closeMemorySearchManager(params: {
 }
 
 class FallbackMemoryManager implements MemorySearchManager {
-  private fallback: Maybe<MemorySearchManager> = null;
+  private fallback: MemorySearchManager | null = null;
   private primaryFailed = false;
   private lastError?: string;
   private cacheEvicted = false;
@@ -565,7 +650,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   constructor(
     private readonly deps: {
       primary: MemorySearchManager;
-      fallbackFactory: () => Promise<Maybe<MemorySearchManager>>;
+      fallbackFactory: () => Promise<MemorySearchManager | null>;
     },
     private readonly onClose?: () => void,
   ) {}
@@ -716,11 +801,11 @@ class FallbackMemoryManager implements MemorySearchManager {
     await this.close();
   }
 
-  private async ensureFallback(): Promise<Maybe<MemorySearchManager>> {
+  private async ensureFallback(): Promise<MemorySearchManager | null> {
     if (this.fallback) {
       return this.fallback;
     }
-    let fallback: Maybe<MemorySearchManager>;
+    let fallback: MemorySearchManager | null;
     try {
       fallback = await this.deps.fallbackFactory();
       if (!fallback) {
@@ -728,7 +813,7 @@ class FallbackMemoryManager implements MemorySearchManager {
         return null;
       }
     } catch (err) {
-      const message = formatErrorMessage(err);
+      const message = err instanceof Error ? err.message : String(err);
       log.warn(`memory fallback unavailable: ${message}`);
       return null;
     }
@@ -768,8 +853,6 @@ function buildQmdManagerIdentityKey(
   config: ResolvedQmdConfig,
   runtimeConfig: QmdManagerRuntimeConfig,
 ): string {
-  // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
-  // Fast stringify avoids deep key-sorting overhead on this hot path.
   return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}`;
 }
 

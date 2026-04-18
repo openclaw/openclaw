@@ -1897,9 +1897,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
-      const timeoutMs = this.qmd.limits.timeoutMs;
+      // `qmd status` can exceed the search timeout on large indexes (main agent
+      // vs small per-role workspaces). Use the QMD CLI command budget instead of
+      // capping at 5s via limits.timeoutMs (default 4s).
       const result = await this.runQmd(["status"], {
-        timeoutMs,
+        timeoutMs: Math.min(this.qmd.update.commandTimeoutMs, 120_000),
       });
       const vectorCount = parseQmdStatusVectorCount(`${result.stdout}\n${result.stderr}`);
       if (vectorCount === null) {

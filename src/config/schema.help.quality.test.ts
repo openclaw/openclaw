@@ -47,6 +47,10 @@ const TARGET_KEYS = [
   "memory.qmd.searchMode",
   "memory.qmd.rerank",
   "memory.qmd.searchTool",
+  "memory.hybrid.read.mode",
+  "memory.hybrid.write.mode",
+  "memory.hybrid.write.successPolicy",
+  "memory.hybrid.routing[].target",
   "memory.qmd.scope",
   "memory.qmd.includeDefaultMemory",
   "memory.qmd.mcporter.enabled",
@@ -433,7 +437,7 @@ const TARGET_KEYS = [
 
 const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "memory.citations": ['"auto"', '"on"', '"off"'],
-  "memory.backend": ['"builtin"', '"qmd"'],
+  "memory.backend": ['"builtin"', '"qmd"', '"mem0"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
   "models.mode": ['"merge"', '"replace"'],
   "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],

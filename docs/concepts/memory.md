@@ -155,7 +155,7 @@ For details on how search works, tuning options, and provider setup, see
 
 ## Memory backends
 
-<CardGroup cols={3}>
+<CardGroup cols={4}>
 <Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
@@ -163,6 +163,14 @@ hybrid search. No extra dependencies.
 <Card title="QMD" icon="search" href="/concepts/memory-qmd">
 Local-first sidecar with reranking, query expansion, and the ability to index
 directories outside the workspace.
+</Card>
+<Card title="Mem0" icon="database" href="/reference/memory-config#mem0-backend-config">
+Self-hosted long-term memory backend. OpenClaw keeps `memory_search` /
+`memory_get` while adding automatic recall and post-turn memory capture.
+</Card>
+<Card title="Hybrid (QMD + Mem0)" icon="shuffle" href="/reference/memory-config#hybrid-backend-config">
+Single-agent routed memory mode. Use rules to keep cold technical knowledge on
+QMD while directing hot preference/task memory to Mem0.
 </Card>
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
 AI-native cross-session memory with user modeling, semantic search, and

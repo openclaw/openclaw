@@ -53,6 +53,9 @@ const state: RegistryState = (() => {
       importedPluginIds: new Set<string>(),
     };
     globalState[PLUGIN_REGISTRY_STATE] = registryState;
+  } else if (!("importedPluginIds" in registryState) || !registryState.importedPluginIds) {
+    // Backward-compatible hydrate for older in-process state shapes.
+    registryState.importedPluginIds = new Set<string>();
   }
   return registryState;
 })();

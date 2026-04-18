@@ -245,6 +245,61 @@ openclaw health
 
 </Steps>
 
+## Local source edits vs released updates
+
+If you run OpenClaw with managed Gateway services (launchd/systemd), runtime changes only apply after restarting the affected Gateway process.
+
+### What is different?
+
+- `openclaw update` (recommended) updates to released content (npm/git channel), runs doctor, and restarts Gateway automatically.
+- Local source edits in your repo are not the same as a released npm update. After code changes, restart the Gateway services that should pick up your local runtime.
+
+### Managed multi-Gateway restart example
+
+When you run three services on one host (`default`, `customer-a`, `customer-c`):
+
+```bash
+openclaw gateway restart
+openclaw --profile customer-a gateway restart
+openclaw --profile customer-c gateway restart
+```
+
+Verify all three after restart:
+
+```bash
+openclaw status
+openclaw --profile customer-a status
+openclaw --profile customer-c status
+```
+
+Optional listener check:
+
+```bash
+lsof -nP -iTCP -sTCP:LISTEN | rg '18789|18840|18880'
+```
+
+### Manual update paths
+
+If you need manual control instead of `openclaw update`:
+
+- npm/pnpm global install path:
+
+```bash
+npm i -g openclaw@latest
+# or
+pnpm add -g openclaw@latest
+```
+
+- source checkout path:
+
+```bash
+git pull
+pnpm install
+pnpm build
+```
+
+Then restart the same managed Gateway services you run in production.
+
 ## Rollback
 
 ### Pin a version (npm)

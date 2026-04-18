@@ -104,6 +104,52 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd).toBeUndefined();
   });
 
+  it("resolves mem0 backend with defaults", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "mem0",
+        mem0: {
+          baseUrl: "http://127.0.0.1:8000",
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.backend).toBe("mem0");
+    expect(resolved.mem0).toMatchObject({
+      enabled: true,
+      baseUrl: "http://127.0.0.1:8000",
+      searchPath: "/v2/memories/search/",
+      addPath: "/v1/memories/",
+      topK: 8,
+      threshold: 0.2,
+    });
+  });
+
+  it("resolves hybrid backend with routed defaults", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "hybrid",
+        mem0: {
+          baseUrl: "http://127.0.0.1:8000",
+        },
+        qmd: {},
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.backend).toBe("hybrid");
+    expect(resolved.mem0?.baseUrl).toBe("http://127.0.0.1:8000");
+    expect(resolved.qmd?.command).toBe("qmd");
+    expect(resolved.hybrid).toMatchObject({
+      readMode: "routed",
+      writeMode: "routed",
+      successPolicy: "any",
+      readOrder: ["mem0", "qmd"],
+      dedupe: true,
+    });
+  });
+
   it("resolves qmd backend with default collections", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

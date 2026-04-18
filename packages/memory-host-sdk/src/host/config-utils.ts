@@ -15,13 +15,20 @@ export { splitShellArgs } from "./openclaw-runtime-io.js";
 /** Chat shape used by memory send-policy matching. */
 export type ChatType = "direct" | "group" | "channel";
 /** Memory backend selected by user config. */
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "mem0" | "hybrid";
 /** Citation injection behavior for memory search results. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
 /** QMD command mode used for search calls. */
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 /** QMD startup policy for background indexing. */
 export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
+export type MemoryHybridTarget = "qmd" | "mem0" | "both";
+export type MemoryHybridReadOrder = "qmd" | "mem0";
+export type MemoryHybridMode = "dual" | "routed";
+export type MemoryHybridSuccessPolicy = "any" | "all";
+export type MemoryHybridRouteScope = "read" | "write" | "both";
+export type MemoryHybridRouteSource = "query" | "conversation" | "knowledge";
+export type MemoryHybridRoutePriority = "normal" | "critical";
 
 /** Action returned by a session send-policy rule. */
 export type SessionSendPolicyAction = "allow" | "deny";
@@ -101,11 +108,53 @@ export type MemoryQmdConfig = {
   scope?: SessionSendPolicyConfig;
 };
 
+export type MemoryMem0Config = {
+  enabled?: boolean;
+  baseUrl?: string;
+  apiKey?: SecretInput;
+  userIdPrefix?: string;
+  agentIdPrefix?: string;
+  searchPath?: string;
+  addPath?: string;
+  topK?: number;
+  threshold?: number;
+  timeoutMs?: number;
+};
+
+export type MemoryHybridConfig = {
+  read?: MemoryHybridReadConfig;
+  write?: MemoryHybridWriteConfig;
+  routing?: MemoryHybridRouteRule[];
+};
+
+export type MemoryHybridReadConfig = {
+  mode?: MemoryHybridMode;
+  order?: MemoryHybridReadOrder[];
+  maxResults?: number;
+  dedupe?: boolean;
+};
+
+export type MemoryHybridWriteConfig = {
+  mode?: MemoryHybridMode;
+  successPolicy?: MemoryHybridSuccessPolicy;
+};
+
+export type MemoryHybridRouteRule = {
+  scope?: MemoryHybridRouteScope;
+  source?: MemoryHybridRouteSource;
+  priority?: MemoryHybridRoutePriority;
+  tags?: string[];
+  queryIncludes?: string[];
+  target: MemoryHybridTarget;
+};
+
 /** Top-level memory config shared by host and runtime callers. */
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  mem0?: MemoryMem0Config;
+  hybrid?: MemoryHybridConfig;
 };
 
 /** Per-agent memory search enablement and extra collection paths. */

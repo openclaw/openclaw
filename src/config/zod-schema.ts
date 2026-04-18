@@ -205,6 +205,21 @@ const MemoryQmdMcporterSchema = z
   })
   .strict();
 
+const MemoryMem0Schema = z
+  .object({
+    enabled: z.boolean().optional(),
+    baseUrl: z.string().url().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    userIdPrefix: z.string().trim().min(1).optional(),
+    agentIdPrefix: z.string().trim().min(1).optional(),
+    searchPath: z.string().trim().min(1).optional(),
+    addPath: z.string().trim().min(1).optional(),
+    topK: z.number().int().positive().optional(),
+    threshold: z.number().min(0).max(1).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -231,11 +246,50 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryHybridRouteRuleSchema = z
+  .object({
+    scope: z.union([z.literal("read"), z.literal("write"), z.literal("both")]).optional(),
+    source: z
+      .union([z.literal("query"), z.literal("conversation"), z.literal("knowledge")])
+      .optional(),
+    priority: z.union([z.literal("normal"), z.literal("critical")]).optional(),
+    tags: z.array(z.string().trim().min(1)).optional(),
+    queryIncludes: z.array(z.string().trim().min(1)).optional(),
+    target: z.union([z.literal("qmd"), z.literal("mem0"), z.literal("both")]),
+  })
+  .strict();
+
+const MemoryHybridSchema = z
+  .object({
+    read: z
+      .object({
+        mode: z.union([z.literal("dual"), z.literal("routed")]).optional(),
+        order: z.array(z.union([z.literal("qmd"), z.literal("mem0")])).optional(),
+        maxResults: z.number().int().positive().optional(),
+        dedupe: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    write: z
+      .object({
+        mode: z.union([z.literal("dual"), z.literal("routed")]).optional(),
+        successPolicy: z.union([z.literal("any"), z.literal("all")]).optional(),
+      })
+      .strict()
+      .optional(),
+    routing: z.array(MemoryHybridRouteRuleSchema).optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z
+      .union([z.literal("builtin"), z.literal("qmd"), z.literal("mem0"), z.literal("hybrid")])
+      .optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    mem0: MemoryMem0Schema.optional(),
+    hybrid: MemoryHybridSchema.optional(),
   })
   .strict()
   .optional();

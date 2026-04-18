@@ -1276,9 +1276,59 @@ export const FIELD_HELP: Record<string, string> = {
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",
   "memory.backend":
-    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, "qmd" uses the QMD sidecar pipeline, "mem0" uses a Mem0-compatible long-term memory service, and "hybrid" enables routed memory flows across QMD + Mem0. Keep "builtin" unless you intentionally operate an external backend.',
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
+  "memory.hybrid":
+    "Configures routed memory behavior when memory.backend=hybrid, including read/write mode, backend order, and routing rules.",
+  "memory.hybrid.read":
+    "Read-path policy for hybrid memory. Use routed mode to choose one backend by rule, or dual mode to query both backends every time.",
+  "memory.hybrid.read.mode":
+    'Hybrid read mode: "routed" selects one backend based on routing rules, while "dual" queries both QMD and Mem0 and merges results.',
+  "memory.hybrid.read.order":
+    "Preferred backend order when dual read mode is active or when fallback merge is needed. Valid values are qmd and mem0.",
+  "memory.hybrid.read.maxResults":
+    "Default maximum number of merged hybrid search results when a tool call does not pass maxResults explicitly.",
+  "memory.hybrid.read.dedupe":
+    "Deduplicates merged hybrid search hits by location and snippet to reduce repeated context injection.",
+  "memory.hybrid.write": "Write-path policy for hybrid memory capture and sync flows.",
+  "memory.hybrid.write.mode":
+    'Hybrid write mode: "routed" sends writes to a rule-selected backend, while "dual" attempts both backends on each write operation. Use "routed" to keep hot vs cold separation, and switch to "dual" only when explicit redundancy is required.',
+  "memory.hybrid.write.successPolicy":
+    'Write success policy for hybrid mode: "any" succeeds when one target succeeds, while "all" requires every selected target to succeed. Use "any" for resilient production traffic, and use "all" only when strict replication is more important than availability.',
+  "memory.hybrid.routing":
+    "Ordered rule list used by hybrid mode to map read/write operations to qmd, mem0, or both backends.",
+  "memory.hybrid.routing[].scope": 'Rule scope: "read", "write", or "both".',
+  "memory.hybrid.routing[].source":
+    'Rule source discriminator: "query" (read flow), "conversation" (post-turn capture), or "knowledge" (sync/index flow).',
+  "memory.hybrid.routing[].priority":
+    'Rule priority gate: "critical" for high-priority events only, or "normal" for default events.',
+  "memory.hybrid.routing[].tags":
+    "Optional keyword tags matched against normalized query/capture tokens before applying this route rule.",
+  "memory.hybrid.routing[].queryIncludes":
+    "Optional substring match list for query/capture text; a rule matches when at least one phrase appears.",
+  "memory.hybrid.routing[].target":
+    'Route target backend: "qmd", "mem0", or "both". Use "qmd" for cold technical knowledge, use "mem0" for hot user/task preference memory, and reserve "both" for critical context where redundancy is intentionally required.',
+  "memory.mem0.enabled":
+    "Enables Mem0 backend integration when memory.backend is set to mem0. Keep enabled for normal operation and disable only for staged rollout/testing.",
+  "memory.mem0.baseUrl":
+    "Base URL for the Mem0 service (for example http://localhost:8000). This is required when using memory.backend=mem0.",
+  "memory.mem0.apiKey":
+    "API key used to authenticate with the Mem0 service. Supports plain values and SecretRef inputs.",
+  "memory.mem0.userIdPrefix":
+    "Prefix used to build Mem0 user IDs from OpenClaw session keys, helping isolate memories across environments.",
+  "memory.mem0.agentIdPrefix":
+    "Prefix used to build Mem0 agent IDs from OpenClaw agent IDs, helping isolate memories across deployments.",
+  "memory.mem0.searchPath":
+    "HTTP path used for Mem0 search calls. Override only when your Mem0-compatible service exposes a non-default route.",
+  "memory.mem0.addPath":
+    "HTTP path used for Mem0 add-memory calls. Override only when your Mem0-compatible service exposes a non-default route.",
+  "memory.mem0.topK":
+    "Default number of memories fetched per search query when maxResults is not explicitly provided.",
+  "memory.mem0.threshold":
+    "Minimum score threshold (0-1) for accepting Mem0 search results before prompt injection.",
+  "memory.mem0.timeoutMs":
+    "Request timeout in milliseconds for Mem0 HTTP calls. Increase in slower network environments.",
   "memory.qmd.command":
     "Sets the executable path for the `qmd` binary used by the QMD backend (default: resolved from PATH). Use an explicit absolute path when multiple qmd installs exist or PATH differs across environments.",
   "memory.qmd.mcporter":

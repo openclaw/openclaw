@@ -1,0 +1,100 @@
+@startuml
+' Inbound chat reply sequence (OpenClaw auto-reply pipeline)
+
+autonumber
+skinparam shadowing false
+skinparam sequence {
+  ArrowThickness 1
+  LifeLineBorderColor #999999
+  LifeLineBackgroundColor #F9F9F9
+  ParticipantBorderColor #666666
+  ParticipantBackgroundColor #FFFFFF
+  NoteBackgroundColor #FFF9E6
+  NoteBorderColor #D6B656
+}
+
+actor User
+participant "Web chat client\n(Gateway RPC)" as Client
+participant "External channel\n(extension handler)" as Ext
+participant "Entry\n(chat.send or extension)" as Entry
+participant "dispatchInboundMessage\nsrc/auto-reply/dispatch.ts" as Dispatch
+participant "dispatchReplyFromConfig\nsrc/auto-reply/reply/dispatch-from-config.ts" as FromCfg
+participant "getReplyFromConfig\nsrc/auto-reply/reply/get-reply.ts" as GetReply
+participant "runPreparedReply\nsrc/auto-reply/reply/get-reply-run.ts" as Prep
+participant "runReplyAgent\nsrc/auto-reply/reply/agent-runner.ts" as Agent
+participant "runEmbeddedPiAgent\nsrc/agents/pi-embedded-runner/run.ts" as Pi
+participant "Outbound\n(dispatcher.deliver or routeReply)" as Out
+
+note over User, Out
+  Entry split: Web Gateway vs external messaging channel
+end note
+
+alt Web Gateway chat
+  User -> Client: Send message
+  Client -> Entry: RPC chat.send\nsrc/gateway/server-methods/chat.ts
+  note right of Entry
+    Validate params, permissions, sanitize,
+    dedupe, send policy, stop command,
+    load session
+  end note
+else External channel
+  User -> Ext: Message on provider
+  Ext -> Entry: Build MsgContext\n+ dispatchReplyWithBufferedBlockDispatcher\nsrc/auto-reply/reply/provider-dispatcher.ts
+  note right of Entry
+    Per-channel routing,
+    mention / group gating
+  end note
+end
+
+Entry -> Dispatch: finalizeInboundContext (if needed)\n+ dispatchReplyFromConfig
+
+note over FromCfg
+  Dedupe, resolveReplyRoutingDecision,
+  hooks, send / typing policy,
+  ACP shortcuts, etc.
+end note
+
+FromCfg -> GetReply: Produce reply payload(s)
+
+note over GetReply
+  finalizeInboundContext,
+  resolveCommandAuthorization,
+  initSessionState,
+  media / link understanding,
+  pre-agent hooks
+end note
+
+GetReply -> Prep: Build prompt and queue settings
+Prep -> Agent: Run agent turn
+
+note over Agent
+  Queue, steer, block streaming,
+  typing, tool event coalescing
+end note
+
+Agent -> Pi: Embedded Pi inference loop
+
+note over Pi
+  Provider / model / auth / fallback,
+  tool loop, model API calls
+end note
+
+Pi --> Agent: Assistant output / payloads / usage
+Agent --> Prep: ReplyPayload or array
+Prep --> GetReply: Return
+GetReply --> FromCfg: ReplyPayload
+
+note over FromCfg, Out
+  Cross-surface routing may use routeReply;
+  same surface typically uses dispatcher deliver
+end note
+
+FromCfg -> Out: deliver or routeReply\nsrc/auto-reply/reply/route-reply.ts
+Out -> User: Final message
+
+note over User, Out
+  Policy and extension hooks: dispatchReplyFromConfig,
+  getReplyFromConfig; model and tools: Pi
+end note
+
+@enduml

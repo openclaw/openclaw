@@ -484,6 +484,57 @@ export async function noteMemorySearchHealth(
     }
     return;
   }
+  if (backendConfig.backend === "mem0") {
+    const mem0BaseUrl = backendConfig.mem0?.baseUrl?.trim();
+    if (!mem0BaseUrl) {
+      note(
+        [
+          "Mem0 backend is configured, but memory.mem0.baseUrl is missing.",
+          "",
+          "Fix:",
+          `- Set Mem0 base URL: ${formatCliCommand("openclaw config set memory.mem0.baseUrl http://127.0.0.1:8000")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+    }
+    return;
+  }
+  if (backendConfig.backend === "hybrid") {
+    const issues: string[] = [];
+    const qmdCheck = await checkQmdBinaryAvailability({
+      command: backendConfig.qmd?.command ?? "qmd",
+      env: process.env,
+      cwd: resolveAgentWorkspaceDir(cfg, agentId),
+    });
+    if (!qmdCheck.available) {
+      issues.push(
+        `- QMD probe failed (${backendConfig.qmd?.command ?? "qmd"}): ${qmdCheck.error ?? "unknown error"}`,
+      );
+    }
+    const mem0BaseUrl = backendConfig.mem0?.baseUrl?.trim();
+    if (!mem0BaseUrl) {
+      issues.push("- Mem0 baseUrl missing");
+    }
+    if (issues.length > 0) {
+      note(
+        [
+          "Hybrid memory backend is configured but one or more dependencies are not ready.",
+          "",
+          ...issues,
+          "",
+          "Fix:",
+          `- Set qmd command if needed: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+          `- Set Mem0 base URL: ${formatCliCommand("openclaw config set memory.mem0.baseUrl http://127.0.0.1:8000")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+    }
+    return;
+  }
 
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();

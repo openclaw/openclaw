@@ -2,16 +2,17 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
-type SearchImpl = (opts?: {
+export type SearchImplOptions = {
   maxResults?: number;
   minScore?: number;
   sessionKey?: string;
-  qmdSearchModeOverride?: "query" | "search" | "vsearch";
-  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+  qmdSearchModeOverride?: "query" | "search" | "vsearch" | string;
+  onDebug?: (debug: MemorySearchRuntimeDebug | unknown) => void;
   signal?: AbortSignal;
-}) => Promise<unknown[]>;
+};
+export type SearchImpl = (opts?: SearchImplOptions) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
-type MemoryReadResult = {
+export type MemoryReadResult = {
   text: string;
   path: string;
   truncated?: boolean;
@@ -19,7 +20,7 @@ type MemoryReadResult = {
   lines?: number;
   nextFrom?: number;
 };
-type MemoryBackend = "builtin" | "qmd";
+type MemoryBackend = "builtin" | "qmd" | "mem0" | "hybrid";
 
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
@@ -39,7 +40,11 @@ let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = asyn
 });
 
 const stubManager = {
-  search: vi.fn(async (_query: string, opts?: Parameters<SearchImpl>[0]) => await searchImpl(opts)),
+  search: vi.fn(async (arg1?: unknown, arg2?: SearchImplOptions) => {
+    const opts =
+      typeof arg1 === "string" || arg1 === undefined ? arg2 : (arg1 as SearchImplOptions);
+    return await searchImpl(opts);
+  }),
   readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
   status: () => ({
     backend,
@@ -47,7 +52,7 @@ const stubManager = {
     chunks: 1,
     dirty: false,
     workspaceDir,
-    dbPath: "/workspace/.memory/index.sqlite",
+    dbPath: `${workspaceDir}/.memory/index.sqlite`,
     provider: "builtin",
     model: "builtin",
     requestedProvider: "builtin",
@@ -68,7 +73,16 @@ const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
 
-vi.mock("./tools.runtime.js", () => ({
+const { memoryIndexModuleId, memoryToolsRuntimeModuleId } = vi.hoisted(() => ({
+  memoryIndexModuleId: "./memory/index.js",
+  memoryToolsRuntimeModuleId: "./tools.runtime.js",
+}));
+
+vi.mock(memoryIndexModuleId, () => ({
+  getMemorySearchManager: getMemorySearchManagerMock,
+}));
+
+vi.mock(memoryToolsRuntimeModuleId, () => ({
   resolveMemoryBackendConfig: ({
     cfg,
   }: {

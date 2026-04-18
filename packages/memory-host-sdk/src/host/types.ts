@@ -102,7 +102,7 @@ export type MemoryReadResult = {
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryProviderStatus = {
-  backend: "builtin" | "qmd";
+  backend: "builtin" | "qmd" | "mem0" | "hybrid";
   provider: string;
   model?: string;
   requestedProvider?: string;
