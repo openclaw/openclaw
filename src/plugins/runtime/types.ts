@@ -1,5 +1,9 @@
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type {
+  DelegatedTaskWatchdogConfig,
+  DelegatedTaskWatchdogHandle,
+} from "../delegated-task-watchdog.js";
 
 export type { RuntimeLogger };
 
@@ -52,6 +56,17 @@ export type SubagentDeleteSessionParams = {
 
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  /**
+   * Create a heartbeat/timeout watchdog for a delegated task.
+   *
+   * Plugins use this seam to schedule heartbeat cadence and timeout cleanup
+   * without importing internal core timers directly. Teardown is explicit —
+   * calling `cancel()` or `destroy()` on the returned handle clears all
+   * held timers, preventing orphan timer leaks.
+   */
+  createTaskWatchdog: (
+    config: DelegatedTaskWatchdogConfig,
+  ) => DelegatedTaskWatchdogHandle;
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
