@@ -64,6 +64,34 @@ function buildBase64ImageUrl(params: { data: string; mediaType?: string }): stri
     : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
 }
 
+function getFileExtension(url: string): string | undefined {
+  const source = (() => {
+    try {
+      const trimmed = url.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        return new URL(trimmed).pathname;
+      }
+    } catch {
+      // Fall back to the raw path when URL parsing fails.
+    }
+    return url;
+  })();
+  const fileName = source.split(/[\\/]/).pop() ?? source;
+  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
+  return match?.[1]?.toLowerCase();
+}
+
+function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.trim()) {
+    return mediaType.trim().toLowerCase().startsWith("image/");
+  }
+  const ext = getFileExtension(path);
+  return (
+    ext !== undefined &&
+    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
+  );
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -116,7 +144,15 @@ function extractImages(message: unknown): ImageBlock[] {
     : typeof m.MediaPath === "string"
       ? [m.MediaPath]
       : [];
-  for (const mediaPath of transcriptMediaPaths) {
+  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
+    ? m.MediaTypes
+    : typeof m.MediaType === "string"
+      ? [m.MediaType]
+      : [];
+  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
+    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
+      continue;
+    }
     appendImageBlock(images, { url: mediaPath });
   }
 
