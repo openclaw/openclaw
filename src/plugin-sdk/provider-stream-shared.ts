@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
 
 export type ProviderStreamWrapperFactory =
   | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
@@ -132,6 +133,20 @@ export function createHtmlEntityToolCallArgumentDecodingWrapper(
   };
 }
 
+export function createPayloadPatchStreamWrapper(
+  baseStreamFn: StreamFn | undefined,
+  patchPayload: (params: {
+    payload: Record<string, unknown>;
+    model: Parameters<StreamFn>[0];
+  }) => void,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payload) =>
+      patchPayload({ payload, model }),
+    );
+}
+
 export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -149,7 +164,7 @@ export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
 } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
-export { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
+export { streamWithPayloadPatch };
 export {
   createToolStreamWrapper,
   createZaiToolStreamWrapper,

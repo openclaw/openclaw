@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/auth: reject gateway auth credentials that match published example placeholders at startup and secret reload, and keep cloud install snippets from publishing copy-paste gateway/keyring secrets. (#68404) Thanks @coygeek.
 - CLI/update: preserve macOS restart helper launchctl failures in the update restart log without letting log setup block the restart path. (#68492) Thanks @hclsys.
 - Slack/threads: keep file-only root messages as starter context so first thread replies can still hydrate starter media. (#68594) Thanks @martingarramon.
+- Google/Antigravity: resolve forward-compatible Gemini 3.1 Pro custom-tools and Flash variants from the bundled Google plugin templates, so `google-antigravity/gemini-3.1-pro-preview-customtools` no longer falls through to an unknown-model error. Fixes #35512.
 
 ## 2026.4.15
 
