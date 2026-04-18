@@ -2,15 +2,13 @@ import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
-import {
-  isRedactedSessionsSpawnAttachment,
-  sanitizeToolUseResultPairing,
-} from "../../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
   extractToolCallsFromAssistant,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
+import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
@@ -253,28 +251,6 @@ function isThinkingLikeReplayBlock(block: unknown): boolean {
   }
   const type = (block as { type?: unknown }).type;
   return type === "thinking" || type === "redacted_thinking";
-}
-
-function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): boolean {
-  const rawName = typeof block.name === "string" ? block.name.trim() : "";
-  if (normalizeLowercaseStringOrEmpty(rawName) !== "sessions_spawn") {
-    return false;
-  }
-  for (const payload of [block.arguments, block.input]) {
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const attachments = (payload as { attachments?: unknown }).attachments;
-    if (!Array.isArray(attachments)) {
-      continue;
-    }
-    for (const attachment of attachments) {
-      if (!isRedactedSessionsSpawnAttachment(attachment)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
