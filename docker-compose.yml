@@ -21,6 +21,12 @@ services:
       # - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
+    # Map host.docker.internal to the host gateway so that local AI providers
+    # (LM Studio, Ollama, etc.) running on the host are reachable from the
+    # container via http://host.docker.internal:<port>. Docker Desktop sets
+    # this automatically; this entry makes the same alias work on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"

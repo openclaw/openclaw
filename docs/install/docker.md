@@ -167,6 +167,32 @@ Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
 </Note>
 
+### Connecting to host services (LM Studio, Ollama, etc.)
+
+When OpenClaw runs in a container, `127.0.0.1` resolves to the container
+itself, not the host machine. Local AI providers running on the host —
+LM Studio, Ollama, llama.cpp, vLLM, and similar — are not reachable at
+`http://127.0.0.1:<port>` from inside the container.
+
+Use `host.docker.internal` instead when the onboarding wizard prompts for
+a base URL:
+
+| Provider  | Host base URL              | Container base URL                  |
+| --------- | -------------------------- | ----------------------------------- |
+| LM Studio | `http://127.0.0.1:1234`    | `http://host.docker.internal:1234`  |
+| Ollama    | `http://127.0.0.1:11434`   | `http://host.docker.internal:11434` |
+
+The bundled `docker-compose.yml` maps `host.docker.internal` to the host
+gateway via `extra_hosts: ["host.docker.internal:host-gateway"]`, so the
+same URL works on Docker Desktop (macOS, Windows) and Docker Engine on
+Linux. If you run OpenClaw with your own Compose file or `docker run`
+invocation, add the same `--add-host=host.docker.internal:host-gateway`
+flag (or the equivalent `extra_hosts` entry) yourself.
+
+Make sure the host provider is reachable from outside loopback: by
+default LM Studio binds to `0.0.0.0` and Ollama can be configured with
+`OLLAMA_HOST=0.0.0.0:11434`.
+
 ### Storage and persistence
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and

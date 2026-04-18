@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/callbacks: treat permanent callback edit errors as completed updates so stale command pagination buttons no longer wedge the update watermark and block newer Telegram updates. (#68588) Thanks @Lucenx9.
 - Browser/CDP: allow the selected remote CDP profile host for CDP health and control checks without widening browser navigation SSRF policy, so WSL-to-Windows Chrome endpoints no longer appear offline under strict defaults. Fixes #68108. (#68207) Thanks @Mlightsnow.
 - Codex: stop cumulative app-server token totals from being treated as fresh context usage, so session status no longer reports inflated context percentages after long Codex threads. (#64669) Thanks @cyrusaf.
+- Docker/setup: map `host.docker.internal` to the host gateway in the bundled `docker-compose.yml` and document it in the Docker install guide, so local AI providers (LM Studio, Ollama, etc.) running on the host are reachable from the container via `http://host.docker.internal:<port>` on Linux as well as Docker Desktop. Fixes #68684.
 
 ## 2026.4.18
 
