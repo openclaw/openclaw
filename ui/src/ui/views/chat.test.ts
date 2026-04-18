@@ -946,6 +946,34 @@ describe("chat view", () => {
     );
   });
 
+  it("keeps transcript images visible when MIME falls back to application/octet-stream", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-history-image-octet-stream",
+        role: "user",
+        content: "",
+        MediaPath: "/tmp/openclaw/user-upload.png",
+        MediaType: "application/octet-stream",
+        timestamp: Date.now(),
+      },
+      "user",
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "session-token",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image?.getAttribute("src")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&token=session-token",
+    );
+  });
+
   it("skips non-image transcript media paths after history reload", () => {
     const container = document.createElement("div");
 
