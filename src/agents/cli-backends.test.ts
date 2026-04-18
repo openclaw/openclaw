@@ -278,8 +278,16 @@ beforeEach(() => {
       bundleMcpMode: "gemini-system-settings",
       config: {
         command: "gemini",
-        args: ["--output-format", "json", "--prompt", "{prompt}"],
-        resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
+        args: ["--yolo", "--output-format", "json", "--prompt", "{prompt}"],
+        resumeArgs: [
+          "--yolo",
+          "--resume",
+          "{sessionId}",
+          "--output-format",
+          "json",
+          "--prompt",
+          "{prompt}",
+        ],
         imageArg: "@",
         imagePathScope: "workspace",
         modelArg: "--model",
@@ -743,8 +751,15 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
-    expect(resolved?.config.args).toEqual(["--output-format", "json", "--prompt", "{prompt}"]);
+    expect(resolved?.config.args).toEqual([
+      "--yolo",
+      "--output-format",
+      "json",
+      "--prompt",
+      "{prompt}",
+    ]);
     expect(resolved?.config.resumeArgs).toEqual([
+      "--yolo",
       "--resume",
       "{sessionId}",
       "--output-format",
@@ -752,6 +767,8 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
       "--prompt",
       "{prompt}",
     ]);
+    expect(resolved?.config.args?.[0]).toBe("--yolo");
+    expect(resolved?.config.resumeArgs?.[0]).toBe("--yolo");
     expect(resolved?.config.modelArg).toBe("--model");
     expect(resolved?.config.sessionMode).toBe("existing");
     expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);

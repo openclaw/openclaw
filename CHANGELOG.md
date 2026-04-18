@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/display: escape raw control characters (including newline and carriage return) in the shared and macOS approval-prompt command sanitizers, so trailing command payloads no longer render on hidden extra lines in the approval UI. (#68198)
 - OpenAI Codex/OAuth + Pi: keep imported Codex CLI OAuth bootstrap, Pi auth export, and runtime overlay handling aligned so Codex sessions survive refresh and health checks without leaking transient CLI state into saved auth files. Thanks @vincentkoc.
 - Agents/TTS: report failed speech synthesis as a real tool error so unconfigured providers no longer feed successful TTS failure output back into agent loops. (#67980) Thanks @lawrence3699.
+- Google Gemini CLI backend: pass `--yolo` on fresh and resume invocations so Gemini's built-in `write_file`, `edit`, and `run_shell_command` tools are actually exposed to the model under non-interactive `--prompt` mode, fixing cases where the agent replied that it had no file-writing tool. Parity with Claude (`bypassPermissions`) and Codex (`workspace-write`) CLI backends; OpenClaw's own tool-policy pipeline remains the runtime authority. (#68216)
 
 ## 2026.4.15
 

@@ -257,8 +257,16 @@ function buildGoogleGeminiCliBackendFixture(): CliBackendPlugin {
     bundleMcpMode: "gemini-system-settings",
     config: {
       command: "gemini",
-      args: ["--output-format", "json", "--prompt", "{prompt}"],
-      resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
+      args: ["--yolo", "--output-format", "json", "--prompt", "{prompt}"],
+      resumeArgs: [
+        "--yolo",
+        "--resume",
+        "{sessionId}",
+        "--output-format",
+        "json",
+        "--prompt",
+        "{prompt}",
+      ],
       output: "json",
       input: "arg",
       imageArg: "@",

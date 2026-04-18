@@ -168,12 +168,13 @@ describe("buildCliArgs", () => {
           command: "gemini",
           modelArg: "--model",
         },
-        baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
+        baseArgs: ["--yolo", "--output-format", "json", "--prompt", "{prompt}"],
         modelId: "gemini-3.1-pro-preview",
         promptArg: "describe the image",
         useResume: false,
       }),
     ).toEqual([
+      "--yolo",
       "--output-format",
       "json",
       "--prompt",
@@ -360,14 +361,14 @@ describe("writeCliImages", () => {
           imageArg: "@",
           imagePathScope: "workspace",
         },
-        baseArgs: ["--output-format", "json", "--prompt", "{prompt}"],
+        baseArgs: ["--yolo", "--output-format", "json", "--prompt", "{prompt}"],
         modelId: "gemini-3.1-pro-preview",
         promptArg: prepared.prompt,
         imagePaths: prepared.imagePaths,
         useResume: false,
       });
 
-      expect(argv).toEqual(["--output-format", "json", "--prompt", prepared.prompt]);
+      expect(argv).toEqual(["--yolo", "--output-format", "json", "--prompt", prepared.prompt]);
 
       await prepared.cleanupImages?.();
     } finally {

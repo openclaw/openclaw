@@ -231,8 +231,8 @@ The bundled OpenAI plugin also registers a default for `codex-cli`:
 The bundled Google plugin also registers a default for `google-gemini-cli`:
 
 - `command: "gemini"`
-- `args: ["--output-format", "json", "--prompt", "{prompt}"]`
-- `resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"]`
+- `args: ["--yolo", "--output-format", "json", "--prompt", "{prompt}"]`
+- `resumeArgs: ["--yolo", "--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"]`
 - `imageArg: "@"`
 - `imagePathScope: "workspace"`
 - `modelArg: "--model"`
@@ -242,6 +242,14 @@ The bundled Google plugin also registers a default for `google-gemini-cli`:
 Prerequisite: the local Gemini CLI must be installed and available as
 `gemini` on `PATH` (`brew install gemini-cli` or
 `npm install -g @google/gemini-cli`).
+
+`--yolo` disables Gemini CLI's per-tool approval prompts so the non-interactive
+`--prompt` invocation actually exposes built-in tools like `write_file`, `edit`,
+and `run_shell_command` to the model. This mirrors the `bypassPermissions` flag
+on the Claude CLI backend and `sandbox_mode="workspace-write"` on the Codex CLI
+backend: when OpenClaw drives a CLI backend, OpenClaw's own tool-policy
+pipeline is the runtime authority, not the subprocess CLI's interactive
+approval UI.
 
 Gemini CLI JSON notes:
 
