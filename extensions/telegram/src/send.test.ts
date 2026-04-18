@@ -26,6 +26,7 @@ const {
 } = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
+  clearTelegramSendIdempotencyCache,
   createForumTopicTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
@@ -256,6 +257,10 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  afterEach(() => {
+    clearTelegramSendIdempotencyCache();
+  });
+
   it("sends typing to the resolved chat and topic", async () => {
     loadConfig.mockReturnValue({
       channels: {
@@ -354,6 +359,35 @@ describe("sendMessageTelegram", () => {
     expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
       name: "Codex Thread",
     });
+  });
+
+  it("dedupes repeated sends with the same idempotency key", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 101,
+      chat: { id: 12345 },
+    });
+
+    const [first, second] = await Promise.all([
+      sendMessageTelegram("12345", "hi", {
+        accountId: "default",
+        idempotencyKey: "msg-42",
+      }),
+      sendMessageTelegram("12345", "hi", {
+        accountId: "default",
+        idempotencyKey: "msg-42",
+      }),
+    ]);
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(first).toEqual({ messageId: "101", chatId: "12345" });
+    expect(second).toEqual({ messageId: "101", chatId: "12345" });
   });
 
   it("rejects empty topic edits", async () => {

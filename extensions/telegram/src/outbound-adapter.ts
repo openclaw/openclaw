@@ -35,6 +35,7 @@ async function resolveTelegramSendContext(params: {
   cfg: NonNullable<TelegramSendOpts>["cfg"];
   deps?: OutboundSendDeps;
   accountId?: string | null;
+  idempotencyKey?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
   gatewayClientScopes?: readonly string[];
@@ -46,6 +47,7 @@ async function resolveTelegramSendContext(params: {
     textMode: "html";
     messageThreadId?: number;
     replyToMessageId?: number;
+    idempotencyKey?: string;
     accountId?: string;
     gatewayClientScopes?: readonly string[];
   };
@@ -61,6 +63,7 @@ async function resolveTelegramSendContext(params: {
       cfg: params.cfg,
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+      idempotencyKey: params.idempotencyKey,
       accountId: params.accountId ?? undefined,
       gatewayClientScopes: params.gatewayClientScopes,
     },
@@ -128,6 +131,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       to,
       text,
       accountId,
+      idempotencyKey,
       deps,
       replyToId,
       threadId,
@@ -137,6 +141,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         cfg,
         deps,
         accountId,
+        idempotencyKey,
         replyToId,
         threadId,
         gatewayClientScopes,
@@ -153,6 +158,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       mediaReadFile,
       accountId,
+      idempotencyKey,
       deps,
       replyToId,
       threadId,
@@ -163,6 +169,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         cfg,
         deps,
         accountId,
+        idempotencyKey,
         replyToId,
         threadId,
         gatewayClientScopes,
@@ -183,6 +190,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     mediaLocalRoots,
     mediaReadFile,
     accountId,
+    idempotencyKey,
     deps,
     replyToId,
     threadId,
@@ -193,6 +201,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       cfg,
       deps,
       accountId,
+      idempotencyKey,
       replyToId,
       threadId,
       gatewayClientScopes,

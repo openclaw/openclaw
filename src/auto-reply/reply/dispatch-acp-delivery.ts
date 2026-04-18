@@ -329,6 +329,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
+        idempotencyKey: params.ctx.MessageSidFull ?? params.ctx.MessageSid,
         cfg: params.cfg,
       });
       if (!result.ok) {

@@ -43,6 +43,30 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
+  it("forwards idempotencyKey in direct text sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text" });
+
+    const result = await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "12345",
+      text: "hello",
+      accountId: "ops",
+      idempotencyKey: "msg-42",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "hello",
+      expect.objectContaining({
+        accountId: "ops",
+        idempotencyKey: "msg-42",
+        textMode: "html",
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-text" });
+  });
+
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })

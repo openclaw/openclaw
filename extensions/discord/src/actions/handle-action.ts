@@ -11,7 +11,7 @@ import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runti
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import { readDiscordParentIdParam } from "./runtime.shared.js";
 
@@ -43,9 +43,13 @@ export async function handleDiscordMessageAction(
     resolveDiscordChannelId(
       readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true }),
     );
+  const resolveOutboundTarget = () => {
+    const to = readStringParam(params, "to", { required: true });
+    return parseDiscordTarget(to, { defaultKind: "channel" })?.normalized ?? to;
+  };
 
   if (action === "send") {
-    const to = readStringParam(params, "to", { required: true });
+    const to = resolveOutboundTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
     const rawComponents =
       params.components ??
@@ -92,7 +96,7 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "poll") {
-    const to = readStringParam(params, "to", { required: true });
+    const to = resolveOutboundTarget();
     const question = readStringParam(params, "pollQuestion", {
       required: true,
     });

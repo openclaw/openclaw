@@ -15,6 +15,7 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  idempotencyKey?: string;
   audioAsVoice?: boolean;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];

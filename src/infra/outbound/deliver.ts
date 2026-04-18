@@ -127,6 +127,7 @@ type ChannelHandlerParams = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  idempotencyKey?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
@@ -252,6 +253,7 @@ function createChannelOutboundContextBase(
     cfg: params.cfg,
     to: params.to,
     accountId: params.accountId,
+    idempotencyKey: params.idempotencyKey,
     replyToId: params.replyToId,
     threadId: params.threadId,
     identity: params.identity,
@@ -273,6 +275,7 @@ type DeliverOutboundPayloadsCoreParams = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  idempotencyKey?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -576,6 +579,7 @@ async function deliverOutboundPayloadsCore(
     to,
     deps,
     accountId,
+    idempotencyKey: params.idempotencyKey,
     replyToId: params.replyToId,
     threadId: params.threadId,
     identity: params.identity,

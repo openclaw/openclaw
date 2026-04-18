@@ -237,6 +237,25 @@ describe("routeReply", () => {
     });
   });
 
+  it("passes idempotency keys through outbound routing and transcript mirror", async () => {
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "telegram",
+      to: "telegram:123",
+      sessionKey: "agent:test:main",
+      idempotencyKey: "msg-42",
+      cfg: {} as never,
+    });
+    expectLastDelivery({
+      channel: "telegram",
+      to: "telegram:123",
+      idempotencyKey: "msg-42",
+      mirror: expect.objectContaining({
+        idempotencyKey: "msg-42",
+      }),
+    });
+  });
+
   it("routes directive-only Slack replies when interactive replies are enabled", async () => {
     const cfg = {
       channels: {

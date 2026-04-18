@@ -107,6 +107,7 @@ export function createFollowupRunner(params: {
           requesterSenderUsername: queued.run.senderUsername,
           requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
+          idempotencyKey: queued.messageId,
           cfg: runtimeConfig,
         });
         if (!result.ok) {
