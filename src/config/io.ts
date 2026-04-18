@@ -1674,6 +1674,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       try {
         await deps.fs.promises.rename(tmp, configPath);
+        // Ensure restrictive permissions after rename (temp file inherits umask 0664)
+        await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+          // best-effort; some filesystems don't support chmod
+        });
       } catch (err) {
         const code = (err as { code?: string }).code;
         // Windows doesn't reliably support atomic replace via rename when dest exists.
