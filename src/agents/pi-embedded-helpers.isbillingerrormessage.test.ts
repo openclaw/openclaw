@@ -1228,6 +1228,37 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("auth_refresh");
   });
 
+  it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+      ),
+    ).toBe("refresh_timeout");
+    expect(
+      classifyProviderRuntimeFailureKind("file lock timeout for /tmp/openclaw-oauth-refresh.lock"),
+    ).toBe("refresh_contention");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        code: "refresh_contention",
+        message:
+          "OAuth token refresh failed for openai-codex: OAuth refresh failed (refresh_contention): another process is already refreshing openai-codex for openai-codex:default. Please wait for the in-flight refresh to finish and retry.",
+      }),
+    ).toBe("refresh_contention");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
+      ),
+    ).toBe("auth_refresh");
+  });
+
+  it("classifies wrapped OpenAI Codex callback validation failures distinctly", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "OpenAI Codex OAuth failed (callback_validation_failed): State mismatch",
+      ),
+    ).toBe("callback_validation");
+  });
+
   it("classifies HTML 403 auth failures", () => {
     expect(
       classifyProviderRuntimeFailureKind(

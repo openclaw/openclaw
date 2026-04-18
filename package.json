@@ -29,6 +29,7 @@
     "dist/",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
