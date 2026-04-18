@@ -4,7 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
+import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   getCachedPluginJitiLoader,
@@ -36,6 +38,8 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   secrets?: BundledEntryModuleRef;
   configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   runtime?: BundledEntryModuleRef;
+  accountInspect?: BundledEntryModuleRef;
+  features?: BundledChannelEntryFeatures;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
@@ -44,7 +48,39 @@ type DefineBundledChannelSetupEntryOptions = {
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
+  runtime?: BundledEntryModuleRef;
+  legacyStateMigrations?: BundledEntryModuleRef;
+  legacySessionSurface?: BundledEntryModuleRef;
+  features?: BundledChannelSetupEntryFeatures;
 };
+
+export type BundledChannelSetupEntryFeatures = {
+  legacyStateMigrations?: boolean;
+  legacySessionSurfaces?: boolean;
+};
+
+export type BundledChannelEntryFeatures = {
+  accountInspect?: boolean;
+};
+
+export type BundledChannelLegacySessionSurface = {
+  isLegacyGroupSessionKey?: (key: string) => boolean;
+  canonicalizeLegacySessionKey?: (params: {
+    key: string;
+    agentId: string;
+  }) => string | null | undefined;
+};
+
+export type BundledChannelLegacyStateMigrationDetector = (params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+}) =>
+  | ChannelLegacyStateMigrationPlan[]
+  | Promise<ChannelLegacyStateMigrationPlan[] | null | undefined>
+  | null
+  | undefined;
 
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-entry";
@@ -52,9 +88,11 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   name: string;
   description: string;
   configSchema: ChannelEntryConfigSchema<TPlugin>;
+  features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: () => TPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -62,6 +100,10 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: () => TPlugin;
   loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  features?: BundledChannelSetupEntryFeatures;
 };
 
 const nodeRequire = createRequire(import.meta.url);
@@ -323,6 +365,8 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   secrets,
   configSchema,
   runtime,
+  accountInspect,
+  features,
   registerCliMetadata,
   registerFull,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
@@ -333,6 +377,13 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   const loadChannelPlugin = () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin);
   const loadChannelSecrets = secrets
     ? () => loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(importMetaUrl, secrets)
+    : undefined;
+  const loadChannelAccountInspector = accountInspect
+    ? () =>
+        loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
+          importMetaUrl,
+          accountInspect,
+        )
     : undefined;
   const setChannelRuntime = runtime
     ? (pluginRuntime: PluginRuntime) => {
@@ -350,6 +401,9 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     name,
     description,
     configSchema: resolvedConfigSchema,
+    ...(features || accountInspect
+      ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
+      : {}),
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
@@ -365,6 +419,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
+    ...(loadChannelAccountInspector ? { loadChannelAccountInspector } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
   };
 }
@@ -373,7 +428,37 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   importMetaUrl,
   plugin,
   secrets,
+  runtime,
+  legacyStateMigrations,
+  legacySessionSurface,
+  features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
+  // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
+  // When runtime wiring is needed, expose only the setter so the loader can hand
+  // the setup surface the active runtime without importing the full channel entry.
+  const setChannelRuntime = runtime
+    ? (pluginRuntime: PluginRuntime) => {
+        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
+          importMetaUrl,
+          runtime,
+        );
+        setter(pluginRuntime);
+      }
+    : undefined;
+  const loadLegacyStateMigrationDetector = legacyStateMigrations
+    ? () =>
+        loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
+          importMetaUrl,
+          legacyStateMigrations,
+        )
+    : undefined;
+  const loadLegacySessionSurface = legacySessionSurface
+    ? () =>
+        loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
+          importMetaUrl,
+          legacySessionSurface,
+        )
+    : undefined;
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin),
@@ -386,5 +471,9 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
             ),
         }
       : {}),
+    ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
+    ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
+    ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(features ? { features } : {}),
   };
 }

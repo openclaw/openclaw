@@ -6,10 +6,9 @@ import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -389,24 +388,12 @@ export function resolveMemorySearchConfig(
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
-  const builtinMultimodalSupport =
-    resolved.provider === "auto"
-      ? false
-      : supportsMemoryMultimodalEmbeddings({
-          provider: resolved.provider,
-          model: resolved.model,
-        });
+  // Config resolution is a startup/doctor hot path; only validate adapters
+  // already registered by the active runtime instead of cold-loading plugins.
   if (
     multimodalActive &&
-    !(
-      // Fall back to the built-in helper when the provider is not registered yet
-      // or when a registered adapter does not implement multimodal capability checks.
-      (
-        multimodalProvider?.supportsMultimodalEmbeddings?.({
-          model: resolved.model,
-        }) ?? builtinMultimodalSupport
-      )
-    )
+    multimodalProvider &&
+    !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
   ) {
     throw new Error(
       "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
