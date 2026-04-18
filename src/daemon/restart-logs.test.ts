@@ -40,10 +40,10 @@ describe("restart log conventions", () => {
       HOME: "/Users/test's",
     });
 
-    expect(setup).toContain("mkdir -p '/Users/test'\\''s/.openclaw/logs' 2>/dev/null || true");
     expect(setup).toContain(
-      "exec >>'/Users/test'\\''s/.openclaw/logs/gateway-restart.log' 2>&1 || true",
+      "if mkdir -p '/Users/test'\\''s/.openclaw/logs' 2>/dev/null && : >>'/Users/test'\\''s/.openclaw/logs/gateway-restart.log' 2>/dev/null; then",
     );
+    expect(setup).toContain("exec >>'/Users/test'\\''s/.openclaw/logs/gateway-restart.log' 2>&1");
   });
 
   it("renders CMD log setup with quoted paths", () => {

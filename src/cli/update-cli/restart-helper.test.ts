@@ -165,9 +165,7 @@ exit 0
         OPENCLAW_PROFILE: "default",
         HOME: "/Users/testuser",
       });
-      expect(content).toContain(
-        "exec >>'/Users/testuser/.openclaw/logs/gateway-restart.log' 2>&1 || true",
-      );
+      expect(content).toContain("exec >>'/Users/testuser/.openclaw/logs/gateway-restart.log' 2>&1");
       // Every launchctl call should allow output through now (no `2>/dev/null`)
       // and the final kickstart must not swallow its exit code.
       expect(content).not.toMatch(/launchctl[^\n]*2>\/dev\/null/);
@@ -185,10 +183,10 @@ exit 0
         OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
       });
 
-      expect(content).toContain("mkdir -p '/tmp/openclaw-state/logs' 2>/dev/null || true");
       expect(content).toContain(
-        "exec >>'/tmp/openclaw-state/logs/gateway-restart.log' 2>&1 || true",
+        "if mkdir -p '/tmp/openclaw-state/logs' 2>/dev/null && : >>'/tmp/openclaw-state/logs/gateway-restart.log' 2>/dev/null; then",
       );
+      expect(content).toContain("exec >>'/tmp/openclaw-state/logs/gateway-restart.log' 2>&1");
       await cleanupScript(scriptPath);
     });
 
