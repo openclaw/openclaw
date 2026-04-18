@@ -1,8 +1,23 @@
 import { execFile } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { resolveOpenClawStateDir } from "@/lib/workspace";
+
+/**
+ * Returns a guaranteed-valid working directory for spawning child processes.
+ * Falls back to the user's home dir when the current process's cwd has been
+ * deleted (e.g. tmp dirs, deleted project folders), which would otherwise make
+ * spawned Node.js children crash with `ENOENT: uv_cwd` before they even start.
+ */
+function safeChildCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return homedir();
+  }
+}
 
 export type DenchIntegrationId = "exa" | "apollo" | "elevenlabs";
 
@@ -1011,6 +1026,7 @@ export async function refreshIntegrationsRuntime(): Promise<IntegrationRuntimeRe
     await execFileAsync("openclaw", ["--profile", profile, "gateway", "restart"], {
       timeout: 30_000,
       env: process.env,
+      cwd: safeChildCwd(),
     });
     return {
       attempted: true,

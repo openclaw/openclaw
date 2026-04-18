@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
@@ -10,6 +11,20 @@ import { getCommandPath, getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { emitCliBanner } from "./banner.js";
 import { resolveCliName } from "./cli-name.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
+
+/**
+ * Returns a guaranteed-valid working directory for the spawned child. When the
+ * current process's cwd has been deleted (tmp dirs, deleted project folders),
+ * `process.cwd()` throws ENOENT and the spawned Node.js child crashes before
+ * it can do anything useful. Falling back to the user's home dir prevents that.
+ */
+function safeChildCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return homedir();
+  }
+}
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
@@ -160,6 +175,7 @@ async function delegateToGlobalOpenClaw(argv: string[]): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const child = spawn("openclaw", delegatedArgv, {
       stdio: "inherit",
+      cwd: safeChildCwd(),
       env: {
         ...process.env,
         DENCHCLAW_DELEGATED: "1",
