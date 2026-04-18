@@ -1082,6 +1082,8 @@ export function createOpenClawReadTool(
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
   const useBridge = !!options?.bridge;
+  // Define constant at function scope for lint compliance
+  const MAX_IMAGE_BYTES_BEFORE_SANITIZATION = 50 * 1024 * 1024; // 50MB pre-read cap
 
   return {
     ...base,
@@ -1109,7 +1111,6 @@ export function createOpenClawReadTool(
       });
 
       try {
-        let stats;
         let isDirectory = false;
         let fileSize = 0;
 
@@ -1124,9 +1125,8 @@ export function createOpenClawReadTool(
           }
           isDirectory = bridgeStats.type === "directory";
           fileSize = bridgeStats.size;
-          stats = { size: fileSize, isDirectory: () => isDirectory };
         } else {
-          stats = await fs.stat(inputPath);
+          const stats = await fs.stat(inputPath);
           isDirectory = stats.isDirectory();
           fileSize = stats.size;
         }
@@ -1148,7 +1148,7 @@ export function createOpenClawReadTool(
           options?.bridge,
           rootDirResolved,
           signal,
-          8192 // Limit MIME sniffing to 8KB
+          8192, // Limit MIME sniffing to 8KB
         );
         
         const fileName = path.basename(inputPath);
@@ -1166,28 +1166,24 @@ export function createOpenClawReadTool(
             mimeType,
             inputPath,
             fileSize,
-            { detectedVia: "mime-sniff" }
+            { detectedVia: "mime-sniff" },
           );
         } 
         else if (kind === "video") {
           // Special handling for WebM audio-only detection
-          let finalMimeType = mimeType;
-          let isAudioOnly = false;
-          
           if (detectedExt === WEBM_EXTENSION && mimeType === "video/webm") {
             // Check if it's actually audio-only using bridge-aware detection
-            isAudioOnly = await isWebmAudioOnly(inputPath, options?.bridge, rootDirResolved);
+            const isAudioOnly = await isWebmAudioOnly(inputPath, options?.bridge, rootDirResolved);
             if (isAudioOnly) {
-              finalMimeType = "audio/webm";
               result = createMediaResultWithFallback(
                 toolCallId,
                 "audio",
                 fileName,
                 mediaUrl,
-                finalMimeType,
+                "audio/webm",
                 inputPath,
                 fileSize,
-                { detectedVia: "mime-sniff", webmDetectedAs: "audio-only" }
+                { detectedVia: "mime-sniff", webmDetectedAs: "audio-only" },
               );
             } else {
               result = createMediaResultWithFallback(
@@ -1195,10 +1191,10 @@ export function createOpenClawReadTool(
                 "video",
                 fileName,
                 mediaUrl,
-                finalMimeType,
+                mimeType,
                 inputPath,
                 fileSize,
-                { detectedVia: "mime-sniff" }
+                { detectedVia: "mime-sniff" },
               );
             }
           } else {
@@ -1207,10 +1203,10 @@ export function createOpenClawReadTool(
               "video",
               fileName,
               mediaUrl,
-              finalMimeType,
+              mimeType,
               inputPath,
               fileSize,
-              { detectedVia: "mime-sniff" }
+              { detectedVia: "mime-sniff" },
             );
           }
         }
@@ -1219,10 +1215,9 @@ export function createOpenClawReadTool(
             throw new Error("Read operation aborted");
           }
 
-          // FIXED: Don't cap image reads - we need the full image for proper sanitization/resizing
           let fileBuffer: Buffer;
           if (useBridge) {
-            // FIXED: Read full file for images to allow proper sanitization
+            // Read full file for images to allow proper sanitization
             const buffer = await options.bridge!.readFile({
               filePath: inputPath,
               cwd: rootDirResolved,
@@ -1230,7 +1225,32 @@ export function createOpenClawReadTool(
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
           } else {
-            // FIXED: Read full file for images instead of using capped readLocalFileSafely
+            // Add pre-read size cap to prevent OOM on host-side image reads
+            if (fileSize > MAX_IMAGE_BYTES_BEFORE_SANITIZATION) {
+              // Image is too large to safely read into memory - return error
+              const errorResult = {
+                toolCallId,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Error: Image file '${fileName}' is too large (${Math.round(fileSize / 1024 / 1024)}MB). Maximum allowed size before processing is ${Math.round(MAX_IMAGE_BYTES_BEFORE_SANITIZATION / 1024 / 1024)}MB.`,
+                  },
+                ],
+                details: { 
+                  path: inputPath, 
+                  error: "Image exceeds maximum read size",
+                  fileSize,
+                  maxAllowed: MAX_IMAGE_BYTES_BEFORE_SANITIZATION,
+                },
+              } as AgentToolResult;
+              
+              if (options?.transformForTransport) {
+                return transformToolResultForTransport(errorResult);
+              }
+              return errorResult;
+            }
+            
+            // Safe to read the file since it's under the size limit
             fileBuffer = await fs.readFile(inputPath);
           }
 
@@ -1266,11 +1286,11 @@ export function createOpenClawReadTool(
               
               if (!resizeResult.success) {
                 // Return error message instead of oversized/invalid image
-                result = {
+                const errorResult = {
                   toolCallId,
                   content: [
                     {
-                      type: "text",
+                      type: "text" as const,
                       text: `Error: Unable to process image '${fileName}'. ${resizeResult.error || `Could not resize to meet ${Math.round(maxBytes / 1024)}KB limit after ${resizeResult.attempts} attempts.`}`,
                     },
                   ],
@@ -1283,9 +1303,9 @@ export function createOpenClawReadTool(
                 } as AgentToolResult;
                 
                 if (options?.transformForTransport) {
-                  result = transformToolResultForTransport(result);
+                  return transformToolResultForTransport(errorResult);
                 }
-                return result;
+                return errorResult;
               }
               
               fileBuffer = resizeResult.buffer;
