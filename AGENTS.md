@@ -134,6 +134,7 @@
   - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
   - `pnpm tsgo:all`: every TypeScript graph above; this is what `pnpm check` runs.
   - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
+- Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
 - Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.
 - Lint/format: `pnpm check`
 - Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
@@ -153,7 +154,7 @@
 - Config schema drift uses `pnpm config:docs:gen` / `pnpm config:docs:check`.
 - Plugin SDK API drift uses `pnpm plugin-sdk:api:gen` / `pnpm plugin-sdk:api:check`.
 - If you change config schema/help or the public Plugin SDK surface, run the matching gen command and commit the updated `.sha256` hash file. Keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
-- When `pnpm tsgo` or `pnpm tsgo:test` fails, triage by coherent surface instead of by raw error count: rerun the failing graph, group failures by package/module/type contract, open the source-of-truth type or export file first, fix the root mismatch, then rerun the failing graph before widening into downstream consumers. Check `origin/main` before doing broad cleanup because some apparent type debt is already fixed upstream.
+- When a `tsgo` graph fails, triage by coherent surface instead of by raw error count: rerun the failing graph, group failures by package/module/type contract, open the source-of-truth type or export file first, fix the root mismatch, then rerun the failing graph before widening into downstream consumers. Check `origin/main` before doing broad cleanup because some apparent type debt is already fixed upstream.
 - For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
 - Verification modes for work on `main`:
   - Default mode: `main` is relatively stable. Count pre-commit hook coverage when it already verified the current tree, avoid rerunning the exact same checks just for ceremony, and prefer keeping CI/main green before landing.
