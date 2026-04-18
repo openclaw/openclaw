@@ -1189,6 +1189,27 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
             env: liveEnv,
             timeoutMs: 60_000,
           });
+          if (visible.webhook_id == null) {
+            const recent = await readMessagesInThread({
+              threadId,
+              env: liveEnv,
+              limit: 25,
+            });
+            const webhookMessages = recent.filter((msg) => msg.webhook_id != null);
+            const webhookMessagesWithMarker = webhookMessages.filter((msg) =>
+              msg.content?.includes(marker),
+            );
+            const webhookPreviews = webhookMessages.map((msg) => ({
+              id: msg.id,
+              author: msg.author?.username,
+              webhookId: msg.webhook_id,
+              hasMarker: msg.content?.includes(marker) ?? false,
+              preview: (msg.content ?? "").slice(0, 160),
+            }));
+            throw new Error(
+              `S7 diagnostic: assertVisibleInThread fell back to non-webhook message ${JSON.stringify({ visibleId: visible.id, visibleAuthor: visible.author?.username, visiblePreview: (visible.content ?? "").slice(0, 160), hasWebhookMessage: webhookMessages.length > 0, hasWebhookMessageWithMarker: webhookMessagesWithMarker.length > 0, webhookPreviews })}`,
+            );
+          }
           const content = visible.content ?? "";
           if (!/i['’]m blocked/i.test(content)) {
             throw new Error(

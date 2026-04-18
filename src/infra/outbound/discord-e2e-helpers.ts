@@ -605,9 +605,29 @@ export async function assertVisibleInThread(params: {
     const jitter = 250 + Math.floor(Math.random() * 500);
     await sleep(1_000 + jitter);
   }
-  // Timeout reached without a webhook match. If any non-webhook match was
-  // seen, return the earliest one (preserves pre-fix behavior for callers
-  // that don't assert authorship).
+  // Timeout reached without a webhook match. Emit a diagnostic trace so
+  // operators can distinguish "no webhook reply at all" from "webhook reply
+  // arrived but without the marker".
+  const allWebhookMsgs = lastMessages.filter((msg) => msg.webhook_id != null);
+  if (allWebhookMsgs.length === 0) {
+    e2eTrace(
+      `assertVisibleInThread FALLBACK: 0 webhook messages in thread ${params.threadId} — child reply was never emitted via webhook`,
+    );
+  } else {
+    const previews = allWebhookMsgs.map((m) => ({
+      id: m.id,
+      webhookId: m.webhook_id,
+      author: m.author?.username,
+      hasMarker: m.content?.includes(params.marker) ?? false,
+      preview: (m.content ?? "").slice(0, 120),
+    }));
+    e2eTrace(
+      `assertVisibleInThread FALLBACK: ${String(allWebhookMsgs.length)} webhook message(s) found but none contain marker ${JSON.stringify(params.marker)}: ${JSON.stringify(previews)}`,
+    );
+  }
+
+  // If any non-webhook match was seen, return the earliest one (preserves
+  // pre-fix behavior for callers that don't assert authorship).
   if (lastNonWebhookMatches.length >= minCount) {
     const ordered = lastNonWebhookMatches.toSorted(byTimestamp);
     const first = ordered[0];
