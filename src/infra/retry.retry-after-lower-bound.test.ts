@@ -39,6 +39,39 @@ beforeEach(() => {
 });
 
 describe("retryAsync respects server-supplied Retry-After as a lower bound", () => {
+  it("preserves symmetric jitter when retryAfterMs exceeds maxDelayMs (avoids thundering herd)", async () => {
+    // When the server asks for a delay larger than our local maxDelayMs, the
+    // Retry-After contract is already unsatisfiable. Using positive-only jitter
+    // in that case is worse than symmetric because the final clamp snaps every
+    // retry back to maxDelayMs — concurrent clients re-attempt in lockstep.
+    // Fall back to symmetric jitter so spread is preserved.
+    randomMocks.generateSecureFraction.mockReturnValue(0);
+
+    vi.useFakeTimers();
+    const delays: number[] = [];
+    const fn = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("429 retry-after too large"))
+      .mockResolvedValueOnce("ok");
+
+    const promise = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 1,
+      maxDelayMs: 1_000, // hard cap
+      jitter: 0.5,
+      retryAfterMs: () => 10_000, // server asks more than we allow
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBe("ok");
+
+    expect(delays).toHaveLength(1);
+    // With fraction=0 and symmetric jitter, delay = 1000 * (1 - 0.5) = 500.
+    // If we had stayed on "positive" mode, delay would have been exactly 1000
+    // for every retry in this scenario.
+    expect(delays[0]).toBeLessThan(1_000);
+  });
+
   it("never schedules a delay below retryAfterMs even at the low end of jitter", async () => {
     // fraction = 0 is the adversarial case: symmetric jitter yields -jitter,
     // i.e. delay = base * (1 - jitter), which would violate the Retry-After
