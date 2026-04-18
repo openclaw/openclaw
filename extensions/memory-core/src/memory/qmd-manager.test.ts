@@ -3562,6 +3562,18 @@ describe("QmdMemoryManager", () => {
       "path required",
     );
 
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-outside-"));
+    try {
+      await fs.writeFile(path.join(outsideDir, "secret.md"), "outside qmd secret", "utf-8");
+      const nestedLink = path.join(workspaceDir, "linked-dir");
+      await fs.symlink(outsideDir, nestedLink, "dir");
+      await expect(
+        manager.readFile({ relPath: "qmd/workspace-main/linked-dir/secret.md" }),
+      ).rejects.toThrow("path required");
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+
     await manager.close();
   });
 

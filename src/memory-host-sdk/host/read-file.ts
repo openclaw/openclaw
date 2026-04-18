@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveAgentContextLimits, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import { isFileMissingError, resolveContainedRegularFile } from "./fs-utils.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import {
   buildMemoryReadResult,
@@ -30,7 +30,7 @@ export async function readMemoryFile(params: {
   const relPath = path.relative(params.workspaceDir, absPath).replace(/\\/g, "/");
   const inWorkspace = relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
   const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
-  let allowedAdditional = false;
+  const matchedAdditionalRoots: string[] = [];
   if (!allowedWorkspace && (params.extraPaths?.length ?? 0) > 0) {
     const additionalPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths);
     for (const additionalPath of additionalPaths) {
@@ -41,31 +41,35 @@ export async function readMemoryFile(params: {
         }
         if (stat.isDirectory()) {
           if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
-            allowedAdditional = true;
+            matchedAdditionalRoots.push(additionalPath);
             break;
           }
           continue;
         }
         if (stat.isFile() && absPath === additionalPath && absPath.endsWith(".md")) {
-          allowedAdditional = true;
+          matchedAdditionalRoots.push(additionalPath);
           break;
         }
       } catch {}
     }
   }
+  const allowedAdditional = matchedAdditionalRoots.length > 0;
   if (!allowedWorkspace && !allowedAdditional) {
     throw new Error("path required");
   }
   if (!absPath.endsWith(".md")) {
     throw new Error("path required");
   }
-  const statResult = await statRegularFile(absPath);
+  const statResult = await resolveContainedRegularFile({
+    absPath,
+    allowedRoots: allowedWorkspace ? [params.workspaceDir] : matchedAdditionalRoots,
+  });
   if (statResult.missing) {
     return { text: "", path: relPath };
   }
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    content = await fs.readFile(statResult.realPath, "utf-8");
   } catch (err) {
     if (isFileMissingError(err)) {
       return { text: "", path: relPath };

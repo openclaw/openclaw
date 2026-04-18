@@ -245,6 +245,7 @@ describe("MemoryIndexManager.readFile", () => {
     const absPath = path.join(workspaceDir, relPath);
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, "first\nsecond", "utf-8");
+    const realAbsPath = await fs.realpath(absPath);
 
     const realReadFile = fs.readFile;
     let injected = false;
@@ -252,7 +253,7 @@ describe("MemoryIndexManager.readFile", () => {
       .spyOn(fs, "readFile")
       .mockImplementation(async (...args: Parameters<typeof realReadFile>) => {
         const [target, options] = args;
-        if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+        if (!injected && typeof target === "string" && path.resolve(target) === realAbsPath) {
           injected = true;
           const err = new Error("missing") as NodeJS.ErrnoException;
           err.code = "ENOENT";
@@ -329,6 +330,71 @@ describe("MemoryIndexManager.readFile", () => {
           relPath: "extra/linked.md",
         }),
       ).rejects.toThrow("path required");
+    }
+  });
+
+  it("rejects workspace memory reads that cross a symlinked directory boundary", async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-outside-"));
+    try {
+      await fs.writeFile(path.join(outsideDir, "secret.md"), "outside secret");
+
+      const nestedLink = path.join(memoryDir, "linked");
+      let symlinkOk = true;
+      try {
+        await fs.symlink(outsideDir, nestedLink, "dir");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES") {
+          symlinkOk = false;
+        } else {
+          throw err;
+        }
+      }
+
+      if (symlinkOk) {
+        await expect(
+          readMemoryFile({
+            workspaceDir,
+            extraPaths: [],
+            relPath: "memory/linked/secret.md",
+          }),
+        ).rejects.toThrow("path required");
+      }
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects additional memory reads that cross a nested symlinked directory", async () => {
+    await fs.mkdir(extraDir, { recursive: true });
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extra-outside-"));
+    try {
+      await fs.writeFile(path.join(outsideDir, "secret.md"), "outside extra secret");
+
+      const nestedLink = path.join(extraDir, "linked-dir");
+      let symlinkOk = true;
+      try {
+        await fs.symlink(outsideDir, nestedLink, "dir");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES") {
+          symlinkOk = false;
+        } else {
+          throw err;
+        }
+      }
+
+      if (symlinkOk) {
+        await expect(
+          readMemoryFile({
+            workspaceDir,
+            extraPaths: [extraDir],
+            relPath: "extra/linked-dir/secret.md",
+          }),
+        ).rejects.toThrow("path required");
+      }
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
     }
   });
 });
