@@ -204,6 +204,78 @@ describe("retryAsync", () => {
     expect(delays[0]).toBe(expectedDelay);
   });
 
+  it("retryAfterMs is respected as floor when jitter would undercut it", async () => {
+    vi.useFakeTimers();
+    randomMocks.generateSecureFraction.mockReturnValue(0);
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const delays: number[] = [];
+
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 100,
+        maxDelayMs: 5000,
+        jitter: 0.5,
+        retryAfterMs: () => 1000,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays[0]).toBeGreaterThanOrEqual(1000);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("jitter still adds randomness above retryAfterMs", async () => {
+    vi.useFakeTimers();
+    randomMocks.generateSecureFraction.mockReturnValue(1);
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const delays: number[] = [];
+
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 100,
+        maxDelayMs: 5000,
+        jitter: 0.5,
+        retryAfterMs: () => 1000,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays[0]).toBe(1500);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("maxDelayMs still caps delay even with retryAfterMs floor", async () => {
+    vi.useFakeTimers();
+    randomMocks.generateSecureFraction.mockReturnValue(1);
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const delays: number[] = [];
+
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 100,
+        maxDelayMs: 800,
+        jitter: 0.5,
+        retryAfterMs: () => 1000,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays[0]).toBe(800);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("uses secure jitter when configured", async () => {
     vi.useFakeTimers();
     randomMocks.generateSecureFraction.mockReturnValue(1);

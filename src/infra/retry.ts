@@ -118,7 +118,8 @@ export async function retryAsync<T>(
         : minDelayMs * 2 ** (attempt - 1);
       let delay = Math.min(baseDelay, maxDelayMs);
       delay = applyJitter(delay, jitter);
-      delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
+      const floorMs = hasRetryAfter ? Math.max(retryAfterMs, minDelayMs) : minDelayMs;
+      delay = Math.min(Math.max(delay, floorMs), maxDelayMs);
 
       options.onRetry?.({
         attempt,
