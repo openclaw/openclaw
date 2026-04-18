@@ -157,7 +157,6 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:media`      | image, image_generate, music_generate, video_generate, tts                                                |
 | `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 
-
 `sessions_history` returns a bounded, safety-filtered recall view. It strips
 thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML
 payloads (including `<tool_call>...</tool_call>`,
