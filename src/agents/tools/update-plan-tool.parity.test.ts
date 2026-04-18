@@ -9,7 +9,10 @@ import {
 import { createUpdatePlanTool } from "./update-plan-tool.js";
 
 describe("update_plan tool – parity tests", () => {
-  it("cancelled status is accepted in the schema", async () => {
+  // Test renamed per Copilot #3094484850 — execute() bypasses Typebox
+  // schema validation; this asserts the tool runtime parsing layer
+  // (readPlanSteps) accepts cancelled, not the JSON schema directly.
+  it("cancelled status is accepted by execute()", async () => {
     const tool = createUpdatePlanTool();
     const result = await tool.execute("call-1", {
       plan: [
@@ -101,7 +104,17 @@ describe("update_plan tool – merge mode (#67514)", () => {
     const plan = getPlan(result);
     expect(plan).toHaveLength(3);
     expect(plan[0]).toEqual({ step: "Install deps", status: "completed" });
-    expect(plan[1]).toEqual({ step: "Run tests", status: "completed" });
+    // PR-B review fix (Copilot #3096520563 / #3105169615): activeForm
+    // is preserved across merge when the incoming patch omits it. The
+    // renderer only displays activeForm for in_progress steps, so this
+    // is harmless metadata preservation that keeps merge calls
+    // token-efficient (caller does not have to re-send activeForm just
+    // to advance status).
+    expect(plan[1]).toEqual({
+      step: "Run tests",
+      status: "completed",
+      activeForm: "Running tests",
+    });
     expect(plan[2]).toEqual({ step: "Deploy", status: "in_progress", activeForm: "Deploying" });
   });
 
@@ -153,7 +166,15 @@ describe("update_plan tool – merge mode (#67514)", () => {
     const plan = getPlan(result);
     expect(plan).toHaveLength(3);
     expect(plan[0]).toEqual({ step: "Plan", status: "completed" });
-    expect(plan[1]).toEqual({ step: "Implement", status: "completed" });
+    // PR-B review fix (Copilot #3096520563 / #3105169615): activeForm
+    // is preserved when the incoming patch omits it (merge mode is
+    // token-efficient). Renderer only shows activeForm for in_progress
+    // steps, so the preserved value is harmless metadata.
+    expect(plan[1]).toEqual({
+      step: "Implement",
+      status: "completed",
+      activeForm: "Implementing",
+    });
     expect(plan[2]).toEqual({ step: "Verify", status: "pending" });
   });
 
@@ -330,16 +351,39 @@ describe("update_plan tool – merge mode (#67514)", () => {
     ).rejects.toThrow(/multiple in_progress steps/);
   });
 
-  it("rejects incoming patch with duplicate step text (Codex P2 r3096162555)", async () => {
-    const tool = createUpdatePlanTool();
+  it("rejects merge=true patch with duplicate step text (Codex P2 r3096162555)", async () => {
+    // PR-B review fix (Copilot #3105169618): duplicate-step check is
+    // merge-only because step text is the join key. Replace mode
+    // legitimately allows repeated step text, so this test now asserts
+    // the merge-mode-specific behavior.
+    const runId = "run-dup-merge";
+    registerAgentRunContext(runId, {});
+    const tool = createUpdatePlanTool({ runId });
     await expect(
       tool.execute("c1", {
+        merge: true,
         plan: [
           { step: "Same step", status: "completed" },
           { step: "Same step", status: "pending" },
         ],
       }),
-    ).rejects.toThrow(/duplicated within the patch/);
+    ).rejects.toThrow(/duplicated within this update_plan call/);
+  });
+
+  it("allows replace-mode (no merge) patch with duplicate step text", async () => {
+    // PR-B review fix (Copilot #3105169618): replace mode does not use
+    // step text as a join key, so legitimate plans with repeated step
+    // text (e.g. "Run tests" twice in a CI workflow) must succeed.
+    const tool = createUpdatePlanTool();
+    const result = await tool.execute("c1", {
+      plan: [
+        { step: "Run tests", status: "pending" },
+        { step: "Build artifact", status: "pending" },
+        { step: "Run tests", status: "pending" }, // intentional repeat
+      ],
+    });
+    const plan = (result.details as Record<string, unknown>).plan as Array<Record<string, unknown>>;
+    expect(plan.map((p) => p.step)).toEqual(["Run tests", "Build artifact", "Run tests"]);
   });
 
   it("emits even when no AgentRunContext is registered (best-effort)", async () => {

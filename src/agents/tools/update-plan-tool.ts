@@ -48,7 +48,7 @@ const UpdatePlanToolSchema = Type.Object({
           Type.String({
             description:
               'Present-continuous form shown while in_progress (e.g. "Running tests"). ' +
-              "Present-continuous form used during in_progress display. Accepted on any status but only rendered for in_progress steps.",
+              "Accepted on any status but only rendered for in_progress steps.",
           }),
         ),
         // PR-9 Wave B1 — closure gate fields. Optional; backwards-compatible.
@@ -184,25 +184,33 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
   if (inProgressCount > 1) {
     throw new ToolInputError("plan can contain at most one in_progress step");
   }
+  return steps;
+}
 
-  // Reject duplicate step TEXT within a single incoming patch (Codex P2
-  // on PR #67514). Merge mode keys steps by `step` text — if the patch
-  // contains two entries with the same step text, the second clobbers the
-  // first, and in merge mode they collide on the same map key when
-  // matching against the previous plan, silently rewriting unrelated
-  // history. Better to surface this at input time.
+/**
+ * Reject duplicate step TEXT within a single incoming patch when merge
+ * mode is requested (Copilot #3105169618 / Codex P2 on PR #67514).
+ * Merge mode keys steps by `step` text — if the patch contains two
+ * entries with the same step text, the second clobbers the first, and
+ * they collide on the same map key when matching against the previous
+ * plan, silently rewriting unrelated history. Replace mode does not
+ * use step text as a join key, so legitimate plans with repeated step
+ * text (e.g. "Run tests" twice in a CI workflow) are allowed there.
+ */
+function rejectDuplicateStepTextForMerge(steps: UpdatePlanStep[]): void {
   const seenSteps = new Set<string>();
   for (let i = 0; i < steps.length; i += 1) {
     const stepText = steps[i].step;
     if (seenSteps.has(stepText)) {
       throw new ToolInputError(
-        `plan[${i}].step is duplicated within the patch ("${stepText}"); ` +
-          "step text must be unique because merge mode uses it as the join key",
+        `plan[${i}].step ("${stepText}") is duplicated within this update_plan ` +
+          "call. Step text must be unique in merge mode because it is the join key. " +
+          "Either rename the duplicate, or omit `merge: true` if you intentionally " +
+          "want repeated step text.",
       );
     }
     seenSteps.add(stepText);
   }
-  return steps;
 }
 
 /**
@@ -228,7 +236,13 @@ function mergeSteps(existing: UpdatePlanStep[], incoming: UpdatePlanStep[]): Upd
     if (!update) {
       return s;
     }
-    // PR-9 Wave B1: preserve closure-gate fields across merge.
+    // PR-9 Wave B1 + PR-B review fix (Copilot #3096520563 / #3105169615):
+    // preserve fields when the incoming patch omits them. This makes
+    // merge mode token-efficient — a patch that only intends to change
+    // `status` does NOT need to re-include `activeForm` or the
+    // closure-gate fields just to keep them.
+    // - activeForm: incoming wins, falling back to existing when omitted.
+    //   (Pre-fix: incoming-undefined cleared the existing activeForm.)
     // - acceptanceCriteria: incoming wins (allows the agent to refine
     //   criteria mid-plan), falling back to existing when omitted.
     // - verifiedCriteria: incoming wins (the merge represents the
@@ -237,7 +251,11 @@ function mergeSteps(existing: UpdatePlanStep[], incoming: UpdatePlanStep[]): Upd
     return {
       step: update.step,
       status: update.status,
-      ...(update.activeForm !== undefined ? { activeForm: update.activeForm } : {}),
+      ...(update.activeForm !== undefined
+        ? { activeForm: update.activeForm }
+        : s.activeForm !== undefined
+          ? { activeForm: s.activeForm }
+          : {}),
       ...(update.acceptanceCriteria !== undefined
         ? { acceptanceCriteria: update.acceptanceCriteria }
         : s.acceptanceCriteria !== undefined
@@ -289,6 +307,11 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
       const explanation = readStringParam(params, "explanation");
       const merge = typeof params.merge === "boolean" ? params.merge : false;
       const incomingSteps = readPlanSteps(params);
+      // Duplicate-step check is a merge-mode concern only (the join key
+      // collision); replace mode legitimately allows repeated step text.
+      if (merge) {
+        rejectDuplicateStepTextForMerge(incomingSteps);
+      }
 
       const ctx = runId ? getAgentRunContext(runId) : undefined;
       const previousSteps = (ctx?.lastPlanSteps ?? []) as UpdatePlanStep[];
