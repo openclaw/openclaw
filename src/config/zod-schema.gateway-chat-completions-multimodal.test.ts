@@ -24,14 +24,10 @@ describe("OpenClawSchema gateway.http.endpoints.chatCompletions multimodal valid
                 files: {
                   enabled: true,
                   maxParts: 5,
-                  allowUrl: false,
-                  urlAllowlist: ["*.example.com"],
                   allowedMimes: ["text/plain", "application/pdf"],
                   maxBytes: 20_971_520,
                   maxTotalBytes: 52_428_800,
                   maxChars: 200_000,
-                  maxRedirects: 3,
-                  timeoutMs: 10_000,
                   pdf: { maxPages: 4, maxPixels: 4_000_000, minTextChars: 200 },
                 },
               },
@@ -90,6 +86,33 @@ describe("OpenClawSchema gateway.http.endpoints.chatCompletions multimodal valid
         },
       }),
     ).toThrow();
+  });
+
+  it("rejects URL-fetch keys on chatCompletions.files (runtime does not fetch URLs here)", () => {
+    // chatCompletions `file` parts are always base64-encoded; the URL-fetch
+    // fields that exist on /v1/responses input_file config are intentionally
+    // absent here to avoid surfacing operator knobs that have no effect.
+    const deadValues: Record<string, unknown> = {
+      allowUrl: true,
+      urlAllowlist: ["*.example.com"],
+      maxRedirects: 3,
+      timeoutMs: 10_000,
+    };
+    for (const [deadField, value] of Object.entries(deadValues)) {
+      expect(() =>
+        OpenClawSchema.parse({
+          gateway: {
+            http: {
+              endpoints: {
+                chatCompletions: {
+                  files: { [deadField]: value },
+                },
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
   });
 
   it("rejects non-positive numeric limits on audio/files", () => {

@@ -235,4 +235,27 @@ describe("openai-http limits resolution for multimodal config", () => {
     });
     expect(limits.files.enabled).toBe(false);
   });
+
+  it("propagates operator-supplied audio/file byte + mime limits to the resolver", () => {
+    const limits = __testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits({
+      audio: {
+        maxBytes: 1234,
+        maxTotalBytes: 5678,
+        allowedMimes: ["audio/flac"],
+      },
+      files: {
+        maxBytes: 2468,
+        maxTotalBytes: 8642,
+        maxChars: 9999,
+        allowedMimes: ["text/plain"],
+      },
+    });
+    expect(limits.audio.maxBytes).toBe(1234);
+    expect(limits.audio.maxTotalBytes).toBe(5678);
+    expect(limits.audio.allowedMimes.has("audio/flac")).toBe(true);
+    expect(limits.files.maxBytes).toBe(2468);
+    expect(limits.files.maxTotalBytes).toBe(8642);
+    expect(limits.files.maxChars).toBe(9999);
+    expect(limits.files.allowedMimes.has("text/plain")).toBe(true);
+  });
 });

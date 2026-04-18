@@ -815,7 +815,8 @@ export const OpenClawSchema = z
                       .object({
                         enabled: z.boolean().optional(),
                         maxParts: z.number().int().nonnegative().optional(),
-                        ...ResponsesEndpointUrlFetchShape,
+                        allowedMimes: z.array(z.string()).optional(),
+                        maxBytes: z.number().int().positive().optional(),
                         maxTotalBytes: z.number().int().positive().optional(),
                         maxChars: z.number().int().positive().optional(),
                         pdf: z

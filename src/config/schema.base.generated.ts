@@ -21582,15 +21582,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             minimum: 0,
                             maximum: 9007199254740991,
                           },
-                          allowUrl: {
-                            type: "boolean",
-                          },
-                          urlAllowlist: {
-                            type: "array",
-                            items: {
-                              type: "string",
-                            },
-                          },
                           allowedMimes: {
                             type: "array",
                             items: {
@@ -21598,16 +21589,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             },
                           },
                           maxBytes: {
-                            type: "integer",
-                            exclusiveMinimum: 0,
-                            maximum: 9007199254740991,
-                          },
-                          maxRedirects: {
-                            type: "integer",
-                            minimum: 0,
-                            maximum: 9007199254740991,
-                          },
-                          timeoutMs: {
                             type: "integer",
                             exclusiveMinimum: 0,
                             maximum: 9007199254740991,

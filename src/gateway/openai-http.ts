@@ -608,6 +608,11 @@ async function resolveAudiosForRequest(
     const tmpPath = pathJoin(tmpdir(), `openclaw-audio-${randomUUID()}.${safeExt}`);
     await writeFile(tmpPath, Buffer.from(part.data, "base64"));
     try {
+      // transcribeFirstAudio expects a full MsgContext (channel id, sender,
+      // timestamps, etc.), but its audio-preflight code path only reads
+      // ctx.MediaPaths + ctx.MediaTypes. We synthesise the minimal shape here
+      // rather than inventing fake channel metadata; the `as any` is scoped
+      // to this single object literal.
       const transcript = await transcribeFirstAudio({
         ctx: {
           MediaPaths: [tmpPath],

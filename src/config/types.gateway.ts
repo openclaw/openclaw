@@ -287,25 +287,14 @@ export type GatewayHttpChatCompletionsFilesConfig = {
   enabled?: boolean;
   /** Max number of `file` parts per request. Default: 5. */
   maxParts?: number;
-  /** Allow URL fetches for file sources. Default: false. */
-  allowUrl?: boolean;
-  /**
-   * Optional hostname allowlist for URL fetches.
-   * Supports exact hosts and `*.example.com` wildcards.
-   */
-  urlAllowlist?: string[];
   /** Allowed MIME types (case-insensitive). */
   allowedMimes?: string[];
-  /** Max bytes per file. Default: 20MB. */
+  /** Max bytes per file (base64-decoded). Default: 20MB. */
   maxBytes?: number;
   /** Max cumulative decoded file bytes in one request. Default: 50MB. */
   maxTotalBytes?: number;
   /** Max decoded characters per file after extraction. Default: 200k. */
   maxChars?: number;
-  /** Max redirects when fetching a URL. Default: 3. */
-  maxRedirects?: number;
-  /** Fetch timeout in ms. Default: 10s. */
-  timeoutMs?: number;
   /** PDF handling (application/pdf). */
   pdf?: GatewayHttpResponsesPdfConfig;
 };
