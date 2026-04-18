@@ -611,11 +611,15 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(logger.error).toHaveBeenCalledWith(expect.not.stringMatching(/\.\./));
   });
 
-  it("still migrates legacy phase jobs and prunes duplicates when frequency is invalid", async () => {
-    // Before the cleanup/validation split, an invalid dreaming.frequency froze
-    // the reconciler before it could reach the legacy migration and duplicate
-    // prune loop, leaving stale phase-owned jobs running. Assert both kinds of
-    // cleanup still happen even when we return "invalid".
+  it("preserves legacy phase jobs and duplicate managed jobs when frequency is invalid", async () => {
+    // Any of these jobs could be the schedule that is actually keeping
+    // dreaming alive for the user — including a duplicate newer than the
+    // oldest managed job, or a legacy phase job that has not yet been
+    // migrated. On invalid config we must not prune or migrate them, because
+    // the replacement write path will never happen. The safe behavior is to
+    // leave every existing job untouched and surface the config error so the
+    // user can fix it; cleanup retries on the next reconcile with a valid
+    // config.
     const managedPrimary: CronJobLike = {
       id: "job-primary",
       name: constants.MANAGED_DREAMING_CRON_NAME,
@@ -662,14 +666,17 @@ describe("short-term dreaming cron reconciliation", () => {
       logger,
     });
 
-    expect(result.status).toBe("invalid");
-    expect(result.removed).toBe(2);
-    expect(harness.removeCalls).toEqual(["job-light", "job-duplicate"]);
-    // Primary managed job stays put so the last-known-good schedule keeps
-    // running until the configured frequency is fixed.
-    expect(harness.jobs.map((entry) => entry.id)).toEqual(["job-primary"]);
+    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(harness.removeCalls).toEqual([]);
     expect(harness.addCalls).toHaveLength(0);
     expect(harness.updateCalls).toHaveLength(0);
+    // Every pre-existing job — primary, duplicate, and legacy — must remain so
+    // whichever one is the live schedule keeps firing.
+    expect(harness.jobs.map((entry) => entry.id)).toEqual([
+      "job-primary",
+      "job-duplicate",
+      "job-light",
+    ]);
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("memory-core: dreaming.frequency contains invalid cron expression:"),
     );

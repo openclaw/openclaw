@@ -436,32 +436,12 @@ export async function reconcileShortTermDreamingCronJob(params: {
     return { status: "disabled", removed };
   }
 
-  // Reconcile legacy/duplicate cleanup before the frequency validation gate so
-  // a stale invalid frequency does not block us from pruning jobs that should
-  // have been migrated or collapsed already. The legacy migration and
-  // duplicate-prune loop are both safe no-ops when there is nothing to clean
-  // up, and they do not depend on the new frequency being valid.
-  let cleanupRemoved = await migrateLegacyPhaseDreamingCronJobs({
-    cron,
-    legacyJobs: legacyPhaseJobs,
-    logger: params.logger,
-    mode: "enabled",
-  });
-  const sortedManaged = sortManagedJobs(managed);
-  const [primary, ...duplicates] = sortedManaged;
-  for (const duplicate of duplicates) {
-    try {
-      const result = await cron.remove(duplicate.id);
-      if (result.removed === true) {
-        cleanupRemoved += 1;
-      }
-    } catch (err) {
-      params.logger.warn(
-        `memory-core: failed to prune duplicate managed dreaming cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
-
+  // Validate the configured frequency/timezone BEFORE touching any existing
+  // jobs. If the config is broken we must not delete legacy phase jobs or
+  // prune duplicate managed jobs: one of those might be the schedule that is
+  // actually keeping dreaming alive for the user. Leaving everything in place
+  // on "invalid" preserves the last-known-good schedule until the config is
+  // fixed.
   const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
   if (!validation.valid) {
     // Strip any trailing period on the upstream error so the "." we append
@@ -480,16 +460,49 @@ export async function reconcileShortTermDreamingCronJob(params: {
       logMessage = `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}.`;
     }
     params.logger.error(logMessage);
-    // Leave the remaining primary managed job untouched so the last-known-good
-    // schedule keeps running until the configured frequency is fixed.
-    return { status: "invalid", removed: cleanupRemoved };
+    return { status: "invalid", removed: 0 };
   }
 
+  const sortedManaged = sortManagedJobs(managed);
+  const [primary, ...duplicates] = sortedManaged;
   const desired = buildManagedDreamingCronJob(params.config);
+
   if (!primary) {
+    // Write the new managed job BEFORE clearing legacy phase jobs so that a
+    // transient failure in `cron.add` leaves the legacy schedule in place as
+    // the fallback. If we migrated legacy first and then `cron.add` threw, the
+    // user would be left with no dreaming schedule at all.
     await cron.add(desired);
     params.logger.info("memory-core: created managed dreaming cron job.");
-    return { status: "added", removed: cleanupRemoved };
+    const migrated = await migrateLegacyPhaseDreamingCronJobs({
+      cron,
+      legacyJobs: legacyPhaseJobs,
+      logger: params.logger,
+      mode: "enabled",
+    });
+    return { status: "added", removed: migrated };
+  }
+
+  // We already have a managed primary. It is now safe to migrate legacy phase
+  // jobs and prune duplicate managed jobs — the primary continues to own the
+  // schedule while we clean up around it.
+  let cleanupRemoved = await migrateLegacyPhaseDreamingCronJobs({
+    cron,
+    legacyJobs: legacyPhaseJobs,
+    logger: params.logger,
+    mode: "enabled",
+  });
+  for (const duplicate of duplicates) {
+    try {
+      const result = await cron.remove(duplicate.id);
+      if (result.removed === true) {
+        cleanupRemoved += 1;
+      }
+    } catch (err) {
+      params.logger.warn(
+        `memory-core: failed to prune duplicate managed dreaming cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
+      );
+    }
   }
 
   const patch = buildManagedDreamingPatch(primary, desired);
