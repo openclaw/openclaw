@@ -11,6 +11,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { releaseContextEngineOwner } from "../context-engine/registry.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -1899,6 +1900,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
         restoreRegistryRollbackSnapshot(registry, previousRegistryState);
         restorePluginRecordSnapshot(record, previousRecordState);
+        // Drop any context engines the failed plugin registered before
+        // throwing. The context-engine registry keeps its own process-global
+        // state, so clearing record.contextEngineIds alone would leave the
+        // engines selectable while status/inspect surfaces show none — an
+        // inconsistency flagged by review.
+        releaseContextEngineOwner(`plugin:${record.id}`);
         recordPluginError({
           logger,
           registry,

@@ -395,6 +395,22 @@ export function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
+/**
+ * Remove every engine registered under `owner`. Used by the plugin loader to
+ * roll back context-engine registrations when a plugin's `register()` throws
+ * after calling `api.registerContextEngine(...)`, so the failed plugin does
+ * not leave an orphan engine selectable in the global registry.
+ */
+export function releaseContextEngineOwner(owner: string): void {
+  const normalizedOwner = requireContextEngineOwner(owner);
+  const registry = getContextEngineRegistryState().engines;
+  for (const [id, entry] of registry.entries()) {
+    if (entry.owner === normalizedOwner) {
+      registry.delete(id);
+    }
+  }
+}
+
 function describeResolvedContextEngineContractError(
   engineId: string,
   engine: unknown,
