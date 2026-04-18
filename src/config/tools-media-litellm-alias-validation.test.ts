@@ -99,6 +99,64 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
+  it("rejects agents.defaults.imageModel aliases when no tools.media config is set", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          imageModel: "litellm/vision",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects agents.defaults.imageModel aliases when shared media models are non-image only", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              capabilities: ["audio"],
+              type: "provider",
+            },
+          ],
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "litellm/vision",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel.primary",
+        }),
+      ]),
+    );
+  });
+
   it("accepts direct providers and concrete LiteLLM model ids", () => {
     const direct = validateConfigObject({
       tools: {
@@ -129,8 +187,24 @@ describe("tools.media LiteLLM alias validation", () => {
         },
       },
     });
+    const explicitImageModels = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini",
+              capabilities: ["image"],
+              type: "provider",
+            },
+          ],
+        },
+      },
+      agents: { defaults: { imageModel: { primary: "litellm/vision" } } },
+    });
 
     expect(direct.ok).toBe(true);
     expect(concreteLiteLLM.ok).toBe(true);
+    expect(explicitImageModels.ok).toBe(true);
   });
 });

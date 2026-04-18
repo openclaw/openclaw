@@ -157,10 +157,20 @@ const SkillEntrySchema = z
   })
   .strict();
 
+function sharedMediaModelExplicitlyExcludesImage(
+  model: { capabilities?: unknown[] } | undefined,
+): boolean {
+  return (
+    Array.isArray(model?.capabilities) &&
+    model.capabilities.length > 0 &&
+    !model.capabilities.includes("image")
+  );
+}
+
 function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
   tools?: {
     media?: {
-      models?: unknown[];
+      models?: Array<{ capabilities?: unknown[] } | undefined>;
       image?: {
         enabled?: boolean;
         models?: unknown[];
@@ -169,20 +179,27 @@ function toolsMediaImageCanFallBackToAgentDefaults(cfg: {
   };
 }): boolean {
   const media = cfg.tools?.media;
+  if (media?.image?.enabled === false) {
+    return false;
+  }
+  if ((media?.image?.models?.length ?? 0) > 0) {
+    return false;
+  }
   if (!media) {
-    return false;
+    return true;
   }
-  if ((media.models?.length ?? 0) > 0 || (media.image?.models?.length ?? 0) > 0) {
-    return false;
+  const sharedModels = media.models ?? [];
+  if (sharedModels.length === 0) {
+    return true;
   }
-  return media.image?.enabled !== false;
+  return sharedModels.every(sharedMediaModelExplicitlyExcludesImage);
 }
 
 function addToolsMediaImageFallbackAliasIssues(
   cfg: {
     tools?: {
       media?: {
-        models?: unknown[];
+        models?: Array<{ capabilities?: unknown[] } | undefined>;
         image?: {
           enabled?: boolean;
           models?: unknown[];
@@ -212,7 +229,7 @@ function addToolsMediaImageFallbackAliasIssues(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path,
-      message: `${formatLiteLLMMediaRoutingAliasMessage(aliasModel)} tools.media.image may fall back to this config when no explicit media image models are set.`,
+      message: `${formatLiteLLMMediaRoutingAliasMessage(aliasModel)} Media understanding image fallback may use this config when no explicit image-capable media models are set.`,
     });
   };
   if (typeof imageModel === "string") {
