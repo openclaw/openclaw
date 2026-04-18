@@ -194,45 +194,57 @@ describe("handleGatewayEvent session.message", () => {
     expect(host.pendingSessionMessageReloadForSessionKey).toBe("agent:qa:main");
   });
 
-  it("consumes the one-shot suppression on the next session.message", () => {
+  it("consumes the one-shot suppression on the matching next session.message", () => {
     loadChatHistoryMock.mockReset();
     const host = createHost() as Record<string, unknown>;
     host.sessionKey = "agent:qa:main";
     host.suppressNextSessionMessageReloadForSessionKey = "agent:qa:main";
+    host.suppressNextSessionMessageReloadMessageSignature = "assistant:done";
     host.suppressNextSessionMessageReloadExpiresAtMs = Date.now() + 5_000;
 
     handleGatewayEvent(host as Parameters<typeof handleGatewayEvent>[0], {
       type: "event",
       event: "session.message",
-      payload: { sessionKey: "agent:qa:main" },
+      payload: {
+        sessionKey: "agent:qa:main",
+        message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+      },
       seq: 1,
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
     expect(host.suppressNextSessionMessageReloadForSessionKey).toBeNull();
+    expect(host.suppressNextSessionMessageReloadMessageSignature).toBeNull();
   });
 
-  it("reloads on a later session.message after the one-shot suppression is consumed", () => {
+  it("reloads when the next session.message does not match the suppressed final", () => {
     loadChatHistoryMock.mockReset();
     const host = createHost() as Record<string, unknown>;
     host.sessionKey = "agent:qa:main";
     host.suppressNextSessionMessageReloadForSessionKey = "agent:qa:main";
+    host.suppressNextSessionMessageReloadMessageSignature = "assistant:done";
     host.suppressNextSessionMessageReloadExpiresAtMs = Date.now() + 5_000;
 
     handleGatewayEvent(host as Parameters<typeof handleGatewayEvent>[0], {
       type: "event",
       event: "session.message",
-      payload: { sessionKey: "agent:qa:main" },
+      payload: {
+        sessionKey: "agent:qa:main",
+        message: { role: "assistant", content: [{ type: "text", text: "Other update" }] },
+      },
       seq: 1,
     });
     handleGatewayEvent(host as Parameters<typeof handleGatewayEvent>[0], {
       type: "event",
       event: "session.message",
-      payload: { sessionKey: "agent:qa:main" },
+      payload: {
+        sessionKey: "agent:qa:main",
+        message: { role: "assistant", content: [{ type: "text", text: "Another update" }] },
+      },
       seq: 2,
     });
 
-    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(2);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(
       host as Parameters<typeof handleGatewayEvent>[0],
     );
@@ -243,17 +255,22 @@ describe("handleGatewayEvent session.message", () => {
     const host = createHost() as Record<string, unknown>;
     host.sessionKey = "agent:qa:main";
     host.suppressNextSessionMessageReloadForSessionKey = "agent:qa:main";
+    host.suppressNextSessionMessageReloadMessageSignature = "assistant:done";
     host.suppressNextSessionMessageReloadExpiresAtMs = Date.now() - 1;
 
     handleGatewayEvent(host as Parameters<typeof handleGatewayEvent>[0], {
       type: "event",
       event: "session.message",
-      payload: { sessionKey: "agent:qa:main" },
+      payload: {
+        sessionKey: "agent:qa:main",
+        message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
+      },
       seq: 1,
     });
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(host.suppressNextSessionMessageReloadForSessionKey).toBeNull();
+    expect(host.suppressNextSessionMessageReloadMessageSignature).toBeNull();
     expect(host.suppressNextSessionMessageReloadExpiresAtMs).toBeNull();
   });
 

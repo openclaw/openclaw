@@ -760,7 +760,7 @@ describe("connectGateway", () => {
     expect(host.chatStream).toBeNull();
   });
 
-  it("does not reload chat history when session.message follows a tracked final", () => {
+  it("does not reload chat history when a matching session.message follows a tracked final", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "engine-run-2";
     host.chatStream = "Done";
@@ -781,7 +781,13 @@ describe("connectGateway", () => {
     });
     client.emitEvent({
       event: "session.message",
-      payload: { sessionKey: "main" },
+      payload: {
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
@@ -794,6 +800,39 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("reloads chat history when the next session.message does not match the tracked final", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "engine-run-2b";
+    host.chatStream = "Done";
+    host.chatStreamStartedAt = 125;
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-2b",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+          timestamp: 126,
+        },
+      },
+    });
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Other update" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads chat history after the tracked final when a same-session update was deferred", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "engine-run-3";
@@ -802,7 +841,13 @@ describe("connectGateway", () => {
 
     client.emitEvent({
       event: "session.message",
-      payload: { sessionKey: "main" },
+      payload: {
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Deferred update" }],
+        },
+      },
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();

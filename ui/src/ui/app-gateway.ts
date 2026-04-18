@@ -16,6 +16,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { extractTextCached } from "./chat/message-extract.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
@@ -50,6 +51,7 @@ import {
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type {
   AgentsListResult,
   PresenceEntry,
@@ -119,6 +121,7 @@ const SESSION_MESSAGE_RELOAD_SUPPRESSION_TTL_MS = 5_000;
 type GatewayHostWithSessionMessageReloadState = GatewayHost & {
   pendingSessionMessageReloadForSessionKey?: string | null;
   suppressNextSessionMessageReloadForSessionKey?: string | null;
+  suppressNextSessionMessageReloadMessageSignature?: string | null;
   suppressNextSessionMessageReloadExpiresAtMs?: number | null;
 };
 
@@ -156,32 +159,67 @@ function flushDeferredSessionMessageReload(host: GatewayHost): boolean {
   return true;
 }
 
+function extractComparableSessionMessageSignature(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "assistant") {
+    return "";
+  }
+  const text = extractTextCached(message);
+  if (typeof text !== "string") {
+    return "";
+  }
+  const normalizedText = normalizeLowercaseStringOrEmpty(text.trim());
+  return normalizedText ? `${role}:${normalizedText}` : "";
+}
+
 function clearSessionMessageReloadSuppression(host: GatewayHost) {
   const reloadHost = host as GatewayHostWithSessionMessageReloadState;
   reloadHost.suppressNextSessionMessageReloadForSessionKey = null;
+  reloadHost.suppressNextSessionMessageReloadMessageSignature = null;
   reloadHost.suppressNextSessionMessageReloadExpiresAtMs = null;
 }
 
-function suppressNextSessionMessageReload(host: GatewayHost, sessionKey: string) {
+function suppressNextSessionMessageReload(host: GatewayHost, sessionKey: string, message: unknown) {
+  const signature = extractComparableSessionMessageSignature(message);
+  if (!signature) {
+    clearSessionMessageReloadSuppression(host);
+    return;
+  }
   const reloadHost = host as GatewayHostWithSessionMessageReloadState;
   reloadHost.suppressNextSessionMessageReloadForSessionKey = sessionKey;
+  reloadHost.suppressNextSessionMessageReloadMessageSignature = signature;
   reloadHost.suppressNextSessionMessageReloadExpiresAtMs =
     Date.now() + SESSION_MESSAGE_RELOAD_SUPPRESSION_TTL_MS;
 }
 
-function shouldSuppressNextSessionMessageReload(host: GatewayHost, sessionKey: string): boolean {
+function shouldSuppressNextSessionMessageReload(
+  host: GatewayHost,
+  payload: { sessionKey?: string; message?: unknown } | undefined,
+): boolean {
+  const sessionKey = payload?.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
   const reloadHost = host as GatewayHostWithSessionMessageReloadState;
   const suppressionSessionKey = reloadHost.suppressNextSessionMessageReloadForSessionKey;
+  const suppressionSignature = reloadHost.suppressNextSessionMessageReloadMessageSignature;
   const expiresAt = reloadHost.suppressNextSessionMessageReloadExpiresAtMs;
   const isExpired = typeof expiresAt === "number" && expiresAt <= Date.now();
   if (isExpired) {
     clearSessionMessageReloadSuppression(host);
-  }
-  if (suppressionSessionKey !== sessionKey) {
     return false;
   }
+  if (suppressionSessionKey !== sessionKey || !suppressionSignature) {
+    return false;
+  }
+  const incomingSignature = extractComparableSessionMessageSignature(payload?.message);
+  const shouldSuppress = incomingSignature === suppressionSignature;
   clearSessionMessageReloadSuppression(host);
-  return !isExpired;
+  return shouldSuppress;
 }
 
 function isTerminalChatState(
@@ -495,20 +533,24 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       clearDeferredSessionMessageReload(host, payload?.sessionKey);
       void loadChatHistory(host as unknown as ChatState);
     } else {
-      suppressNextSessionMessageReload(host, payload?.sessionKey?.trim() || host.sessionKey);
+      suppressNextSessionMessageReload(
+        host,
+        payload?.sessionKey?.trim() || host.sessionKey,
+        payload?.message,
+      );
     }
   }
 }
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string } | undefined,
+  payload: { sessionKey?: string; message?: unknown } | undefined,
 ) {
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
-  if (shouldSuppressNextSessionMessageReload(host, sessionKey)) {
+  if (shouldSuppressNextSessionMessageReload(host, payload)) {
     return;
   }
   if (isActiveChatFlow(host as GatewayHost & Partial<ChatState>)) {
