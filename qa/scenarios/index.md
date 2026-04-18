@@ -5,12 +5,23 @@ Single source of truth for repo-backed QA suite bootstrap data.
 
 - `index.md` defines pack-level bootstrap data
 - each nested `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
-- scenario markdown may also define category metadata, required plugins, lane filters,
-  and gateway config patching
+- scenario markdown may also define coverage IDs, category metadata, required plugins,
+  lane filters, and gateway config patching
 
 - kickoff mission
 - QA operator identity
 - scenario files under one-level theme directories
+
+Coverage tracking:
+
+- add `coverage.primary` IDs to each scenario's `qa-scenario` block
+- add `coverage.secondary` only when a scenario intentionally protects another behavior
+- keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
+- prefer reusing an existing feature ID over minting a scenario-shaped ID
+- avoid copying the scenario title into coverage IDs
+- use `pnpm openclaw qa coverage` to render the current inventory
+- treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
+- keep source-path tracking in the report, not in the scenario schema
 
 Theme directories:
 

@@ -96,6 +96,49 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     expect(parsed).toBeNull();
   });
 
+  it("allows the runtime-only Codex CLI profile when the stored default already matches", () => {
+    const accessToken = buildJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/profile": {
+        email: "codex@example.com",
+      },
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: accessToken,
+          refresh_token: "refresh-token",
+          account_id: "acct_123",
+        },
+      }),
+    );
+
+    const firstParse = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+    expect(firstParse).not.toBeNull();
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: firstParse!.credential,
+        },
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: {
+        access: accessToken,
+        refresh: "refresh-token",
+        accountId: "acct_123",
+        email: "codex@example.com",
+      },
+    });
+  });
+
   it("returns null without logging when the Codex CLI auth file is missing", () => {
     const error = Object.assign(new Error("missing"), {
       code: "ENOENT",
