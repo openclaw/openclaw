@@ -6,6 +6,11 @@ import {
   EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
+// PR-8 review fix (Copilot #3105170294): import the canonical
+// PLAN_STEP_STATUSES from update-plan-tool.ts as the single source of
+// truth for valid step statuses. Prior local duplicate could drift
+// (adding a status in one tool but not the other).
+import { PLAN_STEP_STATUSES, type PlanStepStatus } from "./update-plan-tool.js";
 
 /**
  * `exit_plan_mode` agent tool — proposes the current plan for user
@@ -23,7 +28,9 @@ import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js"
  * authors don't need to learn a second format.
  */
 
-const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
+// PR-8 review fix (Copilot #3105170294): use the imported
+// PLAN_STEP_STATUSES from update-plan-tool.ts \u2014 see import above.
+// Prior local duplicate is removed.
 
 const ExitPlanModeToolSchema = Type.Object({
   // PR-9 Tier 1: explicit plan title field. Without this the agent's
@@ -128,7 +135,7 @@ const ExitPlanModeToolSchema = Type.Object({
 
 type ExitPlanModeStep = {
   step: string;
-  status: (typeof PLAN_STEP_STATUSES)[number];
+  status: PlanStepStatus;
   activeForm?: string;
 };
 
@@ -150,7 +157,7 @@ function readPlanSteps(params: Record<string, unknown>): ExitPlanModeStep[] {
       required: true,
       label: `plan[${index}].status`,
     });
-    if (!PLAN_STEP_STATUSES.includes(status as (typeof PLAN_STEP_STATUSES)[number])) {
+    if (!PLAN_STEP_STATUSES.includes(status as PlanStepStatus)) {
       throw new ToolInputError(
         `plan[${index}].status must be one of ${PLAN_STEP_STATUSES.join(", ")}`,
       );
@@ -158,7 +165,7 @@ function readPlanSteps(params: Record<string, unknown>): ExitPlanModeStep[] {
     const activeForm = readStringParam(stepParams, "activeForm");
     return {
       step,
-      status: status as (typeof PLAN_STEP_STATUSES)[number],
+      status: status as PlanStepStatus,
       ...(activeForm ? { activeForm } : {}),
     };
   });
