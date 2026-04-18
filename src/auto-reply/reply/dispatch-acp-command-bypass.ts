@@ -24,7 +24,7 @@ function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
 }
 
 function isResetCommandCandidate(text: string): boolean {
-  return /^\/(?:new|reset)(?:\s|$)/i.test(text);
+  return /^\/(?:new|reset|acp|unfocus|status)(?:\s|$)/i.test(text);
 }
 
 export function shouldBypassAcpDispatchForCommand(

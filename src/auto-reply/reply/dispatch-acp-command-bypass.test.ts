@@ -15,7 +15,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
-  it("returns false for ACP slash commands", () => {
+  it("returns true for ACP slash commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -24,7 +24,31 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       BodyForAgent: "/acp cancel",
     });
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for status command", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/status",
+      BodyForCommands: "/status",
+      BodyForAgent: "/status",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for unfocus command", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/unfocus",
+      BodyForCommands: "/unfocus",
+      BodyForAgent: "/unfocus",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
   it("returns true for ACP reset-tail slash commands", () => {
@@ -52,7 +76,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
-  it("returns false for slash commands when text commands are disabled", () => {
+  it("returns true for slash commands when text commands are disabled", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -67,7 +91,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       },
     } as OpenClawConfig;
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(false);
+    expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
   });
 
   it("returns false for unauthorized bang-prefixed commands", () => {
