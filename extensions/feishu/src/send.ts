@@ -7,6 +7,7 @@ import {
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { wrapBareUrlsForFeishuMarkdown } from "./markdown-urls.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -434,6 +435,9 @@ export function buildFeishuPostMessagePayload(params: { messageText: string }): 
   msgType: string;
 } {
   const { messageText } = params;
+  // Feishu's post "md" tag breaks autolink at underscores inside URLs, so we
+  // pre-wrap bare http(s) URLs into explicit `[url](url)` form.
+  const safeText = wrapBareUrlsForFeishuMarkdown(messageText);
   return {
     content: JSON.stringify({
       zh_cn: {
@@ -441,7 +445,7 @@ export function buildFeishuPostMessagePayload(params: { messageText: string }): 
           [
             {
               tag: "md",
-              text: messageText,
+              text: safeText,
             },
           ],
         ],

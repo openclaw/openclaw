@@ -131,6 +131,36 @@ describe("getMessageFeishu", () => {
     expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
   });
 
+  it("wraps bare URLs in the post payload so Feishu md renders them as links", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_url" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const url = "https://example.com/v1/verify?flow_id=A_B_C&user_code=DEMO-1234";
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_url",
+      text: `open ${url}`,
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    const sent = create.mock.calls[0][0] as { data: { content: string; msg_type: string } };
+    expect(sent.data.msg_type).toBe("post");
+    const body = JSON.parse(sent.data.content) as {
+      zh_cn: { content: [[{ tag: string; text: string }]] };
+    };
+    expect(body.zh_cn.content[0][0].text).toBe(`open [${url}](${url})`);
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
