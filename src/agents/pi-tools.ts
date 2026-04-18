@@ -98,6 +98,60 @@ function applyMessageProviderToolPolicy(
   }
   const deniedSet = new Set(deniedTools);
   return tools.filter((tool) => !deniedSet.has(tool.name));
+type BashToolsModule = typeof import("./bash-tools.js");
+
+let bashToolsModulePromise: Promise<BashToolsModule> | undefined;
+
+function loadBashToolsModule(): Promise<BashToolsModule> {
+  bashToolsModulePromise ??= import("./bash-tools.js");
+  return bashToolsModulePromise;
+}
+
+function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
+  let loadedTool: AnyAgentTool | undefined;
+  const loadTool = async () => {
+    if (!loadedTool) {
+      const { createExecTool } = await loadBashToolsModule();
+      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+    }
+    return loadedTool;
+  };
+
+  return {
+    name: "exec",
+    label: "exec",
+    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
+    get description() {
+      return describeExecTool({
+        agentId: defaults?.agentId,
+        hasCronTool: defaults?.hasCronTool === true,
+      });
+    },
+    parameters: execSchema,
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
+      (await loadTool()).execute(...args),
+  } as AnyAgentTool;
+}
+
+function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
+  let loadedTool: AnyAgentTool | undefined;
+  const loadTool = async () => {
+    if (!loadedTool) {
+      const { createProcessTool } = await loadBashToolsModule();
+      loadedTool = createProcessTool(defaults) as unknown as AnyAgentTool;
+    }
+    return loadedTool;
+  };
+
+  return {
+    name: "process",
+    label: "process",
+    displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
+    description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
+    parameters: processSchema,
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
+      (await loadTool()).execute(...args),
+  } as AnyAgentTool;
 }
 
 function applyModelProviderToolPolicy(
@@ -275,6 +329,9 @@ export function createOpenClawCodingTools(options?: {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  memberRoleIds?: string[];
+  /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
   senderId?: string | null;
   senderName?: string | null;
@@ -530,6 +587,7 @@ export function createOpenClawCodingTools(options?: {
       agentGroupId: options?.groupId ?? null,
       agentGroupChannel: options?.groupChannel ?? null,
       agentGroupSpace: options?.groupSpace ?? null,
+      agentMemberRoleIds: options?.memberRoleIds,
       agentDir: options?.agentDir,
       sandboxRoot,
       sandboxContainerWorkdir: sandbox?.containerWorkdir,

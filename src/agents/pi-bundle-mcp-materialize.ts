@@ -9,7 +9,6 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
-import { createSessionMcpRuntime } from "./pi-bundle-mcp-runtime.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
 function toAgentToolResult(params: {
@@ -131,6 +130,7 @@ export async function createBundleMcpToolRuntime(params: {
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
 }): Promise<BundleMcpToolRuntime> {
+  const { createSessionMcpRuntime } = await import("./pi-bundle-mcp-runtime.js");
   const runtime = createSessionMcpRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,

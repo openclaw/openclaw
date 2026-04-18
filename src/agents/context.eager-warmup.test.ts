@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
@@ -20,16 +21,14 @@ describe("agents/context eager warmup", () => {
     ["agent", ["node", "openclaw", "agent", "--message", "ok"]],
   ])("does not eager-load config for %s commands on import", async (_label, argv) => {
     process.argv = argv;
-    vi.resetModules();
-    await import("./context.js");
+    await importFreshModule(import.meta.url, `./context.js?scope=${_label}`);
 
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
   it("does not eager-load config when plugin-sdk command-auth is imported", async () => {
     process.argv = ["node", "openclaw", "onboard"];
-    vi.resetModules();
-    await import("../plugin-sdk/command-auth.js");
+    await importFreshModule(import.meta.url, "../plugin-sdk/command-auth.js?scope=onboard");
 
     expect(loadConfigMock).not.toHaveBeenCalled();
   });

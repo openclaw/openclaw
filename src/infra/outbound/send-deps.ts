@@ -26,6 +26,7 @@ export type ResolveOutboundSendDepOptions = {
   legacyKeys?: readonly string[];
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Channel-specific dependency lookup returns caller-typed values.
 export function resolveOutboundSendDep<T>(
   deps: OutboundSendDeps | null | undefined,
   channelId: string,

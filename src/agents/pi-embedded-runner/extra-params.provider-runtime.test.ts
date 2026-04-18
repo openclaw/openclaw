@@ -19,7 +19,7 @@ beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     wrapProviderStreamFn: ({ provider, context }) => {
-      if (provider !== "ollama" || context.thinkingLevel !== "off") {
+      if (provider !== "local-provider" || context.thinkingLevel !== "off") {
         return context.streamFn;
       }
       const baseStreamFn = context.streamFn;
@@ -44,19 +44,19 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-describe("extra-params: Ollama plugin handoff", () => {
+describe("extra-params: provider runtime handoff", () => {
   it("passes thinking-off intent through the provider runtime wrapper seam", () => {
     const payload = runExtraParamsCase({
-      applyProvider: "ollama",
-      applyModelId: "qwen3.5:9b",
+      applyProvider: "local-provider",
+      applyModelId: "local-model:9b",
       model: {
-        api: "ollama",
-        provider: "ollama",
-        id: "qwen3.5:9b",
+        api: "openai-completions",
+        provider: "local-provider",
+        id: "local-model:9b",
       } as unknown as Model<"openai-completions">,
       thinkingLevel: "off",
       payload: {
-        model: "qwen3.5:9b",
+        model: "local-model:9b",
         messages: [],
         stream: true,
         options: {
@@ -70,7 +70,7 @@ describe("extra-params: Ollama plugin handoff", () => {
     expect((payload.options as Record<string, unknown>).think).toBeUndefined();
   });
 
-  it("does not apply the plugin wrapper for non-ollama providers", () => {
+  it("does not apply the plugin wrapper for other providers", () => {
     const payload = runExtraParamsCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
@@ -91,16 +91,16 @@ describe("extra-params: Ollama plugin handoff", () => {
 
   it("does not apply the plugin wrapper when thinkingLevel is not off", () => {
     const payload = runExtraParamsCase({
-      applyProvider: "ollama",
-      applyModelId: "qwen3.5:9b",
+      applyProvider: "local-provider",
+      applyModelId: "local-model:9b",
       model: {
-        api: "ollama",
-        provider: "ollama",
-        id: "qwen3.5:9b",
+        api: "openai-completions",
+        provider: "local-provider",
+        id: "local-model:9b",
       } as unknown as Model<"openai-completions">,
       thinkingLevel: "high",
       payload: {
-        model: "qwen3.5:9b",
+        model: "local-model:9b",
         messages: [],
         stream: true,
         options: {

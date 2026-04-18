@@ -164,11 +164,8 @@ export function buildWebProviderSnapshotCacheKey(params: {
   });
 }
 
-export function mapRegistryProviders<
-  TProvider extends { id: string },
-  TEntry extends { pluginId: string; provider: TProvider },
->(params: {
-  entries: readonly TEntry[];
+export function mapRegistryProviders<TProvider extends { id: string }>(params: {
+  entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];
   sortProviders: (
     providers: Array<TProvider & { pluginId: string }>,

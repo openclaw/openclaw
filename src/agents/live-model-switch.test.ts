@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   abortEmbeddedPiRunMock: vi.fn(),
@@ -65,14 +64,17 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
 }));
 
+let mod: typeof import("./live-model-switch.js");
+
 async function loadModule() {
-  return await importFreshModule<typeof import("./live-model-switch.js")>(
-    import.meta.url,
-    `./live-model-switch.js?scope=${Math.random().toString(36).slice(2)}`,
-  );
+  return mod;
 }
 
 describe("live model switch", () => {
+  beforeAll(async () => {
+    mod = await import("./live-model-switch.js");
+  });
+
   beforeEach(() => {
     state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
