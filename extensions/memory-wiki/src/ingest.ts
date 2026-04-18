@@ -127,7 +127,7 @@ export async function ingestMemoryWikiSource(params: {
   const sourcePath = await fs.realpath(resolvedInputPath).catch(() => resolvedInputPath);
   const buffer = await fs.readFile(sourcePath);
   const content = assertUtf8Text(buffer, sourcePath);
-  const title = resolveSourceTitle(sourcePath, params.title);
+  const title = resolveSourceTitle(resolvedInputPath, params.title);
   const { pageId, pageRelativePath } = await resolveIngestSourcePageIdentity({
     vaultPath: params.config.vault.path,
     sourcePath,

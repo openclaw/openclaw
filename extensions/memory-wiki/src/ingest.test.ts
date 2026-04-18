@@ -325,4 +325,32 @@ describe("ingestMemoryWikiSource", () => {
     expect(second.created).toBe(false);
     expect(second.sourcePath).toBe(canonicalActualPath);
   });
+
+  it("derives the default title from the user input path for symlinked sources", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-symlink-title-");
+    const actualDir = path.join(rootDir, "actual");
+    const aliasDir = path.join(rootDir, "alias");
+    await fs.mkdir(actualDir, { recursive: true });
+    await fs.mkdir(aliasDir, { recursive: true });
+    const actualPath = path.join(actualDir, "opaque-1234.txt");
+    const aliasPath = path.join(aliasDir, "meeting-notes.txt");
+    await fs.writeFile(actualPath, "meeting notes via symlink\n", "utf8");
+    await fs.symlink(actualPath, aliasPath);
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+
+    const result = await ingestMemoryWikiSource({
+      config,
+      inputPath: aliasPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    expect(result.title).toBe("meeting notes");
+    expect(result.pageId).toMatch(/^source\.meeting-notes-[a-f0-9]{8}$/);
+    expect(result.pagePath).toMatch(/^sources\/meeting-notes-[a-f0-9]{8}\.md$/);
+    await expect(
+      fs.readFile(path.join(config.vault.path, result.pagePath), "utf8"),
+    ).resolves.toContain("title: meeting notes");
+  });
 });
