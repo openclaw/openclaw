@@ -608,8 +608,16 @@ export async function runAgentTurnWithFallback(params: {
           ...params.followupRun.run,
           config: runtimeConfig,
         };
-  const initialCleanupSessionId = effectiveRun.sessionId;
-  let latestCleanupSessionId = initialCleanupSessionId;
+  const cleanupSessionIds = new Set<string>();
+  const rememberCleanupSessionId = (sessionId: string | undefined) => {
+    const normalized = normalizeOptionalString(sessionId);
+    if (normalized) {
+      cleanupSessionIds.add(normalized);
+    }
+    return normalized;
+  };
+  rememberCleanupSessionId(effectiveRun.sessionId);
+  rememberCleanupSessionId(params.followupRun.run.sessionId);
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
@@ -1251,6 +1259,7 @@ export async function runAgentTurnWithFallback(params: {
                   0,
                   result.meta?.agentMeta?.compactionCount ?? 0,
                 );
+                rememberCleanupSessionId(result.meta?.agentMeta?.sessionId);
                 attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
                 return result;
               } catch (err) {
@@ -1271,8 +1280,6 @@ export async function runAgentTurnWithFallback(params: {
           },
         });
         runResult = fallbackResult.result;
-        latestCleanupSessionId =
-          normalizeOptionalString(runResult.meta?.agentMeta?.sessionId) ?? latestCleanupSessionId;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
         fallbackAttempts = Array.isArray(fallbackResult.attempts)
@@ -1612,23 +1619,21 @@ export async function runAgentTurnWithFallback(params: {
       directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
     };
   } finally {
-    if (effectiveRun.cleanupBundleMcpOnRunEnd === true) {
-      const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
-      const sessionIds = new Set([
-        initialCleanupSessionId,
-        latestCleanupSessionId,
-        normalizeOptionalString(params.followupRun.run.sessionId),
-      ]);
-      for (const sessionId of sessionIds) {
-        if (!sessionId) {
-          continue;
+    try {
+      if (effectiveRun.cleanupBundleMcpOnRunEnd === true) {
+        const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
+        for (const sessionId of cleanupSessionIds) {
+          await disposeSessionMcpRuntime(sessionId).catch((error) => {
+            logVerbose(
+              `failed to dispose bundle MCP runtime for one-shot run ${sessionId}: ${formatErrorMessage(error)}`,
+            );
+          });
         }
-        await disposeSessionMcpRuntime(sessionId).catch((error) => {
-          logVerbose(
-            `failed to dispose bundle MCP runtime for one-shot run ${sessionId}: ${formatErrorMessage(error)}`,
-          );
-        });
       }
+    } catch (error) {
+      logVerbose(
+        `bundle MCP cleanup failed after one-shot run (non-fatal): ${formatErrorMessage(error)}`,
+      );
     }
   }
 }

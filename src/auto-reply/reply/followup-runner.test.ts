@@ -241,7 +241,9 @@ async function persistRunSessionUsageForFollowupTest(
   await saveSessionStore(storePath, store);
 }
 
-async function loadFreshFollowupRunnerModuleForTest() {
+async function loadFreshFollowupRunnerModuleForTest(options?: {
+  failBundleMcpToolsImport?: boolean;
+}) {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
   vi.doMock(
@@ -264,9 +266,14 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
   }));
-  vi.doMock("../../agents/pi-bundle-mcp-tools.js", () => ({
-    disposeSessionMcpRuntime: (sessionId: unknown) => disposeSessionMcpRuntimeMock(sessionId),
-  }));
+  vi.doMock("../../agents/pi-bundle-mcp-tools.js", () => {
+    if (options?.failBundleMcpToolsImport === true) {
+      throw new Error("simulated bundle MCP tools import failure");
+    }
+    return {
+      disposeSessionMcpRuntime: (sessionId: unknown) => disposeSessionMcpRuntimeMock(sessionId),
+    };
+  });
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
@@ -1394,6 +1401,33 @@ describe("createFollowupRunner typing cleanup", () => {
     await runner(baseQueuedRun());
 
     expectTypingCleanup(typing);
+  });
+
+  it("still tears down typing when bundle MCP cleanup setup fails", async () => {
+    try {
+      await loadFreshFollowupRunnerModuleForTest({ failBundleMcpToolsImport: true });
+      const typing = createMockTypingController();
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+      const runner = createFollowupRunner({
+        opts: { onBlockReply: vi.fn(async () => {}) },
+        typing,
+        typingMode: "instant",
+        defaultModel: "anthropic/claude-opus-4-6",
+      });
+
+      await runner(
+        createQueuedRun({
+          run: {
+            cleanupBundleMcpOnRunEnd: true,
+          },
+        }),
+      );
+
+      expectTypingCleanup(typing);
+    } finally {
+      await loadFreshFollowupRunnerModuleForTest();
+    }
   });
 
   it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {

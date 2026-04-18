@@ -158,8 +158,16 @@ export function createFollowupRunner(params: {
         ? queued
         : { ...queued, run: { ...queued.run, config: runtimeConfig } };
     const run = effectiveQueued.run;
-    const initialCleanupSessionId = run.sessionId;
-    let latestCleanupSessionId = initialCleanupSessionId;
+    const cleanupSessionIds = new Set<string>();
+    const rememberCleanupSessionId = (sessionId: string | undefined) => {
+      const normalized = normalizeOptionalString(sessionId);
+      if (normalized) {
+        cleanupSessionIds.add(normalized);
+      }
+      return normalized;
+    };
+    rememberCleanupSessionId(run.sessionId);
+    rememberCleanupSessionId(queued.run.sessionId);
     const replyOperation = createReplyOperation({
       sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
@@ -290,6 +298,7 @@ export function createFollowupRunner(params: {
                 0,
                 result.meta?.agentMeta?.compactionCount ?? 0,
               );
+              rememberCleanupSessionId(result.meta?.agentMeta?.sessionId);
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
               return result;
             } finally {
@@ -298,8 +307,6 @@ export function createFollowupRunner(params: {
           },
         });
         runResult = fallbackResult.result;
-        latestCleanupSessionId =
-          normalizeOptionalString(runResult.meta?.agentMeta?.sessionId) ?? latestCleanupSessionId;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
       } catch (err) {
@@ -411,24 +418,21 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, effectiveQueued);
     } finally {
-      if (run.cleanupBundleMcpOnRunEnd === true) {
-        const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
-        const sessionIds = new Set([
-          initialCleanupSessionId,
-          latestCleanupSessionId,
-          normalizeOptionalString(run.sessionId),
-          normalizeOptionalString(queued.run.sessionId),
-        ]);
-        for (const sessionId of sessionIds) {
-          if (!sessionId) {
-            continue;
+      try {
+        if (run.cleanupBundleMcpOnRunEnd === true) {
+          const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
+          for (const sessionId of cleanupSessionIds) {
+            await disposeSessionMcpRuntime(sessionId).catch((error) => {
+              logVerbose(
+                `failed to dispose bundle MCP runtime for one-shot followup ${sessionId}: ${formatErrorMessage(error)}`,
+              );
+            });
           }
-          await disposeSessionMcpRuntime(sessionId).catch((error) => {
-            logVerbose(
-              `failed to dispose bundle MCP runtime for one-shot followup ${sessionId}: ${formatErrorMessage(error)}`,
-            );
-          });
         }
+      } catch (cleanupErr) {
+        logVerbose(
+          `bundle MCP cleanup failed in followup runner (non-fatal): ${formatErrorMessage(cleanupErr)}`,
+        );
       }
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.

@@ -3,6 +3,7 @@ import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { CronJob } from "../types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
@@ -253,8 +254,15 @@ export async function executeCronRun(params: {
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
-  const initialCleanupSessionId = params.cronSession.sessionEntry.sessionId;
-  let latestCleanupSessionId = initialCleanupSessionId;
+  const cleanupSessionIds = new Set<string>();
+  const rememberCleanupSessionId = (sessionId: string | undefined) => {
+    const normalized = normalizeOptionalString(sessionId);
+    if (normalized) {
+      cleanupSessionIds.add(normalized);
+    }
+    return normalized;
+  };
+  rememberCleanupSessionId(params.cronSession.sessionEntry.sessionId);
   registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
     sessionKey: params.agentSessionKey,
     verboseLevel: resolvedVerboseLevel,
@@ -326,7 +334,7 @@ export async function executeCronRun(params: {
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
     }
-    latestCleanupSessionId = runResult.meta?.agentMeta?.sessionId?.trim() || latestCleanupSessionId;
+    rememberCleanupSessionId(runResult.meta?.agentMeta?.sessionId);
 
     if (!params.isAborted()) {
       const interimPayloads = runResult.payloads ?? [];
@@ -371,8 +379,7 @@ export async function executeCronRun(params: {
         ].join(" ");
         await executor.runPrompt(continuationPrompt);
         ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
-        latestCleanupSessionId =
-          runResult?.meta?.agentMeta?.sessionId?.trim() || latestCleanupSessionId;
+        rememberCleanupSessionId(runResult?.meta?.agentMeta?.sessionId);
       }
     }
 
@@ -389,16 +396,19 @@ export async function executeCronRun(params: {
     };
   } finally {
     if (params.job.sessionTarget === "isolated") {
-      const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
-      for (const sessionId of new Set([initialCleanupSessionId, latestCleanupSessionId])) {
-        if (!sessionId) {
-          continue;
+      try {
+        const { disposeSessionMcpRuntime } = await loadBundleMcpToolsRuntime();
+        for (const sessionId of cleanupSessionIds) {
+          await disposeSessionMcpRuntime(sessionId).catch((error) => {
+            logWarn(
+              `failed to dispose bundle MCP runtime for isolated cron session ${sessionId}: ${formatErrorMessage(error)}`,
+            );
+          });
         }
-        await disposeSessionMcpRuntime(sessionId).catch((error) => {
-          logWarn(
-            `failed to dispose bundle MCP runtime for isolated cron session ${sessionId}: ${formatErrorMessage(error)}`,
-          );
-        });
+      } catch (error) {
+        logWarn(
+          `failed to finalize bundle MCP cleanup for isolated cron run (non-fatal): ${formatErrorMessage(error)}`,
+        );
       }
     }
   }

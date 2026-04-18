@@ -170,6 +170,8 @@ export function createSessionMcpRuntime(params: {
       detachStderr: resolved.detachStderr,
     };
     const sessionPromise = (async () => {
+      // Register the session before the first await so dispose() can still close
+      // it if startup fails or the runtime is torn down mid-connect.
       sessions.set(params.serverName, session);
       try {
         failIfDisposed();
@@ -316,6 +318,8 @@ export function createSessionMcpRuntime(params: {
     async callTool(serverName, toolName, input) {
       failIfDisposed();
       await getCatalog();
+      // Catalog discovery may have disposed a failed startup session, so retry the
+      // connection here before surfacing a tool-call error.
       const session = await ensureConnectedSession({ serverName });
       return (await session.client.callTool({
         name: toolName,
