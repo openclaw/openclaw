@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+  resolveToolsBySender,
+} from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -128,6 +132,68 @@ describe("resolveChannelGroupPolicy", () => {
 
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
+  });
+});
+
+describe("resolveChannelGroupRequireMention", () => {
+  it("defaults requireMention to false when channel groupPolicy is open", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "open" as const,
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "telegram",
+        groupId: "-1001234567890",
+      }),
+    ).toBe(false);
+  });
+
+  it("still defaults requireMention to true for allowlist when unset", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist" as const,
+          groups: {
+            "-1001234567890": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "telegram",
+        groupId: "-1001234567890",
+      }),
+    ).toBe(true);
+  });
+
+  it("honors explicit requireMention true under open policy", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "open" as const,
+          groups: {
+            "*": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "telegram",
+        groupId: "-1001234567890",
+      }),
+    ).toBe(true);
   });
 });
 

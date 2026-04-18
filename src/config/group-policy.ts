@@ -392,6 +392,10 @@ export function resolveChannelGroupRequireMention(params: {
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
+  const mode = resolveChannelGroupPolicyMode(params.cfg, params.channel, params.accountId);
+  if (mode === "open") {
+    return false;
+  }
   return true;
 }
 

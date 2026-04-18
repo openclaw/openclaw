@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/groups: when `channels.<id>.groupPolicy` is `open`, default mention gating to off unless `groups` / `groups.*` sets `requireMention`, matching the permissive group-access mode and fixing Telegram groups that had no `requireMention` override still requiring `@` mentions. (#68476)
 - Gateway/tools: anchor trusted local `MEDIA:` tool-result passthrough on the exact raw name of this run's registered built-in tools, and reject client tool definitions whose names normalize-collide with a built-in or with another client tool in the same request (`400 invalid_request_error` on both JSON and SSE paths), so a client-supplied tool named like a built-in can no longer inherit its local-media trust. (#67303)
 - Agents/replay recovery: classify the provider wording `401 input item ID does not belong to this connection` as replay-invalid, so users get the existing `/new` session reset guidance instead of a raw 401-style failure. (#66475) Thanks @dallylee.
 - Gateway/webchat: enforce localRoots containment on webchat audio embedding path [AI-assisted]. (#67298) Thanks @pgondhi987.
