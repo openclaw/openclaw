@@ -1,21 +1,20 @@
 import os from "node:os";
 import path from "node:path";
-import {
-  createDedupeCache,
-  createPersistentDedupe,
-  readJsonFileWithFallback,
-} from "openclaw/plugin-sdk";
+import { createDedupeCache, createPersistentDedupe } from "./dedup-runtime-api.js";
 
 // Persistent TTL: 24 hours — survives restarts & WebSocket reconnects.
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 const MEMORY_MAX_SIZE = 1_000;
 const FILE_MAX_ENTRIES = 10_000;
-type PersistentDedupeData = Record<string, number>;
-
-const memoryDedupe = createDedupeCache({ ttlMs: DEDUP_TTL_MS, maxSize: MEMORY_MAX_SIZE });
+const EVENT_DEDUP_TTL_MS = 5 * 60 * 1000;
+const EVENT_MEMORY_MAX_SIZE = 2_000;
+const processingClaims = createDedupeCache({
+  ttlMs: EVENT_DEDUP_TTL_MS,
+  maxSize: EVENT_MEMORY_MAX_SIZE,
+});
 
 function resolveStateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   if (stateOverride) {
     return stateOverride;
   }
@@ -37,20 +36,98 @@ const persistentDedupe = createPersistentDedupe({
   resolveFilePath: resolveNamespaceFilePath,
 });
 
-/**
- * Synchronous dedup — memory only.
- * Kept for backward compatibility; prefer {@link tryRecordMessagePersistent}.
- */
-export function tryRecordMessage(messageId: string): boolean {
-  return !memoryDedupe.check(messageId);
+function resolveEventDedupeKey(
+  namespace: string,
+  messageId: string | undefined | null,
+): string | null {
+  const trimmed = messageId?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return `${namespace}:${trimmed}`;
 }
 
-export function hasRecordedMessage(messageId: string): boolean {
-  const trimmed = messageId.trim();
-  if (!trimmed) {
+function normalizeMessageId(messageId: string | undefined | null): string | null {
+  const trimmed = messageId?.trim();
+  return trimmed ? trimmed : null;
+}
+
+export function tryBeginFeishuMessageProcessing(
+  messageId: string | undefined | null,
+  namespace = "global",
+): boolean {
+  return !processingClaims.check(resolveEventDedupeKey(namespace, messageId));
+}
+
+export function releaseFeishuMessageProcessing(
+  messageId: string | undefined | null,
+  namespace = "global",
+): void {
+  processingClaims.delete(resolveEventDedupeKey(namespace, messageId));
+}
+
+export async function claimUnprocessedFeishuMessage(params: {
+  messageId: string | undefined | null;
+  namespace?: string;
+  log?: (...args: unknown[]) => void;
+}): Promise<"claimed" | "duplicate" | "inflight" | "invalid"> {
+  const { messageId, namespace = "global", log } = params;
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedMessageId) {
+    return "invalid";
+  }
+  if (await hasProcessedFeishuMessage(normalizedMessageId, namespace, log)) {
+    return "duplicate";
+  }
+  if (!tryBeginFeishuMessageProcessing(normalizedMessageId, namespace)) {
+    return "inflight";
+  }
+  return "claimed";
+}
+
+export async function finalizeFeishuMessageProcessing(params: {
+  messageId: string | undefined | null;
+  namespace?: string;
+  log?: (...args: unknown[]) => void;
+  claimHeld?: boolean;
+}): Promise<boolean> {
+  const { messageId, namespace = "global", log, claimHeld = false } = params;
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedMessageId) {
     return false;
   }
-  return memoryDedupe.peek(trimmed);
+  if (!claimHeld && !tryBeginFeishuMessageProcessing(normalizedMessageId, namespace)) {
+    return false;
+  }
+  if (!(await tryRecordMessagePersistent(normalizedMessageId, namespace, log))) {
+    releaseFeishuMessageProcessing(normalizedMessageId, namespace);
+    return false;
+  }
+  return true;
+}
+
+export async function recordProcessedFeishuMessage(
+  messageId: string | undefined | null,
+  namespace = "global",
+  log?: (...args: unknown[]) => void,
+): Promise<boolean> {
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedMessageId) {
+    return false;
+  }
+  return await tryRecordMessagePersistent(normalizedMessageId, namespace, log);
+}
+
+export async function hasProcessedFeishuMessage(
+  messageId: string | undefined | null,
+  namespace = "global",
+  log?: (...args: unknown[]) => void,
+): Promise<boolean> {
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedMessageId) {
+    return false;
+  }
+  return hasRecordedMessagePersistent(normalizedMessageId, namespace, log);
 }
 
 export async function tryRecordMessagePersistent(
@@ -71,23 +148,12 @@ export async function hasRecordedMessagePersistent(
   namespace = "global",
   log?: (...args: unknown[]) => void,
 ): Promise<boolean> {
-  const trimmed = messageId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const now = Date.now();
-  const filePath = resolveNamespaceFilePath(namespace);
-  try {
-    const { value } = await readJsonFileWithFallback<PersistentDedupeData>(filePath, {});
-    const seenAt = value[trimmed];
-    if (typeof seenAt !== "number" || !Number.isFinite(seenAt)) {
-      return false;
-    }
-    return DEDUP_TTL_MS <= 0 || now - seenAt < DEDUP_TTL_MS;
-  } catch (error) {
-    log?.(`feishu-dedup: persistent peek failed: ${String(error)}`);
-    return false;
-  }
+  return persistentDedupe.hasRecent(messageId, {
+    namespace,
+    onDiskError: (error) => {
+      log?.(`feishu-dedup: persistent peek failed: ${String(error)}`);
+    },
+  });
 }
 
 export async function warmupDedupFromDisk(

@@ -1,137 +1,141 @@
-import { describe, expect, it, vi } from "vitest";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import { buildChannelsTable } from "./channels.js";
+import { describe, expect, it } from "vitest";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import {
+  summarizeTokenConfig,
+  type ChannelAccountTokenSummaryRow,
+} from "./channels-token-summary.js";
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  listChannelPlugins: vi.fn(),
-}));
-
-function makeMattermostPlugin(): ChannelPlugin {
+function tokenRow(params: {
+  account: Record<string, unknown>;
+  snapshot?: Partial<ChannelAccountSnapshot>;
+  enabled?: boolean;
+}): ChannelAccountTokenSummaryRow {
   return {
-    id: "mattermost",
-    meta: {
-      id: "mattermost",
-      label: "Mattermost",
-      selectionLabel: "Mattermost",
-      docsPath: "/channels/mattermost",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["echo"],
-      defaultAccountId: () => "echo",
-      resolveAccount: () => ({
-        name: "Echo",
-        enabled: true,
-        botToken: "bot-token-value",
-        baseUrl: "https://mm.example.com",
-      }),
-      isConfigured: () => true,
-      isEnabled: () => true,
-    },
-    actions: {
-      listActions: () => ["send"],
-    },
+    account: params.account,
+    enabled: params.enabled ?? true,
+    snapshot: {
+      accountId: "primary",
+      ...params.snapshot,
+    } as ChannelAccountSnapshot,
   };
 }
 
-function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): ChannelPlugin {
-  return {
-    id: "slack",
-    meta: {
-      id: "slack",
-      label: "Slack",
-      selectionLabel: "Slack",
-      docsPath: "/channels/slack",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["primary"],
-      defaultAccountId: () => "primary",
-      resolveAccount: () => ({
-        name: "Primary",
-        enabled: true,
-        botToken: params?.botToken ?? "bot-token",
-        appToken: params?.appToken ?? "app-token",
-      }),
-      isConfigured: () => true,
-      isEnabled: () => true,
-    },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+function summarize(accounts: ChannelAccountTokenSummaryRow[]) {
+  return summarizeTokenConfig({ accounts, showSecrets: false });
 }
 
-function makeTokenPlugin(): ChannelPlugin {
-  return {
-    id: "token-only",
-    meta: {
-      id: "token-only",
-      label: "TokenOnly",
-      selectionLabel: "TokenOnly",
-      docsPath: "/channels/token-only",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["primary"],
-      defaultAccountId: () => "primary",
-      resolveAccount: () => ({
-        name: "Primary",
-        enabled: true,
-        token: "token-value",
+describe("summarizeTokenConfig", () => {
+  it("does not require appToken for bot-token-only channels", () => {
+    const summary = summarize([
+      tokenRow({
+        account: {
+          botToken: "bot-token-value",
+          baseUrl: "https://mm.example.com",
+        },
+        snapshot: { botTokenSource: "config" },
       }),
-      isConfigured: () => true,
-      isEnabled: () => true,
-    },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
-}
-
-describe("buildChannelsTable - mattermost token summary", () => {
-  it("does not require appToken for mattermost accounts", async () => {
-    vi.mocked(listChannelPlugins).mockReturnValue([makeMattermostPlugin()]);
-
-    const table = await buildChannelsTable({ channels: {} } as never, {
-      showSecrets: false,
-    });
-
-    const mattermostRow = table.rows.find((row) => row.id === "mattermost");
-    expect(mattermostRow).toBeDefined();
-    expect(mattermostRow?.state).toBe("ok");
-    expect(mattermostRow?.detail).not.toContain("need bot+app");
-  });
-
-  it("keeps bot+app requirement when both fields exist", async () => {
-    vi.mocked(listChannelPlugins).mockReturnValue([
-      makeSlackPlugin({ botToken: "bot-token", appToken: "" }),
     ]);
 
-    const table = await buildChannelsTable({ channels: {} } as never, {
-      showSecrets: false,
-    });
-
-    const slackRow = table.rows.find((row) => row.id === "slack");
-    expect(slackRow).toBeDefined();
-    expect(slackRow?.state).toBe("warn");
-    expect(slackRow?.detail).toContain("need bot+app");
+    expect(summary.state).toBe("ok");
+    expect(summary.detail).toContain("bot token config");
+    expect(summary.detail).not.toContain("need bot+app");
   });
 
-  it("still reports single-token channels as ok", async () => {
-    vi.mocked(listChannelPlugins).mockReturnValue([makeTokenPlugin()]);
+  it("keeps bot+app requirement when both fields exist", () => {
+    const summary = summarize([
+      tokenRow({
+        account: {
+          botToken: "bot-token",
+          appToken: "",
+        },
+      }),
+    ]);
 
-    const table = await buildChannelsTable({ channels: {} } as never, {
-      showSecrets: false,
-    });
+    expect(summary.state).toBe("warn");
+    expect(summary.detail).toContain("need bot+app");
+  });
 
-    const tokenRow = table.rows.find((row) => row.id === "token-only");
-    expect(tokenRow).toBeDefined();
-    expect(tokenRow?.state).toBe("ok");
-    expect(tokenRow?.detail).toContain("token");
+  it("reports configured-but-unavailable Slack credentials as warn", () => {
+    const summary = summarize([
+      tokenRow({
+        account: {
+          configured: true,
+          botToken: "",
+          appToken: "",
+          botTokenSource: "config",
+          appTokenSource: "config",
+          botTokenStatus: "configured_unavailable",
+          appTokenStatus: "configured_unavailable",
+        },
+        snapshot: {
+          botTokenSource: "config",
+          appTokenSource: "config",
+        },
+      }),
+    ]);
+
+    expect(summary.state).toBe("warn");
+    expect(summary.detail).toContain("unavailable in this command path");
+  });
+
+  it("treats status-only available HTTP credentials as resolved", () => {
+    const summary = summarize([
+      tokenRow({
+        account: {
+          mode: "http",
+          botToken: "",
+          signingSecret: "", // pragma: allowlist secret
+          botTokenSource: "config",
+          signingSecretSource: "config", // pragma: allowlist secret
+          botTokenStatus: "available",
+          signingSecretStatus: "available", // pragma: allowlist secret
+        },
+        snapshot: {
+          botTokenSource: "config",
+          signingSecretSource: "config", // pragma: allowlist secret
+        },
+      }),
+    ]);
+
+    expect(summary.state).toBe("ok");
+    expect(summary.detail).toContain("credentials ok");
+  });
+
+  it("treats Slack HTTP signing-secret availability as required config", () => {
+    const summary = summarize([
+      tokenRow({
+        account: {
+          mode: "http",
+          botToken: "xoxb-http",
+          signingSecret: "", // pragma: allowlist secret
+          botTokenSource: "config",
+          signingSecretSource: "config", // pragma: allowlist secret
+          botTokenStatus: "available",
+          signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+        },
+        snapshot: {
+          botTokenSource: "config",
+          signingSecretSource: "config", // pragma: allowlist secret
+        },
+      }),
+    ]);
+
+    expect(summary.state).toBe("warn");
+    expect(summary.detail).toContain("configured http credentials unavailable");
+  });
+
+  it("still reports single-token channels as ok", () => {
+    const summary = summarize([
+      tokenRow({
+        account: {
+          token: "token-value",
+          tokenSource: "config",
+        },
+        snapshot: { tokenSource: "config" },
+      }),
+    ]);
+
+    expect(summary.state).toBe("ok");
+    expect(summary.detail).toContain("token config");
   });
 });

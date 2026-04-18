@@ -58,6 +58,7 @@ export type StatusReactionsEmojiConfig = {
   error?: string;
   stallSoft?: string;
   stallHard?: string;
+  compacting?: string;
 };
 
 export type StatusReactionsTimingConfig = {
@@ -147,6 +148,10 @@ export type CommandsConfig = {
   bashForegroundMs?: number;
   /** Allow /config command (default: false). */
   config?: boolean;
+  /** Allow /mcp command for OpenClaw-managed MCP settings (default: false). */
+  mcp?: boolean;
+  /** Allow /plugins command for plugin listing and enablement toggles (default: false). */
+  plugins?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */

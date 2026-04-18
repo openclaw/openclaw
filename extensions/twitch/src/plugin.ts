@@ -5,29 +5,45 @@
  * This is the primary entry point for the Twitch channel integration.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  createLoggedPairingApprovalNotifier,
+  createPairingPrefixStripper,
+} from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, listAccountIds } from "./config.js";
-import { twitchOnboardingAdapter } from "./onboarding.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  listAccountIds,
+  resolveDefaultTwitchAccountId,
+  resolveTwitchAccountContext,
+  resolveTwitchSnapshotAccountId,
+} from "./config.js";
 import { twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
+import { twitchSetupAdapter, twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
-import { resolveTwitchToken } from "./token.js";
 import type {
-  ChannelAccountSnapshot,
-  ChannelCapabilities,
   ChannelLogSink,
-  ChannelMeta,
   ChannelPlugin,
   ChannelResolveKind,
   ChannelResolveResult,
   TwitchAccountConfig,
 } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
+
+type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
 
 /**
  * Twitch channel plugin.
@@ -36,239 +52,157 @@ import { isAccountConfigured } from "./utils/twitch.js";
  * for OpenClaw. Supports message sending, receiving, access control, and
  * status monitoring.
  */
-export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
-  /** Plugin identifier */
-  id: "twitch",
-
-  /** Plugin metadata */
-  meta: {
-    id: "twitch",
-    label: "Twitch",
-    selectionLabel: "Twitch (Chat)",
-    docsPath: "/channels/twitch",
-    blurb: "Twitch chat integration",
-    aliases: ["twitch-chat"],
-  } satisfies ChannelMeta,
-
-  /** Onboarding adapter */
-  onboarding: twitchOnboardingAdapter,
-
-  /** Pairing configuration */
-  pairing: {
-    idLabel: "twitchUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(twitch:)?user:?/i, ""),
-    notifyApproval: async ({ id }) => {
-      // Note: Twitch doesn't support DMs from bots, so pairing approval is limited
-      // We'll log the approval instead
-      console.warn(`Pairing approved for user ${id} (notification sent via chat if possible)`);
+export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
+  createChatChannelPlugin<ResolvedTwitchAccount>({
+    pairing: {
+      idLabel: "twitchUserId",
+      normalizeAllowEntry: createPairingPrefixStripper(/^(twitch:)?user:?/i),
+      notifyApproval: createLoggedPairingApprovalNotifier(
+        ({ id }) => `Pairing approved for user ${id} (notification sent via chat if possible)`,
+        console.warn,
+      ),
     },
-  },
+    outbound: twitchOutbound,
+    base: {
+      id: "twitch",
+      meta: {
+        id: "twitch",
+        label: "Twitch",
+        selectionLabel: "Twitch (Chat)",
+        docsPath: "/channels/twitch",
+        blurb: "Twitch chat integration",
+        aliases: ["twitch-chat"],
+      },
+      setup: twitchSetupAdapter,
+      setupWizard: twitchSetupWizard,
+      capabilities: {
+        chatTypes: ["group"],
+      },
+      configSchema: buildChannelConfigSchema(TwitchConfigSchema),
+      config: {
+        listAccountIds: (cfg: OpenClawConfig): string[] => listAccountIds(cfg),
+        resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): ResolvedTwitchAccount => {
+          const resolvedAccountId = accountId ?? resolveDefaultTwitchAccountId(cfg);
+          const account = getAccountConfig(cfg, resolvedAccountId);
+          if (!account) {
+            return {
+              accountId: resolvedAccountId,
+              channel: "",
+              username: "",
+              accessToken: "",
+              clientId: "",
+              enabled: false,
+            };
+          }
+          return {
+            accountId: resolvedAccountId,
+            ...account,
+          };
+        },
+        defaultAccountId: (cfg: OpenClawConfig): string => resolveDefaultTwitchAccountId(cfg),
+        isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean =>
+          resolveTwitchAccountContext(cfg).configured,
+        isEnabled: (account: ResolvedTwitchAccount | undefined): boolean =>
+          account?.enabled !== false,
+        describeAccount: (account: TwitchAccountConfig | undefined) =>
+          account
+            ? describeAccountSnapshot({
+                account,
+                configured: isAccountConfigured(account, account.accessToken),
+              })
+            : {
+                accountId: DEFAULT_ACCOUNT_ID,
+                enabled: false,
+                configured: false,
+              },
+      },
+      actions: twitchMessageActions,
+      resolver: {
+        resolveTargets: async ({
+          cfg,
+          accountId,
+          inputs,
+          kind,
+          runtime,
+        }: {
+          cfg: OpenClawConfig;
+          accountId?: string | null;
+          inputs: string[];
+          kind: ChannelResolveKind;
+          runtime: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+        }): Promise<ChannelResolveResult[]> => {
+          const account = getAccountConfig(cfg, accountId ?? resolveDefaultTwitchAccountId(cfg));
+          if (!account) {
+            return inputs.map((input) => ({
+              input,
+              resolved: false,
+              note: "account not configured",
+            }));
+          }
 
-  /** Supported chat capabilities */
-  capabilities: {
-    chatTypes: ["group"],
-  } satisfies ChannelCapabilities,
+          const log: ChannelLogSink = {
+            info: (msg) => runtime.log(msg),
+            warn: (msg) => runtime.log(msg),
+            error: (msg) => runtime.error(msg),
+            debug: (msg) => runtime.log(msg),
+          };
+          return await resolveTwitchTargets(inputs, account, kind, log);
+        },
+      },
+      status: createComputedAccountStatusAdapter<ResolvedTwitchAccount>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
+        probeAccount: async ({ account, timeoutMs }) => await probeTwitch(account, timeoutMs),
+        collectStatusIssues: collectTwitchStatusIssues,
+        resolveAccountSnapshot: ({ account, cfg }) => {
+          const resolvedAccountId =
+            account.accountId || resolveTwitchSnapshotAccountId(cfg, account);
+          const { configured } = resolveTwitchAccountContext(cfg, resolvedAccountId);
+          return {
+            accountId: resolvedAccountId,
+            enabled: account.enabled !== false,
+            configured,
+          };
+        },
+      }),
+      gateway: {
+        startAccount: async (ctx): Promise<void> => {
+          const account = ctx.account;
+          const accountId = ctx.accountId;
 
-  /** Configuration schema for Twitch channel */
-  configSchema: buildChannelConfigSchema(TwitchConfigSchema),
+          ctx.setStatus?.({
+            accountId,
+            running: true,
+            lastStartAt: Date.now(),
+            lastError: null,
+          });
 
-  /** Account configuration management */
-  config: {
-    /** List all configured account IDs */
-    listAccountIds: (cfg: OpenClawConfig): string[] => listAccountIds(cfg),
+          ctx.log?.info(`Starting Twitch connection for ${account.username}`);
 
-    /** Resolve an account config by ID */
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): TwitchAccountConfig => {
-      const account = getAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
-      if (!account) {
-        // Return a default/empty account if not configured
-        return {
-          username: "",
-          accessToken: "",
-          clientId: "",
-          enabled: false,
-        } as TwitchAccountConfig;
-      }
-      return account;
+          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+          const { monitorTwitchProvider } = await import("./monitor.js");
+          await monitorTwitchProvider({
+            account,
+            accountId,
+            config: ctx.cfg,
+            runtime: ctx.runtime,
+            abortSignal: ctx.abortSignal,
+          });
+        },
+        stopAccount: async (ctx): Promise<void> => {
+          const account = ctx.account;
+          const accountId = ctx.accountId;
+
+          await removeClientManager(accountId);
+
+          ctx.setStatus?.({
+            accountId,
+            running: false,
+            lastStopAt: Date.now(),
+          });
+
+          ctx.log?.info(`Stopped Twitch connection for ${account.username}`);
+        },
+      },
     },
-
-    /** Get the default account ID */
-    defaultAccountId: (): string => DEFAULT_ACCOUNT_ID,
-
-    /** Check if an account is configured */
-    isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean => {
-      const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
-      const tokenResolution = resolveTwitchToken(cfg, { accountId: DEFAULT_ACCOUNT_ID });
-      return account ? isAccountConfigured(account, tokenResolution.token) : false;
-    },
-
-    /** Check if an account is enabled */
-    isEnabled: (account: TwitchAccountConfig | undefined): boolean => account?.enabled !== false,
-
-    /** Describe account status */
-    describeAccount: (account: TwitchAccountConfig | undefined) => {
-      return {
-        accountId: DEFAULT_ACCOUNT_ID,
-        enabled: account?.enabled !== false,
-        configured: account ? isAccountConfigured(account, account?.accessToken) : false,
-      };
-    },
-  },
-
-  /** Outbound message adapter */
-  outbound: twitchOutbound,
-
-  /** Message actions adapter */
-  actions: twitchMessageActions,
-
-  /** Resolver adapter for username -> user ID resolution */
-  resolver: {
-    resolveTargets: async ({
-      cfg,
-      accountId,
-      inputs,
-      kind,
-      runtime,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      inputs: string[];
-      kind: ChannelResolveKind;
-      runtime: import("../../../src/runtime.js").RuntimeEnv;
-    }): Promise<ChannelResolveResult[]> => {
-      const account = getAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
-
-      if (!account) {
-        return inputs.map((input) => ({
-          input,
-          resolved: false,
-          note: "account not configured",
-        }));
-      }
-
-      // Adapt RuntimeEnv.log to ChannelLogSink
-      const log: ChannelLogSink = {
-        info: (msg) => runtime.log(msg),
-        warn: (msg) => runtime.log(msg),
-        error: (msg) => runtime.error(msg),
-        debug: (msg) => runtime.log(msg),
-      };
-      return await resolveTwitchTargets(inputs, account, kind, log);
-    },
-  },
-
-  /** Status monitoring adapter */
-  status: {
-    /** Default runtime state */
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-
-    /** Build channel summary from snapshot */
-    buildChannelSummary: ({ snapshot }: { snapshot: ChannelAccountSnapshot }) => ({
-      configured: snapshot.configured ?? false,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
-
-    /** Probe account connection */
-    probeAccount: async ({
-      account,
-      timeoutMs,
-    }: {
-      account: TwitchAccountConfig;
-      timeoutMs: number;
-    }): Promise<unknown> => {
-      return await probeTwitch(account, timeoutMs);
-    },
-
-    /** Build account snapshot with current status */
-    buildAccountSnapshot: ({
-      account,
-      cfg,
-      runtime,
-      probe,
-    }: {
-      account: TwitchAccountConfig;
-      cfg: OpenClawConfig;
-      runtime?: ChannelAccountSnapshot;
-      probe?: unknown;
-    }): ChannelAccountSnapshot => {
-      const twitch = (cfg as Record<string, unknown>).channels as
-        | Record<string, unknown>
-        | undefined;
-      const twitchCfg = twitch?.twitch as Record<string, unknown> | undefined;
-      const accountMap = (twitchCfg?.accounts as Record<string, unknown> | undefined) ?? {};
-      const resolvedAccountId =
-        Object.entries(accountMap).find(([, value]) => value === account)?.[0] ??
-        DEFAULT_ACCOUNT_ID;
-      const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
-      return {
-        accountId: resolvedAccountId,
-        enabled: account?.enabled !== false,
-        configured: isAccountConfigured(account, tokenResolution.token),
-        running: runtime?.running ?? false,
-        lastStartAt: runtime?.lastStartAt ?? null,
-        lastStopAt: runtime?.lastStopAt ?? null,
-        lastError: runtime?.lastError ?? null,
-        probe,
-      };
-    },
-
-    /** Collect status issues for all accounts */
-    collectStatusIssues: collectTwitchStatusIssues,
-  },
-
-  /** Gateway adapter for connection lifecycle */
-  gateway: {
-    /** Start an account connection */
-    startAccount: async (ctx): Promise<void> => {
-      const account = ctx.account;
-      const accountId = ctx.accountId;
-
-      ctx.setStatus?.({
-        accountId,
-        running: true,
-        lastStartAt: Date.now(),
-        lastError: null,
-      });
-
-      ctx.log?.info(`Starting Twitch connection for ${account.username}`);
-
-      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorTwitchProvider } = await import("./monitor.js");
-      await monitorTwitchProvider({
-        account,
-        accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-      });
-    },
-
-    /** Stop an account connection */
-    stopAccount: async (ctx): Promise<void> => {
-      const account = ctx.account;
-      const accountId = ctx.accountId;
-
-      // Disconnect and remove client manager from registry
-      await removeClientManager(accountId);
-
-      ctx.setStatus?.({
-        accountId,
-        running: false,
-        lastStopAt: Date.now(),
-      });
-
-      ctx.log?.info(`Stopped Twitch connection for ${account.username}`);
-    },
-  },
-};
+  });

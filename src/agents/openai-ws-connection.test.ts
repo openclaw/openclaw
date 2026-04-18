@@ -6,13 +6,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClientOptions } from "ws";
 import type {
   ClientEvent,
+  ErrorEvent,
   OpenAIWebSocketEvent,
   ResponseCompletedEvent,
   ResponseCreateEvent,
 } from "./openai-ws-connection.js";
-import { OpenAIWebSocketManager } from "./openai-ws-connection.js";
+import { getOpenAIWebSocketErrorDetails, OpenAIWebSocketManager } from "./openai-ws-connection.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock WebSocket (hoisted so vi.mock factory can reference it)
@@ -34,12 +36,12 @@ const { MockWebSocket } = vi.hoisted(() => {
 
     readyState: number = MockWebSocket.CONNECTING;
     url: string;
-    options: Record<string, unknown>;
+    options: ClientOptions | undefined;
     sentMessages: string[] = [];
 
     private _listeners: Map<string, AnyFn[]> = new Map();
 
-    constructor(url: string, options?: Record<string, unknown>) {
+    constructor(url: string, options?: ClientOptions) {
       this.url = url;
       this.options = options ?? {};
       MockWebSocket.lastInstance = this;
@@ -167,6 +169,7 @@ function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager
   return new OpenAIWebSocketManager({
     // Use faster backoff in tests to avoid slow timer waits
     backoffDelaysMs: [10, 20, 40, 80, 160],
+    socketFactory: (url, options) => new MockWebSocket(url, options) as never,
     ...opts,
   });
 }
@@ -232,11 +235,86 @@ describe("OpenAIWebSocketManager", () => {
       await connectPromise;
     });
 
+    it("adds OpenClaw attribution headers on the native OpenAI websocket", async () => {
+      const manager = buildManager();
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          originator: "openclaw",
+          version: expect.any(String),
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+        }),
+      });
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("merges native session headers into the websocket handshake", async () => {
+      const manager = buildManager({
+        headers: {
+          "x-client-request-id": "session-123",
+          "x-openclaw-session-id": "session-123",
+        },
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          "x-client-request-id": "session-123",
+          "x-openclaw-session-id": "session-123",
+        }),
+      });
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("does not add hidden attribution headers on custom websocket endpoints", async () => {
+      const manager = buildManager({
+        url: "wss://proxy.example.com/v1/responses",
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          Authorization: "Bearer sk-test-key",
+          "OpenAI-Beta": "responses-websocket=v1",
+        }),
+      });
+      const headers = sock.options?.headers as Record<string, string>;
+      expect(headers.originator).toBeUndefined();
+      expect(headers.version).toBeUndefined();
+      expect(headers["User-Agent"]).toBeUndefined();
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("rejects insecure websocket TLS overrides", async () => {
+      const manager = buildManager({
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      });
+
+      await expect(manager.connect("sk-test-key")).rejects.toThrow(/insecureskipverify/i);
+      expect(MockWebSocket.lastInstance).toBeNull();
+    });
+
     it("resolves when the connection opens", async () => {
       const manager = buildManager();
       const connectPromise = manager.connect("sk-test");
+      expect(manager.connectionState).toBe("connecting");
       lastSocket().simulateOpen();
       await expect(connectPromise).resolves.toBeUndefined();
+      expect(manager.connectionState).toBe("open");
     });
 
     it("rejects when the initial connection fails (maxRetries=0)", async () => {
@@ -277,7 +355,7 @@ describe("OpenAIWebSocketManager", () => {
 
       const event: ResponseCreateEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         input: [{ type: "message", role: "user", content: "Hello" }],
       };
       manager.send(event);
@@ -290,7 +368,7 @@ describe("OpenAIWebSocketManager", () => {
       const manager = buildManager();
       const event: ClientEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       };
       expect(() => manager.send(event)).toThrow(/cannot send/);
     });
@@ -300,7 +378,7 @@ describe("OpenAIWebSocketManager", () => {
 
       const event: ResponseCreateEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         previous_response_id: "resp_abc123",
         input: [{ type: "function_call_output", call_id: "call_1", output: "result" }],
       };
@@ -461,6 +539,7 @@ describe("OpenAIWebSocketManager", () => {
     it("is safe to call before connect()", () => {
       const manager = buildManager();
       expect(() => manager.close()).not.toThrow();
+      expect(manager.connectionState).toBe("closed");
     });
   });
 
@@ -478,6 +557,12 @@ describe("OpenAIWebSocketManager", () => {
 
       // Simulate a network drop
       sock1.simulateClose(1006, "Network error");
+      expect(manager.connectionState).toBe("reconnecting");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1006,
+        reason: "Network error",
+        retryable: true,
+      });
 
       // Advance time to trigger first retry (10ms delay)
       await vi.advanceTimersByTimeAsync(15);
@@ -485,6 +570,27 @@ describe("OpenAIWebSocketManager", () => {
       // A new socket should have been created
       expect(MockWebSocket.instances.length).toBeGreaterThan(instancesBefore);
       expect(lastSocket()).not.toBe(sock1);
+    });
+
+    it("does not reconnect on non-retryable close codes", async () => {
+      const manager = buildManager({ backoffDelaysMs: [10, 20] });
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      const sock = lastSocket();
+      const instancesBefore = MockWebSocket.instances.length;
+      sock.simulateClose(1008, "policy violation");
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(MockWebSocket.instances.length).toBe(instancesBefore);
+      expect(manager.connectionState).toBe("closed");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1008,
+        reason: "policy violation",
+        retryable: false,
+      });
     });
 
     it("stops retrying after maxRetries", async () => {
@@ -501,6 +607,53 @@ describe("OpenAIWebSocketManager", () => {
         lastSocket().simulateClose(1006, "drop");
         await vi.advanceTimersByTimeAsync(20);
       }
+
+      const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
+      expect(maxRetryError).toBeDefined();
+    });
+
+    it("does not double-count retries when error and close both fire on a reconnect attempt", async () => {
+      // In the real `ws` library, a failed connection fires "error" followed
+      // by "close". Previously, both the onClose handler AND the promise
+      // .catch() in _scheduleReconnect called _scheduleReconnect(), which
+      // double-incremented retryCount and exhausted the retry budget
+      // prematurely (e.g. 3 retries became ~1-2 actual attempts).
+      const manager = buildManager({ maxRetries: 3, backoffDelaysMs: [5, 5, 5] });
+      const errors = attachErrorCollector(manager);
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      // Drop the established connection — triggers first reconnect schedule
+      lastSocket().simulateClose(1006, "Network error");
+
+      // Advance past first retry delay — a new socket is created
+      await vi.advanceTimersByTimeAsync(10);
+      const sock2 = lastSocket();
+
+      // Simulate a realistic failure: error fires first, then close follows.
+      sock2.simulateError(new Error("ECONNREFUSED"));
+      sock2.simulateClose(1006, "Connection failed");
+
+      // Advance past second retry delay — another socket should be created
+      // because we've only used 2 retries (not 3 from double-counting).
+      await vi.advanceTimersByTimeAsync(10);
+      const sock3 = lastSocket();
+      expect(sock3).not.toBe(sock2);
+
+      // Third attempt also fails with error+close
+      sock3.simulateError(new Error("ECONNREFUSED"));
+      sock3.simulateClose(1006, "Connection failed");
+
+      // Advance past third retry delay — one more attempt (retry 3 of 3)
+      await vi.advanceTimersByTimeAsync(10);
+      const sock4 = lastSocket();
+      expect(sock4).not.toBe(sock3);
+
+      // Fourth socket also fails — now retries should be exhausted (3/3)
+      sock4.simulateError(new Error("ECONNREFUSED"));
+      sock4.simulateClose(1006, "Connection failed");
+      await vi.advanceTimersByTimeAsync(10);
 
       const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
       expect(maxRetryError).toBeDefined();
@@ -533,13 +686,14 @@ describe("OpenAIWebSocketManager", () => {
     it("sends a response.create event with generate: false", async () => {
       const { manager, sock } = await createConnectedManager();
 
-      manager.warmUp({ model: "gpt-5.2", instructions: "You are helpful." });
+      manager.warmUp({ model: "gpt-5.4", instructions: "You are helpful." });
 
       expect(sock.sentMessages).toHaveLength(1);
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
-      expect(sent["model"]).toBe("gpt-5.2");
+      expect(sent["model"]).toBe("gpt-5.4");
+      expect(sent["input"]).toEqual([]);
       expect(sent["instructions"]).toBe("You are helpful.");
     });
 
@@ -547,21 +701,40 @@ describe("OpenAIWebSocketManager", () => {
       const { manager, sock } = await createConnectedManager();
 
       manager.warmUp({
-        model: "gpt-5.2",
-        tools: [{ type: "function", function: { name: "exec", description: "Run a command" } }],
+        model: "gpt-5.4",
+        tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["tools"]).toHaveLength(1);
-      expect((sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function?.name).toBe(
-        "exec",
-      );
+      expect((sent["tools"] as Array<{ name?: string }>)[0]?.name).toBe("exec");
     });
   });
 
   // ─── Error handling ─────────────────────────────────────────────────────────
 
   describe("error handling", () => {
+    it("normalizes nested websocket error payloads", () => {
+      const details = getOpenAIWebSocketErrorDetails({
+        type: "error",
+        status: 400,
+        error: {
+          type: "invalid_request_error",
+          code: "previous_response_not_found",
+          message: "Previous response with id 'resp_abc' not found.",
+          param: "previous_response_id",
+        },
+      } satisfies ErrorEvent);
+
+      expect(details).toEqual({
+        status: 400,
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+        message: "Previous response with id 'resp_abc' not found.",
+        param: "previous_response_id",
+      });
+    });
+
     it("emits error event on malformed JSON message", async () => {
       const manager = buildManager();
       const sock = await connectManagerAndGetSocket(manager);
@@ -622,7 +795,7 @@ describe("OpenAIWebSocketManager", () => {
       manager.onMessage((e) => received.push(e));
 
       // Send initial turn
-      manager.send({ type: "response.create", model: "gpt-5.2", input: "Hello" });
+      manager.send({ type: "response.create", model: "gpt-5.4", input: "Hello" });
 
       // Simulate streaming events from server
       sock.simulateMessage({ type: "response.created", response: makeResponse("resp_1") });
@@ -644,7 +817,7 @@ describe("OpenAIWebSocketManager", () => {
       // Send continuation turn using the tracked previous_response_id
       manager.send({
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         previous_response_id: manager.previousResponseId!,
         input: [{ type: "function_call_output", call_id: "call_99", output: "tool result" }],
       });
@@ -671,7 +844,7 @@ function makeResponse(
     object: "response",
     created_at: Date.now(),
     status,
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     output: [],
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
   };

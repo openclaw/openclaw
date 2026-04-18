@@ -59,14 +59,5 @@ export function isMainModule({
     }
   }
 
-  // Fallback: basename match (relative paths, symlinked bins).
-  if (
-    normalizedCurrent &&
-    normalizedArgv1 &&
-    path.basename(normalizedCurrent) === path.basename(normalizedArgv1)
-  ) {
-    return true;
-  }
-
   return false;
 }

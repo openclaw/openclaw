@@ -1,6 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { describe, expect, test, vi } from "vitest";
-import { registerFeishuDocTools } from "./docx.js";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
@@ -21,14 +20,24 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
 });
 
 describe("feishu_doc account selection", () => {
+  let registerFeishuDocTools: typeof import("./docx.js").registerFeishuDocTools;
+
+  beforeAll(async () => {
+    ({ registerFeishuDocTools } = await import("./docx.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   function createDocEnabledConfig(): OpenClawPluginApi["config"] {
     return {
       channels: {
         feishu: {
           enabled: true,
           accounts: {
-            a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } },
-            b: { appId: "app-b", appSecret: "sec-b", tools: { doc: true } },
+            a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } }, // pragma: allowlist secret
+            b: { appId: "app-b", appSecret: "sec-b", tools: { doc: true } }, // pragma: allowlist secret
           },
         },
       },

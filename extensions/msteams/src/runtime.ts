@@ -1,14 +1,9 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setMSTeamsRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getMSTeamsRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("MSTeams runtime not initialized");
-  }
-  return runtime;
-}
+const { setRuntime: setMSTeamsRuntime, getRuntime: getMSTeamsRuntime } =
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "msteams",
+    errorMessage: "MSTeams runtime not initialized",
+  });
+export { getMSTeamsRuntime, setMSTeamsRuntime };

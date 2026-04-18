@@ -35,13 +35,20 @@ export type AcpRuntimeEnsureInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  resumeSessionId?: string;
   cwd?: string;
   env?: Record<string, string>;
+};
+
+export type AcpRuntimeTurnAttachment = {
+  mediaType: string;
+  data: string;
 };
 
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
+  attachments?: AcpRuntimeTurnAttachment[];
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
@@ -117,7 +124,7 @@ export interface AcpRuntime {
     handle?: AcpRuntimeHandle;
   }): Promise<AcpRuntimeCapabilities> | AcpRuntimeCapabilities;
 
-  getStatus?(input: { handle: AcpRuntimeHandle }): Promise<AcpRuntimeStatus>;
+  getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 
@@ -125,7 +132,21 @@ export interface AcpRuntime {
 
   doctor?(): Promise<AcpRuntimeDoctorReport>;
 
+  /**
+   * Prepare the next ensureSession for this session key to start fresh instead
+   * of reopening backend-owned persistent state.
+   */
+  prepareFreshSession?(input: { sessionKey: string }): Promise<void>;
+
   cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
 
-  close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void>;
+  close(input: {
+    handle: AcpRuntimeHandle;
+    reason: string;
+    /**
+     * Discard backend-owned persistent session state so the next ensureSession
+     * starts fresh instead of reopening the same conversation.
+     */
+    discardPersistentState?: boolean;
+  }): Promise<void>;
 }

@@ -52,23 +52,21 @@ vi.mock("@opentelemetry/sdk-node", () => ({
 }));
 
 vi.mock("@opentelemetry/exporter-metrics-otlp-proto", () => ({
-  OTLPMetricExporter: class {},
+  OTLPMetricExporter: function OTLPMetricExporter() {},
 }));
 
 vi.mock("@opentelemetry/exporter-trace-otlp-proto", () => ({
-  OTLPTraceExporter: class {
-    constructor(options?: unknown) {
-      traceExporterCtor(options);
-    }
+  OTLPTraceExporter: function OTLPTraceExporter(options?: unknown) {
+    traceExporterCtor(options);
   },
 }));
 
 vi.mock("@opentelemetry/exporter-logs-otlp-proto", () => ({
-  OTLPLogExporter: class {},
+  OTLPLogExporter: function OTLPLogExporter() {},
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
-  BatchLogRecordProcessor: class {},
+  BatchLogRecordProcessor: function BatchLogRecordProcessor() {},
   LoggerProvider: class {
     getLogger = vi.fn(() => ({
       emit: logEmit,
@@ -78,19 +76,18 @@ vi.mock("@opentelemetry/sdk-logs", () => ({
 }));
 
 vi.mock("@opentelemetry/sdk-metrics", () => ({
-  PeriodicExportingMetricReader: class {},
+  PeriodicExportingMetricReader: function PeriodicExportingMetricReader() {},
 }));
 
 vi.mock("@opentelemetry/sdk-trace-base", () => ({
-  ParentBasedSampler: class {},
-  TraceIdRatioBasedSampler: class {},
+  ParentBasedSampler: function ParentBasedSampler() {},
+  TraceIdRatioBasedSampler: function TraceIdRatioBasedSampler() {},
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
   resourceFromAttributes: vi.fn((attrs: Record<string, unknown>) => attrs),
-  Resource: class {
-    // eslint-disable-next-line @typescript-eslint/no-useless-constructor
-    constructor(_value?: unknown) {}
+  Resource: function Resource(_value?: unknown) {
+    // Constructor shape required by the mocked OpenTelemetry API.
   },
 }));
 
@@ -98,16 +95,16 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
 }));
 
-vi.mock("openclaw/plugin-sdk", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk")>("openclaw/plugin-sdk");
+vi.mock("../api.js", async () => {
+  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
   return {
     ...actual,
     registerLogTransport: registerLogTransportMock,
   };
 });
 
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
-import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
+import type { OpenClawPluginServiceContext } from "../api.js";
+import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
@@ -327,13 +324,13 @@ describe("diagnostics-otel service", () => {
 
   test("redacts sensitive data from log attributes before export", async () => {
     const emitCall = await emitAndCaptureLog({
-      0: '{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}',
+      0: '{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}', // pragma: allowlist secret
       1: "auth configured",
       _meta: { logLevelName: "DEBUG", date: new Date() },
     });
 
     const tokenAttr = emitCall?.attributes?.["openclaw.token"];
-    expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456"); // pragma: allowlist secret
     if (typeof tokenAttr === "string") {
       expect(tokenAttr).toContain("…");
     }
@@ -347,7 +344,7 @@ describe("diagnostics-otel service", () => {
     emitDiagnosticEvent({
       type: "session.state",
       state: "waiting",
-      reason: "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+      reason: "token=ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     });
 
     const sessionCounter = telemetryState.counters.get("openclaw.session.state");
@@ -360,7 +357,7 @@ describe("diagnostics-otel service", () => {
     const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
     expect(typeof attrs?.["openclaw.reason"]).toBe("string");
     expect(String(attrs?.["openclaw.reason"])).not.toContain(
-      "ghp_abcdefghijklmnopqrstuvwxyz123456",
+      "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     );
     await service.stop?.(ctx);
   });

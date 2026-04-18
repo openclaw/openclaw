@@ -2,9 +2,8 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
-import { GatewayClient } from "./client.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -45,7 +44,17 @@ vi.mock("ws", () => ({
   },
 }));
 
+let GatewayClient: typeof import("./client.js").GatewayClient;
+
 describe("GatewayClient", () => {
+  beforeAll(async () => {
+    ({ GatewayClient } = await import("./client.js"));
+  });
+
+  beforeEach(() => {
+    wsMockState.last = null;
+  });
+
   async function withControlUiRoot(
     params: { faviconSvg?: string; indexHtml?: string },
     run: (tmp: string) => Promise<void>,
@@ -63,7 +72,6 @@ describe("GatewayClient", () => {
   }
 
   test("uses a large maxPayload for node snapshots", () => {
-    wsMockState.last = null;
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
     const last = wsMockState.last as { url: unknown; opts: unknown } | null;
@@ -182,16 +190,19 @@ describe("gateway broadcaster", () => {
         socket: approvalsSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.approvals"] } as GatewayWsClient["connect"],
         connId: "c-approvals",
+        usesSharedGatewayAuth: false,
       },
       {
         socket: pairingSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
         connId: "c-pairing",
+        usesSharedGatewayAuth: false,
       },
       {
         socket: readSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
         connId: "c-read",
+        usesSharedGatewayAuth: false,
       },
     ]);
 
@@ -347,7 +358,28 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("notifications.actions")).toBe(true);
     expect(allow.has("device.permissions")).toBe(true);
     expect(allow.has("device.health")).toBe(true);
+    expect(allow.has("callLog.search")).toBe(true);
     expect(allow.has("system.notify")).toBe(true);
+    expect(allow.has("sms.search")).toBe(false);
+  });
+
+  it("treats sms.search as dangerous by default", () => {
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
+  });
+
+  it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macOS 26.3.1",
+        deviceFamily: "Mac",
+      },
+    );
+
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("screen.record")).toBe(false);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

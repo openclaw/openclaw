@@ -3,11 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
+import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -25,7 +27,7 @@ function isBatchSafe(value: string): boolean {
 }
 
 function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
-  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
   if (override) {
     return override.endsWith(".service") ? override : `${override}.service`;
   }
@@ -33,7 +35,7 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
 }
 
 function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
-  const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const override = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
   if (override) {
     return override;
   }
@@ -83,12 +85,24 @@ rm -f "$0"
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
+      // Resolve HOME at generation time via env/process.env to match launchd.ts,
+      // and shell-escape the label in the plist filename to prevent injection.
+      const home = normalizeOptionalString(env.HOME) || process.env.HOME || os.homedir();
+      const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+      const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-launchctl kickstart -k 'gui/${uid}/${escaped}'
+# Try kickstart first (works when the service is still registered).
+# If it fails (e.g. after bootout), clear any persisted disabled state,
+# then re-register via bootstrap and kickstart.
+if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
+  launchctl enable 'gui/${uid}/${escaped}' 2>/dev/null
+  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
+  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+fi
 # Self-cleanup
 rm -f "$0"
 `;
@@ -151,11 +165,12 @@ del "%~f0"
 export async function runRestartScript(scriptPath: string): Promise<void> {
   const isWindows = process.platform === "win32";
   const file = isWindows ? "cmd.exe" : "/bin/sh";
-  const args = isWindows ? ["/c", scriptPath] : [scriptPath];
+  const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
   const child = spawn(file, args, {
     detached: true,
     stdio: "ignore",
+    windowsHide: true,
   });
   child.unref();
 }

@@ -1,23 +1,23 @@
+import {
+  buildChannelKeyCandidates,
+  normalizeChannelSlug,
+  resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
+} from "openclaw/plugin-sdk/channel-targets";
+import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
-import {
-  buildChannelKeyCandidates,
-  normalizeChannelSlug,
-  resolveChannelEntryMatchWithFallback,
-  resolveMentionGatingWithBypass,
-  resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
   return raw
     .trim()
-    .toLowerCase()
-    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .toLowerCase();
 }
 
 export function normalizeNextcloudTalkAllowlist(
@@ -56,16 +56,10 @@ export type NextcloudTalkRoomMatch = {
 export function resolveNextcloudTalkRoomMatch(params: {
   rooms?: Record<string, NextcloudTalkRoomConfig>;
   roomToken: string;
-  roomName?: string | null;
 }): NextcloudTalkRoomMatch {
   const rooms = params.rooms ?? {};
   const allowlistConfigured = Object.keys(rooms).length > 0;
-  const roomName = params.roomName?.trim() || undefined;
-  const roomCandidates = buildChannelKeyCandidates(
-    params.roomToken,
-    roomName,
-    roomName ? normalizeChannelSlug(roomName) : undefined,
-  );
+  const roomCandidates = buildChannelKeyCandidates(params.roomToken);
   const match = resolveChannelEntryMatchWithFallback({
     entries: rooms,
     keys: roomCandidates,
@@ -100,11 +94,9 @@ export function resolveNextcloudTalkGroupToolPolicy(
   if (!roomToken) {
     return undefined;
   }
-  const roomName = params.groupChannel?.trim() || undefined;
   const match = resolveNextcloudTalkRoomMatch({
     rooms: cfg.channels?.["nextcloud-talk"]?.rooms,
     roomToken,
-    roomName,
   });
   return match.roomConfig?.tools ?? match.wildcardConfig?.tools;
 }
@@ -128,19 +120,8 @@ export function resolveNextcloudTalkGroupAllow(params: {
   innerAllowFrom: Array<string | number> | undefined;
   senderId: string;
 }): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
-  if (params.groupPolicy === "disabled") {
-    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
-  }
-  if (params.groupPolicy === "open") {
-    return { allowed: true, outerMatch: { allowed: true }, innerMatch: { allowed: true } };
-  }
-
   const outerAllow = normalizeNextcloudTalkAllowlist(params.outerAllowFrom);
   const innerAllow = normalizeNextcloudTalkAllowlist(params.innerAllowFrom);
-  if (outerAllow.length === 0 && innerAllow.length === 0) {
-    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
-  }
-
   const outerMatch = resolveNextcloudTalkAllowlistMatch({
     allowFrom: params.outerAllowFrom,
     senderId: params.senderId,
@@ -149,14 +130,32 @@ export function resolveNextcloudTalkGroupAllow(params: {
     allowFrom: params.innerAllowFrom,
     senderId: params.senderId,
   });
-  const allowed = resolveNestedAllowlistDecision({
-    outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
-    outerMatched: outerAllow.length > 0 ? outerMatch.allowed : true,
-    innerConfigured: innerAllow.length > 0,
-    innerMatched: innerMatch.allowed,
+  const access = evaluateMatchedGroupAccessForPolicy({
+    groupPolicy: params.groupPolicy,
+    allowlistConfigured: outerAllow.length > 0 || innerAllow.length > 0,
+    allowlistMatched: resolveNestedAllowlistDecision({
+      outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
+      outerMatched: outerAllow.length > 0 ? outerMatch.allowed : true,
+      innerConfigured: innerAllow.length > 0,
+      innerMatched: innerMatch.allowed,
+    }),
   });
 
-  return { allowed, outerMatch, innerMatch };
+  return {
+    allowed: access.allowed,
+    outerMatch:
+      params.groupPolicy === "open"
+        ? { allowed: true }
+        : params.groupPolicy === "disabled"
+          ? { allowed: false }
+          : outerMatch,
+    innerMatch:
+      params.groupPolicy === "open"
+        ? { allowed: true }
+        : params.groupPolicy === "disabled"
+          ? { allowed: false }
+          : innerMatch,
+  };
 }
 
 export function resolveNextcloudTalkMentionGate(params: {
@@ -167,14 +166,15 @@ export function resolveNextcloudTalkMentionGate(params: {
   hasControlCommand: boolean;
   commandAuthorized: boolean;
 }): { shouldSkip: boolean; shouldBypassMention: boolean } {
-  const result = resolveMentionGatingWithBypass({
-    isGroup: params.isGroup,
-    requireMention: params.requireMention,
-    canDetectMention: true,
-    wasMentioned: params.wasMentioned,
-    allowTextCommands: params.allowTextCommands,
-    hasControlCommand: params.hasControlCommand,
-    commandAuthorized: params.commandAuthorized,
-  });
-  return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
+  const shouldBypassMention =
+    params.isGroup &&
+    params.requireMention &&
+    !params.wasMentioned &&
+    params.allowTextCommands &&
+    params.commandAuthorized &&
+    params.hasControlCommand;
+  return {
+    shouldBypassMention,
+    shouldSkip: params.requireMention && !params.wasMentioned && !shouldBypassMention,
+  };
 }

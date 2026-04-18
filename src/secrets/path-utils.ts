@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "./shared.js";
 
 function isArrayIndexSegment(segment: string): boolean {
@@ -8,6 +7,63 @@ function isArrayIndexSegment(segment: string): boolean {
 
 function expectedContainer(nextSegment: string): "array" | "object" {
   return isArrayIndexSegment(nextSegment) ? "array" : "object";
+}
+
+function parseArrayLeafTarget(
+  cursor: unknown,
+  leaf: string,
+  segments: string[],
+): { array: unknown[]; index: number } | null {
+  if (!Array.isArray(cursor)) {
+    return null;
+  }
+  if (!isArrayIndexSegment(leaf)) {
+    throw new Error(`Invalid array index segment "${leaf}" at ${segments.join(".")}.`);
+  }
+  return { array: cursor, index: Number.parseInt(leaf, 10) };
+}
+
+function traverseToLeafParent(params: {
+  root: unknown;
+  segments: string[];
+  requireExistingSegment: boolean;
+}): unknown {
+  if (params.segments.length === 0) {
+    throw new Error("Target path is empty.");
+  }
+
+  let cursor: unknown = params.root;
+  for (let index = 0; index < params.segments.length - 1; index += 1) {
+    const segment = params.segments[index] ?? "";
+    if (Array.isArray(cursor)) {
+      if (!isArrayIndexSegment(segment)) {
+        throw new Error(
+          `Invalid array index segment "${segment}" at ${params.segments.join(".")}.`,
+        );
+      }
+      const arrayIndex = Number.parseInt(segment, 10);
+      if (params.requireExistingSegment && (arrayIndex < 0 || arrayIndex >= cursor.length)) {
+        throw new Error(
+          `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
+        );
+      }
+      cursor = cursor[arrayIndex];
+      continue;
+    }
+
+    if (!isRecord(cursor)) {
+      throw new Error(
+        `Invalid path shape at ${params.segments.slice(0, index).join(".") || "<root>"}.`,
+      );
+    }
+    if (params.requireExistingSegment && !Object.prototype.hasOwnProperty.call(cursor, segment)) {
+      throw new Error(
+        `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
+      );
+    }
+    cursor = cursor[segment];
+  }
+  return cursor;
 }
 
 export function getPath(root: unknown, segments: string[]): unknown {
@@ -32,7 +88,7 @@ export function getPath(root: unknown, segments: string[]): unknown {
 }
 
 export function setPathCreateStrict(
-  root: OpenClawConfig,
+  root: Record<string, unknown>,
   segments: string[],
   value: unknown,
 ): boolean {
@@ -77,13 +133,10 @@ export function setPathCreateStrict(
   }
 
   const leaf = segments[segments.length - 1] ?? "";
-  if (Array.isArray(cursor)) {
-    if (!isArrayIndexSegment(leaf)) {
-      throw new Error(`Invalid array index segment "${leaf}" at ${segments.join(".")}.`);
-    }
-    const arrayIndex = Number.parseInt(leaf, 10);
-    if (!isDeepStrictEqual(cursor[arrayIndex], value)) {
-      cursor[arrayIndex] = value;
+  const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
+  if (arrayTarget) {
+    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
+      arrayTarget.array[arrayTarget.index] = value;
       changed = true;
     }
     return changed;
@@ -99,50 +152,20 @@ export function setPathCreateStrict(
 }
 
 export function setPathExistingStrict(
-  root: OpenClawConfig,
+  root: Record<string, unknown>,
   segments: string[],
   value: unknown,
 ): boolean {
-  if (segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
-  let cursor: unknown = root;
-
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index] ?? "";
-    if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
-        throw new Error(`Invalid array index segment "${segment}" at ${segments.join(".")}.`);
-      }
-      const arrayIndex = Number.parseInt(segment, 10);
-      if (arrayIndex < 0 || arrayIndex >= cursor.length) {
-        throw new Error(
-          `Path segment does not exist at ${segments.slice(0, index + 1).join(".")}.`,
-        );
-      }
-      cursor = cursor[arrayIndex];
-      continue;
-    }
-    if (!isRecord(cursor)) {
-      throw new Error(`Invalid path shape at ${segments.slice(0, index).join(".") || "<root>"}.`);
-    }
-    if (!Object.prototype.hasOwnProperty.call(cursor, segment)) {
-      throw new Error(`Path segment does not exist at ${segments.slice(0, index + 1).join(".")}.`);
-    }
-    cursor = cursor[segment];
-  }
+  const cursor = traverseToLeafParent({ root, segments, requireExistingSegment: true });
 
   const leaf = segments[segments.length - 1] ?? "";
-  if (Array.isArray(cursor)) {
-    if (!isArrayIndexSegment(leaf)) {
-      throw new Error(`Invalid array index segment "${leaf}" at ${segments.join(".")}.`);
-    }
-    const arrayIndex = Number.parseInt(leaf, 10);
-    if (arrayIndex < 0 || arrayIndex >= cursor.length) {
+  const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
+  if (arrayTarget) {
+    if (arrayTarget.index < 0 || arrayTarget.index >= arrayTarget.array.length) {
       throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
     }
-    if (!isDeepStrictEqual(cursor[arrayIndex], value)) {
-      cursor[arrayIndex] = value;
+    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
+      arrayTarget.array[arrayTarget.index] = value;
       return true;
     }
     return false;
@@ -160,37 +183,17 @@ export function setPathExistingStrict(
   return false;
 }
 
-export function deletePathStrict(root: OpenClawConfig, segments: string[]): boolean {
-  if (segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
-  let cursor: unknown = root;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index] ?? "";
-    if (Array.isArray(cursor)) {
-      if (!isArrayIndexSegment(segment)) {
-        throw new Error(`Invalid array index segment "${segment}" at ${segments.join(".")}.`);
-      }
-      cursor = cursor[Number.parseInt(segment, 10)];
-      continue;
-    }
-    if (!isRecord(cursor)) {
-      throw new Error(`Invalid path shape at ${segments.slice(0, index).join(".") || "<root>"}.`);
-    }
-    cursor = cursor[segment];
-  }
+export function deletePathStrict(root: Record<string, unknown>, segments: string[]): boolean {
+  const cursor = traverseToLeafParent({ root, segments, requireExistingSegment: false });
 
   const leaf = segments[segments.length - 1] ?? "";
-  if (Array.isArray(cursor)) {
-    if (!isArrayIndexSegment(leaf)) {
-      throw new Error(`Invalid array index segment "${leaf}" at ${segments.join(".")}.`);
-    }
-    const arrayIndex = Number.parseInt(leaf, 10);
-    if (arrayIndex < 0 || arrayIndex >= cursor.length) {
+  const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
+  if (arrayTarget) {
+    if (arrayTarget.index < 0 || arrayTarget.index >= arrayTarget.array.length) {
       return false;
     }
     // Arrays are compacted to preserve predictable index semantics.
-    cursor.splice(arrayIndex, 1);
+    arrayTarget.array.splice(arrayTarget.index, 1);
     return true;
   }
   if (!isRecord(cursor)) {

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deliverAgentCommandResult } from "../agents/command/delivery.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -12,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
+  getLoadedChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: (value: string) => value,
 }));
 
@@ -28,8 +31,6 @@ vi.mock("../infra/outbound/targets.js", async () => {
     resolveOutboundTarget: mocks.resolveOutboundTarget,
   };
 });
-
-const { deliverAgentCommandResult } = await import("./agent/delivery.js");
 
 describe("deliverAgentCommandResult", () => {
   function createRuntime(): RuntimeEnv {
@@ -52,11 +53,17 @@ describe("deliverAgentCommandResult", () => {
     sessionEntry?: SessionEntry;
     runtime?: RuntimeEnv;
     resultText?: string;
+    payloads?: ReplyPayload[];
   }) {
     const cfg = {} as OpenClawConfig;
     const deps = {} as CliDeps;
     const runtime = params.runtime ?? createRuntime();
-    const result = createResult(params.resultText);
+    const result = params.payloads
+      ? {
+          payloads: params.payloads,
+          meta: { durationMs: 1 },
+        }
+      : createResult(params.resultText);
 
     await deliverAgentCommandResult({
       cfg,
@@ -283,5 +290,33 @@ describe("deliverAgentCommandResult", () => {
     expect(line).toContain("run=run-announce");
     expect(line).toContain("channel=webchat");
     expect(line).toContain("ANNOUNCE_SKIP");
+  });
+
+  it("preserves audioAsVoice in JSON output envelopes", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
+      runtime,
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
+      opts: {
+        message: "hello",
+        deliver: false,
+        json: true,
+      },
+    });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])),
+    ).toEqual({
+      payloads: [
+        {
+          text: "voice caption",
+          mediaUrl: "file:///tmp/clip.mp3",
+          mediaUrls: ["file:///tmp/clip.mp3"],
+          audioAsVoice: true,
+        },
+      ],
+      meta: { durationMs: 1 },
+    });
   });
 });
