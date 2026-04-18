@@ -13,7 +13,6 @@ import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-actio
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
-import { isRecord, readString } from "./comment-shared.js";
 import {
   claimUnprocessedFeishuMessage,
   hasProcessedFeishuMessage,
@@ -30,8 +29,6 @@ import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
-import { getFeishuSequentialKey } from "./sequential-key.js";
-import { createSequentialQueue } from "./sequential-queue.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
@@ -52,9 +49,41 @@ function isFeishuRetryableSyntheticEventError(
     (typeof error === "object" &&
       error !== null &&
       "name" in error &&
-      error.name === "FeishuRetryableSyntheticEventError")
+      (error as { name?: unknown }).name === "FeishuRetryableSyntheticEventError")
   );
 }
+
+function buildCommentNoticeQueueKey(event: {
+  notice_meta?: {
+    file_type?: string;
+    file_token?: string;
+  };
+}): string {
+  const fileType = event.notice_meta?.file_type?.trim() || "unknown";
+  const fileToken = event.notice_meta?.file_token?.trim() || "unknown";
+  return `comment-doc:${fileType}:${fileToken}`;
+}
+
+/**
+ * Event types that have dedicated built-in handlers registered by
+ * {@link registerEventHandlers}.  Custom entries in
+ * `channels.feishu.customEventHandlers` that target any of these types are
+ * dropped with a warning so they don't silently shadow core behavior.
+ *
+ * Keep this in sync with the keys passed to `eventDispatcher.register(...)`
+ * below.  Exposed for tests.
+ */
+export const FEISHU_BUILTIN_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "im.message.receive_v1",
+  "im.message.message_read_v1",
+  "im.chat.member.bot.added_v1",
+  "im.chat.member.bot.deleted_v1",
+  "drive.notice.comment_add_v1",
+  "im.message.reaction.created_v1",
+  "im.message.reaction.deleted_v1",
+  "application.bot.menu_v6",
+  "card.action.trigger",
+]);
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
@@ -62,7 +91,7 @@ export type FeishuReactionCreatedEvent = {
   chat_type?: string;
   reaction_type?: { emoji_type?: string };
   operator_type?: string;
-  user_id?: { open_id?: string; user_id?: string };
+  user_id?: { open_id?: string; user_id?: string; union_id?: string };
   action_time?: string;
 };
 
@@ -197,6 +226,14 @@ type FeishuBotMenuEvent = {
   };
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function readStringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
@@ -316,16 +353,31 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   };
 }
 
-function buildCommentNoticeQueueKey(event: {
-  notice_meta?: {
-    file_type?: string;
-    file_token?: string;
+/**
+ * Per-chat serial queue that ensures messages from the same chat are processed
+ * in arrival order while allowing different chats to run concurrently.
+ */
+function createChatQueue() {
+  const queues = new Map<string, Promise<void>>();
+  return (chatId: string, task: () => Promise<void>): Promise<void> => {
+    const prev = queues.get(chatId) ?? Promise.resolve();
+    const next = prev.then(task, task);
+    queues.set(chatId, next);
+    const cleanup = () => {
+      if (queues.get(chatId) === next) {
+        queues.delete(chatId);
+      }
+    };
+    // Use then(cleanup, cleanup) (not finally) so the cleanup handler also
+    // implicitly consumes any rejection attached to `next`. The caller still
+    // awaits `next` and handles errors via runFeishuHandler; this attachment
+    // prevents the map-retained reference from triggering an
+    // unhandledRejection in node when the task rejects.
+    next.then(cleanup, cleanup);
+    return next;
   };
-}): string {
-  const fileType = event.notice_meta?.file_type?.trim() || "unknown";
-  const fileToken = event.notice_meta?.file_token?.trim() || "unknown";
-  return `comment-doc:${fileType}:${fileToken}`;
 }
+
 function mergeFeishuDebounceMentions(
   entries: FeishuMessageEvent[],
 ): FeishuMessageEvent["message"]["mentions"] | undefined {
@@ -412,9 +464,7 @@ function registerEventHandlers(
   });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-  // Keep normal Feishu traffic FIFO per chat while allowing explicit out-of-band
-  // commands like /btw and /stop to bypass the busy main-chat lane.
-  const enqueue = createSequentialQueue();
+  const enqueue = createChatQueue();
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
     if (fireAndForget) {
       void params.task().catch((err) => {
@@ -429,12 +479,7 @@ function registerEventHandlers(
     }
   };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
-    const sequentialKey = getFeishuSequentialKey({
-      accountId,
-      event,
-      botOpenId: botOpenIds.get(accountId),
-      botName: botNames.get(accountId),
-    });
+    const chatId = event.message.chat_id?.trim() || "unknown";
     const task = () =>
       handleFeishuMessage({
         cfg,
@@ -446,7 +491,7 @@ function registerEventHandlers(
         accountId,
         processingClaimHeld: true,
       });
-    await enqueue(sequentialKey, task);
+    await enqueue(chatId, task);
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
     const senderId =
@@ -563,7 +608,115 @@ function registerEventHandlers(
     },
   });
 
+  // Custom event handlers from configuration.
+  // Plugins can declare additional Feishu event types to listen for via
+  // channels.feishu.customEventHandlers in openclaw.json.  Each entry
+  // specifies an eventType and an optional handler module path that is
+  // dynamically imported.  The module's default or named `handler` export
+  // is called with { event, accountId, cfg, log, error }.
+  const customHandlers: Record<string, (data: unknown) => Promise<void>> = {};
+  const feishuChannelCfg = (cfg as Record<string, unknown>)?.channels as
+    | Record<string, unknown>
+    | undefined;
+  const feishuCfg = (feishuChannelCfg?.feishu ?? {}) as Record<string, unknown>;
+  const customEventConfigs = Array.isArray(feishuCfg.customEventHandlers)
+    ? feishuCfg.customEventHandlers
+    : [];
+
+  // Dedupe handler-module loads across multiple eventTypes pointing at the
+  // same handler path.  The load resolves to a tagged result that distinguishes
+  // import failure (logged once) from a module missing the expected export
+  // (warned once at first invocation), so diagnostics never spam the log.
+  type HandlerFn = (ctx: {
+    event: unknown;
+    accountId: string;
+    cfg: ClawdbotConfig;
+    log: (m: string) => void;
+    error: (m: string) => void;
+  }) => Promise<void> | void;
+  type HandlerLoadResult =
+    | { kind: "ok"; fn: HandlerFn }
+    | { kind: "no-export" }
+    | { kind: "import-failed" };
+  const handlerLoadCache = new Map<string, Promise<HandlerLoadResult>>();
+  const noExportWarned = new Set<string>();
+  const loadHandler = (handlerPath: string): Promise<HandlerLoadResult> => {
+    const cached = handlerLoadCache.get(handlerPath);
+    if (cached) {
+      return cached;
+    }
+    const p = import(handlerPath)
+      .then<HandlerLoadResult>((mod) => {
+        const fn =
+          typeof mod.default === "function"
+            ? (mod.default as HandlerFn)
+            : typeof mod.handler === "function"
+              ? (mod.handler as HandlerFn)
+              : null;
+        return fn ? { kind: "ok", fn } : { kind: "no-export" };
+      })
+      .catch<HandlerLoadResult>((err) => {
+        error(`feishu[${accountId}]: failed to load custom handler ${handlerPath}: ${String(err)}`);
+        return { kind: "import-failed" };
+      });
+    handlerLoadCache.set(handlerPath, p);
+    return p;
+  };
+
+  for (const entry of customEventConfigs) {
+    const raw = entry as Record<string, unknown> | null;
+    const eventType = typeof raw?.eventType === "string" ? raw.eventType.trim() : "";
+    const handlerPath = typeof raw?.handler === "string" ? raw.handler.trim() : "";
+    if (!eventType) {
+      continue;
+    }
+    if (!handlerPath) {
+      // A custom entry without a handler path is a no-op: it only logs when
+      // the event fires.  Warn once at startup so the misconfiguration is
+      // visible in the operator log rather than silently eating events.
+      error(
+        `feishu[${accountId}]: customEventHandlers entry "${eventType}" has no handler path; events will only be logged`,
+      );
+    }
+
+    customHandlers[eventType] = async (data: unknown) => {
+      try {
+        log(`feishu[${accountId}]: custom event ${eventType}`);
+        if (!handlerPath) {
+          return;
+        }
+        const result = await loadHandler(handlerPath);
+        if (result.kind === "ok") {
+          await result.fn({ event: data, accountId, cfg, log, error });
+        } else if (result.kind === "no-export") {
+          if (!noExportWarned.has(handlerPath)) {
+            noExportWarned.add(handlerPath);
+            error(
+              `feishu[${accountId}]: custom handler has no default/handler export: ${handlerPath}`,
+            );
+          }
+        }
+        // import-failed was already logged inside loadHandler; stay silent here.
+      } catch (err) {
+        error(`feishu[${accountId}]: custom event handler error (${eventType}): ${String(err)}`);
+      }
+    };
+  }
+
+  // Detect and warn about custom handlers that conflict with built-in event types.
+  // Built-in handlers are registered after custom handlers (via object spread),
+  // so any conflicting custom handler would be silently overwritten.
+  for (const evtType of Object.keys(customHandlers)) {
+    if (FEISHU_BUILTIN_EVENT_TYPES.has(evtType)) {
+      error(
+        `feishu[${accountId}]: customEventHandlers entry "${evtType}" conflicts with a built-in handler and will be ignored`,
+      );
+      delete customHandlers[evtType];
+    }
+  }
+
   eventDispatcher.register({
+    ...customHandlers,
     "im.message.receive_v1": async (data) => {
       const event = parseFeishuMessageEventPayload(data);
       if (!event) {
@@ -769,16 +922,11 @@ function registerEventHandlers(
           },
         };
         const syntheticMessageId = syntheticEvent.message.message_id;
-        const claim = await claimUnprocessedFeishuMessage({
-          messageId: syntheticMessageId,
-          namespace: accountId,
-          log,
-        });
-        if (claim === "duplicate") {
+        if (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log)) {
           log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
           return;
         }
-        if (claim === "inflight") {
+        if (!tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)) {
           log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
           return;
         }
@@ -809,12 +957,8 @@ function registerEventHandlers(
             }
             return await handleLegacyMenu();
           })
-          .catch(async (err) => {
-            if (isFeishuRetryableSyntheticEventError(err)) {
-              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-            } else {
-              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            }
+          .catch((err) => {
+            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
             throw err;
           });
         if (fireAndForget) {
