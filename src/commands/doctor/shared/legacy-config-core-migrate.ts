@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
+import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import {
   normalizeLegacyBrowserConfig,
   normalizeLegacyCrossContextMessageConfig,
@@ -47,6 +48,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
   next = normalizeLegacyMistralModelMaxTokens(next, changes);
+  const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  if (channelMigrations.changes.length > 0) {
+    next = channelMigrations.next;
+    changes.push(...channelMigrations.changes);
+  }
 
   return { config: next, changes };
 }

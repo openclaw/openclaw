@@ -13,14 +13,11 @@ import {
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: () => [],
   syncExternalCliCredentials: () => false,
 }));
 
 vi.mock("./models-config.providers.js", async () => {
-  const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
-    "./models-config.providers.js",
-  );
-
   function createImplicitProvider(baseUrl: string): ModelsProviderConfig {
     return {
       baseUrl,
@@ -40,7 +37,14 @@ vi.mock("./models-config.providers.js", async () => {
   }
 
   return {
-    ...actual,
+    applyNativeStreamingUsageCompat: (providers: Record<string, ModelsProviderConfig>) => providers,
+    enforceSourceManagedProviderSecrets: ({
+      providers,
+    }: {
+      providers: Record<string, ModelsProviderConfig>;
+    }) => providers,
+    normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
+      providers,
     resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {
       const providers: Record<string, ModelsProviderConfig> = {
         chutes: {

@@ -32,11 +32,13 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
+import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 import {
   resolveSnapshotPlan,
   shouldUsePlaywrightForAriaSnapshot,
   shouldUsePlaywrightForScreenshot,
 } from "./agent.snapshot.plan.js";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -171,48 +173,6 @@ async function saveBrowserMediaResponse(params: {
   });
 }
 
-/** Resolve the correct targetId after a navigation that may trigger a renderer swap. */
-export async function resolveTargetIdAfterNavigate(opts: {
-  oldTargetId: string;
-  navigatedUrl: string;
-  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-}): Promise<string> {
-  let currentTargetId = opts.oldTargetId;
-  try {
-    const pickReplacement = (
-      tabs: Array<{ targetId: string; url: string }>,
-      options?: { allowSingleTabFallback?: boolean },
-    ) => {
-      if (tabs.some((tab) => tab.targetId === opts.oldTargetId)) {
-        return opts.oldTargetId;
-      }
-      const byUrl = tabs.filter((tab) => tab.url === opts.navigatedUrl);
-      if (byUrl.length === 1) {
-        return byUrl[0]?.targetId ?? opts.oldTargetId;
-      }
-      const uniqueReplacement = byUrl.filter((tab) => tab.targetId !== opts.oldTargetId);
-      if (uniqueReplacement.length === 1) {
-        return uniqueReplacement[0]?.targetId ?? opts.oldTargetId;
-      }
-      if (options?.allowSingleTabFallback && tabs.length === 1) {
-        return tabs[0]?.targetId ?? opts.oldTargetId;
-      }
-      return opts.oldTargetId;
-    };
-
-    currentTargetId = pickReplacement(await opts.listTabs());
-    if (currentTargetId === opts.oldTargetId) {
-      await new Promise((r) => setTimeout(r, 800));
-      currentTargetId = pickReplacement(await opts.listTabs(), {
-        allowSingleTabFallback: true,
-      });
-    }
-  } catch {
-    // Best-effort: fall back to pre-navigation targetId
-  }
-  return currentTargetId;
-}
-
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -270,11 +230,7 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-      return jsonError(
-        res,
-        501,
-        "pdf is not supported for existing-session profiles yet; use screenshot/snapshot instead.",
-      );
+      return jsonError(res, 501, EXISTING_SESSION_LIMITS.snapshot.pdfUnsupported);
     }
     await withPlaywrightRouteContext({
       req,
@@ -318,12 +274,15 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           if (element) {
-            return jsonError(
-              res,
-              400,
-              "element screenshots are not supported for existing-session profiles; use ref from snapshot.",
-            );
+            return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
+          }
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: tab.url,
+              ...ssrfPolicyOpts,
+            });
           }
           const buffer = await takeChromeMcpScreenshot({
             profileName: profileCtx.profile.name,
@@ -403,12 +362,15 @@ export function registerBrowserAgentSnapshotRoutes(
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
       if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
         if (plan.selectorValue || plan.frameSelectorValue) {
-          return jsonError(
-            res,
-            400,
-            "selector/frame snapshots are not supported for existing-session profiles; snapshot the whole page and use refs.",
-          );
+          return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
+        }
+        if (ssrfPolicyOpts.ssrfPolicy) {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...ssrfPolicyOpts,
+          });
         }
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,
@@ -498,6 +460,7 @@ export function registerBrowserAgentSnapshotRoutes(
           selector: plan.selectorValue,
           frameSelector: plan.frameSelectorValue,
           refsMode: plan.refsMode,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           options: {
             interactive: plan.interactive ?? undefined,
             compact: plan.compact ?? undefined,
@@ -511,6 +474,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 ...(typeof plan.resolvedMaxChars === "number"
                   ? { maxChars: plan.resolvedMaxChars }
                   : {}),
@@ -579,6 +543,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 limit: plan.limit,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               });
             });
           })()

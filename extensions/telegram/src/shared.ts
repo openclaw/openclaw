@@ -1,16 +1,13 @@
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChannelPluginBase, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  getChatChannelMeta,
-  normalizeAccountId,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
@@ -28,7 +25,7 @@ import {
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { singleAccountKeysToMove } from "./setup-contract.js";
+import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -225,6 +222,7 @@ export function createTelegramPluginBase(params: {
     },
     setup: {
       ...params.setup,
+      namedAccountPromotionKeys,
       singleAccountKeysToMove,
     },
   });

@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 export type {
   AllowlistMatch,
   AllowlistMatchSource,
@@ -36,7 +38,8 @@ export function formatAllowFromLowercase(params: {
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
-    .map((entry) => entry.toLowerCase());
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 /** Normalize allowlist entries through a channel-provided parser or canonicalizer. */
@@ -67,8 +70,8 @@ export function isNormalizedSenderAllowed(params: {
   if (normalizedAllow.includes("*")) {
     return true;
   }
-  const sender = String(params.senderId).trim().toLowerCase();
-  return normalizedAllow.includes(sender);
+  const sender = normalizeOptionalLowercaseString(String(params.senderId));
+  return sender ? normalizedAllow.includes(sender) : false;
 }
 
 type ParsedChatAllowTarget =

@@ -1,4 +1,8 @@
-import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
+import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -42,9 +46,34 @@ function truncateTaskStatusText(value: string, maxChars: number): string {
   return `${truncateUtf16Safe(trimmed, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
+function stripInlineLeakedInternalContext(value: string): string {
+  const beginIndex = value.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+  if (
+    beginIndex !== -1 &&
+    (value.includes(INTERNAL_RUNTIME_CONTEXT_END) ||
+      value.includes("OpenClaw runtime context (internal):") ||
+      value.includes("[Internal task completion event]"))
+  ) {
+    return value.slice(0, beginIndex);
+  }
+  const legacyHeaderIndex = value.indexOf("OpenClaw runtime context (internal):");
+  if (
+    legacyHeaderIndex !== -1 &&
+    (value.includes("Keep internal details private.") ||
+      value.includes("[Internal task completion event]"))
+  ) {
+    return value.slice(0, legacyHeaderIndex);
+  }
+  return value;
+}
+
 function sanitizeTaskStatusValue(value: unknown, errorContext: boolean): unknown {
   if (typeof value === "string") {
-    const sanitized = sanitizeUserFacingText(value, { errorContext }).replace(/\s+/g, " ").trim();
+    const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value), {
+      errorContext,
+    })
+      .replace(/\s+/g, " ")
+      .trim();
     return sanitized || undefined;
   }
   if (Array.isArray(value)) {

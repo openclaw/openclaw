@@ -11,19 +11,33 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { QQBotAccountConfig } from "./types.js";
 import { debugLog } from "./utils/debug-log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "./utils/platform.js";
 const require = createRequire(import.meta.url);
+const PACKAGE_JSON_CANDIDATES = [
+  "../package.json",
+  "./package.json",
+  "../../package.json",
+] as const;
+
+function readPluginVersion(): string {
+  for (const candidate of PACKAGE_JSON_CANDIDATES) {
+    try {
+      const version = (require(candidate) as { version?: unknown }).version;
+      if (typeof version === "string" && version.trim().length > 0) {
+        return version;
+      }
+    } catch {
+      // Ignore missing candidate paths across source and bundled layouts.
+    }
+  }
+  return "unknown";
+}
 
 // Read the package version from package.json.
-let PLUGIN_VERSION = "unknown";
-try {
-  const pkg = require("../package.json");
-  PLUGIN_VERSION = pkg.version ?? "unknown";
-} catch {
-  // fallback
-}
+const PLUGIN_VERSION = readPluginVersion();
 
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
 const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
@@ -108,16 +122,28 @@ export interface QQBotFrameworkCommand {
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
+function normalizeCommandAllowlistEntry(entry: unknown): string {
+  if (
+    typeof entry === "string" ||
+    typeof entry === "number" ||
+    typeof entry === "boolean" ||
+    typeof entry === "bigint"
+  ) {
+    return `${entry}`
+      .trim()
+      .replace(/^qqbot:\s*/i, "")
+      .trim();
+  }
+  return "";
+}
+
 function hasExplicitCommandAllowlist(accountConfig?: QQBotAccountConfig): boolean {
   const allowFrom = accountConfig?.allowFrom;
   if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
     return false;
   }
   return allowFrom.every((entry) => {
-    const normalized = String(entry)
-      .trim()
-      .replace(/^qqbot:\s*/i, "")
-      .trim();
+    const normalized = normalizeCommandAllowlistEntry(entry);
     return normalized.length > 0 && normalized !== "*";
   });
 }
@@ -134,9 +160,9 @@ const frameworkCommands: Map<string, SlashCommand> = new Map();
 
 function registerCommand(cmd: SlashCommand): void {
   if (cmd.requireAuth) {
-    frameworkCommands.set(cmd.name.toLowerCase(), cmd);
+    frameworkCommands.set(normalizeLowercaseStringOrEmpty(cmd.name), cmd);
   } else {
-    commands.set(cmd.name.toLowerCase(), cmd);
+    commands.set(normalizeLowercaseStringOrEmpty(cmd.name), cmd);
   }
 }
 
@@ -244,7 +270,9 @@ function getConfiguredLogFiles(): string[] {
   for (const cli of ["openclaw", "clawdbot", "moltbot"]) {
     try {
       const cfgPath = path.join(homeDir, `.${cli}`, `${cli}.json`);
-      if (!fs.existsSync(cfgPath)) continue;
+      if (!fs.existsSync(cfgPath)) {
+        continue;
+      }
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
       const logFile = cfg?.logging?.file;
       if (logFile && typeof logFile === "string") {
@@ -264,13 +292,17 @@ function collectCandidateLogDirs(): string[] {
   const dirs = new Set<string>();
 
   const pushDir = (p?: string) => {
-    if (!p) return;
+    if (!p) {
+      return;
+    }
     const normalized = path.resolve(p);
     dirs.add(normalized);
   };
 
   const pushStateDir = (stateDir?: string) => {
-    if (!stateDir) return;
+    if (!stateDir) {
+      return;
+    }
     pushDir(stateDir);
     pushDir(path.join(stateDir, "logs"));
   };
@@ -280,7 +312,9 @@ function collectCandidateLogDirs(): string[] {
   }
 
   for (const [key, value] of Object.entries(process.env)) {
-    if (!value) continue;
+    if (!value) {
+      continue;
+    }
     if (/STATE_DIR$/i.test(key) && /(OPENCLAW|CLAWDBOT|MOLTBOT)/i.test(key)) {
       pushStateDir(value);
     }
@@ -292,15 +326,23 @@ function collectCandidateLogDirs(): string[] {
   }
 
   const searchRoots = new Set<string>([homeDir, process.cwd(), path.dirname(process.cwd())]);
-  if (process.env.APPDATA) searchRoots.add(process.env.APPDATA);
-  if (process.env.LOCALAPPDATA) searchRoots.add(process.env.LOCALAPPDATA);
+  if (process.env.APPDATA) {
+    searchRoots.add(process.env.APPDATA);
+  }
+  if (process.env.LOCALAPPDATA) {
+    searchRoots.add(process.env.LOCALAPPDATA);
+  }
 
   for (const root of searchRoots) {
     try {
       const entries = fs.readdirSync(root, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (!/(openclaw|clawdbot|moltbot)/i.test(entry.name)) continue;
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (!/(openclaw|clawdbot|moltbot)/i.test(entry.name)) {
+          continue;
+        }
         const base = path.join(root, entry.name);
         pushDir(base);
         pushDir(path.join(base, "logs"));
@@ -322,9 +364,15 @@ function collectCandidateLogDirs(): string[] {
   if (isWindows()) {
     // Windows temp locations.
     tmpRoots.add("C:\\tmp");
-    if (process.env.TEMP) tmpRoots.add(process.env.TEMP);
-    if (process.env.TMP) tmpRoots.add(process.env.TMP);
-    if (process.env.LOCALAPPDATA) tmpRoots.add(path.join(process.env.LOCALAPPDATA, "Temp"));
+    if (process.env.TEMP) {
+      tmpRoots.add(process.env.TEMP);
+    }
+    if (process.env.TMP) {
+      tmpRoots.add(process.env.TMP);
+    }
+    if (process.env.LOCALAPPDATA) {
+      tmpRoots.add(path.join(process.env.LOCALAPPDATA, "Temp"));
+    }
   } else {
     tmpRoots.add("/tmp");
   }
@@ -349,10 +397,14 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
 
   const pushFile = (filePath: string, sourceDir: string) => {
     const normalized = path.resolve(filePath);
-    if (dedupe.has(normalized)) return;
+    if (dedupe.has(normalized)) {
+      return;
+    }
     try {
       const stat = fs.statSync(normalized);
-      if (!stat.isFile()) return;
+      if (!stat.isFile()) {
+        return;
+      }
       dedupe.add(normalized);
       candidates.push({ filePath: normalized, sourceDir, mtimeMs: stat.mtimeMs });
     } catch {
@@ -375,9 +427,15 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        if (!/\.(log|txt)$/i.test(entry.name)) continue;
-        if (!/(gateway|openclaw|clawdbot|moltbot)/i.test(entry.name)) continue;
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (!/\.(log|txt)$/i.test(entry.name)) {
+          continue;
+        }
+        if (!/(gateway|openclaw|clawdbot|moltbot)/i.test(entry.name)) {
+          continue;
+        }
         pushFile(path.join(dir, entry.name), dir);
       }
     } catch {
@@ -425,7 +483,9 @@ function tailFileLines(
       bytesRead += readSize;
 
       for (let i = 0; i < readSize; i++) {
-        if (buf[i] === 0x0a) newlineCount++;
+        if (buf[i] === 0x0a) {
+          newlineCount++;
+        }
       }
     }
 
@@ -505,7 +565,9 @@ function buildBotLogsResult(): SlashCommandResult {
         lines.push(...tail);
         totalIncluded += tail.length;
         totalOriginal += totalFileLines;
-        if (totalFileLines > MAX_LINES_PER_FILE) truncatedCount++;
+        if (totalFileLines > MAX_LINES_PER_FILE) {
+          truncatedCount++;
+        }
       }
     } catch {
       lines.push(`[Failed to read ${path.basename(logFile.filePath)}]`);
@@ -562,15 +624,21 @@ registerCommand({
  */
 export async function matchSlashCommand(ctx: SlashCommandContext): Promise<SlashCommandResult> {
   const content = ctx.rawContent.trim();
-  if (!content.startsWith("/")) return null;
+  if (!content.startsWith("/")) {
+    return null;
+  }
 
   // Parse the command name and trailing arguments.
   const spaceIdx = content.indexOf(" ");
-  const cmdName = (spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx)).toLowerCase();
+  const cmdName = normalizeLowercaseStringOrEmpty(
+    spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx),
+  );
   const args = spaceIdx === -1 ? "" : content.slice(spaceIdx + 1).trim();
 
   const cmd = commands.get(cmdName);
-  if (!cmd) return null;
+  if (!cmd) {
+    return null;
+  }
 
   // Gate sensitive commands behind the allowFrom authorization check.
   if (cmd.requireAuth && !ctx.commandAuthorized) {

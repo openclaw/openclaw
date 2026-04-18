@@ -1,12 +1,15 @@
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
-let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
-let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
+vi.useRealTimers();
+const [
+  { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
+  { createSignalEventHandler },
+] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
 
 const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture } = vi.hoisted(
   () => {
-    const captureState: { ctx: MsgContext | undefined } = { ctx: undefined };
+    const captureState: { ctx?: MsgContext } = {};
     return {
       sendTypingMock: vi.fn(),
       sendReadReceiptMock: vi.fn(),
@@ -48,18 +51,9 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
-
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeAll(async () => {
-    vi.useRealTimers();
-    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
-      await import("./event-handler.test-harness.js"));
-    ({ createSignalEventHandler } = await import("./event-handler.js"));
-  });
-
   beforeEach(() => {
-    capture.ctx = undefined;
+    delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     dispatchInboundMessageMock.mockClear();
@@ -68,7 +62,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
         historyLimit: 0,
       }),
@@ -85,8 +78,11 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(capture.ctx).toBeTruthy();
-    expectInboundContextContract(capture.ctx!);
-    const contextWithBody = capture.ctx!;
+    const contextWithBody = capture.ctx;
+    if (!contextWithBody) {
+      throw new Error("expected inbound MsgContext");
+    }
+    expectInboundContextContract(contextWithBody);
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
     expect(String(contextWithBody.Body ?? "")).toContain("Alice");
     expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
@@ -96,7 +92,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
         historyLimit: 0,
       }),

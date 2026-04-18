@@ -1,11 +1,19 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/mattermost/api.js");
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+type MattermostSenderAllowed = (params: {
+  senderId: string;
+  senderName?: string;
+  allowFrom: string[];
+  allowNameMatching?: boolean;
+}) => boolean;
+type FacadeModule = {
+  isMattermostSenderAllowed: MattermostSenderAllowed;
+};
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "mattermost",
-    artifactBasename: "api.js",
+    artifactBasename: "policy-api.js",
   });
 }
 export const isMattermostSenderAllowed: FacadeModule["isMattermostSenderAllowed"] = ((...args) =>

@@ -1,13 +1,10 @@
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
+import { isMatrixApprovalReactionAuthorizedSender } from "../../approval-reaction-auth.js";
 import {
   resolveMatrixApprovalReactionTarget,
   unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
-import {
-  isApprovalNotFoundError,
-  resolveMatrixExecApproval,
-} from "../../exec-approval-resolver.js";
-import { isMatrixExecApprovalAuthorizedSender } from "../../exec-approvals.js";
+import { isApprovalNotFoundError, resolveMatrixApproval } from "../../exec-approval-resolver.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
@@ -43,17 +40,12 @@ async function maybeResolveMatrixApprovalReaction(params: {
   if (!params.target) {
     return false;
   }
-  if (
-    !isMatrixExecApprovalAuthorizedSender({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      senderId: params.senderId,
-    })
-  ) {
+  const approvalKind = params.target.approvalId.startsWith("plugin:") ? "plugin" : "exec";
+  if (!isMatrixApprovalReactionAuthorizedSender({ ...params, approvalKind })) {
     return false;
   }
   try {
-    await resolveMatrixExecApproval({
+    await resolveMatrixApproval({
       cfg: params.cfg,
       approvalId: params.target.approvalId,
       decision: params.target.decision,
@@ -169,6 +161,7 @@ export async function handleInboundMatrixReaction(params: {
     roomId: params.roomId,
     senderId: params.senderId,
     isDirectMessage: params.isDirectMessage,
+    dmSessionScope: accountConfig.dm?.sessionScope ?? "per-user",
     threadId: thread.threadId,
     eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,

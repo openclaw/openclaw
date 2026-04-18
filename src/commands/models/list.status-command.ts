@@ -10,11 +10,10 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import {
-  ensureAuthProfileStore,
-  resolveAuthStorePathForDisplay,
-  resolveProfileUnusableUntilForDisplay,
-} from "../../agents/auth-profiles.js";
+import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
+import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -25,33 +24,19 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { withProgressTotals } from "../../cli/progress.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import {
-  formatUsageWindowSummary,
-  loadProviderUsageSummary,
-  resolveUsageProviderId,
-  type UsageProviderId,
-} from "../../infra/provider-usage.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
-import { buildProviderAuthRecoveryHint } from "../provider-auth-guidance.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
-import {
-  describeProbeSummary,
-  formatProbeLatency,
-  runAuthProbes,
-  sortProbeResults,
-  type AuthProbeSummary,
-} from "./list.probe.js";
+import { type AuthProbeSummary } from "./list.probe.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -59,6 +44,15 @@ import {
   ensureFlagCompatibility,
   resolveKnownAgentId,
 } from "./shared.js";
+
+type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
+
+let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
+
+function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
+  providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
+  return providerUsageRuntimePromise;
+}
 
 export async function modelsStatusCommand(
   opts: {
@@ -105,7 +99,7 @@ export async function modelsStatusCommand(
   const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
   const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<Record<string, string>>(
     (acc, [key, entry]) => {
-      const alias = typeof entry?.alias === "string" ? entry.alias.trim() : undefined;
+      const alias = normalizeOptionalString(entry?.alias);
       if (alias) {
         acc[alias] = key;
       }
@@ -131,36 +125,22 @@ export async function modelsStatusCommand(
   const providersFromModels = new Set<string>();
   const providersInUse = new Set<string>();
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (parsed?.provider) {
       providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (parsed?.provider) {
       providersInUse.add(normalizeProviderId(parsed.provider));
     }
   }
 
   const providersFromEnv = new Set<string>();
-  // Keep in sync with resolveEnvApiKey() mappings (we want visibility even when
-  // a provider isn't currently selected in config/models).
-  const envProbeProviders = [
-    "anthropic",
-    "github-copilot",
-    "google-vertex",
-    "openai",
-    "google",
-    "groq",
-    "cerebras",
-    "xai",
-    "openrouter",
-    "zai",
-    "mistral",
-    "synthetic",
-  ];
-  for (const provider of envProbeProviders) {
+  // Use the shared provider-env registry so `models status` stays aligned with
+  // env-backed providers beyond the text-model defaults (for example image-gen).
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
     if (resolveEnvApiKey(provider)) {
       providersFromEnv.add(provider);
     }
@@ -174,7 +154,7 @@ export async function modelsStatusCommand(
       ...providersFromEnv,
     ]),
   )
-    .map((p) => (typeof p === "string" ? p.trim() : ""))
+    .map((p) => normalizeOptionalString(p) ?? "")
     .filter(Boolean)
     .toSorted((a, b) => a.localeCompare(b));
 
@@ -200,7 +180,7 @@ export async function modelsStatusCommand(
     }
     const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
     return raw
-      .flatMap((value) => String(value ?? "").split(","))
+      .flatMap((value) => (value ?? "").split(","))
       .map((value) => value.trim())
       .filter(Boolean);
   })();
@@ -229,7 +209,7 @@ export async function modelsStatusCommand(
     .map(
       (raw) =>
         resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw: raw ?? "",
           defaultProvider: DEFAULT_PROVIDER,
           aliasIndex,
         })?.ref,
@@ -239,6 +219,10 @@ export async function modelsStatusCommand(
 
   let probeSummary: AuthProbeSummary | undefined;
   if (opts.probe) {
+    const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
+      import("../../cli/progress.js"),
+      import("./list.probe.js"),
+    ]);
     probeSummary = await withProgressTotals(
       { label: "Probing auth profiles…", total: 1 },
       async (update) => {
@@ -274,7 +258,6 @@ export async function modelsStatusCommand(
     store,
     cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-    providers,
   });
   const oauthProfiles = authHealth.profiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
@@ -530,6 +513,7 @@ export async function modelsStatusCommand(
   }
 
   if (missingProvidersInUse.length > 0) {
+    const { buildProviderAuthRecoveryHint } = await import("../provider-auth-guidance.js");
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Missing auth"));
     for (const provider of missingProvidersInUse) {
@@ -547,12 +531,14 @@ export async function modelsStatusCommand(
   if (oauthProfiles.length === 0) {
     runtime.log(colorize(rich, theme.muted, "- none"));
   } else {
+    const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
+      await loadProviderUsageRuntime();
     const usageByProvider = new Map<string, string>();
     const usageProviders = Array.from(
       new Set(
         oauthProfiles
           .map((profile) => resolveUsageProviderId(profile.provider))
-          .filter((provider): provider is UsageProviderId => Boolean(provider)),
+          .filter((provider): provider is NonNullable<typeof provider> => Boolean(provider)),
       ),
     );
     if (usageProviders.length > 0) {
@@ -624,6 +610,10 @@ export async function modelsStatusCommand(
   }
 
   if (probeSummary) {
+    const [
+      { getTerminalTableWidth, renderTable },
+      { describeProbeSummary, formatProbeLatency, sortProbeResults },
+    ] = await Promise.all([import("../../terminal/table.js"), import("./list.probe.js")]);
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Auth probes"));
     if (probeSummary.results.length === 0) {

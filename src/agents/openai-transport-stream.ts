@@ -19,15 +19,29 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
+import {
+  mapOpenAIReasoningEffortForModel,
+  resolveOpenAIReasoningEffortMap,
+} from "./openai-reasoning-compat.js";
+import {
+  normalizeOpenAIReasoningEffort,
+  type OpenAIApiReasoningEffort,
+  type OpenAIReasoningEffort,
+} from "./openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIStrictToolSetting,
+} from "./openai-tool-schema.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -47,7 +61,8 @@ type BaseStreamOptions = {
 };
 
 type OpenAIResponsesOptions = BaseStreamOptions & {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoning?: OpenAIReasoningEffort;
+  reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 };
@@ -63,7 +78,8 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
           name: string;
         };
       };
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoning?: OpenAIReasoningEffort;
+  reasoningEffort?: OpenAIReasoningEffort;
 };
 
 type OpenAIModeModel = Model<Api> & {
@@ -289,7 +305,10 @@ function convertResponsesMessages(
             id: itemId,
             call_id: callId,
             name: block.name,
-            arguments: JSON.stringify(block.arguments),
+            arguments:
+              typeof block.arguments === "string"
+                ? block.arguments
+                : JSON.stringify(block.arguments ?? {}),
           });
         }
       }
@@ -332,7 +351,7 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = resolveStrictToolFlagForInventory(tools, options?.strict);
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
   if (strict === undefined) {
     return tools.map((tool) => ({
       type: "function",
@@ -345,43 +364,9 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
     strict,
   }));
-}
-
-function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return true;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
-    return false;
-  }
-  if (Array.isArray(record.type)) {
-    return false;
-  }
-  if (record.type === "object" && record.additionalProperties !== false) {
-    return false;
-  }
-
-  return Object.values(record).every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
-}
-
-function resolveStrictToolFlagForInventory(
-  tools: NonNullable<Context["tools"]>,
-  strict: boolean | null | undefined,
-): boolean | undefined {
-  if (strict !== true) {
-    return strict === false ? false : undefined;
-  }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters))
-    ? true
-    : undefined;
 }
 
 async function processResponsesStream(
@@ -464,7 +449,12 @@ async function processResponsesStream(
       const item = event.item as Record<string, unknown>;
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
-          ? item.summary.map((part) => String((part as { text?: string }).text ?? "")).join("\n\n")
+          ? item.summary
+              .map((part) => {
+                const summaryPart = part as { text?: string };
+                return summaryPart.text ?? "";
+              })
+              .join("\n\n")
           : "";
         currentBlock.thinking = summary;
         currentBlock.thinkingSignature = JSON.stringify(item);
@@ -478,11 +468,12 @@ async function processResponsesStream(
       } else if (item.type === "message" && currentBlock?.type === "text") {
         const content = Array.isArray(item.content) ? item.content : [];
         currentBlock.text = content
-          .map((part) =>
-            (part as { type?: string; text?: string; refusal?: string }).type === "output_text"
-              ? String((part as { text?: string }).text ?? "")
-              : String((part as { refusal?: string }).refusal ?? ""),
-          )
+          .map((part) => {
+            const contentPart = part as { type?: string; text?: string; refusal?: string };
+            return contentPart.type === "output_text"
+              ? (contentPart.text ?? "")
+              : (contentPart.refusal ?? "");
+          })
           .join("");
         currentBlock.textSignature = encodeTextSignatureV1(
           stringifyUnknown(item.id),
@@ -755,6 +746,28 @@ function getPromptCacheRetention(
   return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
 }
 
+function resolveOpenAIReasoningEffort(
+  options: OpenAIResponsesOptions | undefined,
+): Exclude<OpenAIApiReasoningEffort, "none"> {
+  return normalizeOpenAIReasoningEffort(
+    options?.reasoningEffort ?? options?.reasoning ?? "high",
+  ) as Exclude<OpenAIApiReasoningEffort, "none">;
+}
+
+function coerceOpenAIApiReasoningEffort(effort: string): OpenAIApiReasoningEffort {
+  const normalized = normalizeOpenAIReasoningEffort(effort);
+  switch (normalized) {
+    case "none":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return normalized;
+    default:
+      return "high";
+  }
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -793,18 +806,30 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     params.tools = convertResponsesTools(context.tools, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel),
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+        transport: "stream",
+      }),
     });
   }
   if (model.reasoning) {
-    if (options?.reasoningEffort || options?.reasoningSummary) {
+    if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
+      const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
+      const reasoningEffort = coerceOpenAIApiReasoningEffort(
+        mapOpenAIReasoningEffortForModel({
+          model,
+          effort: requestedReasoningEffort,
+        }) ?? requestedReasoningEffort,
+      );
+      const normalizedReasoningEffort: Exclude<OpenAIApiReasoningEffort, "none"> =
+        reasoningEffort === "none" ? "high" : reasoningEffort;
       params.reasoning = {
-        effort: options?.reasoningEffort || "medium",
+        effort: normalizedReasoningEffort,
         summary: options?.reasoningSummary || "auto",
       };
       params.include = ["reasoning.encrypted_content"];
     } else if (model.provider !== "github-copilot") {
-      params.reasoning = { effort: "none" };
+      params.reasoning = { effort: "high", summary: "auto" };
+      params.include = ["reasoning.encrypted_content"];
     }
   }
   applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
@@ -1028,6 +1053,7 @@ async function processOpenAICompletionsStream(
         partialArgs: string;
       }
     | null = null;
+  let pendingThinkingDelta: { signature: string; text: string } | null = null;
   const blockIndex = () => output.content.length - 1;
   const finishCurrentBlock = () => {
     if (!currentBlock) {
@@ -1041,6 +1067,33 @@ async function processOpenAICompletionsStream(
       };
       output.content[blockIndex()] = completed;
     }
+  };
+  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+    if (!currentBlock || currentBlock.type !== "thinking") {
+      finishCurrentBlock();
+      currentBlock = {
+        type: "thinking",
+        thinking: "",
+        thinkingSignature: reasoningDelta.signature,
+      };
+      output.content.push(currentBlock);
+      stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.thinking += reasoningDelta.text;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: blockIndex(),
+      delta: reasoningDelta.text,
+      partial: output,
+    });
+  };
+  const flushPendingThinkingDelta = () => {
+    if (!pendingThinkingDelta) {
+      return;
+    }
+    const bufferedDelta = pendingThinkingDelta;
+    pendingThinkingDelta = null;
+    appendThinkingDelta(bufferedDelta);
   };
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
@@ -1066,6 +1119,7 @@ async function processOpenAICompletionsStream(
       continue;
     }
     if (choice.delta.content) {
+      flushPendingThinkingDelta();
       if (!currentBlock || currentBlock.type !== "text") {
         finishCurrentBlock();
         currentBlock = { type: "text", text: "" };
@@ -1081,28 +1135,19 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
-    const reasoningField = reasoningFields.find((field) => {
-      const value = (choice.delta as Record<string, unknown>)[field];
-      return typeof value === "string" && value.length > 0;
-    });
-    if (reasoningField) {
-      if (!currentBlock || currentBlock.type !== "thinking") {
-        finishCurrentBlock();
-        currentBlock = { type: "thinking", thinking: "", thinkingSignature: reasoningField };
-        output.content.push(currentBlock);
-        stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+    const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
+    if (reasoningDelta) {
+      if (currentBlock?.type === "toolCall") {
+        if (!pendingThinkingDelta) {
+          pendingThinkingDelta = { ...reasoningDelta };
+        } else {
+          pendingThinkingDelta.text += reasoningDelta.text;
+        }
+      } else {
+        appendThinkingDelta(reasoningDelta);
       }
-      currentBlock.thinking += String((choice.delta as Record<string, unknown>)[reasoningField]);
-      stream.push({
-        type: "thinking_delta",
-        contentIndex: blockIndex(),
-        delta: String((choice.delta as Record<string, unknown>)[reasoningField]),
-        partial: output,
-      });
-      continue;
     }
-    if (choice.delta.tool_calls) {
+    if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
         if (
           !currentBlock ||
@@ -1143,6 +1188,38 @@ async function processOpenAICompletionsStream(
     }
   }
   finishCurrentBlock();
+  flushPendingThinkingDelta();
+  const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+  if (output.stopReason === "toolUse" && !hasToolCalls) {
+    output.stopReason = "stop";
+  }
+}
+
+function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
+  signature: string;
+  text: string;
+} | null {
+  const reasoningDetails = delta.reasoning_details;
+  if (Array.isArray(reasoningDetails)) {
+    let text = "";
+    for (const item of reasoningDetails) {
+      const detail = item as { type?: unknown; text?: unknown };
+      if (detail.type === "reasoning.text" && typeof detail.text === "string" && detail.text) {
+        text += detail.text;
+      }
+    }
+    if (text) {
+      return { signature: "reasoning_details", text };
+    }
+  }
+  const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+  for (const field of reasoningFields) {
+    const value = delta[field];
+    if (typeof value === "string" && value.length > 0) {
+      return { signature: field, text: value };
+    }
+  }
+  return null;
 }
 
 function detectCompat(model: OpenAIModeModel) {
@@ -1192,6 +1269,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  requiresStringContent: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -1206,9 +1284,7 @@ function getCompat(model: OpenAIModeModel): {
     supportsDeveloperRole:
       (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
-    reasoningEffortMap:
-      (compat.reasoningEffortMap as Record<string, string> | undefined) ??
-      detected.reasoningEffortMap,
+    reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
     supportsUsageInStreaming:
       (compat.supportsUsageInStreaming as boolean | undefined) ?? detected.supportsUsageInStreaming,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
@@ -1226,6 +1302,7 @@ function getCompat(model: OpenAIModeModel): {
       detected.vercelGatewayRouting,
     supportsStrictMode:
       (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
+    requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
   };
 }
 
@@ -1244,7 +1321,7 @@ type OpenAIResponsesRequestParams = {
   reasoning?:
     | { effort: "none" }
     | {
-        effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
+        effort: Exclude<OpenAIApiReasoningEffort, "none">;
         summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
       };
   include?: string[];
@@ -1254,41 +1331,15 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function resolvesToNativeOpenAIStrictTools(model: OpenAIModeModel): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-  if (!capabilities.usesKnownNativeOpenAIRoute) {
-    return false;
-  }
-  return (
-    capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
-    capabilities.provider === "azure-openai" ||
-    capabilities.provider === "azure-openai-responses"
-  );
+function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
+  return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
-function resolveOpenAIStrictToolSetting(
-  model: OpenAIModeModel,
-  compat?: ReturnType<typeof getCompat>,
-): boolean | undefined {
-  if (resolvesToNativeOpenAIStrictTools(model)) {
-    return true;
-  }
-  if (compat?.supportsStrictMode) {
-    return false;
-  }
-  return undefined;
+function mapNativeOpenAIReasoningEffort(
+  effort: string,
+  reasoningEffortMap: Record<string, string>,
+): string {
+  return normalizeOpenAIReasoningEffort(mapReasoningEffort(effort, reasoningEffortMap));
 }
 
 function convertTools(
@@ -1296,16 +1347,19 @@ function convertTools(
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
-  const strict = resolveStrictToolFlagForInventory(
+  const strict = resolveOpenAIStrictToolFlagForInventory(
     tools,
-    resolveOpenAIStrictToolSetting(model, compat),
+    resolveOpenAIStrictToolSetting(model, {
+      transport: "stream",
+      supportsStrictMode: compat?.supportsStrictMode,
+    }),
   );
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
       ...(strict === undefined ? {} : { strict }),
     },
   }));
@@ -1323,9 +1377,12 @@ export function buildOpenAICompletionsParams(
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
+  const messages = convertMessages(model as never, completionsContext, compat as never);
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, completionsContext, compat as never),
+    messages: compat.requiresStringContent
+      ? flattenCompletionMessagesToStringContent(messages)
+      : messages,
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {
@@ -1346,19 +1403,20 @@ export function buildOpenAICompletionsParams(
   }
   if (context.tools) {
     params.tools = convertTools(context.tools, compat, model);
+    if (options?.toolChoice) {
+      params.tool_choice = options.toolChoice;
+    }
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
   }
-  if (options?.toolChoice) {
-    params.tool_choice = options.toolChoice;
-  }
-  if (compat.thinkingFormat === "openrouter" && model.reasoning && options?.reasoningEffort) {
+  const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
+  if (compat.thinkingFormat === "openrouter" && model.reasoning && completionsReasoningEffort) {
     params.reasoning = {
-      effort: mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap),
+      effort: mapReasoningEffort(completionsReasoningEffort, compat.reasoningEffortMap),
     };
-  } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    params.reasoning_effort = mapReasoningEffort(
-      options.reasoningEffort,
+  } else if (completionsReasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+    params.reasoning_effort = mapNativeOpenAIReasoningEffort(
+      completionsReasoningEffort,
       compat.reasoningEffortMap,
     );
   }
@@ -1409,3 +1467,7 @@ function mapStopReason(reason: string | null) {
       };
   }
 }
+
+export const __testing = {
+  processOpenAICompletionsStream,
+};

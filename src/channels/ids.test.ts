@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
 import {
   CHAT_CHANNEL_ALIASES,
   CHAT_CHANNEL_ORDER,
@@ -10,14 +10,8 @@ import {
 function collectBundledChatChannelAliases(): Record<string, ChatChannelId> {
   const aliases = new Map<string, ChatChannelId>();
 
-  for (const entry of listBundledPluginMetadata({
-    includeChannelConfigs: true,
-    includeSyntheticChannelConfigs: false,
-  })) {
-    const channel =
-      entry.packageManifest && "channel" in entry.packageManifest
-        ? entry.packageManifest.channel
-        : undefined;
+  for (const entry of listChannelCatalogEntries({ origin: "bundled" })) {
+    const channel = entry.channel;
     const rawId = channel?.id?.trim();
     if (!rawId || !CHAT_CHANNEL_ORDER.includes(rawId)) {
       continue;

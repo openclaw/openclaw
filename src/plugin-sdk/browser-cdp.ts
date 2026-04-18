@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "./browser-support.js";
+import { redactSensitiveText } from "../logging/redact.js";
 
 export function parseBrowserHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
@@ -16,7 +16,7 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
         ? 443
         : 80;
 
-  if (Number.isNaN(port) || port <= 0 || port > 65535) {
+  if (Number.isNaN(port) || port <= 0 || port > 65_535) {
     throw new Error(`${label} has invalid port: ${parsed.port}`);
   }
 

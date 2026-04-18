@@ -1,11 +1,11 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-type DiscordSubagentHooksModule = typeof import("./api.js");
+type DiscordSubagentHooksModule = typeof import("./subagent-hooks-api.js");
 
 let discordSubagentHooksPromise: Promise<DiscordSubagentHooksModule> | null = null;
 
 function loadDiscordSubagentHooksModule() {
-  discordSubagentHooksPromise ??= import("./api.js");
+  discordSubagentHooksPromise ??= import("./subagent-hooks-api.js");
   return discordSubagentHooksPromise;
 }
 
@@ -15,12 +15,16 @@ export default defineBundledChannelEntry({
   description: "Discord channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "discordPlugin",
   },
   runtime: {
     specifier: "./runtime-api.js",
     exportName: "setDiscordRuntime",
+  },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectDiscordReadOnlyAccount",
   },
   registerFull(api) {
     api.on("subagent_spawning", async (event) => {

@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import type { EmbeddingInput } from "../memory-host-sdk/engine-embeddings.js";
+import type { EmbeddingInput } from "../memory-host-sdk/host/embedding-inputs.js";
 
 export type MemoryEmbeddingBatchChunk = {
   text: string;
@@ -35,6 +35,8 @@ export type MemoryEmbeddingProvider = {
 export type MemoryEmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  provider?: string;
+  fallback?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -46,6 +48,14 @@ export type MemoryEmbeddingProviderCreateOptions = {
     modelCacheDir?: string;
   };
   outputDimensionality?: number;
+  taskType?:
+    | "RETRIEVAL_QUERY"
+    | "RETRIEVAL_DOCUMENT"
+    | "SEMANTIC_SIMILARITY"
+    | "CLASSIFICATION"
+    | "CLUSTERING"
+    | "QUESTION_ANSWERING"
+    | "FACT_VERIFICATION";
 };
 
 export type MemoryEmbeddingProviderCreateResult = {
@@ -57,6 +67,7 @@ export type MemoryEmbeddingProviderAdapter = {
   id: string;
   defaultModel?: string;
   transport?: "local" | "remote";
+  authProviderId?: string;
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;

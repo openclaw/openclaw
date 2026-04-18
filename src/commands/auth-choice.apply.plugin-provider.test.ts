@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
-import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import {
   applyAuthChoiceLoadedPluginProvider,
   applyAuthChoicePluginProvider,
   runProviderPluginAuthMethod,
-} from "./auth-choice.apply.plugin-provider.js";
+} from "../plugins/provider-auth-choice.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() =>
@@ -123,6 +123,89 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result).toEqual({
       config: {},
       agentModelOverride: "ollama/qwen3:4b",
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+  });
+
+  it("keeps provider config patches when default model application is deferred", async () => {
+    const provider: ProviderPlugin = {
+      id: "moonshot",
+      label: "Moonshot",
+      auth: [
+        {
+          id: "api-key-cn",
+          label: "Moonshot API key (.cn)",
+          kind: "api_key",
+          run: async () => ({
+            profiles: [
+              {
+                profileId: "moonshot:default",
+                credential: {
+                  type: "api_key",
+                  provider: "moonshot",
+                  key: "sk-moonshot-cn-test",
+                },
+              },
+            ],
+            configPatch: {
+              models: {
+                providers: {
+                  moonshot: {
+                    api: "openai-completions",
+                    baseUrl: "https://api.moonshot.cn/v1",
+                    models: [
+                      {
+                        id: "kimi-k2.5",
+                        name: "kimi-k2.5",
+                        input: ["text", "image"],
+                        reasoning: true,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128_000,
+                        maxTokens: 8192,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            defaultModel: "moonshot/kimi-k2.5",
+          }),
+        },
+      ],
+    };
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-6" },
+            },
+          },
+        },
+        setDefaultModel: false,
+      }),
+    );
+
+    expect(result?.agentModelOverride).toBe("moonshot/kimi-k2.5");
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+    });
+    expect(result?.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(result?.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
+    expect(upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "moonshot:default",
+      credential: {
+        type: "api_key",
+        provider: "moonshot",
+        key: "sk-moonshot-cn-test",
+      },
+      agentDir: "/tmp/agent",
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
   });
@@ -253,17 +336,18 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
           agents: {
             defaults: {
               model: {
-                primary: "codex-cli/gpt-5.4",
-                fallbacks: ["openai/gpt-5.2"],
+                primary: "claude-cli/claude-sonnet-4-6",
+                fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
               },
               models: {
-                "codex-cli/gpt-5.4": { alias: "Codex" },
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+                "claude-cli/claude-opus-4-6": { alias: "Opus" },
                 "openai/gpt-5.2": {},
               },
             },
           },
         },
-        defaultModel: "codex-cli/gpt-5.4",
+        defaultModel: "claude-cli/claude-sonnet-4-6",
       }),
     };
 
@@ -291,11 +375,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
 
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "codex-cli/gpt-5.4",
-      fallbacks: ["openai/gpt-5.2"],
+      primary: "claude-cli/claude-sonnet-4-6",
+      fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
     });
     expect(result.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.4": { alias: "Codex" },
+      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+      "claude-cli/claude-opus-4-6": { alias: "Opus" },
       "openai/gpt-5.2": {},
     });
   });

@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -1126,22 +1127,20 @@ async function syncLocale(
     fallbackKeys.push(item.key);
   }
 
-  if (!allowTranslate) {
-    fallbackKeys.length = 0;
-    for (const [key, sourceText] of sourceFlat.entries()) {
-      if ((nextFlat.get(key) ?? sourceText) === sourceText) {
-        fallbackKeys.push(key);
-      }
-    }
-  }
+  // Do not infer fallback state from source-text equality alone.
+  // Product names, config keys, and other intentional carry-through strings may
+  // legitimately stay identical to English. Track fallback keys from actual
+  // fallback decisions and previous fallback metadata instead.
 
   const nextMap: TranslationMap = {};
   for (const [key, value] of sourceFlat.entries()) {
     setNestedValue(nextMap, key, nextFlat.get(key) ?? value);
   }
 
-  const nextProvider = allowTranslate ? resolveConfiguredProvider() : "";
-  const nextModel = allowTranslate ? resolveConfiguredModel() : "";
+  const nextProvider = allowTranslate
+    ? resolveConfiguredProvider()
+    : (previousMeta?.provider ?? "");
+  const nextModel = allowTranslate ? resolveConfiguredModel() : (previousMeta?.model ?? "");
   const sortedFallbackKeys = [...new Set(fallbackKeys)].toSorted((left, right) =>
     left.localeCompare(right),
   );
@@ -1319,6 +1318,6 @@ async function main() {
 }
 
 await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(formatErrorMessage(error));
   process.exit(1);
 });

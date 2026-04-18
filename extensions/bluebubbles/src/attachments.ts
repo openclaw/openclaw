@@ -1,8 +1,17 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { extractAttachments } from "./monitor-normalize.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -10,17 +19,20 @@ import { resolveRequestUrl } from "./request-url.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
-import { resolveChatGuidForTarget, createChatForHandle } from "./send.js";
+import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
-  type BlueBubblesSendTarget,
   type SsrFPolicy,
 } from "./types.js";
 
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy | undefined {
+  // Pass `undefined` (not `{}`) for the non-private case so the non-SSRF fallback path
+  // is used. An empty `{}` policy routes through the SSRF guard, which blocks the
+  // localhost BB deployments that are the most common self-hosted setup. The opt-in
+  // private-network branch keeps the explicit policy. (#64105, #67510)
+  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
 }
 
 export type BlueBubblesAttachmentOpts = {
@@ -45,7 +57,7 @@ function sanitizeFilename(input: string | undefined, fallback: string): string {
 
 function ensureExtension(filename: string, extension: string, fallbackBase: string): string {
   const currentExt = path.extname(filename);
-  if (currentExt.toLowerCase() === extension) {
+  if (normalizeLowercaseStringOrEmpty(currentExt) === extension) {
     return filename;
   }
   const base = currentExt ? filename.slice(0, -currentExt.length) : filename;
@@ -53,8 +65,8 @@ function ensureExtension(filename: string, extension: string, fallbackBase: stri
 }
 
 function resolveVoiceInfo(filename: string, contentType?: string) {
-  const normalizedType = contentType?.trim().toLowerCase();
-  const extension = path.extname(filename).toLowerCase();
+  const normalizedType = normalizeOptionalLowercaseString(contentType);
+  const extension = normalizeLowercaseStringOrEmpty(path.extname(filename));
   const isMp3 =
     extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isCaf =
@@ -88,6 +100,51 @@ function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefine
     : undefined;
 }
 
+/**
+ * Fetch attachment metadata for a message from the BlueBubbles API.
+ *
+ * BlueBubbles sometimes fires the `new-message` webhook before attachment
+ * indexing is complete, so `attachments` arrives as `[]`. This function
+ * GETs the message by GUID and returns whatever attachments the server
+ * has indexed by now. (#65430, #67437)
+ */
+export async function fetchBlueBubblesMessageAttachments(
+  messageGuid: string,
+  opts: {
+    baseUrl: string;
+    password: string;
+    timeoutMs?: number;
+    allowPrivateNetwork?: boolean;
+  },
+): Promise<BlueBubblesAttachment[]> {
+  const url = buildBlueBubblesApiUrl({
+    baseUrl: opts.baseUrl,
+    path: `/api/v1/message/${encodeURIComponent(messageGuid)}`,
+    password: opts.password,
+  });
+  // Pass undefined (not {}) when private network is not opted-in so the
+  // non-SSRF fallback path is used — an empty {} triggers the SSRF-guarded
+  // path which blocks localhost BB servers by default. (#64105)
+  const policy: SsrFPolicy | undefined = opts.allowPrivateNetwork
+    ? { allowPrivateNetwork: true }
+    : undefined;
+  const response = await blueBubblesFetchWithTimeout(
+    url,
+    { method: "GET" },
+    opts.timeoutMs,
+    policy,
+  );
+  if (!response.ok) {
+    return [];
+  }
+  const json = (await response.json()) as Record<string, unknown>;
+  const data = json.data as Record<string, unknown> | undefined;
+  if (!data) {
+    return [];
+  }
+  return extractAttachments(data);
+}
+
 export async function downloadBlueBubblesAttachment(
   attachment: BlueBubblesAttachment,
   opts: BlueBubblesAttachmentOpts & { maxBytes?: number } = {},
@@ -96,7 +153,8 @@ export async function downloadBlueBubblesAttachment(
   if (!guid) {
     throw new Error("BlueBubbles attachment guid is required");
   }
-  const { baseUrl, password, allowPrivateNetwork } = resolveAccount(opts);
+  const { baseUrl, password, allowPrivateNetwork, allowPrivateNetworkConfig } =
+    resolveAccount(opts);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
@@ -104,6 +162,7 @@ export async function downloadBlueBubblesAttachment(
   });
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
   const trustedHostname = safeExtractHostname(baseUrl);
+  const trustedHostnameIsPrivate = trustedHostname ? isBlockedHostnameOrIp(trustedHostname) : false;
   try {
     const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
       url,
@@ -111,7 +170,7 @@ export async function downloadBlueBubblesAttachment(
       maxBytes,
       ssrfPolicy: allowPrivateNetwork
         ? { allowPrivateNetwork: true }
-        : trustedHostname
+        : trustedHostname && (allowPrivateNetworkConfig !== false || !trustedHostnameIsPrivate)
           ? { allowedHostnames: [trustedHostname] }
           : undefined,
       fetchImpl: async (input, init) =>
@@ -127,10 +186,12 @@ export async function downloadBlueBubblesAttachment(
     };
   } catch (error) {
     if (readMediaFetchErrorCode(error) === "max_bytes") {
-      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
+      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`, {
+        cause: error,
+      });
     }
-    const text = error instanceof Error ? error.message : String(error);
-    throw new Error(`BlueBubbles attachment download failed: ${text}`);
+    const text = formatErrorMessage(error);
+    throw new Error(`BlueBubbles attachment download failed: ${text}`, { cause: error });
   }
 }
 
@@ -159,9 +220,29 @@ export async function sendBlueBubblesAttachment(params: {
   const wantsVoice = asVoice === true;
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
-  contentType = contentType?.trim() || undefined;
+  contentType = normalizeOptionalString(contentType);
   const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+
+  // Lazy refresh: when the cache has expired and Private API features are needed,
+  // fetch server info before making the decision. This prevents silent degradation
+  // of reply threading after the 10-minute cache TTL expires. (#43764)
+  const wantsReplyThread = Boolean(replyToMessageGuid?.trim());
+  if (privateApiStatus === null && wantsReplyThread) {
+    try {
+      await fetchBlueBubblesServerInfo({
+        baseUrl,
+        password,
+        accountId,
+        timeoutMs: opts.timeoutMs ?? 5000,
+        allowPrivateNetwork,
+      });
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+    } catch {
+      // Refresh failed — proceed with null status (existing graceful degradation)
+    }
+  }
+
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).

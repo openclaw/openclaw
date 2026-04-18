@@ -59,10 +59,12 @@ export function makeRegistry(
   plugins: Array<{
     id: string;
     channels: string[];
+    activation?: { onAgentHarnesses?: string[] };
     autoEnableWhenConfiguredProviders?: string[];
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
-    contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[] };
+    contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[]; tools?: string[] };
     providers?: string[];
+    configSchema?: Record<string, unknown>;
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
@@ -70,11 +72,14 @@ export function makeRegistry(
     plugins: plugins.map((plugin) => ({
       id: plugin.id,
       channels: plugin.channels,
+      activation: plugin.activation,
       autoEnableWhenConfiguredProviders: plugin.autoEnableWhenConfiguredProviders,
       modelSupport: plugin.modelSupport,
       contracts: plugin.contracts,
+      configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
       providers: plugin.providers ?? [],
+      cliBackends: [],
       skills: [],
       hooks: [],
       origin: "config" as const,

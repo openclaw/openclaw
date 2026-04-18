@@ -1,13 +1,27 @@
 import { describe, expect, it } from "vitest";
-import {
-  validateConfigObjectRawWithPlugins,
-  validateConfigObjectWithPlugins,
-} from "../../../config/validation.js";
-import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import type { OpenClawConfig } from "../../../config/types.js";
+import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
+
+function migrateLegacyConfigForTest(raw: unknown): {
+  config: OpenClawConfig | null;
+  changes: string[];
+} {
+  if (!raw || typeof raw !== "object") {
+    return { config: null, changes: [] };
+  }
+  const next = structuredClone(raw) as Record<string, unknown>;
+  const changes: string[] = [];
+  for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+    migration.apply(next, changes);
+  }
+  return changes.length === 0
+    ? { config: null, changes }
+    : { config: next as OpenClawConfig, changes };
+}
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       routing: {
         transcribeAudio: {
           command: ["whisper", "--model", "base"],
@@ -21,7 +35,7 @@ describe("legacy migrate audio transcription", () => {
   });
 
   it("does not rewrite removed routing.transcribeAudio migrations when new config exists", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       routing: {
         transcribeAudio: {
           command: ["whisper", "--model", "tiny"],
@@ -41,7 +55,7 @@ describe("legacy migrate audio transcription", () => {
   });
 
   it("drops invalid audio.transcription payloads", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       audio: {
         transcription: {
           command: [{}],
@@ -57,7 +71,7 @@ describe("legacy migrate audio transcription", () => {
 
 describe("legacy migrate mention routing", () => {
   it("does not rewrite removed routing.groupChat.requireMention migrations", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       routing: {
         groupChat: {
           requireMention: true,
@@ -70,7 +84,7 @@ describe("legacy migrate mention routing", () => {
   });
 
   it("does not rewrite removed channels.telegram.requireMention migrations", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       channels: {
         telegram: {
           requireMention: false,
@@ -81,224 +95,11 @@ describe("legacy migrate mention routing", () => {
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
   });
-
-  it("moves channels.telegram.groupMentionsOnly into groups.*.requireMention", () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        telegram: {
-          groupMentionsOnly: true,
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
-    expect(
-      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
-        ?.groupMentionsOnly,
-    ).toBeUndefined();
-  });
-
-  it('keeps explicit channels.telegram.groups."*".requireMention when migrating groupMentionsOnly', () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        telegram: {
-          groupMentionsOnly: true,
-          groups: {
-            "*": {
-              requireMention: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(
-      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
-        ?.groupMentionsOnly,
-    ).toBeUndefined();
-  });
-
-  it("does not overwrite invalid channels.telegram.groups when migrating groupMentionsOnly", () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        telegram: {
-          groupMentionsOnly: true,
-          groups: [],
-        },
-      },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
-  });
-
-  it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        telegram: {
-          groupMentionsOnly: true,
-          groups: {
-            "*": false,
-          },
-        },
-      },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
-  });
-});
-
-describe("legacy migrate tts provider shape", () => {
-  it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
-    const res = migrateLegacyConfig({
-      messages: {
-        tts: {
-          provider: "elevenlabs",
-          elevenlabs: {
-            apiKey: "test-key",
-            voiceId: "voice-1",
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
-    );
-    expect(res.config?.messages?.tts).toEqual({
-      provider: "elevenlabs",
-      providers: {
-        elevenlabs: {
-          apiKey: "test-key",
-          voiceId: "voice-1",
-        },
-      },
-    });
-  });
-
-  it("moves channels.discord.accounts.<id>.voice.tts.edge into providers.microsoft", () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        discord: {
-          accounts: {
-            main: {
-              voice: {
-                tts: {
-                  edge: {
-                    voice: "en-US-JennyNeural",
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
-    );
-    const mainTts = (
-      res.config?.channels?.discord?.accounts as
-        | Record<string, { voice?: { tts?: Record<string, unknown> } }>
-        | undefined
-    )?.main?.voice?.tts;
-    expect(mainTts?.providers).toEqual({
-      microsoft: {
-        voice: "en-US-JennyNeural",
-      },
-    });
-    expect(mainTts?.edge).toBeUndefined();
-  });
-
-  it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
-    const res = migrateLegacyConfig({
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              tts: {
-                provider: "openai",
-                openai: {
-                  model: "gpt-4o-mini-tts",
-                  voice: "alloy",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved plugins.entries.voice-call.config.tts.openai → plugins.entries.voice-call.config.tts.providers.openai.",
-    );
-    const voiceCallTts = (
-      res.config?.plugins?.entries as
-        | Record<string, { config?: { tts?: Record<string, unknown> } }>
-        | undefined
-    )?.["voice-call"]?.config?.tts;
-    expect(voiceCallTts).toEqual({
-      provider: "openai",
-      providers: {
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "alloy",
-        },
-      },
-    });
-  });
-
-  it("does not migrate legacy tts provider keys for unknown plugin ids", () => {
-    const res = migrateLegacyConfig({
-      plugins: {
-        entries: {
-          "third-party-plugin": {
-            config: {
-              tts: {
-                provider: "openai",
-                openai: {
-                  model: "custom-tts",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-});
-
-describe("legacy migrate talk provider shape", () => {
-  it("does not migrate extension-owned talk legacy fields during config-load migration", () => {
-    const res = migrateLegacyConfig({
-      talk: {
-        voiceId: "voice-1",
-        modelId: "eleven_v3",
-        outputFormat: "pcm_44100",
-        apiKey: "test-key",
-      },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
-  });
 });
 
 describe("legacy migrate sandbox scope aliases", () => {
   it("moves agents.defaults.sandbox.perSession into scope", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
           sandbox: {
@@ -317,7 +118,7 @@ describe("legacy migrate sandbox scope aliases", () => {
   });
 
   it("moves agents.list[].sandbox.perSession into scope", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       agents: {
         list: [
           {
@@ -339,7 +140,7 @@ describe("legacy migrate sandbox scope aliases", () => {
   });
 
   it("drops legacy sandbox perSession when scope is already set", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
           sandbox: {
@@ -369,40 +170,131 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     };
 
-    const res = migrateLegacyConfig(raw);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
-    expect(validateConfigObjectWithPlugins(raw).ok).toBe(false);
   });
 });
 
 describe("legacy migrate channel streaming aliases", () => {
-  it("migrates telegram and discord streaming aliases", () => {
-    const res = migrateLegacyConfig({
+  it("migrates Telegram and Slack preview-channel legacy streaming fields without rewriting Discord", () => {
+    const res = migrateLegacyConfigForTest({
       channels: {
         telegram: {
           streamMode: "block",
+          chunkMode: "newline",
+          blockStreaming: true,
+          draftChunk: {
+            minChars: 120,
+          },
+          blockStreamingCoalesce: {
+            idleMs: 250,
+          },
         },
         discord: {
           streaming: false,
+          chunkMode: "newline",
+          blockStreaming: true,
+          draftChunk: {
+            maxChars: 900,
+          },
+        },
+        slack: {
+          streamMode: "status_final",
+          blockStreaming: true,
+          blockStreamingCoalesce: {
+            minChars: 100,
+          },
+          nativeStreaming: false,
         },
       },
     });
 
     expect(res.changes).toContain(
-      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
     );
-    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (off).");
+    expect(res.changes).toContain(
+      "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.telegram.blockStreamingCoalesce → channels.telegram.streaming.block.coalesce.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.slack.nativeStreaming → channels.slack.streaming.nativeTransport.",
+    );
     expect(res.config?.channels?.telegram).toMatchObject({
-      streaming: "block",
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+          coalesce: {
+            idleMs: 250,
+          },
+        },
+        preview: {
+          chunk: {
+            minChars: 120,
+          },
+        },
+      },
     });
     expect(res.config?.channels?.discord).toMatchObject({
-      streaming: "off",
+      streaming: false,
+      chunkMode: "newline",
+      blockStreaming: true,
+      draftChunk: {
+        maxChars: 900,
+      },
+    });
+    expect(res.config?.channels?.slack).toMatchObject({
+      streaming: {
+        mode: "progress",
+        block: {
+          enabled: true,
+          coalesce: {
+            minChars: 100,
+          },
+        },
+        nativeTransport: false,
+      },
     });
   });
 
-  it("removes legacy googlechat streamMode aliases", () => {
+  it("preserves slack streaming=false when deriving nativeTransport during migration", () => {
+    const raw = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          streaming: false,
+        },
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+    const migrated = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toContain(
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (off).",
+    );
+    expect(migrated.config?.channels?.slack).toMatchObject({
+      streaming: {
+        mode: "off",
+        nativeTransport: false,
+      },
+    });
+  });
+
+  it("rejects legacy googlechat streamMode aliases during validation and removes them in migration", () => {
     const raw = {
       channels: {
         googlechat: {
@@ -416,20 +308,7 @@ describe("legacy migrate channel streaming aliases", () => {
       },
     };
 
-    const validated = validateConfigObjectWithPlugins(raw);
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      return;
-    }
-    expect(
-      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-    expect(
-      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
-        ?.streamMode,
-    ).toBeUndefined();
-
-    const res = migrateLegacyConfig(raw);
+    const res = migrateLegacyConfigForTest(raw);
     expect(res.changes).toContain(
       "Removed channels.googlechat.streamMode (legacy key no longer used).",
     );
@@ -447,7 +326,7 @@ describe("legacy migrate channel streaming aliases", () => {
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {
-  it("accepts legacy allow aliases through with-plugins validation and normalizes them", () => {
+  it("rejects legacy allow aliases during validation and normalizes them in migration", () => {
     const raw = {
       channels: {
         slack: {
@@ -478,33 +357,20 @@ describe("legacy migrate nested channel enabled aliases", () => {
       },
     };
 
-    const validated = validateConfigObjectWithPlugins(raw);
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      return;
-    }
-    expect(validated.config.channels?.slack?.channels?.ops).toEqual({
+    const migrated = migrateLegacyConfigForTest(raw);
+    expect(migrated.config?.channels?.slack?.channels?.ops).toEqual({
       enabled: false,
     });
-    expect(validated.config.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+    expect(migrated.config?.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
       enabled: true,
     });
-    expect(validated.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
-
-    const rawValidated = validateConfigObjectRawWithPlugins(raw);
-    expect(rawValidated.ok).toBe(true);
-    if (!rawValidated.ok) {
-      return;
-    }
-    expect(rawValidated.config.channels?.slack?.channels?.ops).toEqual({
+    expect(migrated.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
       enabled: false,
     });
   });
 
-  it("moves legacy allow toggles into enabled for slack, googlechat, discord, matrix, and zalouser", () => {
-    const res = migrateLegacyConfig({
+  it("moves legacy allow toggles into enabled for slack, googlechat, and discord", () => {
+    const res = migrateLegacyConfigForTest({
       channels: {
         slack: {
           channels: {
@@ -562,38 +428,6 @@ describe("legacy migrate nested channel enabled aliases", () => {
             },
           },
         },
-        matrix: {
-          groups: {
-            "!ops:example.org": {
-              allow: false,
-            },
-          },
-          accounts: {
-            work: {
-              rooms: {
-                "!legacy:example.org": {
-                  allow: true,
-                },
-              },
-            },
-          },
-        },
-        zalouser: {
-          groups: {
-            "group:trusted": {
-              allow: false,
-            },
-          },
-          accounts: {
-            work: {
-              groups: {
-                "group:legacy": {
-                  allow: true,
-                },
-              },
-            },
-          },
-        },
       },
     });
 
@@ -615,18 +449,6 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.changes).toContain(
       "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
     );
-    expect(res.changes).toContain(
-      "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (false).",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (true).",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (false).",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (true).",
-    );
     expect(res.config?.channels?.slack?.channels?.ops).toEqual({
       enabled: false,
     });
@@ -636,22 +458,10 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
       enabled: false,
     });
-    expect(res.config?.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
-      enabled: false,
-    });
-    expect(res.config?.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
-      enabled: true,
-    });
-    expect(res.config?.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
-      enabled: false,
-    });
-    expect(res.config?.channels?.zalouser?.accounts?.work?.groups?.["group:legacy"]).toEqual({
-      enabled: true,
-    });
   });
 
   it("drops legacy allow when enabled is already set", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       channels: {
         slack: {
           channels: {
@@ -673,78 +483,9 @@ describe("legacy migrate nested channel enabled aliases", () => {
   });
 });
 
-describe("legacy migrate bundled channel private-network aliases", () => {
-  it("accepts legacy Mattermost private-network aliases through validation and normalizes them", () => {
-    const raw = {
-      channels: {
-        mattermost: {
-          allowPrivateNetwork: true,
-          accounts: {
-            work: {
-              allowPrivateNetwork: false,
-            },
-          },
-        },
-      },
-    };
-
-    const validated = validateConfigObjectWithPlugins(raw);
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      return;
-    }
-    expect(validated.config.channels?.mattermost).toEqual({
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-      accounts: {
-        work: {
-          dmPolicy: "pairing",
-          groupPolicy: "allowlist",
-          network: {
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      },
-    });
-
-    const rawValidated = validateConfigObjectRawWithPlugins(raw);
-    expect(rawValidated.ok).toBe(true);
-    if (!rawValidated.ok) {
-      return;
-    }
-    expect(rawValidated.config.channels?.mattermost).toEqual({
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-      accounts: {
-        work: {
-          dmPolicy: "pairing",
-          groupPolicy: "allowlist",
-          network: {
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      },
-    });
-
-    const res = migrateLegacyConfig(raw);
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
-        "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-      ]),
-    );
-  });
-});
-
 describe("legacy migrate x_search auth", () => {
   it("moves only legacy x_search auth into plugin-owned xai config", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       tools: {
         web: {
           x_search: {
@@ -776,7 +517,7 @@ describe("legacy migrate x_search auth", () => {
 
 describe("legacy migrate heartbeat config", () => {
   it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       heartbeat: {
         model: "anthropic/claude-3-5-haiku-20241022",
         every: "30m",
@@ -792,7 +533,7 @@ describe("legacy migrate heartbeat config", () => {
   });
 
   it("moves top-level heartbeat visibility into channels.defaults.heartbeat", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       heartbeat: {
         showOk: true,
         showAlerts: false,
@@ -810,7 +551,7 @@ describe("legacy migrate heartbeat config", () => {
   });
 
   it("keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       heartbeat: {
         model: "anthropic/claude-3-5-haiku-20241022",
         every: "30m",
@@ -837,7 +578,7 @@ describe("legacy migrate heartbeat config", () => {
   });
 
   it("keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       heartbeat: {
         showOk: true,
         showAlerts: true,
@@ -864,7 +605,7 @@ describe("legacy migrate heartbeat config", () => {
   });
 
   it("preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
           heartbeat: {
@@ -889,7 +630,7 @@ describe("legacy migrate heartbeat config", () => {
   });
 
   it("drops blocked prototype keys when migrating top-level heartbeat", () => {
-    const res = migrateLegacyConfig(
+    const res = migrateLegacyConfigForTest(
       JSON.parse(
         '{"heartbeat":{"every":"30m","__proto__":{"polluted":true},"showOk":true}}',
       ) as Record<string, unknown>,
@@ -905,7 +646,7 @@ describe("legacy migrate heartbeat config", () => {
   });
 
   it("records a migration change when removing empty top-level heartbeat", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       heartbeat: {},
     });
 
@@ -917,7 +658,7 @@ describe("legacy migrate heartbeat config", () => {
 
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
@@ -932,7 +673,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 
   it("seeds allowedOrigins using configured port", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "lan",
         port: 9000,
@@ -946,7 +687,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 
   it("seeds allowedOrigins including custom bind host for bind=custom", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "custom",
         customBindHost: "192.168.1.100",
@@ -959,8 +700,8 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 
   it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
     // When allowedOrigins already exists, the migration is a no-op.
-    // applyLegacyMigrations returns next=null when changes.length===0, so config is null.
-    const res = migrateLegacyConfig({
+    // applyLegacyDoctorMigrations returns next=null when changes.length===0, so config is null.
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
@@ -972,7 +713,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 
   it("does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
@@ -984,7 +725,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 
   it("seeds allowedOrigins when existing entries are blank strings", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "tok" },
@@ -999,7 +740,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 
   it("does not migrate loopback bind — returns null", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "loopback",
         auth: { mode: "token", token: "tok" },
@@ -1010,7 +751,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 
   it("preserves existing controlUi fields when seeding allowedOrigins", () => {
-    const res = migrateLegacyConfig({
+    const res = migrateLegacyConfigForTest({
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "tok" },

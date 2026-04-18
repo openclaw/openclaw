@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { buildStreamErrorAssistantMessage } from "../../stream-message-shared.js";
 
 const UNHANDLED_STOP_REASON_RE = /^Unhandled stop reason:\s*(.+)$/i;
@@ -69,9 +70,7 @@ function wrapStreamHandleUnhandledStopReason(
       patchUnhandledStopReasonInAssistantMessage(message);
       return message;
     } catch (err) {
-      const normalizedMessage = normalizeUnhandledStopReasonMessage(
-        err instanceof Error ? err.message : String(err),
-      );
+      const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
       if (!normalizedMessage) {
         throw err;
       }
@@ -105,9 +104,7 @@ function wrapStreamHandleUnhandledStopReason(
             }
             return result;
           } catch (err) {
-            const normalizedMessage = normalizeUnhandledStopReasonMessage(
-              err instanceof Error ? err.message : String(err),
-            );
+            const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
             if (!normalizedMessage) {
               throw err;
             }
@@ -152,9 +149,7 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
         return Promise.resolve(maybeStream).then(
           (stream) => wrapStreamHandleUnhandledStopReason(model, stream),
           (err) => {
-            const normalizedMessage = normalizeUnhandledStopReasonMessage(
-              err instanceof Error ? err.message : String(err),
-            );
+            const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
             if (!normalizedMessage) {
               throw err;
             }
@@ -164,9 +159,7 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       }
       return wrapStreamHandleUnhandledStopReason(model, maybeStream);
     } catch (err) {
-      const normalizedMessage = normalizeUnhandledStopReasonMessage(
-        err instanceof Error ? err.message : String(err),
-      );
+      const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
       if (!normalizedMessage) {
         throw err;
       }

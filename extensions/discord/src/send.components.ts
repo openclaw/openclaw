@@ -61,7 +61,7 @@ function withImplicitComponentAttachmentBlock(
       ...(spec.blocks ?? []),
       {
         type: "file",
-        file: `attachment://${attachmentName}` as `attachment://${string}`,
+        file: `attachment://${attachmentName}`,
       },
     ],
   };

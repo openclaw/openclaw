@@ -9,54 +9,66 @@ export const readAllowFromStoreMock: MockFn = vi.fn();
 export const upsertPairingRequestMock: MockFn = vi.fn();
 export const loadConfigMock: MockFn = vi.fn();
 
-const sendModule = await import("./send.js");
-vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
-  (...args) => sendMock(...args) as never,
-);
-vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(async (...args) => {
-  reactMock(...args);
-  return { ok: true };
-});
+export const TOOL_RESULT_SESSION_STORE_PATH = `/tmp/openclaw-sessions-${process.pid}.json`;
 
+const sendModule = await import("./send.js");
 const replyRuntimeModule = await import("openclaw/plugin-sdk/reply-runtime");
-vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(
-  (...args) => dispatchMock(...args) as never,
-);
-vi.spyOn(replyRuntimeModule, "dispatchInboundMessageWithDispatcher").mockImplementation(
-  (...args) => dispatchMock(...args) as never,
-);
-vi.spyOn(replyRuntimeModule, "dispatchInboundMessageWithBufferedDispatcher").mockImplementation(
-  (...args) => dispatchMock(...args) as never,
-);
+const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
+type ReadChannelAllowFromStore = typeof conversationRuntimeModule.readChannelAllowFromStore;
+type UpsertChannelPairingRequest = typeof conversationRuntimeModule.upsertChannelPairingRequest;
 
 function createPairingStoreMocks() {
   return {
-    readChannelAllowFromStore(...args: unknown[]) {
-      return readAllowFromStoreMock(...args);
+    readChannelAllowFromStore(
+      ...args: Parameters<ReadChannelAllowFromStore>
+    ): ReturnType<ReadChannelAllowFromStore> {
+      return readAllowFromStoreMock(...args) as ReturnType<ReadChannelAllowFromStore>;
     },
-    upsertChannelPairingRequest(...args: unknown[]) {
-      return upsertPairingRequestMock(...args);
+    upsertChannelPairingRequest(
+      ...args: Parameters<UpsertChannelPairingRequest>
+    ): ReturnType<UpsertChannelPairingRequest> {
+      return upsertPairingRequestMock(...args) as ReturnType<UpsertChannelPairingRequest>;
     },
   };
 }
 
-const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
-vi.spyOn(conversationRuntimeModule, "readChannelAllowFromStore").mockImplementation(
-  createPairingStoreMocks().readChannelAllowFromStore,
-);
-vi.spyOn(conversationRuntimeModule, "upsertChannelPairingRequest").mockImplementation(
-  createPairingStoreMocks().upsertChannelPairingRequest,
-);
-
+const pairingStoreMocks = createPairingStoreMocks();
 const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
-vi.spyOn(configRuntimeModule, "loadConfig").mockImplementation(
-  (...args) => loadConfigMock(...args) as never,
-);
-vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(() => undefined);
-vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
-  () => "/tmp/openclaw-sessions.json",
-);
-vi.spyOn(configRuntimeModule, "updateLastRoute").mockImplementation(
-  (...args) => updateLastRouteMock(...args) as never,
-);
-vi.spyOn(configRuntimeModule, "resolveSessionKey").mockImplementation(vi.fn() as never);
+
+export function installDiscordToolResultHarnessSpies() {
+  vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
+    (...args) => sendMock(...args) as never,
+  );
+  vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(async (...args) => {
+    reactMock(...args);
+    return { ok: true };
+  });
+  vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(
+    (...args) => dispatchMock(...args) as never,
+  );
+  vi.spyOn(replyRuntimeModule, "dispatchInboundMessageWithDispatcher").mockImplementation(
+    (...args) => dispatchMock(...args) as never,
+  );
+  vi.spyOn(replyRuntimeModule, "dispatchInboundMessageWithBufferedDispatcher").mockImplementation(
+    (...args) => dispatchMock(...args) as never,
+  );
+  vi.spyOn(conversationRuntimeModule, "readChannelAllowFromStore").mockImplementation((...args) =>
+    pairingStoreMocks.readChannelAllowFromStore(...args),
+  );
+  vi.spyOn(conversationRuntimeModule, "upsertChannelPairingRequest").mockImplementation((...args) =>
+    pairingStoreMocks.upsertChannelPairingRequest(...args),
+  );
+  vi.spyOn(configRuntimeModule, "loadConfig").mockImplementation(
+    (...args) => loadConfigMock(...args) as never,
+  );
+  vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(() => undefined);
+  vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
+    () => TOOL_RESULT_SESSION_STORE_PATH,
+  );
+  vi.spyOn(configRuntimeModule, "updateLastRoute").mockImplementation(
+    (...args) => updateLastRouteMock(...args) as never,
+  );
+  vi.spyOn(configRuntimeModule, "resolveSessionKey").mockImplementation(vi.fn() as never);
+}
+
+installDiscordToolResultHarnessSpies();

@@ -81,11 +81,17 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("demo", "demo-model")).toContain("xhigh");
   });
 
+  it("uses provider runtime hooks for xhigh labels", () => {
+    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+
+    expect(listThinkingLevelLabels("demo", "demo-model")).toContain("xhigh");
+  });
+
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       (provider === "openai" && ["gpt-5.4", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai-codex" &&
-        ["gpt-5.4", "gpt-5.4", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
+        ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
       (provider === "github-copilot" && ["gpt-5.4", "gpt-5.4"].includes(context.modelId))
         ? true
         : undefined,
@@ -94,6 +100,7 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
+    expect(listThinkingLevels("openai-codex", "gpt-5.4-pro")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");

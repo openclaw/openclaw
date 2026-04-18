@@ -1,9 +1,29 @@
+import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
+import {
+  isDangerousNameMatchingEnabled,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  type MarkdownTableMode,
+  type OpenClawConfig,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/config-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  evaluateGroupRouteAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "openclaw/plugin-sdk/group-access";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -11,28 +31,16 @@ import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
-import type {
-  MarkdownTableMode,
-  OpenClawConfig,
-  OutboundReplyPayload,
-  RuntimeEnv,
-} from "../runtime-api.js";
 import {
-  createChannelPairingController,
-  createChannelReplyPipeline,
   deliverTextOrMediaReply,
-  evaluateGroupRouteAccessForPolicy,
-  isDangerousNameMatchingEnabled,
-  mergeAllowlist,
-  resolveMentionGatingWithBypass,
-  resolveOpenProviderRuntimeGroupPolicy,
   resolveSendableOutboundReplyParts,
-  resolveDefaultGroupPolicy,
-  resolveSenderCommandAuthorization,
-  resolveSenderScopedGroupPolicy,
-  summarizeMapping,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "../runtime-api.js";
+  type OutboundReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -75,7 +83,7 @@ function normalizeZalouserEntry(entry: string): string {
 function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
   const index = new Map<string, T[]>();
   for (const item of items) {
-    const name = nameFn(item)?.trim().toLowerCase();
+    const name = normalizeOptionalLowercaseString(nameFn(item));
     if (!name) {
       continue;
     }
@@ -102,9 +110,9 @@ function resolveUserAllowlistEntries(
       additions.push(entry);
       continue;
     }
-    const matches = byName.get(entry.toLowerCase()) ?? [];
+    const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
     const match = matches[0];
-    const id = match?.userId ? String(match.userId) : undefined;
+    const id = match?.userId;
     if (id) {
       additions.push(id);
       mapping.push(`${entry}->${id}`);
@@ -148,24 +156,24 @@ function resolveZalouserInboundSessionKey(params: {
     return params.route.sessionKey;
   }
 
-  const directSessionKey = params.core.channel.routing
-    .buildAgentSessionKey({
+  const directSessionKey = normalizeLowercaseStringOrEmpty(
+    params.core.channel.routing.buildAgentSessionKey({
       agentId: params.route.agentId,
       channel: "zalouser",
       accountId: params.route.accountId,
       peer: { kind: "direct", id: params.senderId },
       dmScope: resolveZalouserDmSessionScope(params.config),
       identityLinks: params.config.session?.identityLinks,
-    })
-    .toLowerCase();
-  const legacySessionKey = params.core.channel.routing
-    .buildAgentSessionKey({
+    }),
+  );
+  const legacySessionKey = normalizeLowercaseStringOrEmpty(
+    params.core.channel.routing.buildAgentSessionKey({
       agentId: params.route.agentId,
       channel: "zalouser",
       accountId: params.route.accountId,
       peer: { kind: "group", id: params.senderId },
-    })
-    .toLowerCase();
+    }),
+  );
   const hasDirectSession =
     params.core.channel.session.readSessionUpdatedAt({
       storePath: params.storePath,
@@ -191,12 +199,12 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
   if (allowFrom.includes("*")) {
     return true;
   }
-  const normalizedSenderId = senderId?.trim().toLowerCase();
+  const normalizedSenderId = normalizeOptionalLowercaseString(senderId);
   if (!normalizedSenderId) {
     return false;
   }
   return allowFrom.some((entry) => {
-    const normalized = entry.toLowerCase().replace(/^(zalouser|zlu):/i, "");
+    const normalized = normalizeLowercaseStringOrEmpty(entry).replace(/^(zalouser|zlu):/i, "");
     return normalized === normalizedSenderId;
   });
 }
@@ -487,28 +495,32 @@ async function processMessage(
       })
     : true;
   const canDetectMention = mentionRegexes.length > 0 || explicitMention.canResolveExplicit;
-  const mentionGate = resolveMentionGatingWithBypass({
-    isGroup,
-    requireMention,
-    canDetectMention,
-    wasMentioned,
-    implicitMention: message.implicitMention === true,
-    hasAnyMention: explicitMention.hasAnyMention,
-    allowTextCommands: core.channel.commands.shouldHandleTextCommands({
-      cfg: config,
-      surface: "zalouser",
-    }),
-    hasControlCommand,
-    commandAuthorized: commandAuthorized === true,
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned,
+      hasAnyMention: explicitMention.hasAnyMention,
+      implicitMentionKinds: implicitMentionKindWhen("quoted_bot", message.implicitMention === true),
+    },
+    policy: {
+      isGroup,
+      requireMention,
+      allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+        cfg: config,
+        surface: "zalouser",
+      }),
+      hasControlCommand,
+      commandAuthorized: commandAuthorized === true,
+    },
   });
-  if (isGroup && requireMention && !canDetectMention && !mentionGate.effectiveWasMentioned) {
+  if (isGroup && requireMention && !canDetectMention && !mentionDecision.effectiveWasMentioned) {
     runtime.error?.(
       `[${account.accountId}] zalouser mention required but detection unavailable ` +
         `(missing mention regexes and bot self id); dropping group ${chatId}`,
     );
     return;
   }
-  if (isGroup && mentionGate.shouldSkip) {
+  if (isGroup && mentionDecision.shouldSkip) {
     recordPendingHistoryEntryIfEnabled({
       historyMap: historyState.groupHistories,
       historyKey: historyKey ?? "",
@@ -604,7 +616,7 @@ async function processMessage(
     GroupMembers: isGroup ? groupMembers : undefined,
     SenderName: senderName || undefined,
     SenderId: senderId,
-    WasMentioned: isGroup ? mentionGate.effectiveWasMentioned : undefined,
+    WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
     CommandAuthorized: commandAuthorized,
     Provider: "zalouser",
     Surface: "zalouser",
@@ -743,7 +755,11 @@ async function deliverZalouserReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onMediaError: (error) => {
-      runtime.error(`Zalouser media send failed: ${String(error)}`);
+      runtime.error(
+        `Zalouser media send failed: ${
+          error instanceof Error ? error.message : JSON.stringify(error)
+        }`,
+      );
     },
   });
 }
@@ -828,9 +844,9 @@ export async function monitorZalouserProvider(
           mapping.push(`${entry}→${cleaned}`);
           continue;
         }
-        const matches = byName.get(cleaned.toLowerCase()) ?? [];
+        const matches = byName.get(normalizeLowercaseStringOrEmpty(cleaned)) ?? [];
         const match = matches[0];
-        const id = match?.groupId ? String(match.groupId) : undefined;
+        const id = match?.groupId;
         if (id) {
           if (!nextGroups[id]) {
             nextGroups[id] = groupsConfig[entry];

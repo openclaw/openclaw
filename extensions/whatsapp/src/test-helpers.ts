@@ -1,12 +1,15 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { vi } from "vitest";
+import { formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
+const SOURCE_CONFIG_KEY = Symbol.for("openclaw:testSourceConfigMock");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -24,18 +27,27 @@ const DEFAULT_CONFIG = {
 if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
 }
+if (!(globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY]) {
+  (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] = () => loadConfigMock();
+}
 
 export function setLoadConfigMock(fn: unknown) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = typeof fn === "function" ? fn : () => fn;
 }
 
+export function setRuntimeConfigSourceSnapshotMock(fn: unknown) {
+  (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] =
+    typeof fn === "function" ? fn : () => fn;
+}
+
 export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
+  (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] = () => loadConfigMock();
 }
 
 function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
   if (!store) {
-    const agentId = (opts?.agentId?.trim() || "main").toLowerCase();
+    const agentId = normalizeLowercaseStringOrEmpty(opts?.agentId?.trim() || "main");
     return path.join(
       process.env.HOME ?? "/tmp",
       ".openclaw",
@@ -54,6 +66,14 @@ function loadConfigMock() {
     return getter();
   }
   return DEFAULT_CONFIG;
+}
+
+function loadRuntimeConfigSourceSnapshotMock() {
+  const getter = (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY];
+  if (typeof getter === "function") {
+    return getter();
+  }
+  return loadConfigMock();
 }
 
 async function updateLastRouteMock(params: {
@@ -81,6 +101,170 @@ function loadSessionStoreMock(storePath: string) {
   }
 }
 
+type BufferedDispatchReplyParams = {
+  ctx: Record<string, unknown>;
+  replyResolver: (
+    ctx: Record<string, unknown>,
+    opts?: BufferedReplyOptions,
+  ) => Promise<Record<string, unknown> | undefined>;
+  replyOptions?: BufferedReplyOptions;
+  dispatcherOptions: {
+    deliver: (
+      payload: Record<string, unknown>,
+      info: { kind: "tool" | "block" | "final" },
+    ) => Promise<void>;
+    onReplyStart?: (() => Promise<void>) | (() => void);
+  };
+};
+
+type MockTypingController = {
+  markDispatchIdle?: () => void;
+  markRunComplete?: () => void;
+};
+
+type BufferedReplyOptions = Record<string, unknown> & {
+  onTypingController?: (typing: MockTypingController) => void;
+};
+
+type TestEnvelopeOptions = {
+  timezone?: string;
+  includeTimestamp?: boolean;
+  includeElapsed?: boolean;
+  userTimezone?: string;
+};
+
+type TestInboundEnvelopeParams = {
+  channel?: string;
+  from?: string;
+  body: string;
+  timestamp?: number | Date;
+  chatType?: string;
+  senderLabel?: string;
+  sender?: { name?: string; e164?: string; id?: string };
+  previousTimestamp?: number | Date;
+  envelope?: TestEnvelopeOptions;
+  fromMe?: boolean;
+};
+
+function sanitizeEnvelopeHeaderPart(value: string) {
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replaceAll("[", "(")
+    .replaceAll("]", ")")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveEnvelopeOptionsMock(cfg?: {
+  agents?: {
+    defaults?: {
+      envelopeTimezone?: string;
+      envelopeTimestamp?: "on" | "off";
+      envelopeElapsed?: "on" | "off";
+      userTimezone?: string;
+    };
+  };
+}): TestEnvelopeOptions {
+  const defaults = cfg?.agents?.defaults;
+  return {
+    timezone: defaults?.envelopeTimezone,
+    includeTimestamp: defaults?.envelopeTimestamp !== "off",
+    includeElapsed: defaults?.envelopeElapsed !== "off",
+    userTimezone: defaults?.userTimezone,
+  };
+}
+
+function resolveEnvelopeTimestampMock(
+  timestamp: number | Date | undefined,
+  envelope?: TestEnvelopeOptions,
+) {
+  if (!timestamp || envelope?.includeTimestamp === false) {
+    return undefined;
+  }
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const zone = envelope?.timezone?.trim();
+  if (zone === "user") {
+    return formatEnvelopeTimestamp(date, envelope?.userTimezone?.trim() || "local");
+  }
+  return formatEnvelopeTimestamp(date, zone || "local");
+}
+
+function resolveSenderLabelMock(sender?: TestInboundEnvelopeParams["sender"]) {
+  const display = sender?.name?.trim();
+  const idPart = sender?.e164?.trim() || sender?.id?.trim();
+  if (display && idPart && display !== idPart) {
+    return `${display} (${idPart})`;
+  }
+  return display || idPart || undefined;
+}
+
+function formatInboundEnvelopeMock(params: TestInboundEnvelopeParams) {
+  const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
+  const isDirect = !chatType || chatType === "direct";
+  const sender = params.senderLabel?.trim() || resolveSenderLabelMock(params.sender);
+  const body =
+    isDirect && params.fromMe
+      ? `(self): ${params.body}`
+      : !isDirect && sender
+        ? `${sanitizeEnvelopeHeaderPart(sender)}: ${params.body}`
+        : params.body;
+  const parts = [sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel")];
+  const from = params.from?.trim();
+  if (from) {
+    parts.push(sanitizeEnvelopeHeaderPart(from));
+  }
+  const timestamp = resolveEnvelopeTimestampMock(params.timestamp, params.envelope);
+  if (timestamp) {
+    parts.push(timestamp);
+  }
+  return `[${parts.join(" ")}] ${body}`;
+}
+
+function createBufferedDispatchReplyMock() {
+  return vi.fn(async (params: BufferedDispatchReplyParams) => {
+    let typingController: MockTypingController | undefined;
+    const replyOptions: BufferedReplyOptions = {
+      ...params.replyOptions,
+      onTypingController: (typing) => {
+        typingController = typing;
+        params.replyOptions?.onTypingController?.(typing);
+      },
+    };
+    await params.dispatcherOptions.onReplyStart?.();
+    try {
+      const payload = await params.replyResolver(params.ctx, replyOptions);
+      if (!payload || typeof payload !== "object") {
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      }
+      const text = typeof payload.text === "string" ? payload.text.trim() : "";
+      const hasMedia =
+        typeof payload.mediaUrl === "string" ||
+        typeof payload.mediaPath === "string" ||
+        typeof payload.fileUrl === "string";
+      if (!text && !hasMedia) {
+        return {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      }
+      await params.dispatcherOptions.deliver(payload, { kind: "final" });
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    } finally {
+      typingController?.markRunComplete?.();
+      typingController?.markDispatchIdle?.();
+    }
+  });
+}
+
 function resolveChannelContextVisibilityModeMock(params: {
   cfg: {
     channels?: Record<
@@ -105,7 +289,8 @@ function resolveChannelContextVisibilityModeMock(params: {
 
 function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Provider?: string }) {
   const from = ctx.From?.trim() ?? "";
-  const chatType = ctx.ChatType?.trim().toLowerCase();
+  const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
+  const normalizedFrom = normalizeLowercaseStringOrEmpty(from);
   if (!from) {
     return null;
   }
@@ -118,9 +303,9 @@ function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Pro
     return null;
   }
   return {
-    key: `whatsapp:group:${from.toLowerCase()}`,
-    channel: ctx.Provider?.trim().toLowerCase() || "whatsapp",
-    id: from.toLowerCase(),
+    key: `whatsapp:group:${normalizedFrom}`,
+    channel: normalizeLowercaseStringOrEmpty(ctx.Provider) || "whatsapp",
+    id: normalizedFrom,
     chatType: chatType === "channel" ? "channel" : "group",
   };
 }
@@ -187,6 +372,7 @@ function resolveChannelGroupRequireMentionMock(params: {
 }
 
 vi.mock("./auto-reply/config.runtime.js", () => ({
+  getRuntimeConfigSourceSnapshot: loadRuntimeConfigSourceSnapshotMock,
   loadConfig: loadConfigMock,
   updateLastRoute: updateLastRouteMock,
   loadSessionStore: loadSessionStoreMock,
@@ -223,44 +409,7 @@ vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
     onModelSelected: undefined,
     responsePrefix: undefined,
   }),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-    async (params: {
-      ctx: Record<string, unknown>;
-      replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
-      dispatcherOptions: {
-        deliver: (
-          payload: Record<string, unknown>,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-        onReplyStart?: (() => Promise<void>) | (() => void);
-      };
-    }) => {
-      await params.dispatcherOptions.onReplyStart?.();
-      const payload = await params.replyResolver(params.ctx);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    },
-  ),
+  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: (jid: string) => {
@@ -302,47 +451,9 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     onModelSelected: undefined,
     responsePrefix: undefined,
   }),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-    async (params: {
-      ctx: Record<string, unknown>;
-      replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
-      dispatcherOptions: {
-        deliver: (
-          payload: Record<string, unknown>,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-        onReplyStart?: (() => Promise<void>) | (() => void);
-      };
-    }) => {
-      await params.dispatcherOptions.onReplyStart?.();
-      const payload = await params.replyResolver(params.ctx);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    },
-  ),
+  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
-  formatInboundEnvelope: (params: { body: string; senderLabel?: string }) =>
-    `${params.senderLabel ? `${params.senderLabel}: ` : ""}${params.body}`,
+  formatInboundEnvelope: formatInboundEnvelopeMock,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: (jid: string) => {
     const digits = jid.replace(/\D+/g, "");
@@ -350,7 +461,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   },
   logVerbose: (_msg: string) => undefined,
   normalizeE164: (value: string) => {
-    const digits = String(value).replace(/\D+/g, "");
+    const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
   readStoreAllowFromForDmPolicy: async () => [] as string[],
@@ -361,11 +472,11 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     cfg.messages?.responsePrefix,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
   resolveInboundSessionEnvelopeContext: (params: {
-    cfg: { session?: { store?: string } };
+    cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
     agentId: string;
   }) => ({
     storePath: resolveStorePathFallback(params.cfg.session?.store, { agentId: params.agentId }),
-    envelopeOptions: {},
+    envelopeOptions: resolveEnvelopeOptionsMock(params.cfg),
     previousTimestamp: undefined,
   }),
   resolveMarkdownTableMode: () => undefined,
@@ -392,8 +503,9 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
+  implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
-    const digits = String(value).replace(/\D+/g, "");
+    const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
   parseActivationCommand: (body: string) => ({
@@ -409,17 +521,54 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
     const next = [...current, params.entry].slice(-params.limit);
     params.historyMap.set(params.historyKey, next);
   },
-  resolveMentionGating: (params: {
-    requireMention: boolean;
-    wasMentioned: boolean;
-    implicitMention?: boolean;
-    shouldBypassMention?: boolean;
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      implicitMentionKinds?: string[];
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    implicitMentionKinds?: string[];
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
   }) => {
-    const effectiveWasMentioned =
-      params.wasMentioned || Boolean(params.implicitMention) || Boolean(params.shouldBypassMention);
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            implicitMentionKinds: params.implicitMentionKinds,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    const effectiveWasMentioned = facts.wasMentioned || Boolean(facts.implicitMentionKinds?.length);
     return {
       effectiveWasMentioned,
-      shouldSkip: params.requireMention && !effectiveWasMentioned,
+      shouldSkip:
+        policy.isGroup && policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
+      shouldBypassMention: false,
+      implicitMention: Boolean(facts.implicitMentionKinds?.length),
+      matchedImplicitMentionKinds: facts.implicitMentionKinds ?? [],
     };
   },
 }));
@@ -430,13 +579,7 @@ vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({
 }));
 
 vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
-  formatInboundEnvelope: (params: {
-    body: string;
-    sender?: { name?: string; e164?: string; id?: string };
-  }) => {
-    const sender = params.sender?.name ?? params.sender?.e164 ?? params.sender?.id ?? undefined;
-    return sender ? `${sender}: ${params.body}` : params.body;
-  },
+  formatInboundEnvelope: formatInboundEnvelopeMock,
   resolveMessagePrefix: (
     cfg: {
       channels?: { whatsapp?: { messagePrefix?: string; allowFrom?: string[] } };
@@ -444,7 +587,13 @@ vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
     },
     _agentId: string,
     params?: { configured?: string; hasAllowFrom?: boolean },
-  ) => params?.configured ?? cfg.messages?.messagePrefix,
+  ) => {
+    const configured = params?.configured ?? cfg.messages?.messagePrefix;
+    if (configured !== undefined) {
+      return configured;
+    }
+    return params?.hasAllowFrom === true ? "" : "[openclaw]";
+  },
 }));
 
 vi.mock("./auth-store.runtime.js", () => ({

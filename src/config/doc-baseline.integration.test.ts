@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
   flattenConfigDocBaselineEntries,
@@ -10,7 +10,6 @@ import {
 } from "./doc-baseline.js";
 
 describe("config doc baseline integration", () => {
-  const tempRoots: string[] = [];
   let sharedRenderedPromise: Promise<
     Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>
   > | null = null;
@@ -28,14 +27,6 @@ describe("config doc baseline integration", () => {
     );
     return sharedByPathPromise;
   }
-
-  afterEach(async () => {
-    await Promise.all(
-      tempRoots.splice(0).map(async (tempRoot) => {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }),
-    );
-  });
 
   it("is deterministic across repeated runs", async () => {
     const { baseline } = await getSharedRendered();
@@ -121,36 +112,36 @@ describe("config doc baseline integration", () => {
   });
 
   it("supports check mode for stale hash files", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-doc-baseline-"));
-    tempRoots.push(tempRoot);
-    const rendered = getSharedRendered();
+    await withTempDir({ prefix: "openclaw-config-doc-baseline-" }, async (tempRoot) => {
+      const rendered = getSharedRendered();
 
-    const initial = await writeConfigDocBaselineArtifacts({
-      repoRoot: tempRoot,
-      rendered,
+      const initial = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        rendered,
+      });
+      expect(initial.wrote).toBe(true);
+
+      const current = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        check: true,
+        rendered,
+      });
+      expect(current.changed).toBe(false);
+
+      // Corrupt the hash file to simulate drift
+      await fs.writeFile(
+        path.join(tempRoot, "docs/.generated/config-baseline.sha256"),
+        "0000000000000000000000000000000000000000000000000000000000000000  config-baseline.json\n",
+        "utf8",
+      );
+
+      const stale = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        check: true,
+        rendered,
+      });
+      expect(stale.changed).toBe(true);
+      expect(stale.wrote).toBe(false);
     });
-    expect(initial.wrote).toBe(true);
-
-    const current = await writeConfigDocBaselineArtifacts({
-      repoRoot: tempRoot,
-      check: true,
-      rendered,
-    });
-    expect(current.changed).toBe(false);
-
-    // Corrupt the hash file to simulate drift
-    await fs.writeFile(
-      path.join(tempRoot, "docs/.generated/config-baseline.sha256"),
-      "0000000000000000000000000000000000000000000000000000000000000000  config-baseline.json\n",
-      "utf8",
-    );
-
-    const stale = await writeConfigDocBaselineArtifacts({
-      repoRoot: tempRoot,
-      check: true,
-      rendered,
-    });
-    expect(stale.changed).toBe(true);
-    expect(stale.wrote).toBe(false);
   });
 });

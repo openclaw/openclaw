@@ -1,67 +1,73 @@
-import { randomBytes } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
-type CloseTrackedBrowserTabsForSessions = (params: {
+type CloseTrackedBrowserTabsParams = {
   sessionKeys: Array<string | undefined>;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
   onWarn?: (message: string) => void;
-}) => Promise<number>;
+};
 
-type MovePathToTrash = (targetPath: string) => Promise<string>;
+type BrowserMaintenanceSurface = {
+  closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
+};
 
-function createTrashCollisionSuffix(): string {
-  return randomBytes(6).toString("hex");
+let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
+
+function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
+  return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
-export const closeTrackedBrowserTabsForSessions: CloseTrackedBrowserTabsForSessions = async (
-  params,
-) => {
-  if (!Array.isArray(params?.sessionKeys) || params.sessionKeys.length === 0) {
-    return 0;
-  }
-  // Session reset always attempts browser cleanup, even when browser is disabled.
-  // Keep that path a no-op unless the browser runtime is actually active.
-  const closeTrackedTabs = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<{
-    closeTrackedBrowserTabsForSessions: CloseTrackedBrowserTabsForSessions;
-  }>({
-    dirName: "browser",
-    artifactBasename: "runtime-api.js",
-  })?.closeTrackedBrowserTabsForSessions;
-  if (typeof closeTrackedTabs !== "function") {
-    return 0;
-  }
-  return await closeTrackedTabs(params);
-};
+function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
+  cachedBrowserMaintenanceSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+  return cachedBrowserMaintenanceSurface;
+}
 
-export const movePathToTrash: MovePathToTrash = async (targetPath) => {
+export async function closeTrackedBrowserTabsForSessions(
+  params: CloseTrackedBrowserTabsParams,
+): Promise<number> {
+  if (!hasRequestedSessionKeys(params.sessionKeys)) {
+    return 0;
+  }
+
+  let surface: BrowserMaintenanceSurface;
   try {
-    const result = await runCommandWithTimeout(["trash", targetPath], { timeoutMs: 10_000 });
-    if (result.code !== 0) {
-      throw new Error(`trash exited with code ${result.code ?? "unknown"}`);
-    }
+    surface = loadBrowserMaintenanceSurface();
+  } catch (error) {
+    params.onWarn?.(`browser cleanup unavailable: ${String(error)}`);
+    return 0;
+  }
+  return await surface.closeTrackedBrowserTabsForSessions(params);
+}
+
+export async function movePathToTrash(targetPath: string): Promise<string> {
+  const [
+    { default: fs },
+    { default: os },
+    { default: path },
+    { generateSecureToken },
+    { runExec },
+  ] = await Promise.all([
+    import("node:fs"),
+    import("node:os"),
+    import("node:path"),
+    import("../infra/secure-random.js"),
+    import("../process/exec.js"),
+  ]);
+  try {
+    await runExec("trash", [targetPath], { timeoutMs: 10_000 });
     return targetPath;
   } catch {
-    const homeDir = os.homedir();
-    const pathRuntime = homeDir.startsWith("/") ? path.posix : path;
-    const trashDir = pathRuntime.join(homeDir, ".Trash");
-    await fs.mkdir(trashDir, { recursive: true });
-    const base = pathRuntime.basename(targetPath);
-    const timestamp = Date.now();
-    let destination = pathRuntime.join(trashDir, `${base}-${timestamp}`);
-    try {
-      await fs.access(destination);
-      destination = pathRuntime.join(
-        trashDir,
-        `${base}-${timestamp}-${createTrashCollisionSuffix()}`,
-      );
-    } catch {
-      // The initial destination is free to use.
+    const trashDir = path.join(os.homedir(), ".Trash");
+    fs.mkdirSync(trashDir, { recursive: true });
+    const base = path.basename(targetPath);
+    let dest = path.join(trashDir, `${base}-${Date.now()}`);
+    if (fs.existsSync(dest)) {
+      dest = path.join(trashDir, `${base}-${Date.now()}-${generateSecureToken(6)}`);
     }
-    await fs.rename(targetPath, destination);
-    return destination;
+    fs.renameSync(targetPath, dest);
+    return dest;
   }
-};
+}

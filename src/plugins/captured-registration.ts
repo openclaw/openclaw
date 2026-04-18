@@ -1,14 +1,18 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
+  AgentHarness,
+  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
+  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -27,13 +31,17 @@ type CapturedPluginCliRegistration = {
 export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
+  agentHarnesses: AgentHarness[];
   cliRegistrars: CapturedPluginCliRegistration[];
+  cliBackends: CliBackendPlugin[];
+  textTransforms: PluginTextTransformRegistration[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
+  musicGenerationProviders: MusicGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
@@ -45,13 +53,17 @@ export function createCapturedPluginRegistration(params?: {
   registrationMode?: OpenClawPluginApi["registrationMode"];
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
+  const agentHarnesses: AgentHarness[] = [];
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
+  const cliBackends: CliBackendPlugin[] = [];
+  const textTransforms: PluginTextTransformRegistration[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
+  const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
@@ -65,13 +77,17 @@ export function createCapturedPluginRegistration(params?: {
 
   return {
     providers,
+    agentHarnesses,
     cliRegistrars,
+    cliBackends,
+    textTransforms,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
     mediaUnderstandingProviders,
     imageGenerationProviders,
     videoGenerationProviders,
+    musicGenerationProviders,
     webFetchProviders,
     webSearchProviders,
     memoryEmbeddingProviders,
@@ -112,6 +128,15 @@ export function createCapturedPluginRegistration(params?: {
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
         },
+        registerAgentHarness(harness: AgentHarness) {
+          agentHarnesses.push(harness);
+        },
+        registerCliBackend(backend: CliBackendPlugin) {
+          cliBackends.push(backend);
+        },
+        registerTextTransforms(transforms: PluginTextTransformRegistration) {
+          textTransforms.push(transforms);
+        },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);
         },
@@ -129,6 +154,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerVideoGenerationProvider(provider: VideoGenerationProviderPlugin) {
           videoGenerationProviders.push(provider);
+        },
+        registerMusicGenerationProvider(provider: MusicGenerationProviderPlugin) {
+          musicGenerationProviders.push(provider);
         },
         registerWebFetchProvider(provider: WebFetchProviderPlugin) {
           webFetchProviders.push(provider);

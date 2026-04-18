@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
+import type { OpenClawPluginApi } from "./api.js";
 
 let runtimeStub: {
   config: { toNumber?: string };
@@ -35,7 +37,7 @@ type Registered = {
   methods: Map<string, unknown>;
   tools: unknown[];
 };
-type RegisterVoiceCall = (api: Record<string, unknown>) => void | Promise<void>;
+type RegisterVoiceCall = (api: Record<string, unknown>) => void;
 type RegisterCliContext = {
   program: Command;
   config: Record<string, unknown>;
@@ -57,7 +59,7 @@ function captureStdout() {
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
-  void plugin.register({
+  const api = createTestPluginApi({
     id: "voice-call",
     name: "Voice Call",
     description: "test",
@@ -65,16 +67,15 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as Parameters<
-      typeof plugin.register
-    >[0]["runtime"],
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: () => {},
     resolvePath: (p: string) => p,
-  } as unknown as Parameters<typeof plugin.register>[0]);
+  });
+  void plugin.register(api);
   return { methods, tools };
 }
 
@@ -82,7 +83,7 @@ async function registerVoiceCallCli(program: Command) {
   const { register } = plugin as unknown as {
     register: RegisterVoiceCall;
   };
-  await register({
+  register({
     id: "voice-call",
     name: "Voice Call",
     description: "test",

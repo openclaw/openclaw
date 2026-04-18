@@ -1,18 +1,24 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
-import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
-import type { ChatChannelId } from "../registry.js";
+import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
-export type ChannelId = ChatChannelId | (string & {});
+export type { ChannelId } from "./channel-id.types.js";
+
+export type ChannelExposure = {
+  configured?: boolean;
+  setup?: boolean;
+  docs?: boolean;
+};
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
@@ -41,6 +47,7 @@ export type ChannelMessageActionDiscoveryContext = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 };
 
 /**
@@ -55,10 +62,21 @@ export type ChannelMessageToolSchemaContribution = {
   visibility?: "current-channel" | "all-configured";
 };
 
+type ChannelMessageToolMediaSourceParams =
+  | readonly string[]
+  | Partial<Record<ChannelMessageActionName, readonly string[]>>;
+
 export type ChannelMessageToolDiscovery = {
   actions?: readonly ChannelMessageActionName[] | null;
   capabilities?: readonly ChannelMessageCapability[] | null;
   schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
+  /**
+   * Plugin-owned message-tool params that carry media sources.
+   * Core uses this to derive sandbox path normalization and host media-access
+   * hints without hardcoding plugin-specific param names. Prefer scoping keys
+   * by action so unrelated actions do not inherit another action's media args.
+   */
+  mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
 /** Shared setup input bag used by CLI, onboarding, and setup adapters. */
@@ -92,6 +110,7 @@ export type ChannelSetupInput = {
   accessToken?: string;
   password?: string;
   deviceName?: string;
+  avatarUrl?: string;
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
@@ -146,7 +165,9 @@ export type ChannelMeta = {
   detailLabel?: string;
   systemImage?: string;
   markdownCapable?: boolean;
+  exposure?: ChannelExposure;
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
@@ -337,7 +358,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all";
+  }) => "off" | "first" | "all" | "batched";
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -391,10 +412,11 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  currentGraphChannelId?: string;
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
@@ -432,6 +454,10 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
+  /**
+   * Bundled plugins that need inbound conversation resolution before runtime
+   * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
+   */
   resolveInboundConversation?: (params: {
     from?: string;
     to?: string;
@@ -533,6 +559,7 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
       kind: ChannelDirectoryEntryKind | "channel";
@@ -591,6 +618,7 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;
   agentId?: string | null;
@@ -617,12 +645,14 @@ export type ChannelMessageActionAdapter = {
   /**
    * Unified discovery surface for the shared `message` tool.
    * This returns the scoped actions,
-   * capabilities, and schema fragments together so they cannot drift.
+   * capabilities, schema fragments, and any plugin-owned media-source params
+   * together so they cannot drift.
    */
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
+  resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
     action: ChannelMessageActionName;
     args: Record<string, unknown>;
