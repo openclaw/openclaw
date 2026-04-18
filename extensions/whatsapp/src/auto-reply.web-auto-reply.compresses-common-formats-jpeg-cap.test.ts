@@ -294,14 +294,20 @@ describe("web auto-reply", () => {
       resetLoadConfigMock();
     }
   });
-  it("sends PDF media as a document", async () => {
+  it("falls back to text when media is unsupported", async () => {
     const sendMedia = vi.fn();
     const { reply, dispatch } = await setupSingleInboundMessage({
       resolverValue: { text: "hi", mediaUrl: "https://example.com/file.pdf" },
       sendMedia,
     });
 
-    const fetchMock = mockFetchMediaBuffer(Buffer.from("%PDF-1.4"), "application/pdf");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
+      headers: { get: () => "application/pdf" },
+      status: 200,
+    } as unknown as Response);
 
     await dispatch("msg-pdf");
 

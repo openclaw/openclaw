@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  getSignalContractSurface,
+  isSignalSenderAllowed,
   type SignalSender,
 } from "../../../../test/helpers/channels/dm-policy-contract.js";
 import {
@@ -19,29 +19,24 @@ const signalSender: SignalSender = {
   raw: "+15550001111",
   e164: "+15550001111",
 };
-const signalSenderE164 = "+15550001111";
 
-function createChannelSmokeCases(
-  isSignalSenderAllowed: (sender: SignalSender, allowFrom: string[]) => boolean,
-): ChannelSmokeCase[] {
-  return [
-    {
-      name: "bluebubbles",
-      storeAllowFrom: ["attacker-user"],
-      isSenderAllowed: (allowFrom) => allowFrom.includes("attacker-user"),
-    },
-    {
-      name: "signal",
-      storeAllowFrom: [signalSenderE164],
-      isSenderAllowed: (allowFrom) => isSignalSenderAllowed(signalSender, allowFrom),
-    },
-    {
-      name: "mattermost",
-      storeAllowFrom: ["user:attacker-user"],
-      isSenderAllowed: (allowFrom) => allowFrom.includes("user:attacker-user"),
-    },
-  ];
-}
+const channelSmokeCases: ChannelSmokeCase[] = [
+  {
+    name: "bluebubbles",
+    storeAllowFrom: ["attacker-user"],
+    isSenderAllowed: (allowFrom) => allowFrom.includes("attacker-user"),
+  },
+  {
+    name: "signal",
+    storeAllowFrom: [signalSender.e164],
+    isSenderAllowed: (allowFrom) => isSignalSenderAllowed(signalSender, allowFrom),
+  },
+  {
+    name: "mattermost",
+    storeAllowFrom: ["user:attacker-user"],
+    isSenderAllowed: (allowFrom) => allowFrom.includes("user:attacker-user"),
+  },
+];
 
 function expandChannelIngressCases(cases: readonly ChannelSmokeCase[]) {
   return cases.flatMap((testCase) =>
@@ -71,15 +66,13 @@ describe("security/dm-policy-shared channel smoke", () => {
     expect(access.reason).toBe("groupPolicy=allowlist (not allowlisted)");
   }
 
-  it("blocks group ingress when sender is only in pairing store", async () => {
-    const { isSignalSenderAllowed } = await getSignalContractSurface();
-    for (const { testCase } of expandChannelIngressCases(
-      createChannelSmokeCases(isSignalSenderAllowed),
-    )) {
+  it.each(expandChannelIngressCases(channelSmokeCases))(
+    "[$testCase.name] blocks group $ingress when sender is only in pairing store",
+    ({ testCase }) => {
       expectBlockedGroupAccess({
         storeAllowFrom: testCase.storeAllowFrom,
         isSenderAllowed: testCase.isSenderAllowed,
       });
-    }
-  });
+    },
+  );
 });

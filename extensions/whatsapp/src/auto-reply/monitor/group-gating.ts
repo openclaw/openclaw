@@ -6,12 +6,11 @@ import {
   getSenderIdentity,
   identitiesOverlap,
 } from "../../identity.js";
-import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
-import { resolveGroupActivationFor } from "./group-activation.js";
+import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import {
   hasControlCommand,
   implicitMentionKindWhen,
@@ -95,18 +94,11 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
   return { shouldProcess: false } as const;
 }
 
-export async function applyGroupGating(params: ApplyGroupGatingParams) {
+export function applyGroupGating(params: ApplyGroupGatingParams) {
   const sender = getSenderIdentity(params.msg);
   const self = getSelfIdentity(params.msg, params.authDir);
-  const inboundPolicy = resolveWhatsAppInboundPolicy({
-    cfg: params.cfg,
-    accountId: params.msg.accountId,
-    selfE164: self.e164 ?? null,
-  });
-  const conversationGroupPolicy = inboundPolicy.resolveConversationGroupPolicy(
-    params.conversationId,
-  );
-  if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
+  const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
+  if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
   }
@@ -118,21 +110,14 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     sender.name ?? undefined,
   );
 
-  const baseMentionConfig = {
-    ...params.baseMentionConfig,
-    allowFrom: inboundPolicy.configuredAllowFrom,
-  };
-  const mentionConfig = {
-    ...buildMentionConfig(params.cfg, params.agentId),
-    allowFrom: inboundPolicy.configuredAllowFrom,
-  };
+  const mentionConfig = buildMentionConfig(params.cfg, params.agentId);
   const commandBody = stripMentionsForCommand(
     params.msg.body,
     mentionConfig.mentionRegexes,
     self.e164,
   );
   const activationCommand = parseActivationCommand(commandBody);
-  const owner = isOwnerSender(baseMentionConfig, params.msg);
+  const owner = isOwnerSender(params.baseMentionConfig, params.msg);
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {
@@ -152,9 +137,8 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     "group mention debug",
   );
   const wasMentioned = mentionDebug.wasMentioned;
-  const activation = await resolveGroupActivationFor({
+  const activation = resolveGroupActivationFor({
     cfg: params.cfg,
-    accountId: inboundPolicy.account.accountId,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,

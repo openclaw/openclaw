@@ -1,8 +1,10 @@
 import { isNormalizedSenderAllowed } from "openclaw/plugin-sdk/allow-from";
 import {
-  evaluateSenderGroupAccess,
   resolveOpenProviderRuntimeGroupPolicy,
   type GroupPolicy,
+} from "openclaw/plugin-sdk/config-runtime";
+import {
+  evaluateSenderGroupAccess,
   type SenderGroupAccessDecision,
 } from "openclaw/plugin-sdk/group-access";
 

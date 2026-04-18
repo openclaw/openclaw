@@ -220,53 +220,86 @@ describe("createTelegramBot", () => {
       },
     });
 
-    const events: string[] = [];
-    let releaseTopicTurn!: () => void;
-    const topicGate = new Promise<void>((resolve) => {
-      releaseTopicTurn = resolve;
+    const startedBodies: string[] = [];
+    let releaseConversationTurn!: () => void;
+    const conversationGate = new Promise<void>((resolve) => {
+      releaseConversationTurn = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = String(ctx.CommandBody ?? ctx.Body ?? "");
+      startedBodies.push(body);
+      if (body.includes("hello there")) {
+        await conversationGate;
+      }
+      return { text: `reply:${body}` };
     });
 
     createTelegramBot({ token: "tok" });
-    const sequentializer = sequentializeSpy.mock.results[0]?.value as
-      | TelegramMiddleware
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+    const statusHandler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: TelegramMiddlewareTestContext) => Promise<void>)
       | undefined;
-    expect(sequentializer).toBeDefined();
-    if (!sequentializer) {
+    expect(statusHandler).toBeDefined();
+    if (!statusHandler) {
       return;
     }
 
-    const busyMessage = makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message;
-    const statusMessage = makeForumGroupMessageCtx({ threadId: 99, text: "/status" }).message;
     const busyCtx = {
       ...makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }),
-      message: { ...busyMessage, message_id: 101 },
+      message: {
+        ...makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message,
+        message_id: 101,
+      },
       update: { update_id: 101 },
     };
     const statusCtx = {
       ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }),
-      message: { ...statusMessage, message_id: 102 },
+      message: {
+        ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }).message,
+        message_id: 102,
+      },
       update: { update_id: 102 },
+      match: "",
     };
 
-    const busyPromise = sequentializer(busyCtx, async () => {
-      events.push("busy:start");
-      await topicGate;
-      events.push("busy:end");
+    const busyPromise = runTelegramMiddlewareChain({
+      ctx: busyCtx,
+      finalHandler: messageHandler,
     });
 
     await vi.waitFor(() => {
-      expect(events).toEqual(["busy:start"]);
+      expect(startedBodies).toHaveLength(1);
+      expect(startedBodies[0]).toContain("hello there");
     });
 
-    await sequentializer(statusCtx, async () => {
-      events.push("status");
+    const statusPromise = runTelegramMiddlewareChain({
+      ctx: statusCtx,
+      finalHandler: statusHandler,
     });
 
-    expect(events).toEqual(["busy:start", "status"]);
+    await vi.waitFor(() => {
+      expect(startedBodies).toHaveLength(2);
+      expect(startedBodies[0]).toContain("hello there");
+      expect(startedBodies[1]).toBe("/status");
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("reply:/status");
+    });
 
-    releaseTopicTurn();
+    await statusPromise;
+
+    releaseConversationTurn();
     await busyPromise;
-    expect(events).toEqual(["busy:start", "status", "busy:end"]);
+
+    await vi.waitFor(() => {
+      expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+    });
+    const sentBodies = sendMessageSpy.mock.calls.map((call) => String(call[1]));
+    expect(sentBodies[0]).toContain("reply:/status");
+    expect(sentBodies[1]).toContain("hello there");
   });
 
   it("keeps ordinary Telegram messages serialized within the same topic", async () => {

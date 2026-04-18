@@ -28,7 +28,7 @@ describe("live-agent-probes", () => {
         attempt: 1,
         exactReply: spec.name,
       }),
-    ).toContain(`reply exactly: ${spec.name}`);
+    ).toContain("Return only a tool call");
     expect(
       buildLiveCronProbeMessage({
         agent: "codex",
@@ -36,15 +36,7 @@ describe("live-agent-probes", () => {
         attempt: 1,
         exactReply: spec.name,
       }),
-    ).toContain("ask me to retry");
-    expect(
-      buildLiveCronProbeMessage({
-        agent: "codex",
-        argsJson: spec.argsJson,
-        attempt: 1,
-        exactReply: spec.name,
-      }),
-    ).toContain("previous OpenClaw cron MCP tool call was cancelled");
+    ).toContain("No prose before the tool call");
   });
 
   it("validates cron cli job shape for the shared live probe", () => {

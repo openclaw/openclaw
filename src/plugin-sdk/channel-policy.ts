@@ -160,7 +160,6 @@ export function createRestrictSendersChannelSecurity<
   approveChannelId?: string;
   approveHint?: string;
   normalizeDmEntry?: (raw: string) => string;
-  inheritSharedDefaultsFromDefaultAccount?: boolean;
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedAccount>({
@@ -174,7 +173,6 @@ export function createRestrictSendersChannelSecurity<
       approveChannelId: params.approveChannelId,
       approveHint: params.approveHint,
       normalizeEntry: params.normalizeDmEntry,
-      inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     }),
     collectWarnings: createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>({
       providerConfigPresent:

@@ -241,9 +241,8 @@ describeLive("openai plugin live", () => {
     });
 
     const text = (transcription?.text ?? "").toLowerCase();
-    const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
-    expect(collapsedText).toContain("openclaw");
+    expect(text).toContain("openclaw");
     expect(text).toMatch(/\bok\b/);
   }, 45_000);
 

@@ -1,9 +1,6 @@
 import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../config/types.base.js";
 
-export { resolveOpenProviderRuntimeGroupPolicy };
-export type { GroupPolicy };
-
 export type SenderGroupAccessReason =
   | "allowed"
   | "disabled"

@@ -542,11 +542,9 @@ describe("gateway server misc", () => {
       "utf-8",
     );
 
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, async () => {
-      const autoPort = await getFreePort();
-      const autoServer = await startGatewayServer(autoPort);
-      await autoServer.close();
-    });
+    const autoPort = await getFreePort();
+    const autoServer = await startGatewayServer(autoPort);
+    await autoServer.close();
 
     const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     const channels = updated.channels as Record<string, unknown> | undefined;

@@ -54,8 +54,8 @@ describe("maybeSendAckReaction", () => {
 
   it.each(["ack", "minimal", "extensive"] as const)(
     "sends ack reactions when reactionLevel is %s",
-    async (reactionLevel) => {
-      await maybeSendAckReaction({
+    (reactionLevel) => {
+      maybeSendAckReaction({
         cfg: createConfig(reactionLevel),
         msg: createMessage(),
         agentId: "agent",
@@ -81,8 +81,8 @@ describe("maybeSendAckReaction", () => {
     },
   );
 
-  it("suppresses ack reactions when reactionLevel is off", async () => {
-    await maybeSendAckReaction({
+  it("suppresses ack reactions when reactionLevel is off", () => {
+    maybeSendAckReaction({
       cfg: createConfig("off"),
       msg: createMessage(),
       agentId: "agent",
@@ -97,8 +97,8 @@ describe("maybeSendAckReaction", () => {
     expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("uses the active account reactionLevel override for ack gating", async () => {
-    await maybeSendAckReaction({
+  it("uses the active account reactionLevel override for ack gating", () => {
+    maybeSendAckReaction({
       cfg: createConfig("off", {
         accounts: {
           work: {

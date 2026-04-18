@@ -154,15 +154,12 @@ describe("buildGatewayCronService", () => {
         state.cron as unknown as {
           state?: {
             deps?: {
-              enqueueSystemEvent?: (
-                optsText: string,
-                opts?: {
-                  agentId?: string;
-                  sessionKey?: string;
-                  contextKey?: string;
-                  trusted?: boolean;
-                },
-              ) => void;
+              enqueueSystemEvent?: (optsText: string, opts?: {
+                agentId?: string;
+                sessionKey?: string;
+                contextKey?: string;
+                trusted?: boolean;
+              }) => void;
             };
           };
         }

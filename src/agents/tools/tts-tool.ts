@@ -49,7 +49,15 @@ export function createTtsTool(opts?: {
         };
       }
 
-      throw new Error(result.error ?? "TTS conversion failed");
+      return {
+        content: [
+          {
+            type: "text",
+            text: result.error ?? "TTS conversion failed",
+          },
+        ],
+        details: { error: result.error },
+      };
     },
   };
 }

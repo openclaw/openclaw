@@ -7,6 +7,7 @@ import { sendPayloadWithChunkedTextAndMedia } from "../../../src/plugin-sdk/repl
 import { chunkTextForOutbound } from "../../../src/plugin-sdk/text-chunking.js";
 import { resetGlobalHookRunner } from "../../../src/plugins/hook-runner-global.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 type CreateSlackOutboundPayloadHarness = (params: PayloadHarnessParams) => {
   run: () => Promise<Record<string, unknown>>;
   sendMock: Mock;
@@ -21,15 +22,25 @@ const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleI
 const slackTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "slack",
-  artifactBasename: "outbound-payload-test-api.js",
+  artifactBasename: "test-api.js",
 });
 const whatsappTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "whatsapp",
-  artifactBasename: "outbound-payload-test-api.js",
+  artifactBasename: "test-api.js",
+});
+const zalouserSessionRouteModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "zalouser",
+  artifactBasename: "src/session-route.js",
 });
 
 let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
+let parseZalouserOutboundTargetPromise:
+  | Promise<{
+      parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
+    }>
+  | undefined;
 let slackTestApiPromise:
   | Promise<{
       createSlackOutboundPayloadHarness: CreateSlackOutboundPayloadHarness;
@@ -65,6 +76,14 @@ async function getWhatsAppOutboundAsync(): Promise<ChannelOutboundAdapter> {
   }>;
   const { whatsappOutbound } = await whatsappTestApiPromise;
   return whatsappOutbound;
+}
+
+async function getParseZalouserOutboundTarget(): Promise<ParseZalouserOutboundTarget> {
+  parseZalouserOutboundTargetPromise ??= import(zalouserSessionRouteModuleId) as Promise<{
+    parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
+  }>;
+  const { parseZalouserOutboundTarget } = await parseZalouserOutboundTargetPromise;
+  return parseZalouserOutboundTarget;
 }
 
 type PayloadHarnessParams = {
@@ -320,7 +339,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
   primeChannelOutboundSendMock(sendZalouser, { ok: true, messageId: "zlu-1" }, params.sendResults);
   const ctx = {
     cfg: {},
-    to: "987654321",
+    to: "user:987654321",
     text: "",
     payload: params.payload,
   };
@@ -329,11 +348,12 @@ function createZalouserHarness(params: PayloadHarnessParams) {
       await sendPayloadWithChunkedTextAndMedia({
         ctx,
         sendText: async (nextCtx) => {
+          const target = (await getParseZalouserOutboundTarget())(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
-            await sendZalouser(nextCtx.to, nextCtx.text, {
+            await sendZalouser(target.threadId, nextCtx.text, {
               profile: "default",
-              isGroup: false,
+              isGroup: target.isGroup,
               textMode: "markdown",
               textChunkMode: "length",
               textChunkLimit: 1200,
@@ -341,11 +361,12 @@ function createZalouserHarness(params: PayloadHarnessParams) {
           );
         },
         sendMedia: async (nextCtx) => {
+          const target = (await getParseZalouserOutboundTarget())(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
-            await sendZalouser(nextCtx.to, nextCtx.text, {
+            await sendZalouser(target.threadId, nextCtx.text, {
               profile: "default",
-              isGroup: false,
+              isGroup: target.isGroup,
               mediaUrl: nextCtx.mediaUrl,
               textMode: "markdown",
               textChunkMode: "length",
@@ -356,7 +377,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
         emptyResult: { channel: "zalouser", messageId: "" },
       }),
     sendMock: sendZalouser,
-    to: ctx.to,
+    to: "987654321",
   };
 }
 

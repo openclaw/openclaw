@@ -115,8 +115,22 @@ export function installWebSearchProviderContractSuite(params: {
     provider.setCredentialValue(searchConfigTarget, credentialValue);
     expect(provider.getCredentialValue(searchConfigTarget)).toEqual(credentialValue);
 
-    expect(typeof provider.createTool).toBe("function");
-    expect(provider.getCredentialValue(searchConfigTarget)).toEqual(credentialValue);
+    const config = {
+      tools: {
+        web: {
+          search: {
+            provider: provider.id,
+            ...searchConfigTarget,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const tool = provider.createTool({ config, searchConfig: searchConfigTarget });
+
+    expect(tool).not.toBeNull();
+    expect(tool?.description.trim()).not.toBe("");
+    expect(tool?.parameters).toEqual(expect.any(Object));
+    expect(typeof tool?.execute).toBe("function");
     if (provider.runSetup) {
       expect(typeof provider.runSetup).toBe("function");
     }
@@ -164,6 +178,21 @@ export function installWebFetchProviderContractSuite(params: {
       expect(applied.plugins?.entries?.[params.pluginId]?.enabled).toBe(true);
     }
 
-    expect(typeof provider.createTool).toBe("function");
+    const config = {
+      tools: {
+        web: {
+          fetch: {
+            provider: provider.id,
+            ...fetchConfigTarget,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const tool = provider.createTool({ config, fetchConfig: fetchConfigTarget });
+
+    expect(tool).not.toBeNull();
+    expect(tool?.description.trim()).not.toBe("");
+    expect(tool?.parameters).toEqual(expect.any(Object));
+    expect(typeof tool?.execute).toBe("function");
   });
 }

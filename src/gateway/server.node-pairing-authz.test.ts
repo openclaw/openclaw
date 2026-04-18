@@ -1,11 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import {
-  approveNodePairing,
-  getPairedNode,
-  listNodePairing,
-  requestNodePairing,
-} from "../infra/node-pairing.js";
+import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   issueOperatorToken,
@@ -45,15 +40,13 @@ async function connectNodeClient(params: {
 }
 
 async function expectPairingApprovalRejected(params: {
-  started: Awaited<ReturnType<typeof startServerWithClient>>;
-  nodeId: string;
   approverName: string;
   tokenScopes: string[];
   connectedScopes: string[];
   requestCommands?: string[];
   expectedMessage: string;
 }) {
-  const { started } = params;
+  const started = await startServerWithClient("secret");
   const approver = await issueOperatorToken({
     name: params.approverName,
     approvedScopes: ["operator.admin"],
@@ -65,7 +58,7 @@ async function expectPairingApprovalRejected(params: {
   let pairingWs: WebSocket | undefined;
   try {
     const request = await requestNodePairing({
-      nodeId: params.nodeId,
+      nodeId: "node-approve-target",
       platform: "darwin",
       ...(params.requestCommands ? { commands: params.requestCommands } : {}),
     });
@@ -84,9 +77,14 @@ async function expectPairingApprovalRejected(params: {
     expect(approve.ok).toBe(false);
     expect(approve.error?.message).toBe(params.expectedMessage);
 
-    await expect(getPairedNode(params.nodeId)).resolves.toBeNull();
+    await expect(
+      import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+    ).resolves.toBeNull();
   } finally {
     pairingWs?.close();
+    started.ws.close();
+    await started.server.close();
+    started.envSnapshot.restore();
   }
 }
 
@@ -184,38 +182,38 @@ async function expectRePairingRequest(params: {
 }
 
 describe("gateway node pairing authorization", () => {
-  test("enforces node pairing approval scopes", async () => {
+  test("requires operator.admin for exec-capable node pairing approvals", async () => {
+    await expectPairingApprovalRejected({
+      approverName: "node-pair-approve-pairing-only",
+      tokenScopes: ["operator.pairing"],
+      connectedScopes: ["operator.pairing"],
+      requestCommands: ["system.run"],
+      expectedMessage: "missing scope: operator.admin",
+    });
+  });
+
+  test("requires operator.pairing before node pairing approvals", async () => {
+    await expectPairingApprovalRejected({
+      approverName: "node-pair-approve-attacker",
+      tokenScopes: ["operator.write"],
+      connectedScopes: ["operator.write"],
+      requestCommands: ["system.run"],
+      expectedMessage: "missing scope: operator.pairing",
+    });
+  });
+
+  test("allows pairing-only operators to approve commandless node requests", async () => {
     const started = await startServerWithClient("secret");
+    const approver = await issueOperatorToken({
+      name: "node-pair-approve-commandless",
+      approvedScopes: ["operator.admin"],
+      tokenScopes: ["operator.pairing"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
     let pairingWs: WebSocket | undefined;
     try {
-      await expectPairingApprovalRejected({
-        started,
-        nodeId: "node-approve-reject-admin",
-        approverName: "node-pair-approve-pairing-only",
-        tokenScopes: ["operator.pairing"],
-        connectedScopes: ["operator.pairing"],
-        requestCommands: ["system.run"],
-        expectedMessage: "missing scope: operator.admin",
-      });
-
-      await expectPairingApprovalRejected({
-        started,
-        nodeId: "node-approve-reject-pairing",
-        approverName: "node-pair-approve-attacker",
-        tokenScopes: ["operator.write"],
-        connectedScopes: ["operator.write"],
-        requestCommands: ["system.run"],
-        expectedMessage: "missing scope: operator.pairing",
-      });
-
-      const approver = await issueOperatorToken({
-        name: "node-pair-approve-commandless",
-        approvedScopes: ["operator.admin"],
-        tokenScopes: ["operator.pairing"],
-        clientId: GATEWAY_CLIENT_NAMES.TEST,
-        clientMode: GATEWAY_CLIENT_MODES.TEST,
-      });
-
       const request = await requestNodePairing({
         nodeId: "node-approve-target",
         platform: "darwin",
@@ -239,7 +237,9 @@ describe("gateway node pairing authorization", () => {
       expect(approve.payload?.requestId).toBe(request.request.requestId);
       expect(approve.payload?.node?.nodeId).toBe("node-approve-target");
 
-      await expect(getPairedNode("node-approve-target")).resolves.toEqual(
+      await expect(
+        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+      ).resolves.toEqual(
         expect.objectContaining({
           nodeId: "node-approve-target",
         }),

@@ -8,7 +8,7 @@ import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
-export async function maybeSendAckReaction(params: {
+export function maybeSendAckReaction(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
   agentId: string;
@@ -41,9 +41,8 @@ export async function maybeSendAckReaction(params: {
 
   const activation =
     params.msg.chatType === "group"
-      ? await resolveGroupActivationFor({
+      ? resolveGroupActivationFor({
           cfg: params.cfg,
-          accountId: params.accountId,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,

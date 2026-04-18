@@ -310,36 +310,33 @@ export function registerControlUiAndPairingSuite(): void {
     });
   });
 
-  test("allows localhost ui clients without device identity when insecure auth is enabled", async () => {
+  test("allows localhost control ui without device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
-    const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret", {
+    const { server, ws, prevToken } = await startControlUiServerWithClient("secret", {
       wsHeaders: { origin: "http://127.0.0.1" },
     });
-    let tuiWs: WebSocket | undefined;
-    try {
-      await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
+    await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
+    ws.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
 
-      tuiWs = await openWs(port);
-      await connectControlUiWithoutDeviceAndExpectOk({
-        ws: tuiWs,
-        token: "secret",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.TUI,
-          version: "1.0.0",
-          platform: "darwin",
-          mode: GATEWAY_CLIENT_MODES.UI,
-        },
-      });
-    } finally {
-      ws.close();
-      tuiWs?.close();
-      await Promise.all([
-        waitForWsClose(ws, 1_000),
-        ...(tuiWs ? [waitForWsClose(tuiWs, 1_000)] : []),
-      ]);
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
+  test("allows localhost tui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startControlUiServerWithClient("secret");
+    await connectControlUiWithoutDeviceAndExpectOk({
+      ws,
+      token: "secret",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TUI,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+    });
+    ws.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
   });
 
   test("allows control ui password-only auth on localhost when insecure auth is enabled", async () => {
@@ -1325,35 +1322,16 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("allows gateway backend loopback shared-auth connections without device pairing", async () => {
-    const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
-    const sockets = [ws];
+  test("allows local gateway backend shared-auth connections without device pairing", async () => {
+    const { server, ws, prevToken } = await startControlUiServerWithClient("secret");
     try {
-      const backendCases: Array<{
-        name: string;
-        headers?: Record<string, string>;
-        socket?: WebSocket;
-      }> = [
-        { name: "default host", socket: ws },
-        { name: "remote-looking host", headers: { host: "gateway.example" } },
-        { name: "private host", headers: { host: "172.17.0.2:18789" } },
-      ];
-
-      for (const backendCase of backendCases) {
-        const socket = backendCase.socket ?? (await openWs(port, backendCase.headers));
-        if (!backendCase.socket) {
-          sockets.push(socket);
-        }
-        const backendConnect = await connectReq(socket, {
-          token: "secret",
-          client: BACKEND_GATEWAY_CLIENT,
-        });
-        expect(backendConnect.ok, backendCase.name).toBe(true);
-      }
+      const localBackend = await connectReq(ws, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(localBackend.ok).toBe(true);
     } finally {
-      for (const socket of sockets) {
-        socket.close();
-      }
+      ws.close();
       await server.close();
       restoreGatewayToken(prevToken);
     }

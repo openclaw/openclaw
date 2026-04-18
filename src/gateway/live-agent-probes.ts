@@ -85,22 +85,15 @@ export function buildLiveCronProbeMessage(params: {
   }
   if (family === "claude") {
     return (
-      "Retry the OpenClaw MCP tool named `cron` now. " +
+      "Return only a tool call for the OpenClaw MCP tool `cron`. " +
       `Use these exact JSON arguments: ${params.argsJson}. ` +
-      `If the cron job is created, reply exactly: ${params.exactReply}. ` +
-      "If the tool call is cancelled, the job is not created, or you cannot confirm creation, " +
-      "reply briefly saying that and ask me to retry. No markdown. " +
-      "I will verify externally with the OpenClaw cron CLI."
+      "No prose. I will verify externally with the OpenClaw cron CLI."
     );
   }
   return (
-    "Your previous OpenClaw cron MCP tool call was cancelled before the job was created. " +
-    "Retry the OpenClaw MCP tool named cron now. " +
+    "Use the OpenClaw MCP tool named cron. " +
     `Use these exact JSON arguments: ${params.argsJson}. ` +
-    `If the cron job is created, reply exactly: ${params.exactReply}. ` +
-    "If the tool call is cancelled, the job is not created, or you cannot confirm creation, " +
-    "reply briefly saying that and ask me to retry. No markdown. " +
-    "I will verify externally with the OpenClaw cron CLI."
+    "No prose before the tool call. I will verify externally with the OpenClaw cron CLI."
   );
 }
 

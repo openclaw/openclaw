@@ -13,7 +13,6 @@ import type { WebInboundMsg } from "./types.js";
 export type MentionConfig = {
   mentionRegexes: RegExp[];
   allowFrom?: Array<string | number>;
-  isSelfChat?: boolean;
 };
 
 export type MentionTargets = {
@@ -44,10 +43,7 @@ export function isBotMentionedFromTargets(
     // Remove zero-width and directionality markers WhatsApp injects around display names
     normalizeMentionText(text);
 
-  const isSelfChat =
-    typeof mentionCfg.isSelfChat === "boolean"
-      ? mentionCfg.isSelfChat
-      : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom);
+  const isSelfChat = isSelfChatMode(targets.self.e164, mentionCfg.allowFrom);
 
   const hasMentions = targets.normalizedMentions.length > 0;
   if (hasMentions && !isSelfChat) {

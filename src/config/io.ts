@@ -978,10 +978,7 @@ function resolveLegacyConfigForRead(
     listPluginDoctorLegacyConfigRules({ pluginIds }),
   );
   if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
-    return {
-      effectiveConfigRaw: resolvedConfigRaw,
-      sourceLegacyIssues,
-    };
+    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
   }
   const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
   return {

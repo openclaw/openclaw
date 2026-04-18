@@ -1,25 +1,17 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
-import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  clearPluginCommands,
-  executePluginCommand,
-  matchPluginCommand,
-  registerPluginCommand,
-} from "openclaw/plugin-sdk/plugin-runtime";
-import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "../../../../test/helpers/plugins/plugin-registry.js";
-import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let discordNativeCommandTesting: typeof import("./native-command.js").__testing;
@@ -28,6 +20,33 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   executePluginCommand: vi.fn(),
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    matchPluginCommand: (...args: unknown[]) => runtimeModuleMocks.matchPluginCommand(...args),
+    executePluginCommand: (...args: unknown[]) => runtimeModuleMocks.executePluginCommand(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return {
+    ...actual,
+    dispatchReplyWithDispatcher: (...args: unknown[]) =>
+      runtimeModuleMocks.dispatchReplyWithDispatcher(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
+  resolveDirectStatusReplyForSession: (...args: unknown[]) =>
+    runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
 }));
 
 function createInteraction(params?: {
@@ -251,16 +270,13 @@ async function expectPairCommandReply(params: {
   cfg: OpenClawConfig;
   commandName: string;
   interaction: MockCommandInteraction;
-  expectedRegisteredName?: string;
 }) {
   const command = await createPluginCommand({
     cfg: params.cfg,
     name: params.commandName,
   });
   const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
-  const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
-    text: "paired:now",
-  });
+
   await (command as { run: (interaction: unknown) => Promise<void> }).run(
     Object.assign(params.interaction, {
       options: {
@@ -272,12 +288,6 @@ async function expectPairCommandReply(params: {
   );
 
   expect(dispatchSpy).not.toHaveBeenCalled();
-  expect(executeSpy).toHaveBeenCalledWith(
-    expect.objectContaining({
-      command: expect.objectContaining({ name: params.expectedRegisteredName ?? "pair" }),
-      args: "now",
-    }),
-  );
   expect(params.interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({ content: "paired:now" }),
   );
@@ -328,28 +338,21 @@ describe("Discord native plugin command dispatch", () => {
       await import("./native-command.js"));
   });
 
-  afterAll(() => {
-    clearPluginCommands();
-    setActivePluginRegistry(createTestRegistry());
-    discordNativeCommandTesting.setMatchPluginCommand(matchPluginCommand);
-    discordNativeCommandTesting.setExecutePluginCommand(executePluginCommand);
-    discordNativeCommandTesting.setDispatchReplyWithDispatcher(dispatchReplyWithDispatcher);
-    discordNativeCommandTesting.setResolveDirectStatusReplyForSession(
-      resolveDirectStatusReplyForSession,
-    );
-    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(
-      resolveDiscordNativeInteractionRouteState,
-    );
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
     setActivePluginRegistry(createTestRegistry());
+    const actualPluginRuntime = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/plugin-runtime")
+    >("openclaw/plugin-sdk/plugin-runtime");
     runtimeModuleMocks.matchPluginCommand.mockReset();
-    runtimeModuleMocks.matchPluginCommand.mockImplementation(matchPluginCommand);
+    runtimeModuleMocks.matchPluginCommand.mockImplementation(
+      actualPluginRuntime.matchPluginCommand,
+    );
     runtimeModuleMocks.executePluginCommand.mockReset();
-    runtimeModuleMocks.executePluginCommand.mockImplementation(executePluginCommand);
+    runtimeModuleMocks.executePluginCommand.mockImplementation(
+      actualPluginRuntime.executePluginCommand,
+    );
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockReset();
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: {
@@ -369,10 +372,7 @@ describe("Discord native plugin command dispatch", () => {
       runtimeModuleMocks.executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand,
     );
     discordNativeCommandTesting.setDispatchReplyWithDispatcher(
-      runtimeModuleMocks.dispatchReplyWithDispatcher as typeof dispatchReplyWithDispatcher,
-    );
-    discordNativeCommandTesting.setResolveDirectStatusReplyForSession(
-      runtimeModuleMocks.resolveDirectStatusReplyForSession as typeof resolveDirectStatusReplyForSession,
+      runtimeModuleMocks.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
     );
     discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
       createUnboundRouteState({
@@ -436,6 +436,7 @@ describe("Discord native plugin command dispatch", () => {
       description: "Pair",
       acceptsArgs: true,
     };
+    const command = await createNativeCommand(cfg, commandSpec);
     const interaction = createInteraction({
       channelType: ChannelType.GuildText,
       channelId: "234567890123456789",
@@ -454,7 +455,6 @@ describe("Discord native plugin command dispatch", () => {
         handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
       }),
     ).toEqual({ ok: true });
-    const command = await createNativeCommand(cfg, commandSpec);
 
     const executeSpy = runtimeModuleMocks.executePluginCommand;
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(

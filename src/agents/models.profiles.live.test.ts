@@ -14,7 +14,6 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
-  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
@@ -485,17 +484,6 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
-          if (
-            shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-              provider: model.provider,
-              useExplicitModels: useExplicit,
-              providerFilter: providers,
-              config: cfg,
-              env: process.env,
-            })
-          ) {
-            continue;
-          }
           if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }

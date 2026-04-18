@@ -94,7 +94,6 @@ const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
 let matchPluginCommandImpl = pluginRuntime.matchPluginCommand;
 let executePluginCommandImpl = pluginRuntime.executePluginCommand;
 let dispatchReplyWithDispatcherImpl = dispatchReplyWithDispatcher;
-let resolveDirectStatusReplyForSessionImpl = resolveDirectStatusReplyForSession;
 let resolveDiscordNativeInteractionRouteStateImpl = resolveDiscordNativeInteractionRouteState;
 
 export const __testing = {
@@ -117,13 +116,6 @@ export const __testing = {
   ): typeof dispatchReplyWithDispatcher {
     const previous = dispatchReplyWithDispatcherImpl;
     dispatchReplyWithDispatcherImpl = next;
-    return previous;
-  },
-  setResolveDirectStatusReplyForSession(
-    next: typeof resolveDirectStatusReplyForSession,
-  ): typeof resolveDirectStatusReplyForSession {
-    const previous = resolveDirectStatusReplyForSessionImpl;
-    resolveDirectStatusReplyForSessionImpl = next;
     return previous;
   },
   setResolveDiscordNativeInteractionRouteState(
@@ -629,19 +621,6 @@ async function safeDiscordInteractionCall<T>(
   }
 }
 
-function createNativeCommandDefinition(command: NativeCommandSpec): ChatCommandDefinition {
-  return {
-    key: command.name,
-    nativeName: command.name,
-    description: command.description,
-    textAliases: [],
-    acceptsArgs: command.acceptsArgs,
-    args: command.args,
-    argsParsing: "none",
-    scope: "native",
-  };
-}
-
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
   cfg: ReturnType<typeof loadConfig>;
@@ -660,13 +639,18 @@ export function createDiscordNativeCommand(params: {
     ephemeralDefault,
     threadBindings,
   } = params;
-  const fallbackCommandDefinition = createNativeCommandDefinition(command);
   const commandDefinition =
-    matchPluginCommandImpl(`/${command.name}`) !== null
-      ? fallbackCommandDefinition
-      : (findCommandByNativeName(command.name, "discord", {
-          includeBundledChannelFallback: false,
-        }) ?? fallbackCommandDefinition);
+    findCommandByNativeName(command.name, "discord") ??
+    ({
+      key: command.name,
+      nativeName: command.name,
+      description: command.description,
+      textAliases: [],
+      acceptsArgs: command.acceptsArgs,
+      args: command.args,
+      argsParsing: "none",
+      scope: "native",
+    } satisfies ChatCommandDefinition);
   const argDefinitions = commandDefinition.args ?? command.args;
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
@@ -1146,7 +1130,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
   if (!suppressReplies && commandName === "status") {
-    const statusReply = await resolveDirectStatusReplyForSessionImpl({
+    const statusReply = await resolveDirectStatusReplyForSession({
       cfg,
       sessionKey: commandTargetSessionKey?.trim() || sessionKey,
       channel: "discord",

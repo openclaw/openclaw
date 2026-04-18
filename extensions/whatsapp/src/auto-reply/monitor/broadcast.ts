@@ -6,7 +6,6 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "openclaw/plugin-sdk/routing";
-import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
@@ -93,15 +92,11 @@ export async function maybeBroadcastMessage(params: {
       peerId: params.peerId,
       agentId: normalizedAgentId,
     });
-    const baseAgentRoute = {
+    const agentRoute = {
       ...params.route,
       agentId: normalizedAgentId,
       ...routeKeys,
     };
-    const agentRoute =
-      params.msg.chatType === "group"
-        ? resolveWhatsAppGroupSessionRoute(baseAgentRoute)
-        : baseAgentRoute;
 
     try {
       return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, {

@@ -10,6 +10,7 @@ const createScheduledEventDiscord = vi.fn(async () => ({ id: "event-1" }));
 const deleteChannelDiscord = vi.fn(async () => ({ ok: true }));
 const fetchChannelInfoDiscord = vi.fn(async () => ({ guild_id: "guild-1" }));
 const hasAnyGuildPermissionDiscord = vi.fn(async () => false);
+const setChannelPermissionDiscord = vi.fn(async () => ({ ok: true }));
 const uploadEmojiDiscord = vi.fn(async () => ({ id: "emoji-1" }));
 
 const enableAllActions = (_key: keyof DiscordActionConfig, _defaultValue = true) => true;
@@ -24,8 +25,25 @@ describe("discord guild admin sender authorization", () => {
       deleteChannelDiscord,
       fetchChannelInfoDiscord,
       hasAnyGuildPermissionDiscord,
+      setChannelPermissionDiscord,
       uploadEmojiDiscord,
     });
+  });
+
+  it("rejects privileged guild actions when sender identity is missing", async () => {
+    await expect(
+      handleDiscordGuildAction(
+        "channelDelete",
+        {
+          channelId: "channel-1",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Sender identity required");
+
+    expect(fetchChannelInfoDiscord).not.toHaveBeenCalled();
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(deleteChannelDiscord).not.toHaveBeenCalled();
   });
 
   it("rejects roleAdd when sender lacks MANAGE_ROLES", async () => {
@@ -112,6 +130,23 @@ describe("discord guild admin sender authorization", () => {
     );
   });
 
+  it("reports disabled channel management before permission lookups", async () => {
+    await expect(
+      handleDiscordGuildAction(
+        "channelDelete",
+        {
+          channelId: "channel-1",
+          senderUserId: "sender-1",
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("Discord channel management is disabled.");
+
+    expect(fetchChannelInfoDiscord).not.toHaveBeenCalled();
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(deleteChannelDiscord).not.toHaveBeenCalled();
+  });
+
   it("allows emojiUpload when sender has guild-expression permissions", async () => {
     hasAnyGuildPermissionDiscord.mockResolvedValueOnce(true);
     uploadEmojiDiscord.mockResolvedValueOnce({ id: "emoji-1" });
@@ -168,5 +203,36 @@ describe("discord guild admin sender authorization", () => {
       undefined,
     );
     expect(createScheduledEventDiscord).not.toHaveBeenCalled();
+  });
+
+  it("checks channelPermissionSet permissions for direct guild actions", async () => {
+    hasAnyGuildPermissionDiscord.mockResolvedValueOnce(true);
+
+    await handleDiscordGuildAction(
+      "channelPermissionSet",
+      {
+        channelId: "channel-1",
+        targetId: "role-1",
+        targetType: "role",
+        allow: "1024",
+        senderUserId: "sender-1",
+      },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("channel-1");
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
+      "guild-1",
+      "sender-1",
+      [PermissionFlagsBits.ManageChannels],
+      undefined,
+    );
+    expect(setChannelPermissionDiscord).toHaveBeenCalledWith({
+      channelId: "channel-1",
+      targetId: "role-1",
+      targetType: 0,
+      allow: "1024",
+      deny: undefined,
+    });
   });
 });
