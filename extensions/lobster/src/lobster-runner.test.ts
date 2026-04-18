@@ -339,7 +339,7 @@ describe("createEmbeddedLobsterRunner", () => {
         timeoutMs: 2000,
         maxStdoutBytes: 4096,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/no such file|ENOENT/i);
   });
 
   it("aborts long-running embedded work", async () => {

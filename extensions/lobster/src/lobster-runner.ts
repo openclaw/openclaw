@@ -184,7 +184,7 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
     throw new Error("Workflow path is not a file");
   }
   const ext = path.extname(resolved).toLowerCase();
-  if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
+  if (!WORKFLOW_FILE_EXTENSIONS.has(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }
   return resolved;
@@ -194,10 +194,11 @@ const WORKFLOW_FILE_EXTENSIONS = new Set([".lobster", ".yaml", ".yml", ".json"])
 
 function looksLikeWorkflowFileCandidate(candidate: string): boolean {
   const ext = path.extname(candidate).toLowerCase();
+  const firstToken = (candidate.split(/\s+/)[0] ?? candidate);
   return (
     WORKFLOW_FILE_EXTENSIONS.has(ext) ||
-    candidate.includes("/") ||
-    candidate.includes(path.sep)
+    firstToken.includes("/") ||
+    firstToken.includes(path.sep)
   );
 }
 
