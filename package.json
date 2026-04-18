@@ -716,6 +716,10 @@
       "types": "./dist/plugin-sdk/global-singleton.d.ts",
       "default": "./dist/plugin-sdk/global-singleton.js"
     },
+    "./plugin-sdk/directory-config-runtime": {
+      "types": "./dist/plugin-sdk/directory-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/directory-config-runtime.js"
+    },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
       "default": "./dist/plugin-sdk/directory-runtime.js"

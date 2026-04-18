@@ -45,12 +45,9 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
-const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
-  "Proxy notice: Status: Internal Server Error";
-const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE =
-  `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
-const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE =
-  `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
+const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
+const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
+const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,

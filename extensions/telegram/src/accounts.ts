@@ -3,7 +3,6 @@ import {
   createAccountActionGate,
   normalizeAccountId,
   normalizeOptionalAccountId,
-  resolveAccountEntry,
   resolveAccountWithDefaultFallback,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
@@ -14,12 +13,15 @@ import type {
 import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { mergeTelegramAccountConfig, resolveTelegramAccountConfig } from "./account-config.js";
 import {
   listTelegramAccountIds as listSelectedTelegramAccountIds,
   resolveDefaultTelegramAccountSelection,
 } from "./account-selection.js";
 import type { TelegramTransport } from "./fetch.js";
 import { resolveTelegramToken } from "./token.js";
+
+export { mergeTelegramAccountConfig, resolveTelegramAccountConfig } from "./account-config.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
@@ -87,43 +89,6 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
     );
   }
   return selection.accountId;
-}
-
-export function resolveTelegramAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): TelegramAccountConfig | undefined {
-  const normalized = normalizeAccountId(accountId);
-  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
-}
-
-export function mergeTelegramAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): TelegramAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    groups: channelGroups,
-    ...base
-  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
-
-  // In multi-account setups, channel-level `groups` must NOT be inherited by
-  // accounts that don't have their own `groups` config.  A bot that is not a
-  // member of a configured group will fail when handling group messages, and
-  // this failure disrupts message delivery for *all* accounts.
-  // Single-account setups keep backward compat: channel-level groups still
-  // applies when the account has no override.
-  // See: https://github.com/openclaw/openclaw/issues/30673
-  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
-  const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
-
-  return { ...base, ...account, groups };
 }
 
 export function createTelegramActionGate(params: {

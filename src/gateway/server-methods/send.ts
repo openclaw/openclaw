@@ -26,6 +26,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -34,7 +35,6 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../protocol/index.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -231,8 +231,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     // from unlocking owner-only channel actions by setting
     // `senderIsOwner: true` on the request.
     const callerScopes = client?.connect?.scopes ?? [];
-    const callerIsFullOperator =
-      Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
+    const callerIsFullOperator = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
     const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
