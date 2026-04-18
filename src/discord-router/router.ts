@@ -53,6 +53,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
   let lastSequence: number | null = null;
   let sessionId: string | undefined;
   let resumeGatewayUrl: string | undefined;
+  let shuttingDown = false;
 
   function connect(resume = false) {
     const url = resume && resumeGatewayUrl ? resumeGatewayUrl : gatewayUrl;
@@ -185,9 +186,15 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
         clearInterval(heartbeatInterval);
         heartbeatInterval = undefined;
       }
-      // Auto-reconnect unless we explicitly shut down
-      if (code !== 1000) {
-        setTimeout(() => connect(!!sessionId), 5000);
+      // Always reconnect — Discord sends 1000/1001 for routine reconnects.
+      // Only process exit (SIGINT/SIGTERM) should stop the router.
+      if (!shuttingDown) {
+        const delay = code === 4004 ? 0 : 5000; // 4004 = auth failed, don't retry
+        if (code === 4004) {
+          runtime.error("[router] authentication failed (4004), not reconnecting");
+          return;
+        }
+        setTimeout(() => connect(!!sessionId), delay);
       }
     });
 
@@ -200,8 +207,12 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
 
   // Keep running until process exit
   await new Promise<void>((resolve) => {
-    process.once("SIGINT", resolve);
-    process.once("SIGTERM", resolve);
+    const shutdown = () => {
+      shuttingDown = true;
+      resolve();
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
   });
 }
 
