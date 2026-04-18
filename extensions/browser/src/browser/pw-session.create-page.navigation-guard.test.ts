@@ -681,4 +681,49 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       }),
     ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
   });
+
+  it("ignores already-handled route races during guarded navigation", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+
+    await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "about:blank",
+    });
+    const page = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "TARGET_1",
+    });
+
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://example.com/static/app.js",
+        isNavigationRequest: false,
+        route: {
+          continue: vi.fn(async () => {
+            throw new Error("route.continue: Route is already handled!");
+          }),
+        },
+      });
+      return {
+        request: () => ({
+          url: () => "https://example.com",
+          redirectedFrom: () => null,
+        }),
+      };
+    });
+
+    await expect(
+      gotoPageWithNavigationGuard({
+        cdpUrl: "http://127.0.0.1:18792",
+        page,
+        url: "https://example.com",
+        timeoutMs: 1000,
+        targetId: "TARGET_1",
+      }),
+    ).resolves.not.toBeNull();
+
+    expect(pageClose).not.toHaveBeenCalled();
+  });
 });

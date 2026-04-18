@@ -783,6 +783,26 @@ export async function assertPageNavigationCompletedSafely(opts: {
   }
 }
 
+async function continueRouteSafely(route: Route): Promise<void> {
+  try {
+    // Playwright can surface a handled-route race when page navigation and teardown
+    // interleave. Swallow only that known benign case so browser tasks do not crash
+    // the whole gateway while preserving every other route failure.
+    await route.continue();
+  } catch (err) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : typeof err === "object" && err && "message" in err && typeof err.message === "string"
+          ? err.message
+          : "";
+    if (message.includes("Route is already handled")) {
+      return;
+    }
+    throw err;
+  }
+}
+
 export async function gotoPageWithNavigationGuard(opts: {
   cdpUrl: string;
   page: Page;
@@ -803,7 +823,7 @@ export async function gotoPageWithNavigationGuard(opts: {
     const isSubframeDocument =
       !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
     if (!isTopLevel && !isSubframeDocument) {
-      await route.continue();
+      await continueRouteSafely(route);
       return;
     }
     try {
@@ -821,7 +841,7 @@ export async function gotoPageWithNavigationGuard(opts: {
       }
       throw err;
     }
-    await route.continue();
+    await continueRouteSafely(route);
   };
 
   await opts.page.route("**", handler);
