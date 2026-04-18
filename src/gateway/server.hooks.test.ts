@@ -18,6 +18,7 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
+const HOOKS_AGENT_SESSION_KEY = "agent:hooks:main";
 const HOOK_TOKEN = "hook-secret";
 
 afterEach(() => {
@@ -116,14 +117,14 @@ async function expectHookAgentSessionRouting(params: {
     sessionKey: params.requestSessionKey,
   });
   expect(resAgent.status).toBe(200);
-  await waitForSystemEvent();
+  await waitForSystemEvent(2000, { sessionKey: HOOKS_AGENT_SESSION_KEY });
 
   const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
     | { sessionKey?: string; job?: { agentId?: string } }
     | undefined;
   expect(routedCall?.job?.agentId).toBe("hooks");
   expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
-  drainSystemEvents(resolveMainKey());
+  drainSystemEvents(HOOKS_AGENT_SESSION_KEY);
 }
 
 describe("gateway server hooks", () => {
@@ -174,12 +175,12 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAgentWithId.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(2000, { sessionKey: HOOKS_AGENT_SESSION_KEY });
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(routedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      drainSystemEvents(HOOKS_AGENT_SESSION_KEY);
 
       mockIsolatedRunOkOnce();
       const resAgentUnknown = await postHook(port, "/hooks/agent", {
@@ -610,12 +611,12 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAllowed.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEvent(2000, { sessionKey: HOOKS_AGENT_SESSION_KEY });
       const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(allowedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      drainSystemEvents(HOOKS_AGENT_SESSION_KEY);
 
       const resDenied = await postHook(port, "/hooks/agent", {
         message: "Denied",

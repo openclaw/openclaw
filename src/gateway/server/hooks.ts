@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKeyFromConfig,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
@@ -42,7 +45,14 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
+    // Route hook completion status/error events to the target agent's main
+    // session, not the default agent's. Fixes cross-agent leakage where hook
+    // payloads (e.g. Gmail email bodies) routed to a non-default agent via
+    // `agentId` would still announce the summary into the default agent's
+    // session, breaking isolation between agents handling different data.
+    const completionSessionKey = value.agentId
+      ? resolveAgentMainSessionKey({ cfg: loadConfig(), agentId: value.agentId })
+      : resolveMainSessionKeyFromConfig();
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
     const now = Date.now();
@@ -97,7 +107,7 @@ export function createGatewayHooksRequestHandler(params: {
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
         if (!result.delivered) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: completionSessionKey,
             trusted: false,
           });
           if (value.wakeMode === "now") {
@@ -107,7 +117,7 @@ export function createGatewayHooksRequestHandler(params: {
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+          sessionKey: completionSessionKey,
           trusted: false,
         });
         if (value.wakeMode === "now") {
