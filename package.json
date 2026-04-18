@@ -1113,7 +1113,12 @@
       "default": "./dist/plugin-sdk/zod.js"
     },
     "./extension-api": "./dist/extensionAPI.js",
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./openclaw.mjs",
+    "./plugin-sdk/delegated-wait-run": {
+      "types": "./src/plugin-sdk/delegated-wait-run.ts",
+      "require": "./dist/plugin-sdk/delegated-wait-run.js",
+      "default": "./dist/plugin-sdk/delegated-wait-run.js"
+    }
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
