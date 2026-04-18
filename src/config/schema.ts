@@ -443,12 +443,12 @@ function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
 
 function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => {
-    const metadata: ChannelUiMetadata = {
-      id: entry.channelId,
-      ...(entry.label ? { label: entry.label } : {}),
-      ...(entry.description ? { description: entry.description } : {}),
-      configSchema: entry.schema,
-    };
+    const metadata: ChannelUiMetadata = Object.assign(
+      { id: entry.channelId },
+      entry.label ? { label: entry.label } : {},
+      entry.description ? { description: entry.description } : {},
+      { configSchema: entry.schema },
+    );
     if ("uiHints" in entry) {
       metadata.configUiHints = entry.uiHints as ChannelUiMetadata["configUiHints"];
     }
