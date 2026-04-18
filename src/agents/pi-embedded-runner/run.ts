@@ -518,15 +518,29 @@ export async function runEmbeddedPiAgent(
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
         modelId?: string;
+        /** Optional raw error text from the failing upstream call. When
+         *  present, we extract any 4xx/5xx HTTP status and forward it as
+         *  `statusCode` so `markAuthProfileFailure` can skip false-positive
+         *  cooldowns on 400s whose classifier label was something other
+         *  than `"format"`. */
+        errorText?: string;
       }) => {
-        const { profileId, reason } = failure;
+        const { profileId, reason, errorText } = failure;
         if (!profileId || !reason || reason === "timeout") {
           return;
+        }
+        let statusCode: number | undefined;
+        if (typeof errorText === "string") {
+          const m = /\b(4\d{2}|5\d{2})\b/.exec(errorText);
+          if (m) {
+            statusCode = parseInt(m[1], 10);
+          }
         }
         await markAuthProfileFailure({
           store: authStore,
           profileId,
           reason,
+          statusCode,
           cfg: params.config,
           agentDir,
           runId: params.runId,
@@ -1321,6 +1335,7 @@ export async function runEmbeddedPiAgent(
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
               modelId,
+              errorText,
             });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });

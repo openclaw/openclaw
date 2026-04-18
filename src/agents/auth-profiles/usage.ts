@@ -810,10 +810,37 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  /**
+   * Optional raw HTTP status code observed with the failure. When the caller
+   * can surface this, we can skip profile-level cooldowns for HTTP 400s even
+   * if the message classifier labeled the failure as something else. See the
+   * `reason === "format"` case which already short-circuits for the canonical
+   * 400-classification path.
+   */
+  statusCode?: number;
+  /** Alias for `statusCode`. Accepted for compatibility with callers that
+   *  already use `httpStatus` terminology. */
+  httpStatus?: number;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, cfg, runId, modelId } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+    return;
+  }
+
+  // Format errors and HTTP 400s indicate a malformed client-side payload, not
+  // a profile-level problem. Penalizing the profile produces false-positive
+  // cooldowns that cascade into fallback churn when the caller retries with a
+  // corrected payload. See issue #23815 (auth cooldown cascade). The
+  // `reason === "format"` half was already covered by upstream classifier
+  // conventions for bare 400s; adding explicit `statusCode` / `httpStatus`
+  // handling extends the same guarantee to callers that propagate the raw
+  // status code directly (typical of middleware error paths).
+  if (
+    reason === "format" ||
+    params.statusCode === 400 ||
+    params.httpStatus === 400
+  ) {
     return;
   }
 
