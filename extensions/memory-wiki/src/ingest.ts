@@ -9,8 +9,9 @@ import {
   renderMarkdownFence,
   renderWikiMarkdown,
   slugifyWikiSegment,
+  toWikiPageSummary,
+  type WikiPageSummary,
 } from "./markdown.js";
-import { readQueryableWikiPages } from "./query.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 export type IngestMemoryWikiSourceResult = {
@@ -21,6 +22,10 @@ export type IngestMemoryWikiSourceResult = {
   bytes: number;
   created: boolean;
   indexUpdatedFiles: string[];
+};
+
+type LocalFileSourcePage = WikiPageSummary & {
+  sourcePath: string;
 };
 
 function pathExists(filePath: string): Promise<boolean> {
@@ -49,6 +54,31 @@ async function resolveCanonicalSourcePath(sourcePath: string): Promise<string> {
   return await fs.realpath(sourcePath).catch(() => path.resolve(sourcePath));
 }
 
+async function listSourceMarkdownFiles(rootDir: string): Promise<string[]> {
+  const dirPath = path.join(rootDir, "sources");
+  const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md")
+    .map((entry) => path.join("sources", entry.name))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+async function readLocalFileSourcePages(rootDir: string): Promise<LocalFileSourcePage[]> {
+  const files = await listSourceMarkdownFiles(rootDir);
+  const pages = await Promise.all(
+    files.map(async (relativePath) => {
+      const absolutePath = path.join(rootDir, relativePath);
+      const raw = await fs.readFile(absolutePath, "utf8");
+      const page = toWikiPageSummary({ absolutePath, relativePath, raw });
+      if (page?.kind !== "source" || page.sourceType !== "local-file" || !page.sourcePath) {
+        return null;
+      }
+      return page as LocalFileSourcePage;
+    }),
+  );
+  return pages.flatMap((page) => (page ? [page] : []));
+}
+
 async function resolveIngestSourcePageIdentity(params: {
   vaultPath: string;
   sourcePath: string;
@@ -58,17 +88,12 @@ async function resolveIngestSourcePageIdentity(params: {
   pageRelativePath: string;
 }> {
   const canonicalSourcePath = await resolveCanonicalSourcePath(params.sourcePath);
-  const pages = await readQueryableWikiPages(params.vaultPath);
+  const pages = await readLocalFileSourcePages(params.vaultPath);
   const existingSourcePaths = await Promise.all(
-    pages.map(async (page) => {
-      if (page.kind !== "source" || page.sourceType !== "local-file" || !page.sourcePath) {
-        return null;
-      }
-      return {
-        page,
-        canonicalSourcePath: await resolveCanonicalSourcePath(page.sourcePath),
-      };
-    }),
+    pages.map(async (page) => ({
+      page,
+      canonicalSourcePath: await resolveCanonicalSourcePath(page.sourcePath),
+    })),
   );
   const existingPage = existingSourcePaths.find(
     (entry) => entry?.canonicalSourcePath === canonicalSourcePath,

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -232,6 +232,64 @@ describe("ingestMemoryWikiSource", () => {
     await expect(
       fs.readFile(path.join(config.vault.path, second.pagePath), "utf8"),
     ).resolves.toContain("same title source two");
+  });
+
+  it("limits source identity lookup to source pages", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-source-scan-");
+    const inputPath = path.join(rootDir, "source.txt");
+    await fs.writeFile(inputPath, "source content\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+      initialize: true,
+    });
+    const entityPath = path.join(config.vault.path, "entities", "alpha.md");
+    await fs.writeFile(
+      entityPath,
+      [
+        "---",
+        "pageType: entity",
+        "id: entity.alpha",
+        "title: Alpha",
+        "---",
+        "",
+        "# Alpha",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const writeFileSpy = vi.spyOn(fs, "writeFile");
+
+    try {
+      const result = await ingestMemoryWikiSource({
+        config,
+        inputPath,
+        title: "Source Scan",
+        nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+      });
+
+      const sourcePagePath = path.join(config.vault.path, result.pagePath);
+      const sourcePageWriteOrder = writeFileSpy.mock.calls.findIndex(
+        ([filePath]) =>
+          typeof filePath === "string" &&
+          path.normalize(filePath) === path.normalize(sourcePagePath),
+      );
+      expect(sourcePageWriteOrder).toBeGreaterThanOrEqual(0);
+      const sourcePageWriteCallOrder = writeFileSpy.mock.invocationCallOrder[sourcePageWriteOrder];
+      expect(sourcePageWriteCallOrder).toBeTypeOf("number");
+
+      const earlyEntityRead = readFileSpy.mock.calls.some(([filePath], index) => {
+        return (
+          typeof filePath === "string" &&
+          path.normalize(filePath) === path.normalize(entityPath) &&
+          readFileSpy.mock.invocationCallOrder[index] < sourcePageWriteCallOrder
+        );
+      });
+      expect(earlyEntityRead).toBe(false);
+    } finally {
+      readFileSpy.mockRestore();
+      writeFileSpy.mockRestore();
+    }
   });
 
   it("treats symlinked paths to the same file as one stable source", async () => {
