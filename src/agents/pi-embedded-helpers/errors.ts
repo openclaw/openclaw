@@ -257,6 +257,7 @@ export type ProviderRuntimeFailureKind =
   | "auth_scope"
   | "auth_refresh"
   | "auth_html_403"
+  | "upstream_html"
   | "proxy"
   | "rate_limit"
   | "dns"
@@ -294,6 +295,7 @@ const RETRYABLE_402_SCOPED_RESULT_HINTS = [
 ] as const;
 const RAW_402_MARKER_RE =
   /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
+const BARE_LEADING_402_RE = /^\s*402\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
 const TIMEOUT_ERROR_CODES = new Set([
@@ -320,15 +322,19 @@ const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host
 const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const REPLAY_INVALID_RE =
-  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b/i;
+  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+
+function stripErrorPrefix(raw: string): string {
+  return raw.replace(/^error:\s*/i, "").trim();
+}
 
 function inferSignalStatus(signal: FailoverSignal): number | undefined {
   if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
     return signal.status;
   }
-  return extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
+  return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
 }
 
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
@@ -336,15 +342,24 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (!trimmed) {
     return false;
   }
+  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
   const inferred =
     typeof status === "number" && Number.isFinite(status)
       ? status
-      : extractLeadingHttpStatus(trimmed)?.code;
+      : extractLeadingHttpStatus(candidate)?.code;
   if (typeof inferred !== "number" || inferred < 400) {
     return false;
   }
-  const rest = extractLeadingHttpStatus(trimmed)?.rest ?? trimmed;
+  const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+}
+
+function isTransportHtmlErrorStatus(status: number | undefined): boolean {
+  return (
+    status === 408 ||
+    status === 499 ||
+    (typeof status === "number" && status >= 500 && status < 600)
+  );
 }
 
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
@@ -462,6 +477,15 @@ function hasRetryable402TransientSignal(text: string): boolean {
   );
 }
 
+function hasKnownBareLeading402Signal(text: string): boolean {
+  return (
+    hasQuotaRefreshWindowSignal(text) ||
+    hasExplicit402BillingSignal(text) ||
+    isRateLimitErrorMessage(text) ||
+    hasRetryable402TransientSignal(text)
+  );
+}
+
 function normalize402Message(raw: string): string {
   return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
 }
@@ -492,7 +516,14 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
 }
 
 function classifyFailoverReasonFrom402Text(raw: string): PaymentRequiredFailoverReason | null {
-  if (!RAW_402_MARKER_RE.test(raw)) {
+  if (RAW_402_MARKER_RE.test(raw)) {
+    return classify402Message(raw);
+  }
+  if (!BARE_LEADING_402_RE.test(raw)) {
+    return null;
+  }
+  const normalized = normalize402Message(raw);
+  if (!normalized || !hasKnownBareLeading402Signal(normalized)) {
     return null;
   }
   return classify402Message(raw);
@@ -669,7 +700,9 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
 }
 
 function isExactUnknownNoDetailsError(raw: string): boolean {
-  return normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)";
+  return (
+    normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
+  );
 }
 
 function classifyFailoverClassificationFromMessage(
@@ -757,6 +790,13 @@ function classifyFailoverClassificationFromMessage(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  if (
+    signal.message &&
+    isTransportHtmlErrorStatus(inferredStatus) &&
+    isHtmlErrorResponse(signal.message, inferredStatus)
+  ) {
+    return toReasonClassification("timeout");
+  }
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
@@ -791,11 +831,11 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
     return "auth_scope";
   }
-  if (message && status === 403 && isHtmlErrorResponse(message, status)) {
-    return "auth_html_403";
-  }
   if (message && isProxyErrorMessage(message, status)) {
     return "proxy";
+  }
+  if (message && isHtmlErrorResponse(message, status)) {
+    return status === 403 ? "auth_html_403" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
     ...normalizedSignal,
@@ -882,6 +922,14 @@ export function formatAssistantErrorText(
     return (
       "Authentication failed with an HTML 403 response from the provider. " +
       "Re-authenticate and verify your provider account access."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "upstream_html") {
+    return (
+      "The provider returned an HTML error page instead of an API response. " +
+      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
+      "Retry in a moment or check provider status."
     );
   }
 
@@ -1109,6 +1157,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("session expired") ||
     lower.includes("session invalid") ||
     lower.includes("conversation not found") ||
+    lower.includes("no conversation found") ||
     lower.includes("conversation does not exist") ||
     lower.includes("conversation expired") ||
     lower.includes("conversation invalid") ||
@@ -1125,6 +1174,15 @@ export function classifyFailoverReason(
 ): FailoverReason | null {
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
+  const reasonFrom402Text =
+    leadingStatus?.code === 402 ? classifyFailoverReasonFrom402Text(trimmed) : null;
+  if (
+    leadingStatus?.code === 402 &&
+    !reasonFrom402Text &&
+    !isHtmlErrorResponse(trimmed, leadingStatus.code)
+  ) {
+    return null;
+  }
   return failoverReasonFromClassification(
     classifyFailoverSignal({
       status: leadingStatus?.code,
