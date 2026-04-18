@@ -470,6 +470,7 @@ type SlackRepliesPageMessage = {
   bot_id?: string;
   ts?: string;
   files?: SlackFile[];
+  attachments?: SlackAttachment[];
 };
 
 type SlackRepliesPage = {
@@ -512,8 +513,11 @@ export async function resolveSlackThreadHistory(params: {
       })) as SlackRepliesPage;
 
       for (const msg of response.messages ?? []) {
-        // Keep messages with text OR file attachments
-        if (!msg.text?.trim() && !msg.files?.length) {
+        const hasForwardedAttachments =
+          msg.attachments?.some(
+            (a) => a.is_share === true && !!(a.text?.trim() || a.fallback?.trim()),
+          ) ?? false;
+        if (!msg.text?.trim() && !msg.files?.length && !hasForwardedAttachments) {
           continue;
         }
         if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
@@ -529,16 +533,35 @@ export async function resolveSlackThreadHistory(params: {
       cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
     } while (cursor);
 
-    return retained.map((msg) => ({
-      // For file-only messages, create a placeholder showing attached filenames
-      text: msg.text?.trim()
+    return retained.map((msg) => {
+      const forwardedText = (msg.attachments ?? [])
+        .filter((a) => a.is_share === true)
+        .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS)
+        .map((a) => {
+          const body = a.text?.trim() || a.fallback?.trim();
+          if (!body) return null;
+          const author = a.author_name;
+          return author
+            ? `[Forwarded message from ${author}]\n${body}`
+            : `[Forwarded message]\n${body}`;
+        })
+        .filter(Boolean)
+        .join("\n\n");
+
+      const baseText = msg.text?.trim()
         ? msg.text
-        : `[attached: ${msg.files?.map((f) => f.name ?? "file").join(", ")}]`,
-      userId: msg.user,
-      botId: msg.bot_id,
-      ts: msg.ts,
-      files: msg.files,
-    }));
+        : msg.files?.length
+          ? `[attached: ${msg.files.map((f) => f.name ?? "file").join(", ")}]`
+          : "";
+
+      return {
+        text: [baseText, forwardedText].filter(Boolean).join("\n"),
+        userId: msg.user,
+        botId: msg.bot_id,
+        ts: msg.ts,
+        files: msg.files,
+      };
+    });
   } catch {
     return [];
   }

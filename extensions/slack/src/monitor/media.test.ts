@@ -843,6 +843,141 @@ describe("resolveSlackThreadHistory", () => {
     expect(replies).not.toHaveBeenCalled();
   });
 
+  it("includes forwarded attachment text in thread history messages", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "check this user",
+          user: "U1",
+          ts: "1.000",
+          attachments: [
+            {
+              is_share: true,
+              text: "*From:* user@example.com\n*Subject:* Help needed",
+              author_name: "n8n.cloud",
+              fallback: "fallback text",
+            },
+          ],
+        },
+        { text: "noted", user: "U2", ts: "2.000" },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]?.text).toBe(
+      "check this user\n[Forwarded message from n8n.cloud]\n*From:* user@example.com\n*Subject:* Help needed",
+    );
+    expect(result[1]?.text).toBe("noted");
+  });
+
+  it("retains messages with only forwarded attachments and no text", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "",
+          user: "U1",
+          ts: "1.000",
+          attachments: [
+            {
+              is_share: true,
+              text: "forwarded content",
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("[Forwarded message]\nforwarded content");
+  });
+
+  it("ignores non-share attachments in thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "link preview here",
+          user: "U1",
+          ts: "1.000",
+          attachments: [
+            {
+              is_share: false,
+              text: "some unfurl preview",
+              author_name: "GitHub",
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("link preview here");
+  });
+
+  it("drops forwarded attachments with no text or fallback from thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "",
+          user: "U1",
+          ts: "1.000",
+          attachments: [
+            {
+              is_share: true,
+              // no text, no fallback — image-only share
+              image_url: "https://files.slack.com/image.jpg",
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(0);
+  });
+
   it("returns empty when Slack API throws", async () => {
     const replies = vi.fn().mockRejectedValueOnce(new Error("slack down"));
     const client = {
