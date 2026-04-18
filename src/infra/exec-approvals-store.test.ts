@@ -200,6 +200,48 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(false);
   });
 
+  it("refuses to traverse a symlinked .openclaw dir even when HOME itself is real", () => {
+    // Regression test: on AWS deployments, HOME is real (/home/ubuntu) but
+    // ~/.openclaw is a symlink to OPENCLAW_STATE_DIR (/data/openclaw).
+    // The exec approvals system should not block in this case — it should
+    // use the real resolved path rather than tripping on the symlink.
+    //
+    // Currently this test FAILS (demonstrating the bug): the check uses
+    // resolveRequiredHomeDir() as the trusted root and walks from there,
+    // hitting the symlink at ~/.openclaw and throwing.
+    //
+    // The fix: when OPENCLAW_STATE_DIR is set, use its real path as the
+    // trusted root for the approvals path check instead of HOME.
+    const realHome = makeTempDir();
+    tempDirs.push(realHome);
+    const realStateDir = makeTempDir();
+    tempDirs.push(realStateDir);
+
+    // Set HOME to a real (non-symlinked) directory.
+    process.env.OPENCLAW_HOME = realHome;
+
+    // Make ~/.openclaw a symlink to realStateDir, as AWS deployments do.
+    const symlinkDotOpenclaw = path.join(realHome, ".openclaw");
+    fs.symlinkSync(realStateDir, symlinkDotOpenclaw);
+
+    // With OPENCLAW_STATE_DIR pointing directly at the real dir, the
+    // approvals system should resolve through it cleanly without throwing.
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = realStateDir;
+    try {
+      // This should NOT throw — OPENCLAW_STATE_DIR resolves to a real path.
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).not.toThrow();
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+    }
+  });
+
   it("adds trimmed allowlist entries once and persists generated ids", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(123_456);

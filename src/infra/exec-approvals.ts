@@ -227,12 +227,42 @@ function mergeLegacyAgent(
   };
 }
 
-function ensureDir(filePath: string) {
+// When OPENCLAW_STATE_DIR is set (e.g. in a systemd service), use its real
+// path as the trusted root so that a ~/.openclaw symlink pointing at the same
+// directory does not produce a false-positive symlink rejection.
+function resolveApprovalsPathTrustedRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDir) {
+    try {
+      return fs.realpathSync(stateDir);
+    } catch {
+      // State dir not yet created; fall through to HOME-based root.
+    }
+  }
+  return resolveRequiredHomeDir(env);
+}
+
+function ensureDir(filePath: string, env: NodeJS.ProcessEnv = process.env) {
   const dir = path.dirname(filePath);
-  assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
+  const trustedRoot = resolveApprovalsPathTrustedRoot(env);
+  assertNoSymlinkPathComponents(dir, trustedRoot);
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+  if (dirStat.isSymbolicLink()) {
+    // Allow a symlink dir only when OPENCLAW_STATE_DIR is set; follow it and
+    // verify the target is a real directory.
+    const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+    if (!stateDir) {
+      throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+    }
+    const realDir = fs.realpathSync(dir);
+    const realStat = fs.lstatSync(realDir);
+    if (!realStat.isDirectory() || realStat.isSymbolicLink()) {
+      throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+    }
+    return realDir;
+  }
+  if (!dirStat.isDirectory()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
   return dir;
