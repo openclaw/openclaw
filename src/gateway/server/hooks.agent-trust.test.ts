@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 const runCronIsolatedAgentTurnMock = vi.fn();
+const resolveMainSessionKeyFromConfigMock = vi.fn(() => "main-session");
 const resolveMainSessionKeyMock = vi.fn(() => "main-session");
 const resolveAgentMainSessionKeyMock = vi.fn(
   (params: { agentId: string }) => `agent:${params.agentId}:main`,
@@ -19,7 +20,8 @@ vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 vi.mock("../../config/sessions.js", () => ({
-  resolveMainSessionKeyFromConfig: resolveMainSessionKeyMock,
+  resolveMainSessionKeyFromConfig: resolveMainSessionKeyFromConfigMock,
+  resolveMainSessionKey: resolveMainSessionKeyMock,
   resolveAgentMainSessionKey: resolveAgentMainSessionKeyMock,
 }));
 vi.mock("../../config/config.js", () => ({
@@ -139,6 +141,7 @@ describe("dispatchAgentHook trust handling", () => {
       expect.objectContaining({ agentId: "dev" }),
     );
     expect(resolveMainSessionKeyMock).not.toHaveBeenCalled();
+    expect(resolveMainSessionKeyFromConfigMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook gmail: delivered", {
       sessionKey: "agent:dev:main",
       trusted: false,

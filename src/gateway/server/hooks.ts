@@ -4,6 +4,7 @@ import type { CliDeps } from "../../cli/deps.types.js";
 import { loadConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
+  resolveMainSessionKey,
   resolveMainSessionKeyFromConfig,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,14 +46,17 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
+    // Load once and share between the completion-session-key resolution and
+    // the isolated agent turn below so both see a consistent config snapshot.
+    const cfg = loadConfig();
     // Route hook completion status/error events to the target agent's main
     // session, not the default agent's. Fixes cross-agent leakage where hook
     // payloads (e.g. Gmail email bodies) routed to a non-default agent via
     // `agentId` would still announce the summary into the default agent's
     // session, breaking isolation between agents handling different data.
     const completionSessionKey = value.agentId
-      ? resolveAgentMainSessionKey({ cfg: loadConfig(), agentId: value.agentId })
-      : resolveMainSessionKeyFromConfig();
+      ? resolveAgentMainSessionKey({ cfg, agentId: value.agentId })
+      : resolveMainSessionKey(cfg);
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
     const now = Date.now();
@@ -89,7 +93,6 @@ export function createGatewayHooksRequestHandler(params: {
     const runId = randomUUID();
     void (async () => {
       try {
-        const cfg = loadConfig();
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
