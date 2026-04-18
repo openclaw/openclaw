@@ -6,6 +6,7 @@ import {
   normalizeAuthIdentityToken,
   shouldMirrorRefreshedOAuthCredential,
 } from "./oauth-identity.js";
+import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
 import type { AuthProfileCredential } from "./types.js";
 
 // Direct unit + fuzz tests for the cross-agent credential-mirroring identity
@@ -176,30 +177,6 @@ describe("isSameOAuthIdentity", () => {
 // ---------------------------------------------------------------------------
 // Fuzz tests. Seeded Mulberry32 so the run is reproducible.
 // ---------------------------------------------------------------------------
-
-function makeSeededRandom(seed: number): () => number {
-  let t = seed >>> 0;
-  return () => {
-    t = (t + 0x6d2b79f5) >>> 0;
-    let r = t;
-    r = Math.imul(r ^ (r >>> 15), r | 1);
-    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function randomString(rng: () => number, maxLen: number): string {
-  const len = Math.floor(rng() * maxLen);
-  const chars: string[] = [];
-  for (let i = 0; i < len; i += 1) {
-    chars.push(String.fromCodePoint(32 + Math.floor(rng() * 95))); // printable ASCII
-  }
-  return chars.join("");
-}
-
-function maybe<T>(rng: () => number, value: T): T | undefined {
-  return rng() < 0.5 ? value : undefined;
-}
 
 describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adopt)", () => {
   describe("positive matches", () => {
@@ -479,30 +456,6 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
 });
 
 describe("isSafeToCopyOAuthIdentity fuzz", () => {
-  function makeSeededRandom(seed: number): () => number {
-    let t = seed >>> 0;
-    return () => {
-      t = (t + 0x6d2b79f5) >>> 0;
-      let r = t;
-      r = Math.imul(r ^ (r >>> 15), r | 1);
-      r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
-      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function randomString(rng: () => number, maxLen: number): string {
-    const len = Math.floor(rng() * maxLen);
-    const chars: string[] = [];
-    for (let i = 0; i < len; i += 1) {
-      chars.push(String.fromCodePoint(32 + Math.floor(rng() * 95)));
-    }
-    return chars.join("");
-  }
-
-  function maybe<T>(rng: () => number, value: T): T | undefined {
-    return rng() < 0.5 ? value : undefined;
-  }
-
   it("is reflexive: share(a, a) is always true", () => {
     const rng = makeSeededRandom(0x0172_0417);
     for (let i = 0; i < 1000; i += 1) {
