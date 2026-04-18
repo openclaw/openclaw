@@ -423,6 +423,11 @@ export class OpenClawApp extends LitElement {
   // host so the textarea survives chat re-renders.
   @state() planApprovalReviseOpen = false;
   @state() planApprovalReviseDraft = "";
+  // PR-13 Bug 2: question-card "Other" inline-textarea state. Replaces
+  // the prior window.prompt approach so backing out returns to the
+  // option list instead of (perceptibly) exiting the sequence.
+  @state() planApprovalQuestionOtherOpen = false;
+  @state() planApprovalQuestionOtherDraft = "";
   // PR-8 follow-up: latest known plan content (rendered as markdown).
   // Updated whenever the agent calls update_plan (regardless of whether
   // the sidebar is open). The chat-controls "Plan view" button reads
@@ -1268,6 +1273,43 @@ export class OpenClawApp extends LitElement {
 
   handlePlanApprovalReviseDraftChange(text: string): void {
     this.planApprovalReviseDraft = text;
+  }
+
+  /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea handlers.
+   * Mirror the revise pattern. Open shows the textarea; Cancel returns
+   * to the option list (does NOT clear planApprovalRequest); Submit
+   * routes through the existing handlePlanApprovalAnswer with the
+   * typed text.
+   */
+  handlePlanApprovalQuestionOtherOpen(): void {
+    if (!this.planApprovalRequest?.question) {
+      return;
+    }
+    this.planApprovalQuestionOtherOpen = true;
+    this.planApprovalError = null;
+  }
+
+  handlePlanApprovalQuestionOtherCancel(): void {
+    this.planApprovalQuestionOtherOpen = false;
+    this.planApprovalQuestionOtherDraft = "";
+    this.planApprovalError = null;
+  }
+
+  handlePlanApprovalQuestionOtherDraftChange(text: string): void {
+    this.planApprovalQuestionOtherDraft = text;
+  }
+
+  async handlePlanApprovalQuestionOtherSubmit(): Promise<void> {
+    const draft = this.planApprovalQuestionOtherDraft.trim();
+    if (!draft) {
+      return;
+    }
+    // Clear the local textarea state before routing — handlePlanApprovalAnswer
+    // owns clearing the request itself.
+    this.planApprovalQuestionOtherOpen = false;
+    this.planApprovalQuestionOtherDraft = "";
+    await this.handlePlanApprovalAnswer(draft);
   }
 
   handleGatewayUrlConfirm() {

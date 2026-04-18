@@ -139,6 +139,14 @@ export type AppViewState = {
   planApprovalReviseOpen: boolean;
   planApprovalReviseDraft: string;
   /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea state. Mirrors
+   * the revise pattern; replaces the prior `window.prompt` approach so
+   * Cancel returns to the option list instead of (perceptibly) exiting
+   * the sequence. Caller owns the state so it survives renders.
+   */
+  planApprovalQuestionOtherOpen: boolean;
+  planApprovalQuestionOtherDraft: string;
+  /**
    * PR-8 follow-up: most recent live-plan markdown rendered into the
    * sidebar, kept in sync by `refreshLivePlanSidebar()`. Surfaced so the
    * chat-controls "Plan view" button + `/plan view` slash command can
@@ -443,6 +451,16 @@ export type AppViewState = {
     handlePlanApprovalReviseOpen: () => void;
     handlePlanApprovalReviseCancel: () => void;
     handlePlanApprovalReviseDraftChange: (text: string) => void;
+    /**
+     * PR-13 Bug 2: question-card "Other" inline-textarea handlers.
+     * Mirrors the revise pattern. Cancel does NOT clear the request,
+     * so users can back out of typing a free-text answer and return
+     * to the option list.
+     */
+    handlePlanApprovalQuestionOtherOpen: () => void;
+    handlePlanApprovalQuestionOtherCancel: () => void;
+    handlePlanApprovalQuestionOtherDraftChange: (text: string) => void;
+    handlePlanApprovalQuestionOtherSubmit: () => Promise<void>;
     /**
      * PR-10 ask_user_question: route the chosen answer back through
      * the same approval-card surface. Persists via

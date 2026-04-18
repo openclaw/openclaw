@@ -2454,6 +2454,13 @@ export function renderApp(state: AppViewState) {
               planApprovalError: state.planApprovalError,
               planApprovalReviseOpen: state.planApprovalReviseOpen,
               planApprovalReviseDraft: state.planApprovalReviseDraft,
+              // PR-13 Bug 2: question-card "Other" inline-textarea
+              // state, mirroring the revise pattern. Cancel returns to
+              // the option list instead of (perceptibly) exiting the
+              // sequence (was: window.prompt that lost the card on
+              // cancel/blur).
+              planApprovalQuestionOtherOpen: state.planApprovalQuestionOtherOpen,
+              planApprovalQuestionOtherDraft: state.planApprovalQuestionOtherDraft,
               onPlanApprovalDecision: (decision, feedback) =>
                 state.handlePlanApprovalDecision(decision, feedback),
               // PR-10 AskUserQuestion: route the chosen answer back
@@ -2463,6 +2470,13 @@ export function renderApp(state: AppViewState) {
               onPlanApprovalReviseCancel: () => state.handlePlanApprovalReviseCancel(),
               onPlanApprovalReviseDraftChange: (text) =>
                 state.handlePlanApprovalReviseDraftChange(text),
+              onPlanApprovalQuestionOtherOpen: () => state.handlePlanApprovalQuestionOtherOpen(),
+              onPlanApprovalQuestionOtherCancel: () =>
+                state.handlePlanApprovalQuestionOtherCancel(),
+              onPlanApprovalQuestionOtherDraftChange: (text) =>
+                state.handlePlanApprovalQuestionOtherDraftChange(text),
+              onPlanApprovalQuestionOtherSubmit: () =>
+                state.handlePlanApprovalQuestionOtherSubmit(),
               onOpenPlanInSidebar: (request) => {
                 // Render the proposed plan as a markdown document and
                 // hand it to the existing markdown-sidebar viewer (same

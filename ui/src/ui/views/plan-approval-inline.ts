@@ -35,6 +35,18 @@ export interface InlinePlanApprovalProps {
   // "answer", answer: <text> } }. Same approval-card shell renders the
   // question prompt + one button per option (and optional Other field).
   onAnswerOption?: (answer: string) => void;
+  /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea state. Caller
+   * owns these (mirrors the reviseOpen/reviseDraft pattern) so backing
+   * out of the textarea returns to the option list instead of (as
+   * window.prompt cancellation did) appearing to exit the sequence.
+   */
+  questionOtherOpen?: boolean;
+  questionOtherDraft?: string;
+  onQuestionOtherOpen?: () => void;
+  onQuestionOtherCancel?: () => void;
+  onQuestionOtherDraftChange?: (text: string) => void;
+  onQuestionOtherSubmit?: () => void;
 }
 
 export function renderInlinePlanApproval(
@@ -164,6 +176,12 @@ export function renderInlinePlanApproval(
 function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
   const { request, busy, error } = props;
   const question = request!.question!;
+  // PR-13 Bug 2: render the "Other" inline textarea when the user has
+  // clicked Other and not yet submitted/cancelled. Mirrors the revise
+  // UX so backing out (Cancel button or Escape key) returns to the
+  // option list instead of (as window.prompt cancellation appeared to
+  // do) exiting the entire sequence.
+  const otherOpen = props.questionOtherOpen === true;
   return html`
     <div class="plan-inline-card" role="region" aria-label="Agent question">
       <div class="plan-inline-card__header">
@@ -176,42 +194,82 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
         ${question.options.length} options${question.allowFreetext ? " + free text" : ""}
       </div>
       ${error ? html`<div class="plan-inline-card__error">${error}</div>` : nothing}
-      <div class="plan-inline-card__actions plan-inline-card__actions--question">
-        ${question.options.map(
-          (option, idx) => html`
-            <button
-              class="plan-inline-card__btn ${idx === 0 ? "plan-inline-card__btn--primary" : ""}"
-              type="button"
+      ${otherOpen
+        ? html`
+            <textarea
+              class="plan-inline-card__revise-input"
+              placeholder="Type your answer to the question above…"
+              rows="3"
+              .value=${props.questionOtherDraft ?? ""}
               ?disabled=${busy}
-              @click=${() => props.onAnswerOption?.(option)}
-              title=${`Answer: ${option}`}
-            >
-              ${option}
-            </button>
-          `,
-        )}
-        ${question.allowFreetext
-          ? html`
+              @input=${(e: Event) =>
+                props.onQuestionOtherDraftChange?.((e.target as HTMLTextAreaElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  props.onQuestionOtherSubmit?.();
+                } else if (e.key === "Escape") {
+                  // PR-13 Bug 2: Escape returns to options, doesn't
+                  // dismiss the card.
+                  e.preventDefault();
+                  props.onQuestionOtherCancel?.();
+                }
+              }}
+            ></textarea>
+            <div class="plan-inline-card__actions">
               <button
-                class="plan-inline-card__btn plan-inline-card__btn--secondary"
+                class="plan-inline-card__btn plan-inline-card__btn--primary"
+                type="button"
+                ?disabled=${busy ||
+                !(props.questionOtherDraft && props.questionOtherDraft.trim().length > 0)}
+                @click=${() => props.onQuestionOtherSubmit?.()}
+                title="Send the typed answer"
+              >
+                Send answer
+              </button>
+              <button
+                class="plan-inline-card__btn"
                 type="button"
                 ?disabled=${busy}
-                @click=${() => {
-                  // Simple free-text via prompt() — keeps the card
-                  // shell minimal. A richer inline-textarea variant
-                  // would mirror the revise UX; defer to PR-11 polish.
-                  const answer = window.prompt(question.prompt, "");
-                  if (answer && answer.trim()) {
-                    props.onAnswerOption?.(answer.trim());
-                  }
-                }}
-                title="Type a free-text answer"
+                @click=${() => props.onQuestionOtherCancel?.()}
+                title="Back to the option list"
               >
-                Other…
+                Back to options
               </button>
-            `
-          : nothing}
-      </div>
+            </div>
+          `
+        : html`
+            <div class="plan-inline-card__actions plan-inline-card__actions--question">
+              ${question.options.map(
+                (option, idx) => html`
+                  <button
+                    class="plan-inline-card__btn ${idx === 0
+                      ? "plan-inline-card__btn--primary"
+                      : ""}"
+                    type="button"
+                    ?disabled=${busy}
+                    @click=${() => props.onAnswerOption?.(option)}
+                    title=${`Answer: ${option}`}
+                  >
+                    ${option}
+                  </button>
+                `,
+              )}
+              ${question.allowFreetext
+                ? html`
+                    <button
+                      class="plan-inline-card__btn plan-inline-card__btn--secondary"
+                      type="button"
+                      ?disabled=${busy}
+                      @click=${() => props.onQuestionOtherOpen?.()}
+                      title="Type a free-text answer"
+                    >
+                      Other…
+                    </button>
+                  `
+                : nothing}
+            </div>
+          `}
     </div>
   `;
 }

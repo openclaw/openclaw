@@ -1273,7 +1273,9 @@
   font-size: 12px;
   font-family: var(--mono);
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
 }
 
 .agent-chat__mode-chip:hover {
@@ -1401,6 +1403,26 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/*
+ * PR-13 Bug 1: question-variant approval cards stack option buttons
+ * VERTICALLY instead of the standard plan-approval Approve/Edit/Revise
+ * triad. Long answer strings clip + overlap when laid out horizontally
+ * on narrow viewports — vertical alignment lets each option breathe
+ * and matches Codex's question pattern (numbered vertical list).
+ */
+.plan-inline-card__actions--question {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.plan-inline-card__actions--question .plan-inline-card__btn {
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  white-space: normal; /* allow long option text to wrap instead of clipping */
+  line-height: 1.4;
 }
 
 .plan-inline-card__btn {
