@@ -770,7 +770,7 @@ function resolveFailureAlert(state: CronServiceState, job: CronJob): ResolvedFai
   if (job.failureAlert === false) {
     return null;
   }
-  if (!jobConfig && globalConfig?.enabled !== true) {
+  if (globalConfig?.enabled === false) {
     return null;
   }
 
