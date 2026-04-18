@@ -857,6 +857,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           text: mentionPrecheckText,
           userId: selfUserId,
           displayName: selfDisplayName,
+          mentionRegexes: agentMentionRegexes,
         });
         const hasControlCommandInMessage = core.channel.text.hasControlCommand(
           commandPrecheckText,
@@ -1209,7 +1210,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
         RawBody: bodyText,
-        CommandBody: bodyText,
+        CommandBody: stripMatrixMentionPrefix({
+          text: bodyText,
+          userId: selfUserId,
+          displayName: selfDisplayName,
+          mentionRegexes: agentMentionRegexes,
+        }),
         InboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,

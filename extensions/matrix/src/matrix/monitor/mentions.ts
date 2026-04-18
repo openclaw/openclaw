@@ -154,10 +154,11 @@ export function stripMatrixMentionPrefix(params: {
   text: string;
   userId?: string | null;
   displayName?: string | null;
+  mentionRegexes?: RegExp[];
 }): string {
-  const text = params.text ?? "";
-  if (!text) {
-    return text;
+  let result = params.text ?? "";
+  if (!result) {
+    return result;
   }
   const candidates: string[] = [];
   const userId = typeof params.userId === "string" ? params.userId.trim() : "";
@@ -170,7 +171,6 @@ export function stripMatrixMentionPrefix(params: {
   }
   const displayName = typeof params.displayName === "string" ? params.displayName.trim() : "";
   if (displayName) {
-    candidates.push(`@${displayName}`);
     candidates.push(displayName);
   }
   for (const candidate of candidates) {
@@ -178,15 +178,25 @@ export function stripMatrixMentionPrefix(params: {
       continue;
     }
     const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Match the label at the start, allowing an optional ":" or "," separator
-    // before the rest of the message. Requires at least one trailing whitespace
-    // so we don't strip messages like "@bot" with no further content.
     const pattern = new RegExp(`^\\s*${escaped}\\s*[:,]?\\s+`, "i");
-    if (pattern.test(text)) {
-      return text.replace(pattern, "").trimStart();
+    const before = result;
+    result = result.replace(pattern, "");
+    if (result !== before) {
+      return result.trimStart();
     }
   }
-  return text;
+  // Fall back to mentionRegexes (e.g. @botname patterns from config)
+  if (params.mentionRegexes) {
+    for (const re of params.mentionRegexes) {
+      const startRe = new RegExp(`^(?:${re.source})\\s*[:,]?\\s+`, re.flags.replace("g", ""));
+      const before = result;
+      result = result.replace(startRe, "");
+      if (result !== before) {
+        return result.trimStart();
+      }
+    }
+  }
+  return result;
 }
 
 export function resolveMentions(params: {
