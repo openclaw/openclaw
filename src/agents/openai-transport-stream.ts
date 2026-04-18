@@ -1135,6 +1135,9 @@ async function processOpenAICompletionsStream(
     if (!choice.delta) {
       continue;
     }
+    const hasToolCallDeltas =
+      Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
+    let deferredVisibleReasoningText = "";
     if (choice.delta.content) {
       appendTextDelta(choice.delta.content);
       continue;
@@ -1145,6 +1148,10 @@ async function processOpenAICompletionsStream(
     );
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "text") {
+        if (currentBlock?.type === "toolCall" && hasToolCallDeltas) {
+          deferredVisibleReasoningText += reasoningDelta.text;
+          continue;
+        }
         appendTextDelta(reasoningDelta.text);
         continue;
       }
@@ -1197,6 +1204,9 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    if (deferredVisibleReasoningText) {
+      appendTextDelta(deferredVisibleReasoningText);
+    }
   }
   finishCurrentBlock();
   flushPendingThinkingDelta();
@@ -1239,6 +1249,7 @@ function getCompletionsReasoningDeltas(
     previous.text += next.text;
   };
   const reasoningDetails = delta.reasoning_details;
+  let usedReasoningDetails = false;
   if (Array.isArray(reasoningDetails)) {
     const visibleTypes = new Set(visibleReasoningDetailTypes);
     for (const item of reasoningDetails) {
@@ -1247,20 +1258,24 @@ function getCompletionsReasoningDeltas(
         continue;
       }
       if (detail.type === "reasoning.text") {
+        usedReasoningDetails = true;
         pushDelta({ kind: "thinking", signature: "reasoning_details", text: detail.text });
         continue;
       }
       if (typeof detail.type === "string" && visibleTypes.has(detail.type)) {
+        usedReasoningDetails = true;
         pushDelta({ kind: "text", text: detail.text });
       }
     }
   }
-  const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
-  for (const field of reasoningFields) {
-    const value = delta[field];
-    if (typeof value === "string" && value.length > 0) {
-      pushDelta({ kind: "thinking", signature: field, text: value });
-      break;
+  if (!usedReasoningDetails) {
+    const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
+    for (const field of reasoningFields) {
+      const value = delta[field];
+      if (typeof value === "string" && value.length > 0) {
+        pushDelta({ kind: "thinking", signature: field, text: value });
+        break;
+      }
     }
   }
   return output;
