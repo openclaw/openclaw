@@ -1141,3 +1141,93 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(result.content).toBe("Failed to redirect: Error: connection lost");
   });
 });
+
+describe("executeSlashCommand /plan auto (PR-10)", () => {
+  it("/plan auto with no arg defaults to 'on'", async () => {
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      calls.push({ method, payload });
+      return {};
+    });
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "auto",
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].method).toBe("sessions.patch");
+    expect(calls[0].payload).toMatchObject({
+      planApproval: { action: "auto", autoEnabled: true },
+    });
+    expect(result.content).toContain("auto-approve **enabled**");
+    expect(result.action).toBe("refresh");
+  });
+
+  it("/plan auto on explicitly enables", async () => {
+    const request = vi.fn(async () => ({}));
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "auto on",
+    );
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      planApproval: { action: "auto", autoEnabled: true },
+    });
+    expect(result.content).toContain("**enabled**");
+  });
+
+  it("/plan auto off explicitly disables", async () => {
+    const request = vi.fn(async () => ({}));
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "auto off",
+    );
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      planApproval: { action: "auto", autoEnabled: false },
+    });
+    expect(result.content).toContain("**disabled**");
+  });
+
+  it("/plan auto bogus rejects with usage hint", async () => {
+    const request = vi.fn();
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "auto bogus",
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(result.content).toContain("Unrecognized auto value");
+  });
+
+  it("/plan auto reports config-disabled error legibly", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("plan mode is disabled at the config level");
+    });
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "auto on",
+    );
+    expect(result.content).toContain("Plan mode is disabled at the config level");
+  });
+
+  it("/plan status mentions the new auto option", async () => {
+    const request = vi.fn();
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "",
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(result.content).toContain("auto");
+  });
+});

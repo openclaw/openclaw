@@ -16,6 +16,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createAskUserQuestionTool } from "./tools/ask-user-question-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
@@ -290,6 +291,10 @@ export function createOpenClawTools(
           // `AgentRunContext.openSubagentRunIds` and hard-block plan
           // submission while research subagents are still in flight.
           createExitPlanModeTool({ runId: options?.runId }),
+          // PR-10: ask_user_question — surfaces a clarifying question
+          // through the same approval-card pipeline as exit_plan_mode.
+          // Plan-mode-safe: doesn't transition out of plan mode.
+          createAskUserQuestionTool({ runId: options?.runId }),
         ]
       : []),
     createSessionsListTool({

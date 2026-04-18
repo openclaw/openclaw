@@ -114,6 +114,7 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
+import { PLAN_ARCHETYPE_PROMPT } from "../../plan-mode/plan-archetype-prompt.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -681,13 +682,14 @@ export async function runEmbeddedAttempt(
             "",
             "ACTION CONTRACT — when the user says anything that requests a plan, iteration, revision, or 'try again' / 'iterate' / 'fresh' / 'next attempt':",
             "1. Briefly acknowledge in one short sentence (optional).",
-            '2. CALL `exit_plan_mode(plan=[...], summary="…")` IN THE SAME TURN. The plan parameter is required.',
+            '2. CALL `exit_plan_mode(title="…", summary="…", plan=[...])` IN THE SAME TURN. `title` and `plan` are required; non-trivial plans should also include `analysis`, `assumptions`, `risks`, `verification`.',
             "3. Stop after the tool call. Do NOT respond with any further chat text in that turn.",
             "",
             "If you skip step 2 — if you respond with chat-only acknowledgement — you have failed the plan-mode contract and the user has to re-prompt you, which they should not have to do. Treat acknowledgement-without-tool-call as a defect, not as 'staying conversational'.",
             "",
             "Investigation phase (when needed):",
             "- Use read-only tools first (read, web_search, web_fetch, lcm_grep). Track investigation in update_plan.",
+            "- Use `ask_user_question` ONLY for tradeoffs you can't resolve via local investigation.",
             "- Then call exit_plan_mode with the proposed plan.",
             "",
             "Hard rules:",
@@ -696,6 +698,12 @@ export async function runEmbeddedAttempt(
             "- Do NOT call enter_plan_mode (you're already in plan mode — it's a no-op).",
             "",
             "═════════════════════════",
+            "",
+            // PR-10: append the decision-complete plan archetype
+            // standard so the agent produces Opus-quality plans
+            // (analysis + assumptions + risks + verification) instead
+            // of bare step lists.
+            PLAN_ARCHETYPE_PROMPT,
           ].join("\n")
         : planModeFeatureEnabled
           ? [

@@ -123,11 +123,11 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     key: "plan",
     name: "plan",
     description: "Toggle plan mode (blocks write/edit/exec until approved)",
-    args: "<on|off|status|view>",
+    args: "<on|off|status|view|auto>",
     icon: "book",
     category: "session",
     executeLocal: true,
-    argOptions: ["on", "off", "status", "view"],
+    argOptions: ["on", "off", "status", "view", "auto"],
   },
 ];
 

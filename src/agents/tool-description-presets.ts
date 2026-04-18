@@ -13,6 +13,20 @@ export const ENTER_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
   "Enter plan mode — block mutation tools until the user approves a plan.";
 export const EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
   "Exit plan mode and request user approval of the proposed plan.";
+export const ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY =
+  "Ask the user a multiple-choice question and pause for the answer.";
+
+export function describeAskUserQuestionTool(): string {
+  return [
+    "Ask the user a clarifying question with 2-6 selectable options.",
+    "The runtime emits an approval card (Control UI / Telegram inline buttons / channel fallback) and pauses your run until the user picks an option (or types free text when allowed).",
+    "The chosen answer arrives in your next turn as a synthetic user message tagged `[QUESTION_ANSWER]: <answer text>`.",
+    "USE FOR: tradeoffs you cannot resolve via local investigation (product/scope choices, design preferences, organizational priorities, ambiguous user intent).",
+    "DO NOT USE FOR: things you could grep / read / web_search yourself, trivial defaults already covered by AGENTS.md, or confirmation requests (that's what exit_plan_mode does).",
+    "Plan-mode safe: asking a question DOES NOT exit plan mode. The session stays armed and you can submit `exit_plan_mode` after receiving the answer.",
+    "Pass `allowFreetext: true` to add an 'Other...' affordance when your N options might not cover the user's intent.",
+  ].join(" ");
+}
 
 export function describeSessionsListTool(): string {
   return [

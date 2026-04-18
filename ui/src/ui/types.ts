@@ -474,6 +474,12 @@ export type GatewaySessionRow = {
       verifiedCriteria?: string[];
     }>;
     lastPlanUpdatedAt?: number;
+    /**
+     * PR-10 auto-mode: when true, future plan submissions auto-resolve
+     * as "approve" without waiting for the user. Toggle via the chip
+     * or `/plan auto` slash command.
+     */
+    autoApprove?: boolean;
   };
 };
 
