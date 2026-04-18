@@ -185,7 +185,9 @@ Keep inbound mention handling split in two layers:
 - plugin-owned evidence gathering
 - shared policy evaluation
 
-Use `openclaw/plugin-sdk/channel-inbound` for the shared layer.
+Use `openclaw/plugin-sdk/channel-mention-gating` for mention-policy decisions.
+Use `openclaw/plugin-sdk/channel-inbound` only when you need the broader inbound
+helper barrel.
 
 Good fit for plugin-local logic:
 
@@ -254,6 +256,11 @@ bundled channel plugins that already depend on runtime injection:
 - `matchesMentionWithExplicit`
 - `implicitMentionKindWhen`
 - `resolveInboundMentionDecision`
+
+If you only need `implicitMentionKindWhen` and
+`resolveInboundMentionDecision`, import from
+`openclaw/plugin-sdk/channel-mention-gating` to avoid loading unrelated inbound
+runtime helpers.
 
 The older `resolveMentionGating*` helpers remain on
 `openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code
@@ -492,6 +499,11 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
     OpenClaw loads this instead of the full entry when the channel is disabled
     or unconfigured. It avoids pulling in heavy runtime code during setup flows.
     See [Setup and Config](/plugins/sdk-setup#setup-entry) for details.
+
+    Bundled workspace channels that split setup-safe exports into sidecar
+    modules can use `defineBundledChannelSetupEntry(...)` from
+    `openclaw/plugin-sdk/channel-entry-contract` when they also need an
+    explicit setup-time runtime setter.
 
   </Step>
 

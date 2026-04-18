@@ -87,6 +87,7 @@ describe("resolveBuildAllSteps", () => {
       "canvas:a2ui:bundle",
       "tsdown",
       "runtime-postbuild",
+      "write-npm-update-compat-sidecars",
       "build-stamp",
       "canvas-a2ui-copy",
       "copy-hook-metadata",

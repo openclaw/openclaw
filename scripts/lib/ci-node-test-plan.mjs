@@ -18,10 +18,16 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.gateway-client.config.ts",
           "test/vitest/vitest.gateway-methods.config.ts",
           "test/vitest/vitest.gateway-server.config.ts",
+          "test/vitest/vitest.daemon.config.ts",
+        ],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-commands",
+        configs: [
           "test/vitest/vitest.cli.config.ts",
           "test/vitest/vitest.commands-light.config.ts",
           "test/vitest/vitest.commands.config.ts",
-          "test/vitest/vitest.daemon.config.ts",
         ],
         requiresDist: false,
       },
