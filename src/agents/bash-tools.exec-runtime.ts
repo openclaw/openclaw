@@ -511,7 +511,7 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
-  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void | Promise<void>;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
@@ -570,16 +570,15 @@ export async function runExecProcess(opts: {
     }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
-    // throw — so a try-catch here would be ineffective.  Instead we rely
-    // on the `updatesDisabled` flag being set proactively: by the promise
-    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
-    // signal (Layer 2) — both of which prevent this call from ever being
-    // reached after the agent run has ended.
-    opts.onUpdate({
+    // throw.  The `updatesDisabled` flag is set proactively on process exit
+    // and abort signal, but race conditions can still allow a late call to
+    // slip through (see #68376).  Catch the returned Promise to prevent
+    // unhandled rejections from crashing the gateway.
+    const result = opts.onUpdate({
       content: [{ type: "text", text: warningText + (tailText || "") }],
       details: {
         status: "running",
@@ -590,6 +589,13 @@ export async function runExecProcess(opts: {
         tail: session.tail,
       },
     });
+    // Swallow: race between process exit / abort-signal and a late emitUpdate
+    // tick.  See #68376 — a synchronous try/catch cannot catch the rejected
+    // Promise from emit.  Guard with instanceof check because a void callback
+    // may return a non-Promise truthy value (e.g. array.push() returns a number).
+    if (result instanceof Promise) {
+      result.catch(() => {});
+    }
   };
 
   const handleStdout = (data: string) => {

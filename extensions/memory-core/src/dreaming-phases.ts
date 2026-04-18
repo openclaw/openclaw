@@ -75,6 +75,10 @@ const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
 const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
+// Cap per-day session corpus files to prevent unbounded disk growth (#68379).
+// Once a corpus file exceeds this size, further appends are skipped until the
+// next day bucket rolls over.
+const SESSION_CORPUS_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -636,6 +640,18 @@ async function appendSessionCorpusLines(params: {
     `${params.day}.txt`,
   );
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  // Check file size via stat before reading to avoid unnecessary I/O when the
+  // corpus file already exceeds the cap (#68379).
+  try {
+    const { size } = await fs.stat(absolutePath);
+    if (size >= SESSION_CORPUS_MAX_FILE_BYTES) {
+      return [];
+    }
+  } catch (statErr) {
+    if ((statErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw statErr;
+    }
+  }
   let existing = "";
   try {
     existing = await fs.readFile(absolutePath, "utf-8");
