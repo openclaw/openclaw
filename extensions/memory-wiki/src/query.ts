@@ -665,7 +665,7 @@ export async function searchMemoryWiki(params: {
       })
     : null;
   const memoryResults = sharedMemoryManager
-    ? (await sharedMemoryManager.search(params.query, { maxResults })).map((result) =>
+    ? (await sharedMemoryManager.search(params.query, { maxResults, sessionKey: params.agentSessionKey })).map((result) =>
         toMemoryWikiSearchResult(result),
       )
     : [];
