@@ -27,7 +27,7 @@
 }
 /* Firefox uses ::marker (not ::-webkit-details-marker). Without this,
    Firefox renders the native disclosure triangle ALONGSIDE the custom
-   chevron we draw in the markup. Codex P2 #67721 r3095798696. */
+   chevron we draw in the markup. */
 .chat-plan-card summary::marker {
   content: "";
 }

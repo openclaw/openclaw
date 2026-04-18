@@ -1320,8 +1320,16 @@ export function renderChat(props: ChatProps) {
         prevents the user from typing into the wrong surface during
         the approval moment. The card's own Revise textarea handles
         feedback collection in-place.
+
+        PR-7 review fix (Copilot #3105170553 / #3105219639): only hide
+        the input when BOTH planApprovalRequest AND
+        onPlanApprovalDecision are present. Otherwise the user would
+        see neither the card (which requires the handler) nor the
+        input — leaving them with no way to interact. When the
+        decision handler isn't wired, leave the input visible so the
+        user can still chat.
       -->
-      ${props.planApprovalRequest
+      ${props.planApprovalRequest && props.onPlanApprovalDecision
         ? nothing
         : html`
             <!-- Input bar -->

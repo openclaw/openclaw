@@ -78,7 +78,7 @@ describe("formatPlanAsMarkdown", () => {
   });
 });
 
-describe("renderPlanCard (jsdom render — Copilot r3095798656)", () => {
+describe("renderPlanCard (jsdom render)", () => {
   function renderToHost(plan: PlanCardData): HTMLElement {
     const host = document.createElement("div");
     render(renderPlanCard(plan), host);

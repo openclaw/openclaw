@@ -54,7 +54,7 @@ describe("resolveCurrentMode", () => {
     expect(mode.id).toBe("accept");
   });
 
-  it("returns a Custom mode for unknown combos (was: forced Ask, fixed P1 r3094970182)", () => {
+  it("returns a Custom mode for unknown combos (was: forced Ask)", () => {
     const mode = resolveCurrentMode("unknown", "unknown");
     expect(mode.id).toBe("custom");
     expect(mode.shortLabel).toBe("Custom");
@@ -290,7 +290,7 @@ describe("focus guard (input/textarea/contenteditable)", () => {
   });
 });
 
-describe("renderModeSwitcher (jsdom render — Copilot r3095798778)", () => {
+describe("renderModeSwitcher (jsdom render)", () => {
   function renderToHost(params: Parameters<typeof renderModeSwitcher>[0]): HTMLElement {
     const host = document.createElement("div");
     render(renderModeSwitcher(params), host);
@@ -327,7 +327,7 @@ describe("renderModeSwitcher (jsdom render — Copilot r3095798778)", () => {
     // declare role="menu" because we don't implement the WAI-ARIA menu
     // keyboard contract (arrow nav, Home/End, focus trap). Plain
     // <button> children give native focus + Escape-on-chip without
-    // making a false ARIA promise (Codex/Copilot #67721 r3095798757).
+    // making a false ARIA promise (PR #67721 ARIA-semantics fix).
     const menu = host.querySelector(".agent-chat__mode-menu");
     expect(menu).not.toBeNull();
     expect(menu?.getAttribute("role")).toBeNull();
