@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
-import { getMemoryRuntime } from "./memory-state.js";
+import { getMemoryRuntime, registerMemoryCapabilityLoader } from "./memory-state.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -16,6 +16,10 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   );
   return getMemoryRuntime();
 }
+
+registerMemoryCapabilityLoader((cfg) => {
+  ensureMemoryRuntime(cfg);
+});
 
 export async function getActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;

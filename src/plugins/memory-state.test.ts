@@ -12,6 +12,7 @@ import {
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
+  registerMemoryCapabilityLoader,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
@@ -85,8 +86,7 @@ describe("memory plugin state", () => {
   });
 
   it("lazy-loads plugins when listActiveMemoryPublicArtifacts is called without registered capability", async () => {
-    const loader = await import("./loader.js");
-    const loadSpy = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
+    const loadSpy = vi.fn(() => {
       registerMemoryCapability("memory-core", {
         publicArtifacts: {
           async listArtifacts() {
@@ -103,8 +103,8 @@ describe("memory plugin state", () => {
           },
         },
       });
-      return {} as never;
     });
+    registerMemoryCapabilityLoader(loadSpy);
 
     const cfg = { plugins: {} } as unknown as OpenClawConfig;
     const artifacts = await listActiveMemoryPublicArtifacts({ cfg });
@@ -112,8 +112,6 @@ describe("memory plugin state", () => {
     expect(loadSpy).toHaveBeenCalled();
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0]?.kind).toBe("memory-root");
-
-    loadSpy.mockRestore();
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {

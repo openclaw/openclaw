@@ -151,10 +151,18 @@ type MemoryPluginState = {
   runtime?: MemoryPluginRuntime;
 };
 
+type MemoryCapabilityLoader = (cfg: OpenClawConfig) => void;
+
 const memoryPluginState: MemoryPluginState = {
   corpusSupplements: [],
   promptSupplements: [],
 };
+
+let memoryCapabilityLoader: MemoryCapabilityLoader | undefined;
+
+export function registerMemoryCapabilityLoader(loader?: MemoryCapabilityLoader): void {
+  memoryCapabilityLoader = loader;
+}
 
 export function registerMemoryCorpusSupplement(
   pluginId: string,
@@ -275,13 +283,9 @@ export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
   if (!memoryPluginState.capability && params.cfg) {
-    const { resolveRuntimePluginRegistry } = await import("./loader.js");
-    const { buildPluginRuntimeLoadOptions, resolvePluginRuntimeLoadContext } =
-      await import("./runtime/load-context.js");
+    memoryCapabilityLoader?.(params.cfg);
     if (!memoryPluginState.capability) {
-      resolveRuntimePluginRegistry(
-        buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext({ config: params.cfg })),
-      );
+      memoryCapabilityLoader?.(params.cfg);
     }
   }
   const artifacts =
@@ -332,6 +336,7 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.promptSupplements = [];
   memoryPluginState.flushPlanResolver = undefined;
   memoryPluginState.runtime = undefined;
+  memoryCapabilityLoader = undefined;
 }
 
 export const _resetMemoryPluginState = clearMemoryPluginState;
