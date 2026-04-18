@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
+import "../components/mcp-app-view.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
@@ -268,6 +269,7 @@ export function renderToolPreview(
     canvasHostUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    mcpAppsEnabled?: boolean;
   },
 ) {
   if (!preview) {
@@ -285,19 +287,34 @@ export function renderToolPreview(
         <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderPreviewFrame({
-          title: preview.title?.trim() || "Canvas",
-          src: resolveCanvasIframeUrl(
-            preview.url,
-            options?.canvasHostUrl,
-            options?.allowExternalEmbedUrls ?? false,
-          ),
-          height: preview.preferredHeight,
-          sandbox:
-            preview.kind === "canvas"
-              ? resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts")
-              : resolveCanvasPreviewSandbox(preview),
-        })}
+        ${preview.mcpApp && options?.mcpAppsEnabled === true
+          ? html`<mcp-app-view
+              .src=${resolveCanvasIframeUrl(
+                preview.url,
+                options?.canvasHostUrl,
+                options?.allowExternalEmbedUrls ?? false,
+              ) ?? ""}
+              .sandboxMode=${options?.embedSandboxMode ?? "scripts"}
+              .height=${preview.preferredHeight ?? 600}
+              .mcpTitle=${preview.title?.trim() || "MCP App"}
+              .mcpServerName=${preview.mcpApp.serverName}
+              .mcpSessionKey=${preview.mcpApp.sessionKey ?? ""}
+              .mcpToolInput=${preview.mcpApp.toolInput}
+              .mcpToolResult=${preview.mcpApp.toolResult}
+            ></mcp-app-view>`
+          : renderPreviewFrame({
+              title: preview.title?.trim() || "Canvas",
+              src: resolveCanvasIframeUrl(
+                preview.url,
+                options?.canvasHostUrl,
+                options?.allowExternalEmbedUrls ?? false,
+              ),
+              height: preview.preferredHeight,
+              sandbox:
+                preview.kind === "canvas"
+                  ? resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts")
+                  : resolveCanvasPreviewSandbox(preview),
+            })}
       </div>
     </div>
   `;
@@ -408,6 +425,7 @@ export function renderToolCard(
     canvasHostUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    mcpAppsEnabled?: boolean;
   },
 ) {
   const hasOutput = Boolean(card.outputText?.trim());
@@ -434,6 +452,7 @@ export function renderToolCard(
                 opts.canvasHostUrl,
                 opts.embedSandboxMode ?? "scripts",
                 opts.allowExternalEmbedUrls ?? false,
+                opts.mcpAppsEnabled ?? false,
               )}
             </div>
           `
@@ -448,6 +467,7 @@ export function renderExpandedToolCardContent(
   canvasHostUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
+  mcpAppsEnabled = false,
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -467,6 +487,7 @@ export function renderExpandedToolCardContent(
         canvasHostUrl,
         embedSandboxMode,
         allowExternalEmbedUrls,
+        mcpAppsEnabled,
       })
     : nothing;
 
@@ -519,6 +540,7 @@ export function renderToolCardSidebar(
   onOpenSidebar?: (content: SidebarContent) => void,
   canvasHostUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
+  mcpAppsEnabled = false,
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -575,6 +597,7 @@ export function renderToolCardSidebar(
             rawText: card.outputText,
             canvasHostUrl,
             embedSandboxMode,
+            mcpAppsEnabled,
           })}`
         : nothing}
       ${showCollapsed

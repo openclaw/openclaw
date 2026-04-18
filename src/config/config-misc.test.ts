@@ -229,8 +229,36 @@ describe("plugins.entries.*.hooks", () => {
     });
     expect(result.success).toBe(true);
   });
+});
 
-  it("accepts allowPromptInjection=false alongside allowConversationAccess=true", () => {
+describe("mcp.apps.enabled", () => {
+  it("accepts boolean values", () => {
+    for (const value of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        mcp: {
+          apps: {
+            enabled: value,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects non-boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        apps: {
+          enabled: "yes",
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("plugins.entries.*.hooks.allowPromptInjection", () => {
+  it("accepts boolean values", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
         entries: {

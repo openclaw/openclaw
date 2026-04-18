@@ -80,5 +80,13 @@ export type ToolCard = {
     viewId?: string;
     className?: string;
     style?: string;
+    mcpApp?: {
+      serverName: string;
+      toolName: string;
+      uiResourceUri: string;
+      sessionKey?: string;
+      toolInput?: unknown;
+      toolResult?: unknown;
+    };
   };
 };

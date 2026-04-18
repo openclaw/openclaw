@@ -442,6 +442,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
+  "mcp.apps":
+    "MCP Apps UI support. When enabled, OpenClaw may render MCP-provided HTML views and allow those views to call MCP tools through the active session.",
+  "mcp.apps.enabled":
+    "Opt-in toggle for MCP Apps UI rendering and the app-to-host MCP bridge. Keep disabled unless you trust the configured MCP servers that provide app UI resources.",
   "gateway.push":
     "Push-delivery settings used by the gateway when it needs to wake or notify paired devices. Configure relay-backed APNs here for official iOS builds; direct APNs auth remains env-based for local/manual builds.",
   "gateway.push.apns":

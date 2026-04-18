@@ -257,6 +257,18 @@ export function collectGatewayConfigFindings(
     });
   }
 
+  if (cfg.mcp?.apps?.enabled === true) {
+    findings.push({
+      checkId: "mcp.apps.enabled",
+      severity: "warn",
+      title: "MCP Apps UI bridge enabled",
+      detail:
+        "mcp.apps.enabled=true allows configured MCP servers to provide HTML UI resources that OpenClaw renders in sandboxed iframes. Those app views can call app-visible MCP tools through the active session runtime.",
+      remediation:
+        "Keep this enabled only for MCP servers you trust. Disable with `openclaw config set mcp.apps.enabled false --strict-json` when you do not need MCP Apps UI rendering.",
+    });
+  }
+
   const enabledDangerousFlags = (
     options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
   )(cfg);

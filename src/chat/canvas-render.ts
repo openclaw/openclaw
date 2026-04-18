@@ -2,6 +2,15 @@ import { parseFenceSpans } from "../markdown/fences.js";
 
 export type CanvasSurface = "assistant_message";
 
+export type McpAppPreviewMeta = {
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  sessionKey?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
+};
+
 export type CanvasPreview = {
   kind: "canvas";
   surface: CanvasSurface;
@@ -12,6 +21,7 @@ export type CanvasPreview = {
   viewId?: string;
   className?: string;
   style?: string;
+  mcpApp?: McpAppPreviewMeta;
 };
 
 function tryParseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
@@ -52,6 +62,29 @@ function getNestedRecord(
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function coerceMcpAppMeta(
+  record: Record<string, unknown> | undefined,
+): McpAppPreviewMeta | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const serverName = getRecordStringField(record, "serverName");
+  const toolName = getRecordStringField(record, "toolName");
+  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
+  if (!serverName || !toolName || !uiResourceUri) {
+    return undefined;
+  }
+  const sessionKey = getRecordStringField(record, "sessionKey");
+  return {
+    serverName,
+    toolName,
+    uiResourceUri,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(Object.hasOwn(record, "toolInput") ? { toolInput: record.toolInput } : {}),
+    ...(Object.hasOwn(record, "toolResult") ? { toolResult: record.toolResult } : {}),
+  };
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
@@ -96,6 +129,8 @@ function coerceCanvasPreview(
   const style = getRecordStringField(presentation, "style");
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  const mcpAppRaw = getNestedRecord(record, "mcpApp");
+  const mcpApp = coerceMcpAppMeta(mcpAppRaw);
   if (viewUrl) {
     return {
       kind: "canvas",
@@ -107,6 +142,7 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();

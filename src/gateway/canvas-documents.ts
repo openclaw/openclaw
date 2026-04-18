@@ -5,7 +5,13 @@ import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 
-export type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
+export type CanvasDocumentKind =
+  | "html_bundle"
+  | "url_embed"
+  | "document"
+  | "image"
+  | "video_asset"
+  | "mcp_app_view";
 
 export type CanvasDocumentAsset = {
   logicalPath: string;
@@ -26,6 +32,14 @@ export type CanvasDocumentCreateInput = {
   entrypoint?: CanvasDocumentEntrypoint;
   assets?: CanvasDocumentAsset[];
   surface?: "assistant_message" | "tool_card" | "sidebar";
+  mcpApp?: McpAppViewMeta;
+};
+
+export type McpAppViewMeta = {
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  sessionKey?: string;
 };
 
 export type CanvasDocumentManifest = {
@@ -38,6 +52,7 @@ export type CanvasDocumentManifest = {
   localEntrypoint?: string;
   externalUrl?: string;
   surface?: "assistant_message" | "tool_card" | "sidebar";
+  mcpApp?: McpAppViewMeta;
   assets: Array<{
     logicalPath: string;
     contentType?: string;
@@ -294,6 +309,7 @@ export async function createCanvasDocument(
       ? { preferredHeight: input.preferredHeight }
       : {}),
     ...(input.surface ? { surface: input.surface } : {}),
+    ...(input.mcpApp ? { mcpApp: input.mcpApp } : {}),
     createdAt: new Date().toISOString(),
     entryUrl: entry.entryUrl,
     ...(entry.localEntrypoint ? { localEntrypoint: entry.localEntrypoint } : {}),

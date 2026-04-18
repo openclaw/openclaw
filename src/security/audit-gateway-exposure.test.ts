@@ -156,6 +156,28 @@ describe("security audit gateway exposure findings", () => {
     );
   });
 
+  it("warns when MCP Apps UI support is enabled", () => {
+    const cfg: OpenClawConfig = {
+      mcp: {
+        apps: { enabled: true },
+      },
+    };
+
+    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "mcp.apps.enabled",
+          severity: "warn",
+        }),
+      ]),
+    );
+    const flags = findings.find(
+      (finding) => finding.checkId === "config.insecure_or_dangerous_flags",
+    );
+    expect(flags).toBeUndefined();
+  });
+
   it.each([
     {
       name: "loopback gateway",
