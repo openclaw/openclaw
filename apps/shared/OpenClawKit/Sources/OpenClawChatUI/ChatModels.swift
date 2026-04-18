@@ -108,6 +108,9 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case mimeType
         case fileName
         case content
+        case data
+        case source
+        case imageURL = "image_url"
         case id
         case name
         case arguments
@@ -129,9 +132,29 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
             self.content = any
         } else if let str = try container.decodeIfPresent(String.self, forKey: .content) {
             self.content = AnyCodable(str)
+        } else if let data = try container.decodeIfPresent(String.self, forKey: .data) {
+            self.content = AnyCodable(data)
+        } else if let source = try container.decodeIfPresent(AnyCodable.self, forKey: .source) {
+            self.content = source
+        } else if let imageURL = try container.decodeIfPresent(AnyCodable.self, forKey: .imageURL) {
+            self.content = imageURL
         } else {
             self.content = nil
         }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.type, forKey: .type)
+        try container.encodeIfPresent(self.text, forKey: .text)
+        try container.encodeIfPresent(self.thinking, forKey: .thinking)
+        try container.encodeIfPresent(self.thinkingSignature, forKey: .thinkingSignature)
+        try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
+        try container.encodeIfPresent(self.fileName, forKey: .fileName)
+        try container.encodeIfPresent(self.content, forKey: .content)
+        try container.encodeIfPresent(self.id, forKey: .id)
+        try container.encodeIfPresent(self.name, forKey: .name)
+        try container.encodeIfPresent(self.arguments, forKey: .arguments)
     }
 }
 
@@ -155,6 +178,10 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         case tool_name
         case usage
         case stopReason
+        case mediaPath = "MediaPath"
+        case mediaPaths = "MediaPaths"
+        case mediaType = "MediaType"
+        case mediaTypes = "MediaTypes"
     }
 
     public init(
@@ -190,14 +217,11 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
 
+        var decodedContent: [OpenClawChatMessageContent] = []
         if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
-            self.content = decoded
-            return
-        }
-
-        // Some session log formats store `content` as a plain string.
-        if let text = try? container.decode(String.self, forKey: .content) {
-            self.content = [
+            decodedContent = decoded
+        } else if let text = try? container.decode(String.self, forKey: .content) {
+            decodedContent = [
                 OpenClawChatMessageContent(
                     type: "text",
                     text: text,
@@ -210,10 +234,32 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
                     name: nil,
                     arguments: nil),
             ]
-            return
         }
 
-        self.content = []
+        let mediaPaths =
+            (try? container.decodeIfPresent([String].self, forKey: .mediaPaths)) ??
+            ((try? container.decodeIfPresent(String.self, forKey: .mediaPath)).map { [$0] }) ?? []
+        let mediaTypes =
+            (try? container.decodeIfPresent([String].self, forKey: .mediaTypes)) ??
+            ((try? container.decodeIfPresent(String.self, forKey: .mediaType)).map { [$0] }) ?? []
+
+        for (index, path) in mediaPaths.enumerated() {
+            let mimeType = index < mediaTypes.count ? mediaTypes[index] : mediaTypes.first
+            decodedContent.append(
+                OpenClawChatMessageContent(
+                    type: "image",
+                    text: nil,
+                    thinking: nil,
+                    thinkingSignature: nil,
+                    mimeType: mimeType,
+                    fileName: URL(fileURLWithPath: path).lastPathComponent,
+                    content: AnyCodable(path),
+                    id: nil,
+                    name: nil,
+                    arguments: nil))
+        }
+
+        self.content = decodedContent
     }
 
     public func encode(to encoder: Encoder) throws {

@@ -246,8 +246,8 @@ private struct ChatMessageBody: View {
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
         self.message.content.filter { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
+            switch (content.type ?? "text").lowercased() {
+            case "file", "attachment", "image":
                 true
             default:
                 false
@@ -355,17 +355,71 @@ private struct AttachmentRow: View {
     let isUser: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "paperclip")
-            Text(self.att.fileName ?? "Attachment")
-                .font(.footnote)
-                .lineLimit(1)
-                .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
-            Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            if let preview = self.previewImage {
+                OpenClawPlatformImageFactory.image(preview)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: self.previewImage == nil ? "paperclip" : "photo")
+                Text(self.att.fileName ?? "Attachment")
+                    .font(.footnote)
+                    .lineLimit(1)
+                    .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
+                Spacer()
+            }
         }
         .padding(10)
         .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var previewImage: OpenClawPlatformImage? {
+        if let data = self.imageData {
+            return OpenClawPlatformImage(data: data)
+        }
+        return nil
+    }
+
+    private var imageData: Data? {
+        if let string = self.att.content?.value as? String {
+            return Self.decodeImageData(from: string)
+        }
+        if let dict = self.att.content?.value as? [String: Any] {
+            if let nested = dict["data"] as? String {
+                return Self.decodeImageData(from: nested)
+            }
+            if let url = dict["url"] as? String {
+                return Self.decodeImageData(from: url)
+            }
+        }
+        if let dict = self.att.content?.value as? [String: AnyCodable] {
+            if let nested = dict["data"]?.value as? String {
+                return Self.decodeImageData(from: nested)
+            }
+            if let url = dict["url"]?.value as? String {
+                return Self.decodeImageData(from: url)
+            }
+        }
+        return nil
+    }
+
+    private static func decodeImageData(from raw: String) -> Data? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let commaIndex = trimmed.range(of: ","), trimmed[..<commaIndex.lowerBound].contains(";base64") {
+            let base64 = String(trimmed[commaIndex.upperBound...])
+            return Data(base64Encoded: base64)
+        }
+        if let base64 = Data(base64Encoded: trimmed) {
+            return base64
+        }
+        let url = URL(fileURLWithPath: trimmed)
+        guard url.isFileURL else { return nil }
+        return try? Data(contentsOf: url)
     }
 }
 
