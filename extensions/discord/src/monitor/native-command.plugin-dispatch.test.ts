@@ -326,6 +326,7 @@ async function expectConfiguredAcpCommandBlocked(params: {
   cfg: OpenClawConfig;
   interaction: MockCommandInteraction;
   expectedMessage: string;
+  expectedEphemeral?: boolean;
   commandName?: "new" | "reset";
 }) {
   discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async () =>
@@ -352,6 +353,7 @@ async function expectConfiguredAcpCommandBlocked(params: {
   expect(params.interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({
       content: params.expectedMessage,
+      ...(params.expectedEphemeral ? { ephemeral: true } : {}),
     }),
   );
   expect(params.interaction.reply).not.toHaveBeenCalled();
@@ -785,6 +787,7 @@ describe("Discord native plugin command dispatch", () => {
       cfg,
       interaction,
       expectedMessage: "You are not authorized to use this command.",
+      expectedEphemeral: true,
       commandName: "reset",
     });
   });
