@@ -73,11 +73,20 @@ function isOpenAIProvider(provider?: string) {
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
+type BashToolsModule = typeof import("./bash-tools.js");
+
+let bashToolsModulePromise: Promise<BashToolsModule> | undefined;
+
+function loadBashToolsModule(): Promise<BashToolsModule> {
+  bashToolsModulePromise ??= import("./bash-tools.js");
+  return bashToolsModulePromise;
+}
+
 function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
   let loadedTool: AnyAgentTool | undefined;
   const loadTool = async () => {
     if (!loadedTool) {
-      const { createExecTool } = await import("./bash-tools.js");
+      const { createExecTool } = await loadBashToolsModule();
       loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
     }
     return loadedTool;
@@ -103,7 +112,7 @@ function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
   let loadedTool: AnyAgentTool | undefined;
   const loadTool = async () => {
     if (!loadedTool) {
-      const { createProcessTool } = await import("./bash-tools.js");
+      const { createProcessTool } = await loadBashToolsModule();
       loadedTool = createProcessTool(defaults) as unknown as AnyAgentTool;
     }
     return loadedTool;
