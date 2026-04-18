@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import {
+  DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
   removeAckReactionAfterReply,
@@ -252,6 +253,48 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController,
   } = context;
+  const statusReactionTiming = {
+    ...DEFAULT_TIMING,
+    ...cfg.messages?.statusReactions?.timing,
+  };
+  const clearTelegramStatusReaction = async () => {
+    if (!msg.message_id || !reactionApi) {
+      return;
+    }
+    await reactionApi(chatId, msg.message_id, []);
+  };
+  const finalizeTelegramStatusReaction = async (params: {
+    outcome: "done" | "error";
+    hasFinalResponse: boolean;
+  }) => {
+    if (!statusReactionController) {
+      return;
+    }
+    if (params.outcome === "done") {
+      await statusReactionController.setDone();
+      if (removeAckAfterReply) {
+        await sleepWithAbort(statusReactionTiming.doneHoldMs);
+        await clearTelegramStatusReaction();
+      } else {
+        await statusReactionController.restoreInitial();
+      }
+      return;
+    }
+    await statusReactionController.setError();
+    if (params.hasFinalResponse) {
+      if (removeAckAfterReply) {
+        await sleepWithAbort(statusReactionTiming.errorHoldMs);
+        await clearTelegramStatusReaction();
+      } else {
+        await statusReactionController.restoreInitial();
+      }
+      return;
+    }
+    if (removeAckAfterReply) {
+      await sleepWithAbort(statusReactionTiming.errorHoldMs);
+    }
+    await statusReactionController.restoreInitial();
+  };
   const dispatchFenceKey = resolveTelegramAbortFenceKey({
     ctxPayload,
     chatId,
@@ -1017,9 +1060,11 @@ export const dispatchTelegramMessage = async ({
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {
-      void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
-        logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-      });
+      void finalizeTelegramStatusReaction({ outcome: "done", hasFinalResponse: true }).catch(
+        (err: unknown) => {
+          logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+        },
+      );
     } else {
       removeAckReactionAfterReply({
         removeAfterReply: removeAckAfterReply,
@@ -1065,9 +1110,11 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = queuedFinal || sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
-    void Promise.resolve(statusReactionController.setError()).catch((err: unknown) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
+    void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
+      (err: unknown) => {
+        logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+      },
+    );
   }
 
   if (!hasFinalResponse) {
@@ -1116,19 +1163,13 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void Promise.resolve(statusReactionController.setDone())
-      .catch((err: unknown) => {
-        logVerbose(`telegram: status reaction done failed: ${String(err)}`);
-      })
-      .then(async () => {
-        if (!removeAckAfterReply) {return;}
-        if (!msg.message_id || !reactionApi) {return;}
-        await sleepWithAbort(1500);
-        await reactionApi(chatId, msg.message_id, []);
-      })
-      .catch((err: unknown) => {
-        logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-      });
+    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
+    void finalizeTelegramStatusReaction({
+      outcome: statusReactionOutcome,
+      hasFinalResponse: true,
+    }).catch((err: unknown) => {
+      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+    });
   } else {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
