@@ -46,6 +46,7 @@ export function escapeRegExp(value: string): string {
 /**
  * Safely parse JSON, returning null on error instead of throwing.
  */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON parsing helper lets callers ascribe the expected payload type.
 export function safeParseJson<T>(raw: string): T | null {
   try {
     return JSON.parse(raw) as T;

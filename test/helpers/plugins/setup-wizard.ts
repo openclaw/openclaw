@@ -151,6 +151,7 @@ export function createSetupWizardAdapter(params: SetupWizardAdapterParams) {
   return buildChannelSetupWizardAdapterFromSetupWizard(params);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves plugin-specific setup wizard surface type.
 export function createPluginSetupWizardAdapter<TPlugin extends SetupWizardTestPlugin>(
   plugin: TPlugin,
 ) {
@@ -161,12 +162,14 @@ export function createPluginSetupWizardAdapter<TPlugin extends SetupWizardTestPl
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves plugin-specific setup wizard surface type.
 export function createPluginSetupWizardConfigure<TPlugin extends SetupWizardTestPlugin>(
   plugin: TPlugin,
 ) {
   return createPluginSetupWizardAdapter(plugin).configure;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves plugin-specific setup wizard surface type.
 export function createPluginSetupWizardStatus<TPlugin extends SetupWizardTestPlugin>(
   plugin: TPlugin,
 ) {

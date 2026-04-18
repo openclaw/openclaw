@@ -102,6 +102,7 @@ function resolveWorkspacePackageDir(packageName: string): string {
   throw new Error(`Unknown workspace package: ${packageName}`);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
   pluginId: string;
   artifactBasename: string;
@@ -113,6 +114,7 @@ export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
 export function loadBundledPluginApiSync<T extends object>(pluginId: string): T {
   return loadBundledPluginPublicSurfaceSync<T>({
     pluginId,
@@ -120,6 +122,7 @@ export function loadBundledPluginApiSync<T extends object>(pluginId: string): T 
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
 export function loadBundledPluginContractApiSync<T extends object>(pluginId: string): T {
   return loadBundledPluginPublicSurfaceSync<T>({
     pluginId,
@@ -127,6 +130,7 @@ export function loadBundledPluginContractApiSync<T extends object>(pluginId: str
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
 export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: string): T {
   return loadBundledPluginPublicSurfaceSync<T>({
     pluginId,
@@ -134,6 +138,7 @@ export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: stri
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
 export function loadBundledPluginTestApiSync<T extends object>(pluginId: string): T {
   return loadBundledPluginPublicSurfaceSync<T>({
     pluginId,
