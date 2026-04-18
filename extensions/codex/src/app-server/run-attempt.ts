@@ -30,7 +30,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
 import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
@@ -79,6 +79,8 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   let yieldDetected = false;
+  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  const startupAuthProfileId = params.authProfileId ?? startupBinding?.authProfileId;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -102,7 +104,7 @@ export async function runCodexAppServerAttempt(
       timeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start, params.authProfileId);
+        const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
         const startupThread = await startOrResumeThread({
           client: startupClient,
           params,
