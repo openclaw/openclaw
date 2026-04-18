@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/channels: route cross-agent subagent spawns through the target agent's bound channel account while preserving peer and workspace/role-scoped bindings, so child sessions no longer inherit the caller's account in shared rooms, workspaces, or multi-account setups. (#67508) Thanks @lukeboyett and @gumadeiras.
 - Telegram/callbacks: treat permanent callback edit errors as completed updates so stale command pagination buttons no longer wedge the update watermark and block newer Telegram updates. (#68588) Thanks @Lucenx9.
+- Browser/CDP: allow the selected remote CDP profile host for CDP health and control checks without widening browser navigation SSRF policy, so WSL-to-Windows Chrome endpoints no longer appear offline under strict defaults. Fixes #68108. (#68207) Thanks @Mlightsnow.
 
 ## 2026.4.18
 

@@ -126,27 +126,11 @@ function resolveCdpPortRangeStart(
 
 const normalizeStringList = normalizeOptionalTrimmedStringList;
 
-function mergeAllowedHostnames(
-  base: string[] | undefined,
-  extra: readonly string[],
-): string[] | undefined {
-  if (extra.length === 0) {
-    return base;
-  }
-  return Array.from(new Set([...(base ?? []), ...extra]));
-}
-
-function resolveBrowserSsrFPolicy(
-  cfg: BrowserConfig | undefined,
-  extraAllowedHostnames: readonly string[] = [],
-): SsrFPolicy | undefined {
+function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = mergeAllowedHostnames(
-    normalizeStringList(rawPolicy?.allowedHostnames),
-    extraAllowedHostnames,
-  );
+  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
@@ -173,30 +157,6 @@ function resolveBrowserSsrFPolicy(
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };
-}
-
-function collectConfiguredCdpHostnames(cfg: BrowserConfig | undefined): string[] {
-  const hostnames = new Set<string>();
-  const addHostnameFromUrl = (rawUrl: string | undefined): void => {
-    const trimmed = rawUrl?.trim() ?? "";
-    if (!trimmed) {
-      return;
-    }
-    try {
-      const hostname = new URL(trimmed).hostname;
-      if (hostname) {
-        hostnames.add(hostname);
-      }
-    } catch {
-      // Ignore unparseable URLs; they will be rejected elsewhere with a proper error.
-    }
-  };
-
-  addHostnameFromUrl(cfg?.cdpUrl);
-  for (const profile of Object.values(cfg?.profiles ?? {})) {
-    addHostnameFromUrl(profile?.cdpUrl);
-  }
-  return Array.from(hostnames);
 }
 
 function ensureDefaultProfile(
@@ -333,7 +293,7 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
-    ssrfPolicy: resolveBrowserSsrFPolicy(cfg, collectConfiguredCdpHostnames(cfg)),
+    ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
     extraArgs,
   };
 }
