@@ -59,7 +59,7 @@ export function normalizeCompatibilityConfig({
     const nextAccount = { ...account };
     const botName = typeof nextAccount.botName === "string" ? nextAccount.botName.trim() : "";
     delete nextAccount.botName;
-    if (botName && typeof nextAccount.name !== "string") {
+    if (botName && (typeof nextAccount.name !== "string" || !nextAccount.name.trim())) {
       nextAccount.name = botName;
       changes.push(
         `Moved channels.feishu.accounts.${accountId}.botName → channels.feishu.accounts.${accountId}.name.`,
