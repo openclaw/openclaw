@@ -87,7 +87,9 @@ function safeExtractHostname(baseUrl: string): string | undefined {
 }
 
 /**
- * Resolve the BB client's SSRF policy at construction time. Three modes:
+ * Resolve the BB client's SSRF policy at construction time. Three modes —
+ * all of which go through `fetchWithSsrFGuard`; we never hand back a policy
+ * that skips the guard:
  *
  *   1. `{ allowPrivateNetwork: true }` — user explicitly opted in
  *      (`network.dangerouslyAllowPrivateNetwork: true`). Private/loopback
@@ -99,8 +101,11 @@ function safeExtractHostname(baseUrl: string): string | undefined {
  *      that closes #34749, #57181, #59722, #60715 for self-hosted BB on
  *      private/localhost addresses without requiring a full opt-in.
  *
- *   3. `undefined` — no policy; use the non-SSRF fallback path. Applied only
- *      when we can't identify a trusted hostname. (#64105)
+ *   3. `{}` — guarded with the default-deny policy. Applied when we can't
+ *      produce a valid allowlist (opt-out on a private hostname, or an
+ *      unparseable baseUrl). Previously returned `undefined` and skipped
+ *      the guard entirely, which was an SSRF bypass when a user explicitly
+ *      opted out of private-network access. Aisle #68234 found this.
  *
  * Prior to this helper, the logic lived inline in `attachments.ts` and was
  * inconsistently replicated across 15+ callsites. Resolving once ensures
@@ -111,7 +116,7 @@ export function resolveBlueBubblesClientSsrfPolicy(params: {
   allowPrivateNetwork: boolean;
   allowPrivateNetworkConfig?: boolean;
 }): {
-  ssrfPolicy: SsrFPolicy | undefined;
+  ssrfPolicy: SsrFPolicy;
   trustedHostname?: string;
   trustedHostnameIsPrivate: boolean;
 } {
@@ -137,7 +142,9 @@ export function resolveBlueBubblesClientSsrfPolicy(params: {
     };
   }
 
-  return { ssrfPolicy: undefined, trustedHostname, trustedHostnameIsPrivate };
+  // Mode 3: default-deny guard. Honors an explicit opt-out on a private
+  // hostname and fails-safe on unparseable URLs. Never undefined. (aisle #68234)
+  return { ssrfPolicy: {}, trustedHostname, trustedHostnameIsPrivate };
 }
 
 // --- Client ----------------------------------------------------------------
@@ -155,7 +162,7 @@ type ClientConstructorParams = {
   accountId: string;
   baseUrl: string;
   password: string;
-  ssrfPolicy: SsrFPolicy | undefined;
+  ssrfPolicy: SsrFPolicy;
   trustedHostname: string | undefined;
   trustedHostnameIsPrivate: boolean;
   defaultTimeoutMs: number;
@@ -181,7 +188,7 @@ export class BlueBubblesClient {
   readonly trustedHostnameIsPrivate: boolean;
 
   private readonly password: string;
-  private readonly ssrfPolicy: SsrFPolicy | undefined;
+  private readonly ssrfPolicy: SsrFPolicy;
   private readonly defaultTimeoutMs: number;
   private readonly authStrategy: BlueBubblesAuthStrategy;
 
@@ -200,7 +207,7 @@ export class BlueBubblesClient {
    * Read the resolved SSRF policy for this client. Exposed primarily for tests
    * and diagnostics; production code should never need to inspect it.
    */
-  getSsrfPolicy(): SsrFPolicy | undefined {
+  getSsrfPolicy(): SsrFPolicy {
     return this.ssrfPolicy;
   }
 

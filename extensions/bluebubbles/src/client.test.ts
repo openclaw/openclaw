@@ -115,23 +115,46 @@ describe("resolveBlueBubblesClientSsrfPolicy (3-mode policy)", () => {
     expect(result.trustedHostnameIsPrivate).toBe(false);
   });
 
-  it("mode 3: private hostname + explicit opt-out → undefined (falls back to non-SSRF path)", () => {
+  it("mode 3: private hostname + explicit opt-out → {} (guarded default-deny, honors the opt-out) (aisle #68234)", () => {
+    // Previously returned `undefined`, which routed through the unguarded
+    // fetch fallback and effectively bypassed SSRF protection exactly when
+    // the user had explicitly asked to disable private-network access.
     const result = resolveBlueBubblesClientSsrfPolicy({
       baseUrl: "http://192.168.1.50:1234",
       allowPrivateNetwork: false,
       allowPrivateNetworkConfig: false,
     });
-    expect(result.ssrfPolicy).toBeUndefined();
+    expect(result.ssrfPolicy).toEqual({});
     expect(result.trustedHostnameIsPrivate).toBe(true);
   });
 
-  it("mode 3: unparseable baseUrl → undefined policy", () => {
+  it("mode 3: unparseable baseUrl → {} (fail-safe guarded, never bypass)", () => {
     const result = resolveBlueBubblesClientSsrfPolicy({
       baseUrl: "not a url",
       allowPrivateNetwork: false,
     });
-    expect(result.ssrfPolicy).toBeUndefined();
+    expect(result.ssrfPolicy).toEqual({});
     expect(result.trustedHostname).toBeUndefined();
+  });
+
+  it("never returns undefined ssrfPolicy — every mode is guarded (aisle #68234 invariant)", () => {
+    // This invariant is what closes the SSRF bypass aisle flagged. Any
+    // refactor that reintroduces `ssrfPolicy: undefined` should break here.
+    const cases = [
+      { baseUrl: "http://localhost:1234", allowPrivateNetwork: true },
+      { baseUrl: "http://localhost:1234", allowPrivateNetwork: false },
+      {
+        baseUrl: "http://192.168.1.50:1234",
+        allowPrivateNetwork: false,
+        allowPrivateNetworkConfig: false,
+      },
+      { baseUrl: "https://bb.example.com", allowPrivateNetwork: false },
+      { baseUrl: "not a url", allowPrivateNetwork: false },
+    ];
+    for (const c of cases) {
+      const result = resolveBlueBubblesClientSsrfPolicy(c);
+      expect(result.ssrfPolicy).toBeDefined();
+    }
   });
 });
 
