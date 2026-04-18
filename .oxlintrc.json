@@ -20,8 +20,12 @@
     "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "error",
+    "typescript/no-meaningless-void-operator": "off",
+    "typescript/no-unnecessary-type-assertion": "off",
     "typescript/no-unnecessary-type-conversion": "error",
+    "typescript/no-unnecessary-type-parameters": "off",
     "typescript/no-unsafe-type-assertion": "off",
+    "typescript/no-useless-default-assignment": "off",
     "unicorn/consistent-function-scoping": "off",
     "unicorn/prefer-set-size": "error",
     "unicorn/require-post-message-target-origin": "error"
