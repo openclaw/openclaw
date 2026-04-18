@@ -11,6 +11,7 @@ import {
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
+  mergeMemoryPluginState,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
@@ -282,7 +283,7 @@ describe("memory plugin state", () => {
     expect(getMemoryRuntime()).toBe(runtime);
   });
 
-  it("restoreMemoryPluginState preserves a live capability when restoring empty state", () => {
+  it("mergeMemoryPluginState preserves a live capability when merging empty state", () => {
     const runtime = createMemoryRuntime();
     registerMemoryCapability("memory-core", {
       promptBuilder: () => ["core prompt"],
@@ -290,10 +291,13 @@ describe("memory plugin state", () => {
     });
 
     // A stale or cache-hit snapshot with no capability must not clobber a
-    // live registration. Previously this path reset memoryPluginState.capability
-    // to undefined, which caused listActiveMemoryPublicArtifacts to return []
-    // and memory-wiki bridge imports to prune all synced source pages.
-    restoreMemoryPluginState({
+    // live registration. Previously the cache-hit path called
+    // restoreMemoryPluginState, which reset memoryPluginState.capability to
+    // undefined and caused listActiveMemoryPublicArtifacts to return [] and
+    // memory-wiki bridge imports to prune all synced source pages. The
+    // cache-hit path now calls mergeMemoryPluginState (this function), which
+    // only overwrites fields carrying a non-empty value.
+    mergeMemoryPluginState({
       capability: undefined,
       corpusSupplements: [],
       promptSupplements: [],
@@ -302,6 +306,30 @@ describe("memory plugin state", () => {
     expect(getMemoryCapabilityRegistration()).toMatchObject({ pluginId: "memory-core" });
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["core prompt"]);
     expect(getMemoryRuntime()).toBe(runtime);
+  });
+
+  it("restoreMemoryPluginState clears a live capability when swap-restoring empty state", () => {
+    const runtime = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["core prompt"],
+      runtime,
+    });
+    registerMemoryPromptSupplement("stale", () => ["stale supplement"]);
+
+    // restoreMemoryPluginState is the destructive swap used by rollback paths
+    // where newly-registered state from a failed plugin must be wiped back to
+    // the captured pre-register snapshot — even when that snapshot is empty.
+    // Without this semantic, loader.ts's register-rollback path would leave
+    // stale supplements behind (covered by loader.test.ts "clears
+    // newly-registered memory plugin registries when plugin register fails").
+    restoreMemoryPluginState({
+      capability: undefined,
+      corpusSupplements: [],
+      promptSupplements: [],
+    });
+
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+    expect(listMemoryPromptSupplements()).toHaveLength(0);
   });
 
   it("clearMemoryPluginState resets both registries", () => {

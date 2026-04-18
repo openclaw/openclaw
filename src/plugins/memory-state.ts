@@ -311,6 +311,30 @@ export async function listActiveMemoryPublicArtifacts(params: {
 }
 
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
+  memoryPluginState.capability = state.capability
+    ? {
+        pluginId: state.capability.pluginId,
+        capability: { ...state.capability.capability },
+      }
+    : undefined;
+  memoryPluginState.corpusSupplements = [...state.corpusSupplements];
+  memoryPluginState.promptBuilder = state.promptBuilder;
+  memoryPluginState.promptSupplements = [...state.promptSupplements];
+  memoryPluginState.flushPlanResolver = state.flushPlanResolver;
+  memoryPluginState.runtime = state.runtime;
+}
+
+/**
+ * Additive counterpart to {@link restoreMemoryPluginState}: only overwrites
+ * each field when the incoming state carries a non-empty value. Intended for
+ * cache-hit paths in the plugin loader that must NOT clobber a live
+ * capability when the cached snapshot predates the capability's registration.
+ *
+ * Use {@link restoreMemoryPluginState} (full swap) for rollback on failed
+ * plugin registration, where each field MUST revert to its pre-register
+ * value regardless of whether the saved previous value was empty.
+ */
+export function mergeMemoryPluginState(state: MemoryPluginState): void {
   if (state.capability) {
     memoryPluginState.capability = {
       pluginId: state.capability.pluginId,
