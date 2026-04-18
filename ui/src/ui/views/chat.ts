@@ -158,6 +158,16 @@ export type ChatProps = {
   onPlanApprovalReviseOpen?: () => void;
   onPlanApprovalReviseCancel?: () => void;
   onPlanApprovalReviseDraftChange?: (text: string) => void;
+  /**
+   * PR-13 Bug 2: question-card "Other" inline-textarea props.
+   * Mirrors the revise pattern. Cancel returns to the option list.
+   */
+  planApprovalQuestionOtherOpen?: boolean;
+  planApprovalQuestionOtherDraft?: string;
+  onPlanApprovalQuestionOtherOpen?: () => void;
+  onPlanApprovalQuestionOtherCancel?: () => void;
+  onPlanApprovalQuestionOtherDraftChange?: (text: string) => void;
+  onPlanApprovalQuestionOtherSubmit?: () => void | Promise<void>;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -1476,6 +1486,14 @@ export function renderChat(props: ChatProps) {
             onAnswerOption: props.onPlanApprovalAnswer
               ? (answer) => void props.onPlanApprovalAnswer!(answer)
               : undefined,
+            // PR-13 Bug 2: inline-textarea "Other" path props.
+            questionOtherOpen: props.planApprovalQuestionOtherOpen ?? false,
+            questionOtherDraft: props.planApprovalQuestionOtherDraft ?? "",
+            onQuestionOtherOpen: () => props.onPlanApprovalQuestionOtherOpen?.(),
+            onQuestionOtherCancel: () => props.onPlanApprovalQuestionOtherCancel?.(),
+            onQuestionOtherDraftChange: (text) =>
+              props.onPlanApprovalQuestionOtherDraftChange?.(text),
+            onQuestionOtherSubmit: () => void props.onPlanApprovalQuestionOtherSubmit?.(),
           })
         : nothing}
 
