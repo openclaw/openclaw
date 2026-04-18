@@ -905,7 +905,7 @@ describe("resolveSlackThreadStarter", () => {
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 
-  it("returns null when the starter message has no text and no files", async () => {
+  it("returns null when the starter message has no text or files", async () => {
     const replies = vi.fn().mockResolvedValueOnce({ messages: [{ text: "   ", user: "U1" }] });
     const client = {
       conversations: { replies },
@@ -918,6 +918,37 @@ describe("resolveSlackThreadStarter", () => {
     });
 
     expect(result).toBeNull();
+    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
+  });
+
+  it("returns a placeholder starter when the root message only has files", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "   ",
+          user: "U1",
+          ts: "1.000",
+          files: [{ name: "root.png", mimetype: "image/png" }],
+        },
+      ],
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+
+    const result = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+    });
+
+    expect(result).toEqual({
+      text: "[attached: root.png]",
+      userId: "U1",
+      botId: undefined,
+      ts: "1.000",
+      files: [{ name: "root.png", mimetype: "image/png" }],
+    });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 
@@ -942,7 +973,7 @@ describe("resolveSlackThreadStarter", () => {
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(expect.stringContaining("ts=9.999"));
   });
 
-  it("surfaces non-Error thrown values as String(err) via logVerbose", async () => {
+  it("surfaces non-Error thrown values via logVerbose", async () => {
     const replies = vi.fn().mockRejectedValueOnce("rate_limited");
     const client = {
       conversations: { replies },
