@@ -169,6 +169,7 @@ def log_line(level: str, msg: str) -> None:
 
 
 _GATEWAY_PORT = int(os.environ.get("AUTOFIX_GATEWAY_PORT", "18789"))
+_GATEWAY_RECLAIM = os.environ.get("AUTOFIX_RECLAIM_GATEWAY_PORT", "1") != "0"
 
 
 def _gateway_already_listening() -> bool:
@@ -180,6 +181,64 @@ def _gateway_already_listening() -> bool:
             return True
     except (OSError, socket.timeout):
         return False
+
+
+def _reclaim_gateway_port(port: int) -> bool:
+    """If another process is bound to `port` AND its command line looks
+    like an OpenClaw gateway (node.exe running openclaw.mjs gateway),
+    kill it so this daemon can spawn a supervised replacement. Returns
+    True iff a process was killed.
+
+    This is intentionally conservative: we only kill processes whose
+    command line matches the OpenClaw gateway signature. Anything else
+    on the port (unrelated dev server, another app) is left alone and
+    the daemon falls back to the "wait for port to free up" path."""
+    if sys.platform != "win32":
+        return False
+    # PowerShell-hosted query + conditional kill; one round-trip is
+    # easier to reason about than chaining tasklist + wmic.
+    ps_script = (
+        f"$p = (Get-NetTCPConnection -LocalPort {port} -State Listen "
+        "-ErrorAction SilentlyContinue).OwningProcess | Select-Object -First 1; "
+        "if (-not $p) { Write-Output 'free'; exit 0 }; "
+        "$cl = (Get-CimInstance Win32_Process -Filter \"ProcessId=$p\" "
+        "-ErrorAction SilentlyContinue).CommandLine; "
+        "if ($cl -and ($cl -match 'openclaw\\.mjs.*gateway' -or "
+        "$cl -match 'openclaw.*gateway.*run')) { "
+        "  Stop-Process -Id $p -Force; "
+        "  Write-Output (\"killed:\" + $p) "
+        "} else { "
+        "  Write-Output (\"occupied:\" + $p + \":\" + ($cl -replace '\\s+', ' ')) "
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_line("WARN", f"gateway: port-reclaim probe failed: {exc}")
+        return False
+    out = (result.stdout or "").strip().splitlines()
+    verdict = out[-1] if out else ""
+    if verdict.startswith("killed:"):
+        killed_pid = verdict.split(":", 1)[1].strip()
+        log_line(
+            "INFO",
+            f"gateway: reclaimed port {port} (killed pre-existing openclaw gateway pid {killed_pid})",
+        )
+        # Give the OS a moment to release the socket before we try bind.
+        time.sleep(2)
+        return True
+    if verdict.startswith("occupied:"):
+        log_line(
+            "WARN",
+            f"gateway: port {port} occupied by a non-openclaw process ({verdict[9:]}); "
+            "deferring instead of killing",
+        )
+    return False
 
 
 def _resolve_node_bin() -> Optional[str]:
@@ -234,23 +293,32 @@ class GatewaySupervisor:
     def _run_forever(self) -> None:
         while not self._stop_requested:
             if _gateway_already_listening():
-                # Someone else (a manually-started `openclaw gateway run`,
-                # a leftover process, etc.) is already bound to the
-                # default port. Don't try to spawn a duplicate -- it'd
-                # just exit immediately with "port already in use".
-                # Poll until the port is free, then take over.
-                log_line(
-                    "INFO",
-                    "gateway: port 18789 already in use by another process; "
-                    "waiting for it to free up before spawning our own",
-                )
-                slept = 0
-                while not self._stop_requested and _gateway_already_listening():
-                    time.sleep(10)
-                    slept += 10
-                if self._stop_requested:
-                    return
-                log_line("INFO", "gateway: port 18789 is free; spawning")
+                # Port is bound. First try to take it: if the owner
+                # looks like an openclaw gateway (node running
+                # openclaw.mjs gateway), kill it so we can spawn a
+                # supervised replacement. If the owner is something
+                # else (unrelated dev server), leave it alone and
+                # wait for it to free up.
+                if _GATEWAY_RECLAIM and _reclaim_gateway_port(_GATEWAY_PORT):
+                    # Reclaim succeeded; fall through to spawn.
+                    pass
+                else:
+                    log_line(
+                        "INFO",
+                        f"gateway: port {_GATEWAY_PORT} already in use; "
+                        "waiting for it to free up before spawning our own",
+                    )
+                    while (
+                        not self._stop_requested
+                        and _gateway_already_listening()
+                    ):
+                        time.sleep(10)
+                    if self._stop_requested:
+                        return
+                    log_line(
+                        "INFO",
+                        f"gateway: port {_GATEWAY_PORT} is free; spawning",
+                    )
             try:
                 self._spawn_and_wait()
             except Exception as exc:
