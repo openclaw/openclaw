@@ -140,10 +140,17 @@ function renderAcceptanceCriteria(step: PlanStepForRender, format: PlanRenderFor
   if (!criteria || criteria.length === 0) {
     return [];
   }
-  const verified = new Set(step.verifiedCriteria ?? []);
+  // PR-11 review fix (Codex P2 #3105075579): normalize the verified
+  // set the same way criteria are normalized before comparison.
+  // Pre-fix the comparison was raw-against-normalized — a criterion
+  // verified upstream with equivalent text differing only by whitespace
+  // / newline formatting would render as unchecked here, producing
+  // inconsistent plan state in `/plan restate` and UI checklists.
+  const normalize = (s: string) => s.replace(/[\n\r]+/g, " ").trim();
+  const verified = new Set((step.verifiedCriteria ?? []).map(normalize));
   return criteria.map((rawCriterion) => {
-    const criterion = rawCriterion.replace(/[\n\r]+/g, " ").trim();
-    const isVerified = verified.has(rawCriterion);
+    const criterion = normalize(rawCriterion);
+    const isVerified = verified.has(criterion);
     switch (format) {
       case "html": {
         // Same PR-11 B1 neutralization as the parent step path.

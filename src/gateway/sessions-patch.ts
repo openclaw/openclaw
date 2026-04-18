@@ -414,7 +414,26 @@ export async function applySessionsPatchToStore(params: {
           }
         })();
       }
-      delete next.planMode;
+      // PR-11 review fix (Codex P2 #3105134664): preserve
+      // `lastPlanSteps` and `autoApprove` across the planMode→normal
+      // transition. Pre-fix, /plan off (and any other normal-mode
+      // toggle) erased the persisted plan snapshot — losing the
+      // sidebar-recovery + audit trail. Operators expected to be able
+      // to re-read the prior plan after toggling back to normal.
+      const preservedPlanSteps = next.planMode?.lastPlanSteps;
+      const preservedAutoApprove = next.planMode?.autoApprove === true;
+      if (preservedPlanSteps?.length || preservedAutoApprove) {
+        next.planMode = {
+          mode: "normal",
+          approval: "none",
+          rejectionCount: 0,
+          updatedAt: now,
+          ...(preservedAutoApprove ? { autoApprove: true } : {}),
+          ...(preservedPlanSteps?.length ? { lastPlanSteps: preservedPlanSteps } : {}),
+        };
+      } else {
+        delete next.planMode;
+      }
     } else if (raw === "plan") {
       if (!planModeEnabled) {
         return invalid(
@@ -521,6 +540,17 @@ export async function applySessionsPatchToStore(params: {
       // Existing approve/reject/edit path.
       if (!next.planMode) {
         return invalid("planApproval requires an active plan-mode session");
+      }
+      // PR-11 review fix (Copilot #3104741699): require a pending
+      // approval before allowing approve/edit/reject. Pre-fix the
+      // server accepted these actions even when planMode.approval was
+      // "none" (e.g. session in plan mode but no plan submitted yet),
+      // letting any client patch transition the session out of plan
+      // mode without an actual approval round-trip.
+      if (next.planMode.approval !== "pending") {
+        return invalid(
+          `planApproval action="${action}" requires a pending approval (current state: ${next.planMode.approval}); call exit_plan_mode first`,
+        );
       }
       const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
       const expectedApprovalId =

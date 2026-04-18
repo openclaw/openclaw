@@ -56,12 +56,34 @@ export async function persistPlanArchetypeMarkdown(
   // here keeps a malformed id from escaping the plans directory.
   // Using \p{Cc} (Unicode "Other, Control") to satisfy the
   // no-control-regex lint rule while still rejecting C0/DEL controls.
+  //
+  // PR-11 review fix (Copilot #3105169607): also reject "." / ".."
+  // / any agentId composed entirely of dots — `path.join(baseDir,
+  // "..", "plans")` would escape the intended directory.
+  // Additionally verify the resolved target stays within baseDir as
+  // a belt-and-suspenders prefix check.
   if (/[\\/]/.test(agentId) || /\p{Cc}/u.test(agentId)) {
     throw new Error(`persistPlanArchetypeMarkdown: invalid agentId: ${JSON.stringify(agentId)}`);
+  }
+  if (agentId === "." || agentId === ".." || /^\.+$/.test(agentId)) {
+    throw new Error(
+      `persistPlanArchetypeMarkdown: invalid agentId (path-traversal): ${JSON.stringify(agentId)}`,
+    );
   }
 
   const baseDir = input.baseDir ?? path.join(os.homedir(), ".openclaw", "agents");
   const dir = path.join(baseDir, agentId, "plans");
+  // PR-11 review M3: belt-and-suspenders confine — resolve the target
+  // and verify it stays within baseDir. Catches any edge case the
+  // syntactic check missed (e.g. agentId smuggling some Unicode
+  // separator we didn't enumerate).
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedDir = path.resolve(dir);
+  if (!resolvedDir.startsWith(resolvedBase + path.sep) && resolvedDir !== resolvedBase) {
+    throw new Error(
+      `persistPlanArchetypeMarkdown: resolved path escapes baseDir: ${JSON.stringify(resolvedDir)}`,
+    );
+  }
   await fsp.mkdir(dir, { recursive: true });
 
   const baseName = buildPlanFilename(input.title, input.now);

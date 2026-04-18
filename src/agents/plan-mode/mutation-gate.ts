@@ -15,6 +15,14 @@ import type { PlanMode } from "./types.js";
 /**
  * Tools blocked during plan mode unless handled by a special case below
  * (e.g. exec has a read-only prefix allowlist).
+ *
+ * PR-10 review fix (Copilot/Codex P1 #3105169112): `sessions_spawn`
+ * was previously on this blocklist, which broke the documented
+ * plan-mode workflow ("spawn research subagents during plan-mode
+ * investigation, then synthesize the plan"). Removed — subagent
+ * spawning is a research operation, not a workspace mutation. The
+ * subagent's own runtime applies its own plan-mode gate if/when
+ * needed.
  */
 const MUTATION_TOOL_BLOCKLIST = new Set([
   "apply_patch",
@@ -26,7 +34,7 @@ const MUTATION_TOOL_BLOCKLIST = new Set([
   "nodes",
   "process",
   "sessions_send",
-  "sessions_spawn",
+  // "sessions_spawn",  // removed per PR-10 review #3105169112
   "subagents",
   "write",
 ]);
@@ -47,6 +55,19 @@ const PLAN_MODE_ALLOWED_TOOLS = new Set([
   "update_plan",
   "exit_plan_mode",
   "session_status",
+  // PR-10 review fix (Copilot/Codex P1 #3104741578 / #3104743331):
+  // ask_user_question is a planning-time clarification tool that
+  // does NOT exit plan mode and does NOT mutate workspace state. It
+  // must be in the allowlist or the entire feature is broken under
+  // the default-deny gate.
+  "ask_user_question",
+  // enter_plan_mode is also non-mutating (state transition only) and
+  // should be allowed even when called redundantly mid-plan.
+  "enter_plan_mode",
+  // sessions_spawn allowed for research-subagent flows (see comment
+  // on MUTATION_TOOL_BLOCKLIST above). Belt-and-suspenders allowlist
+  // entry in addition to the blocklist removal.
+  "sessions_spawn",
 ]);
 
 /**

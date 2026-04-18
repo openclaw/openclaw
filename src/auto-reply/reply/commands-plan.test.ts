@@ -455,7 +455,10 @@ describe("/plan handler — parser dispatch", () => {
     expect(result?.reply?.text).toBeDefined();
     // Message must stay under Telegram's 4096-char limit (with headroom).
     expect(result!.reply!.text!.length).toBeLessThanOrEqual(4096);
-    expect(result?.reply?.text).toContain("more line");
+    // PR-11 hardening v2: truncation footer changed from "more line(s)"
+    // to "more step(s)" since we now truncate by step count rather
+    // than slicing the rendered string.
+    expect(result?.reply?.text).toContain("more step");
   });
 
   it("plaintext format applies to extended SMS-like channels (review M4)", async () => {

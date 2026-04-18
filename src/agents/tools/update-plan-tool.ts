@@ -312,6 +312,39 @@ export function createUpdatePlanTool(options?: CreateUpdatePlanToolOptions): Any
         );
       }
 
+      // PR-11 review fix (Codex P1 #3105040898): re-validate closure
+      // criteria on the MERGED plan. `readPlanSteps` enforces
+      // acceptanceCriteria + verifiedCriteria coherence on the
+      // incoming patch only — but merge can produce a step with
+      // status "completed" while inherited acceptanceCriteria from
+      // the prior snapshot remain unverified (the patch omits the
+      // verifiedCriteria field, so the merged step keeps the prior
+      // empty/partial verified set). Closure gate must reject these
+      // so completion flows don't fire on unmet contracts.
+      for (const step of plan) {
+        if (step.status !== "completed") {
+          continue;
+        }
+        const ac = step.acceptanceCriteria;
+        if (!ac || ac.length === 0) {
+          continue; // no criteria declared → no gate to enforce
+        }
+        const verified = new Set(
+          (step.verifiedCriteria ?? []).map((c) => c.replace(/[\n\r]+/g, " ").trim()),
+        );
+        const unmet = ac.filter((c) => !verified.has(c.replace(/[\n\r]+/g, " ").trim()));
+        if (unmet.length > 0) {
+          const sample = unmet.slice(0, 3).join("; ");
+          const more = unmet.length > 3 ? ` (+${unmet.length - 3} more)` : "";
+          throw new ToolInputError(
+            `merge would mark step "${step.step}" as completed with ${unmet.length} unverified ` +
+              `acceptance criteria: ${sample}${more}. ` +
+              `Either include the verified criteria in this update_plan call, or do not transition ` +
+              `to status:"completed" until all acceptance criteria are met.`,
+          );
+        }
+      }
+
       // Persist for next merge in this run. Snapshot stored as
       // `PlanStepSnapshot[]` (structural superset of `UpdatePlanStep[]`).
       // PR-9 Wave B1: include closure-gate fields so the persister and
