@@ -44,7 +44,7 @@ describe("resolveDiscordToken", () => {
     expect(res.source).toBe("config");
   });
 
-  it("falls back to top-level token for non-default accounts without account token", () => {
+  it("does not fall back to top-level token for explicit non-default account without token", () => {
     const cfg = {
       channels: {
         discord: {
@@ -56,8 +56,24 @@ describe("resolveDiscordToken", () => {
       },
     } as OpenClawConfig;
     const res = resolveDiscordToken(cfg, { accountId: "work" });
-    expect(res.token).toBe("base-token");
-    expect(res.source).toBe("config");
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
+
+  it("does not fall back to top-level token for unknown explicit non-default account", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "base-token",
+          accounts: {
+            default: { token: "default-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveDiscordToken(cfg, { accountId: "astro" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
   });
 
   it("does not inherit top-level token when account token is explicitly blank", () => {

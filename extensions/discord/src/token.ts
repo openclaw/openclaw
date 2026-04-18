@@ -1,4 +1,3 @@
-import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -6,7 +5,8 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 
 export type DiscordTokenSource = "env" | "config" | "none";
 
-export type DiscordTokenResolution = BaseTokenResolution & {
+export type DiscordTokenResolution = {
+  token: string;
   source: DiscordTokenSource;
 };
 
@@ -22,6 +22,10 @@ export function resolveDiscordToken(
   cfg?: OpenClawConfig,
   opts: { accountId?: string | null; envToken?: string | null } = {},
 ): DiscordTokenResolution {
+  const explicitAccountId =
+    typeof opts.accountId === "string" && opts.accountId.trim().length > 0
+      ? normalizeAccountId(opts.accountId)
+      : undefined;
   const accountId = normalizeAccountId(opts.accountId);
   const discordCfg = cfg?.channels?.discord;
   const accountCfg = resolveAccountEntry(discordCfg?.accounts, accountId);
@@ -37,6 +41,9 @@ export function resolveDiscordToken(
     return { token: accountToken, source: "config" };
   }
   if (hasAccountToken) {
+    return { token: "", source: "none" };
+  }
+  if (explicitAccountId && explicitAccountId !== DEFAULT_ACCOUNT_ID) {
     return { token: "", source: "none" };
   }
 
