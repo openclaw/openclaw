@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
@@ -7,8 +6,12 @@ import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
   createExpiredOauthStore,
+  removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
+  resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
@@ -91,24 +94,20 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
   let mainAgentDir = "";
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-mirror-"));
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-mirror-");
   });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    refreshProviderOAuthCredentialWithPluginMock.mockReset();
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
     externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
     clearRuntimeAuthProfileStoreSnapshots();
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    mainAgentDir = path.join(caseRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
-    await fs.mkdir(mainAgentDir, { recursive: true });
+    mainAgentDir = await createOAuthMainAgentDir(caseRoot);
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -121,9 +120,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
   });
 
   afterAll(async () => {
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("mirrors refreshed credentials into the main store so peers skip refresh", async () => {

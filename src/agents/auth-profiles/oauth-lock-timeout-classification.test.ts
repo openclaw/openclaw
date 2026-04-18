@@ -1,12 +1,13 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
   createExpiredOauthStore,
+  removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
 } from "./oauth-test-utils.js";
 import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
@@ -91,7 +92,7 @@ describe("OAuth refresh lock timeout classification", () => {
   let caseIndex = 0;
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-lock-timeout-"));
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-lock-timeout-");
     ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
   });
 
@@ -102,11 +103,7 @@ describe("OAuth refresh lock timeout classification", () => {
     );
     clearRuntimeAuthProfileStoreSnapshots();
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    agentDir = path.join(caseRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    await fs.mkdir(agentDir, { recursive: true });
+    agentDir = await createOAuthMainAgentDir(caseRoot);
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -117,7 +114,7 @@ describe("OAuth refresh lock timeout classification", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("maps only global refresh lock timeouts to refresh_contention", async () => {

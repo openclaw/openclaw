@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
   createExpiredOauthStore,
+  removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
+  resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -86,17 +89,13 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    refreshProviderOAuthCredentialWithPluginMock.mockReset();
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
     clearRuntimeAuthProfileStoreSnapshots();
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-concurrent-"));
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
-    await fs.mkdir(mainAgentDir, { recursive: true });
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-concurrent-");
+    mainAgentDir = await createOAuthMainAgentDir(tempRoot);
     await loadOAuthModuleForTest();
     // Drop any refresh-queue entries left behind by a prior timed-out test.
     resetOAuthRefreshQueuesForTest();
@@ -109,9 +108,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     if (resetOAuthRefreshQueuesForTest) {
       resetOAuthRefreshQueuesForTest();
     }
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("refreshes exactly once when many agents share one OAuth profile and all race on expiry", async () => {
