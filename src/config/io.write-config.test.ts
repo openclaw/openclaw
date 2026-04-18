@@ -80,6 +80,26 @@ describe("config io write", () => {
     return persisted.commands;
   };
 
+  const createFastConfigIO = (home: string) =>
+    createConfigIO({
+      env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => home,
+      logger: silentLogger,
+    });
+
+  const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
+    const io = createFastConfigIO(home);
+
+    await io.writeConfigFile({
+      gateway: { mode: "local", port: 18789 },
+    });
+
+    return JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      $schema?: string;
+      gateway?: { mode?: string; port?: number };
+    };
+  };
+
   it.runIf(process.platform !== "win32")(
     "tightens world-writable state dir when writing the default config",
     async () => {
@@ -207,20 +227,7 @@ describe("config io write", () => {
         "utf-8",
       );
 
-      const io = createConfigIO({
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
-      });
-
-      await io.writeConfigFile({
-        gateway: { mode: "local", port: 18789 },
-      });
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        $schema?: string;
-        gateway?: { mode?: string; port?: number };
-      };
+      const persisted = await writeGatewayPortAndReadConfig(home, configPath);
       expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
       expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
     });
@@ -242,20 +249,7 @@ describe("config io write", () => {
         "utf-8",
       );
 
-      const io = createConfigIO({
-        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
-      });
-
-      await io.writeConfigFile({
-        gateway: { mode: "local", port: 18789 },
-      });
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        $schema?: string;
-        gateway?: { mode?: string; port?: number };
-      };
+      const persisted = await writeGatewayPortAndReadConfig(home, configPath);
       expect(persisted).not.toHaveProperty("$schema");
       expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
     });
