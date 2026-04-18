@@ -113,11 +113,14 @@ export async function resolveCronModelSelection(
     });
     if ("error" in resolvedOverride) {
       if (resolvedOverride.error.startsWith("model not allowed:")) {
+        getLog().error(
+          `[cron] payload.model '${modelOverride}' is not in the allowlist — explicitly configured model was rejected. ` +
+            `Refusing silent fallback to defaults (${resolvedDefault.provider}/${resolvedDefault.model}). ` +
+            `Either add '${modelOverride}' to the model allowlist or remove model from cron payload.`,
+        );
         return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
+          ok: false,
+          error: `cron: payload.model '${modelOverride}' not in allowlist (refusing silent fallback to ${resolvedDefault.provider}/${resolvedDefault.model})`,
         };
       }
       return { ok: false, error: resolvedOverride.error };
