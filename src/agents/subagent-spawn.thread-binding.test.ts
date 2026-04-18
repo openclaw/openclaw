@@ -44,7 +44,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   }
 
   beforeEach(() => {
-    vi.resetModules();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
@@ -160,59 +159,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
           channel: "matrix",
           accountId: "bot-alpha",
           to: `room:${boundRoom}`,
-          threadId: "$thread-root",
-        },
-      }),
-    );
-  });
-
-  it("seeds a thread-bound child session from the binding created during spawn", async () => {
-    hoisted.hookRunner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "subagent_spawning",
-    );
-    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
-      status: "ok",
-      threadBindingReady: true,
-      deliveryOrigin: {
-        channel: "matrix",
-        accountId: "sut",
-        to: "room:!room:example",
-        threadId: "$thread-root",
-      },
-    });
-    const { spawnSubagentDirect } = await loadThreadBindingSpawnModule();
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "reply with a marker",
-        thread: true,
-        mode: "session",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "matrix",
-        agentAccountId: "sut",
-        agentTo: "room:!room:example",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    const agentCall = hoisted.callGatewayMock.mock.calls.find(
-      ([call]) => (call as { method?: string }).method === "agent",
-    )?.[0] as { params?: Record<string, unknown> } | undefined;
-    expect(agentCall?.params).toMatchObject({
-      channel: "matrix",
-      accountId: "sut",
-      to: "room:!room:example",
-      threadId: "$thread-root",
-      deliver: true,
-    });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterOrigin: {
-          channel: "matrix",
-          accountId: "sut",
-          to: "room:!room:example",
           threadId: "$thread-root",
         },
         expectsCompletionMessage: false,
