@@ -11,7 +11,10 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
-import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
+import {
+  createMinimaxReasoningContentTextWrapper,
+  createMinimaxThinkingDisabledWrapper,
+} from "./minimax-stream-wrappers.js";
 import {
   createSiliconFlowThinkingWrapper,
   shouldApplySiliconFlowThinkingOffCompat,
@@ -412,6 +415,16 @@ function applyPostPluginStreamWrappers(
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+
+  // When MiniMax-M2.* is self-hosted via openai-completions (exo-explore,
+  // vLLM, Ollama, etc.), it streams reasoning_content deltas with empty
+  // content. openclaw routes that to a thinking block, so if the model's
+  // output budget is exhausted inside <think> (or if the model emits only
+  // reasoning this turn) the final message has no visible text and the chat
+  // UI shows a blank reply. MiniMax-M2 is a documented interleaved-thinking
+  // model, so we cannot disable thinking — instead, promote thinking-only
+  // final messages into text. Mirrors the Xiaomi/MiMo pattern (#60304).
+  ctx.agent.streamFn = createMinimaxReasoningContentTextWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.resolvedExtraParams, ctx.override],

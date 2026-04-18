@@ -3,6 +3,7 @@ import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createMinimaxFastModeWrapper,
+  createMinimaxReasoningContentTextWrapper,
   createMinimaxThinkingDisabledWrapper,
 } from "./minimax-stream-wrappers.js";
 
@@ -65,6 +66,9 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
   });
 
   it("does not affect minimax with non-anthropic-messages api", () => {
+    // openai-completions uses createMinimaxReasoningContentTextWrapper instead —
+    // MiniMax-M2 is a documented interleaved-thinking model; disabling thinking
+    // on that path degrades quality.
     expect(
       captureThinkingPayload({
         provider: "minimax",
@@ -120,5 +124,255 @@ describe("createMinimaxFastModeWrapper", () => {
     );
 
     expect(capturedId).toBe("MiniMax-M2.7-highspeed");
+  });
+});
+
+type FakeStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
+function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): FakeStream {
+  return {
+    async result() {
+      return params.resultMessage;
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {
+        for (const event of params.events) {
+          yield event;
+        }
+      })();
+    },
+  };
+}
+
+function runWrappedMinimaxOpenAIStream(params: {
+  provider?: string;
+  modelId: string;
+  api?: string;
+  events: unknown[];
+  resultMessage: unknown;
+}) {
+  const baseStreamFn: StreamFn = () =>
+    createFakeStream({
+      events: params.events,
+      resultMessage: params.resultMessage,
+    }) as ReturnType<StreamFn>;
+
+  const wrapped = createMinimaxReasoningContentTextWrapper(baseStreamFn);
+  return wrapped(
+    {
+      api: params.api ?? "openai-completions",
+      provider: params.provider ?? "exo",
+      id: params.modelId,
+    } as never,
+    { messages: [] } as never,
+    {},
+  ) as FakeStream;
+}
+
+describe("createMinimaxReasoningContentTextWrapper", () => {
+  it.each([
+    ["exo", "mlx-community/MiniMax-M2.7-4bit"],
+    ["ollama", "MiniMax-M2.7"],
+    ["vllm", "MiniMaxAI/MiniMax-M2.7"],
+  ])(
+    "rewrites thinking-only final messages into text for MiniMax on openai-completions (%s / %s)",
+    async (provider, modelId) => {
+      const stream = runWrappedMinimaxOpenAIStream({
+        provider,
+        modelId,
+        events: [
+          {
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "MiniMax final answer" }],
+              stopReason: "stop",
+            },
+          },
+        ],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "MiniMax final answer" }],
+          stopReason: "stop",
+        },
+      });
+
+      const events: unknown[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      await expect(stream.result()).resolves.toEqual({
+        role: "assistant",
+        content: [{ type: "text", text: "MiniMax final answer" }],
+        stopReason: "stop",
+      });
+      expect(events).toEqual([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "MiniMax final answer" }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    },
+  );
+
+  it("preserves messages that already have visible text", async () => {
+    const originalMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "internal reasoning" },
+        { type: "text", text: "Visible answer." },
+      ],
+      stopReason: "stop",
+    };
+    const stream = runWrappedMinimaxOpenAIStream({
+      modelId: "MiniMax-M2.7",
+      events: [{ type: "done", reason: "stop", message: originalMessage }],
+      resultMessage: originalMessage,
+    });
+
+    for await (const _ of stream) {
+      // drain
+    }
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "internal reasoning" },
+        { type: "text", text: "Visible answer." },
+      ],
+      stopReason: "stop",
+    });
+  });
+
+  it("preserves messages that include tool calls", async () => {
+    const originalMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "about to call a tool" },
+        { type: "toolCall", id: "t1", name: "search", arguments: { q: "hi" } },
+      ],
+      stopReason: "toolUse",
+    };
+    const stream = runWrappedMinimaxOpenAIStream({
+      modelId: "MiniMax-M2.7",
+      events: [{ type: "done", reason: "toolUse", message: originalMessage }],
+      resultMessage: originalMessage,
+    });
+
+    for await (const _ of stream) {
+      // drain
+    }
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "thinking", thinking: "about to call a tool" }, { type: "toolCall" }],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("does not touch non-MiniMax openai-completions models", async () => {
+    const originalMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "gpt reasoning" }],
+      stopReason: "stop",
+    };
+    const stream = runWrappedMinimaxOpenAIStream({
+      provider: "openai",
+      modelId: "gpt-4o-mini",
+      events: [{ type: "done", reason: "stop", message: originalMessage }],
+      resultMessage: originalMessage,
+    });
+
+    for await (const _ of stream) {
+      // drain
+    }
+
+    // Message left as-is — no rewrite should apply outside the MiniMax family.
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "gpt reasoning" }],
+      stopReason: "stop",
+    });
+  });
+
+  it("does not rewrite MiniMax via anthropic-messages path", async () => {
+    const originalMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "anthropic-shaped thinking" }],
+      stopReason: "stop",
+    };
+    const stream = runWrappedMinimaxOpenAIStream({
+      api: "anthropic-messages",
+      provider: "minimax",
+      modelId: "MiniMax-M2.7",
+      events: [{ type: "done", reason: "stop", message: originalMessage }],
+      resultMessage: originalMessage,
+    });
+
+    for await (const _ of stream) {
+      // drain
+    }
+
+    // Anthropic path uses createMinimaxThinkingDisabledWrapper instead.
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "anthropic-shaped thinking" }],
+      stopReason: "stop",
+    });
+  });
+
+  it("does not rewrite when stop reason is not stop or length", async () => {
+    const originalMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "aborted mid-thought" }],
+      stopReason: "aborted",
+    };
+    const stream = runWrappedMinimaxOpenAIStream({
+      modelId: "MiniMax-M2.7",
+      events: [{ type: "done", reason: "aborted", message: originalMessage }],
+      resultMessage: originalMessage,
+    });
+
+    for await (const _ of stream) {
+      // drain
+    }
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "aborted mid-thought" }],
+      stopReason: "aborted",
+    });
+  });
+
+  it("rewrites on length stop reason (max_tokens exhausted inside <think>)", async () => {
+    const originalMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "partial reasoning" }],
+      stopReason: "length",
+    };
+    const stream = runWrappedMinimaxOpenAIStream({
+      modelId: "MiniMax-M2.7",
+      events: [{ type: "done", reason: "length", message: originalMessage }],
+      resultMessage: originalMessage,
+    });
+
+    for await (const _ of stream) {
+      // drain
+    }
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "partial reasoning" }],
+      stopReason: "length",
+    });
   });
 });
