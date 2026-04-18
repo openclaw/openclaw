@@ -4,19 +4,18 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createExpiredOauthStore,
+  resolveApiKeyForProfileInTest,
+} from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-function resolveApiKeyForProfileInTest(
-  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
-) {
-  return resolveApiKeyForProfile({ cfg: {}, ...params });
-}
+import type { OAuthCredential } from "./types.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -81,30 +80,8 @@ vi.mock("./external-cli-sync.js", () => ({
     existing !== incoming,
 }));
 
-function createExpiredOauthStore(params: {
-  profileId: string;
-  provider: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: Date.now() - 60_000,
-      } satisfies OAuthCredential,
-    },
-  };
-}
-
 describe("OAuth refresh in-process queue", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let agentDir = "";
   let caseIndex = 0;
@@ -163,12 +140,12 @@ describe("OAuth refresh in-process queue", () => {
     });
 
     const [first, second] = await Promise.all([
-      resolveApiKeyForProfileInTest({
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
       }).catch((e) => e),
-      resolveApiKeyForProfileInTest({
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store: ensureAuthProfileStore(agentDir),
         profileId,
         agentDir,
@@ -230,7 +207,7 @@ describe("OAuth refresh in-process queue", () => {
 
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>
-        resolveApiKeyForProfileInTest({
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
           store: ensureAuthProfileStore(agentDir),
           profileId,
           agentDir,

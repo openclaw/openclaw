@@ -5,6 +5,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createExpiredOauthStore,
+  resolveApiKeyForProfileInTest,
+} from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -12,12 +17,6 @@ import {
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-function resolveApiKeyForProfileInTest(
-  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
-) {
-  return resolveApiKeyForProfile({ cfg: {}, ...params });
-}
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -85,36 +84,8 @@ vi.mock("./external-cli-sync.js", () => ({
     existing !== incoming,
 }));
 
-function createExpiredOauthStore(params: {
-  profileId: string;
-  provider: string;
-  access?: string;
-  refresh?: string;
-  accountId?: string;
-  email?: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access ?? "cached-access-token",
-        refresh: params.refresh ?? "refresh-token",
-        expires: Date.now() - 60_000,
-        accountId: params.accountId,
-        email: params.email,
-      } satisfies OAuthCredential,
-    },
-  };
-}
-
 describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let caseIndex = 0;
   let mainAgentDir = "";
@@ -178,7 +149,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -222,7 +193,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     // Main-agent refresh uses undefined agentDir; the mirror path is a no-op
     // (local == main). Just make sure the main store still reflects the refresh
     // and no double-write happens.
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(undefined),
       profileId,
       agentDir: undefined,
@@ -274,7 +245,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
 
     // Refresh mock intentionally left as default-undefined — it should not
     // be called, the pre-refresh adopt wins.
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -337,7 +308,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
       throw new Error("upstream 503 service unavailable");
     });
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -380,7 +351,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,

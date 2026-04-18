@@ -4,6 +4,12 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  oauthCred,
+  resolveApiKeyForProfileInTest,
+  storeWith,
+} from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -16,12 +22,6 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 // shared identity copy gate before copying main-store credentials into the
 // sub-agent store. Unit tests cover policy variants; this suite proves each
 // production branch refuses a mismatched accountId.
-
-function resolveApiKeyForProfileInTest(
-  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
-) {
-  return resolveApiKeyForProfile({ cfg: {}, ...params });
-}
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -86,27 +86,8 @@ vi.mock("./external-cli-sync.js", () => ({
     existing !== incoming,
 }));
 
-function oauthCred(params: {
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-  accountId?: string;
-  email?: string;
-}): OAuthCredential {
-  return { type: "oauth", ...params };
-}
-
-function storeWith(profileId: string, cred: OAuthCredential): AuthProfileStore {
-  return { version: 1, profiles: { [profileId]: cred } };
-}
-
 describe("OAuth credential adoption is identity-gated", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let caseIndex = 0;
   let mainAgentDir = "";
@@ -183,7 +164,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       mainAgentDir,
     );
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -252,7 +233,7 @@ describe("OAuth credential adoption is identity-gated", () => {
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -333,7 +314,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     });
 
     await expect(
-      resolveApiKeyForProfileInTest({
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
         store: ensureAuthProfileStore(subAgentDir),
         profileId,
         agentDir: subAgentDir,
