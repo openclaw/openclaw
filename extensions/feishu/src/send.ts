@@ -429,6 +429,72 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
+/**
+ * List messages in a Feishu chat/group by container_id (chat_id).
+ * Uses container_id_type=chat to query chat history.
+ */
+export async function listFeishuChatMessages(params: {
+  cfg: ClawdbotConfig;
+  chatId: string;
+  limit?: number;
+  pageToken?: string;
+  sortType?: "ByCreateTimeAsc" | "ByCreateTimeDesc";
+  accountId?: string;
+}): Promise<{ messages: FeishuThreadMessageInfo[]; pageToken?: string; hasMore: boolean }> {
+  const { cfg, chatId, limit = 50, pageToken, sortType = "ByCreateTimeAsc", accountId } = params;
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+
+  const response = (await client.im.message.list({
+    params: {
+      container_id_type: "chat",
+      container_id: chatId,
+      sort_type: sortType,
+      page_size: Math.min(limit, 50),
+      ...(pageToken ? { page_token: pageToken } : {}),
+    },
+  })) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      has_more?: boolean;
+      page_token?: string;
+      items?: Array<FeishuMessageGetItem>;
+    };
+  };
+
+  if (response.code !== 0) {
+    throw new Error(
+      `Feishu chat list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
+    );
+  }
+
+  const items = response.data?.items ?? [];
+  const messages: FeishuThreadMessageInfo[] = items
+    .slice(0, limit)
+    .map((item) => {
+      const parsed = parseFeishuMessageItem(item);
+      return {
+        messageId: parsed.messageId,
+        senderId: parsed.senderId,
+        senderType: parsed.senderType,
+        content: parsed.content,
+        contentType: parsed.contentType,
+        createTime: parsed.createTime,
+      };
+    });
+
+  return {
+    messages,
+    hasMore: response.data?.has_more ?? false,
+    pageToken: response.data?.page_token,
+  };
+}
+
 export function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;

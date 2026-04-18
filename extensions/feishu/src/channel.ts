@@ -169,6 +169,7 @@ function describeFeishuMessageTool({
   const actions = new Set<ChannelMessageActionName>([
     "send",
     "read",
+    "list",
     "edit",
     "thread-reply",
     "pin",
@@ -751,6 +752,35 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               };
             }
             return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
+          }
+
+          if (ctx.action === "list") {
+            const chatId =
+              readFirstString(ctx.params, ["channelId", "chatId", "target"]) ??
+              (typeof ctx.params.threadId === "string" ? ctx.params.threadId : undefined);
+            if (!chatId) {
+              throw new Error("Feishu list requires channelId or target (chat_id).");
+            }
+            const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : 50;
+            const pageToken =
+              typeof ctx.params.pageToken === "string" ? ctx.params.pageToken : undefined;
+            const sortType =
+              ctx.params.sortType === "ByCreateTimeDesc" ? "ByCreateTimeDesc" : "ByCreateTimeAsc";
+            const { listFeishuChatMessages } = await loadFeishuChannelRuntime();
+            const result = await listFeishuChatMessages({
+              cfg: ctx.cfg,
+              chatId,
+              limit,
+              pageToken,
+              sortType,
+              accountId: ctx.accountId ?? undefined,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              action: "list",
+              ...result,
+            });
           }
 
           if (ctx.action === "edit") {
