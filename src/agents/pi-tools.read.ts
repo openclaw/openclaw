@@ -985,18 +985,32 @@ function getFallbackMimeTypeFromExtension(filePath: string): string {
 }
 
 function getFallbackMimeType(ext: string): string {
-  if (IMAGE_EXTENSIONS.has(ext)) return getImageMimeType(ext);
-  if (AUDIO_EXTENSIONS.has(ext)) return getAudioMimeType(ext);
-  if (VIDEO_EXTENSIONS.has(ext)) return getVideoMimeType(ext);
-  if (ext === WEBM_EXTENSION) return "video/webm";
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return getImageMimeType(ext);
+  }
+  if (AUDIO_EXTENSIONS.has(ext)) {
+    return getAudioMimeType(ext);
+  }
+  if (VIDEO_EXTENSIONS.has(ext)) {
+    return getVideoMimeType(ext);
+  }
+  if (ext === WEBM_EXTENSION) {
+    return "video/webm";
+  }
   return "text/plain";
 }
 
 function getKindFromExtension(filePath: string): string {
   const ext = filePath.toLowerCase().split(".").pop() ?? "";
-  if (IMAGE_EXTENSIONS.has(ext)) return "image";
-  if (AUDIO_EXTENSIONS.has(ext)) return "audio";
-  if (VIDEO_EXTENSIONS.has(ext) || ext === WEBM_EXTENSION) return "video";
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return "image";
+  }
+  if (AUDIO_EXTENSIONS.has(ext)) {
+    return "audio";
+  }
+  if (VIDEO_EXTENSIONS.has(ext) || ext === WEBM_EXTENSION) {
+    return "video";
+  }
   return "text";
 }
 
@@ -1034,26 +1048,6 @@ async function detectMediaTypeFromBytes(
     const kind = getKindFromExtension(filePath);
     return { mimeType, kind, extension: ext };
   }
-}
-
-// Helper function to resolve adaptive read max bytes based on file size
-function resolveAdaptiveReadMaxBytes(fileSize?: number): number | undefined {
-  // If file size is available, use adaptive limits
-  if (fileSize !== undefined) {
-    // For files under 1MB, allow full read
-    if (fileSize <= 1024 * 1024) {
-      return undefined; // No limit for small files
-    }
-    // For files between 1MB and 10MB, limit to 5MB
-    if (fileSize <= 10 * 1024 * 1024) {
-      return 5 * 1024 * 1024;
-    }
-    // For larger files, limit to 10MB
-    return 10 * 1024 * 1024;
-  }
-  
-  // Default: no limit (will be handled by streaming for text)
-  return undefined;
 }
 
 // Helper function to create text fallback for media results

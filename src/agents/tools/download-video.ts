@@ -590,8 +590,6 @@ async function resolveWorkspaceRoot(): Promise<string> {
   const sessionTrustedRoot = getTrustedWorkspaceRoot();
   if (sessionTrustedRoot) {
     // Validate the trusted workspace root is still safe using session boundary policy
-    const resolved = path.resolve(sessionTrustedRoot);
-    
     // Ensure directory exists
     await fs.mkdir(sessionTrustedRoot, { recursive: true });
     return sessionTrustedRoot;
