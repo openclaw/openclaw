@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Cron/gateway: reject ambiguous announce delivery config at add/update time so invalid multi-channel or target-id provider settings fail early instead of persisting broken cron jobs. (#69015) Thanks @obviyus.
 - Cron/main-session delivery: preserve `heartbeat.target="last"` through deferred wake queuing, gateway wake forwarding, and same-target wake coalescing so queued cron replies still return to the last active chat. (#69021) Thanks @obviyus.
 - Cron/gateway: ignore disabled channels when announce delivery ambiguity is checked, and validate main-session delivery patches against the live cron service default agent so hot-reloaded agent config does not falsely reject valid updates. (#69040) Thanks @obviyus.
+- Daemon/systemd classifier: stop misclassifying a missing systemd user D-Bus socket (the `Failed to connect to bus: No such file or directory` path that shows up on WSL2 when user D-Bus is not running) as a missing-systemctl error, so `openclaw gateway start` no longer reports `systemctl not available; systemd user services are required on Linux.` on hosts that actually have systemctl installed, and WSL2 users get an actionable D-Bus unavailable hint pointing at `/etc/wsl.conf` and `wsl --shutdown`. (#68380)
 
 ## 2026.4.19-beta.2
 
@@ -115,7 +116,6 @@ Docs: https://docs.openclaw.ai
 - Google/Antigravity: resolve forward-compatible Gemini 3.1 Pro custom-tools and Flash variants from the bundled Google plugin templates, so `google-antigravity/gemini-3.1-pro-preview-customtools` no longer falls through to an unknown-model error. Fixes #35512.
 - Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
 - Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
-- Daemon/systemd classifier: stop misclassifying a missing systemd user D-Bus socket (the `Failed to connect to bus: No such file or directory` path that shows up on WSL2 when user D-Bus is not running) as a missing-systemctl error, so `openclaw gateway start` no longer reports `systemctl not available; systemd user services are required on Linux.` on hosts that actually have systemctl installed, and WSL2 users get an actionable D-Bus unavailable hint pointing at `/etc/wsl.conf` and `wsl --shutdown`. (#68380)
 
 ## 2026.4.15
 
