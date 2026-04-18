@@ -13,6 +13,7 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const pinOrUnpinMessageTelegram = vi.fn(async () => ({ ok: true }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../telegram/send.js", () => ({
@@ -24,6 +25,8 @@ vi.mock("../../telegram/send.js", () => ({
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
+  pinOrUnpinMessageTelegram: (...args: Parameters<typeof pinOrUnpinMessageTelegram>) =>
+    pinOrUnpinMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -83,6 +86,7 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    pinOrUnpinMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -547,6 +551,72 @@ describe("handleTelegramAction", () => {
         ],
       }),
     );
+  });
+
+  it("pins a message silently by default when actions.pin is enabled", async () => {
+    await handleTelegramAction(
+      {
+        action: "pinMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      telegramConfig({ actions: { pin: true } }),
+    );
+    expect(pinOrUnpinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      true,
+      expect.objectContaining({ token: "tok", disableNotification: true }),
+    );
+  });
+
+  it("honours an explicit disableNotification:false on pin", async () => {
+    await handleTelegramAction(
+      {
+        action: "pinMessage",
+        chatId: "123",
+        messageId: 456,
+        disableNotification: false,
+      },
+      telegramConfig({ actions: { pin: true } }),
+    );
+    expect(pinOrUnpinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      true,
+      expect.objectContaining({ token: "tok", disableNotification: false }),
+    );
+  });
+
+  it("unpins a message when actions.pin is enabled", async () => {
+    await handleTelegramAction(
+      {
+        action: "unpinMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      telegramConfig({ actions: { pin: true } }),
+    );
+    expect(pinOrUnpinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      false,
+      expect.objectContaining({ token: "tok", disableNotification: undefined }),
+    );
+  });
+
+  it("throws when pin is disabled (default)", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "pinMessage",
+          chatId: "123",
+          messageId: 456,
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/pin\/unpin is disabled/);
+    expect(pinOrUnpinMessageTelegram).not.toHaveBeenCalled();
   });
 });
 

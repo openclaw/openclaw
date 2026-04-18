@@ -190,7 +190,11 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
-    apiRoot: z.string().url().optional().describe("The root URL of the Telegram API. Defaults to https://api.telegram.org."),
+    apiRoot: z
+      .string()
+      .url()
+      .optional()
+      .describe("The root URL of the Telegram API. Defaults to https://api.telegram.org."),
     webhookUrl: z
       .string()
       .optional()
@@ -227,7 +231,10 @@ export const TelegramAccountSchemaBase = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+        createForumTopic: z.boolean().optional(),
+        pin: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -94,6 +94,14 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("createForumTopic")) {
       actions.add("topic-create");
     }
+    if (isEnabled("pin", false)) {
+      actions.add("pin");
+      actions.add("unpin");
+      // Note: "list-pins" is intentionally omitted. Telegram's Bot API only
+      // exposes the latest pinned message (via getChat.pinned_message) and has
+      // no endpoint to enumerate the full pinned-message list, so there is no
+      // meaningful implementation path for list-pins on this channel.
+    }
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -223,6 +231,21 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           name,
           iconColor: iconColor ?? undefined,
           iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "pin" || action === "unpin") {
+      const chatId = readTelegramChatIdParam(params);
+      const messageId = readTelegramMessageIdParam(params);
+      return await handleTelegramAction(
+        {
+          action: action === "pin" ? "pinMessage" : "unpinMessage",
+          chatId,
+          messageId,
           accountId: accountId ?? undefined,
         },
         cfg,

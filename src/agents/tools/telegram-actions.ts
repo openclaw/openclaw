@@ -11,6 +11,7 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
+  pinOrUnpinMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendStickerTelegram,
@@ -399,6 +400,39 @@ export async function handleTelegramAction(
       name: result.name,
       chatId: result.chatId,
     });
+  }
+
+  if (action === "pinMessage" || action === "unpinMessage") {
+    if (!isActionEnabled("pin", false)) {
+      throw new Error("Telegram pin/unpin is disabled. Set channels.telegram.actions.pin to true.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageId = readNumberParam(params, "messageId", {
+      required: true,
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const pin = action === "pinMessage";
+    // Silent pin by default for agent-initiated actions (avoids notification
+    // spam on broadcasts/announcements). Callers may opt in to Telegram's
+    // default notification by passing disableNotification:false explicitly.
+    // Unpin has no notification flag, so we leave it undefined.
+    const explicitDisableNotification =
+      typeof params.disableNotification === "boolean" ? params.disableNotification : undefined;
+    const disableNotification = pin ? (explicitDisableNotification ?? true) : undefined;
+    await pinOrUnpinMessageTelegram(chatId ?? "", messageId ?? 0, pin, {
+      token,
+      accountId: accountId ?? undefined,
+      disableNotification,
+    });
+    return jsonResult({ ok: true, pinned: pin });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

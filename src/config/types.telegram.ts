@@ -20,6 +20,8 @@ export type TelegramActionConfig = {
   sticker?: boolean;
   /** Enable forum topic creation. */
   createForumTopic?: boolean;
+  /** Enable pin/unpin message actions. */
+  pin?: boolean;
 };
 
 export type TelegramNetworkConfig = {

@@ -874,6 +874,53 @@ export async function deleteMessageTelegram(
   return { ok: true };
 }
 
+type TelegramPinOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  /** If true, suppress the standard "message was pinned" notification (pin only). */
+  disableNotification?: boolean;
+};
+
+export async function pinOrUnpinMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  pin: boolean,
+  opts: TelegramPinOpts = {},
+): Promise<{ ok: true }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  if (pin) {
+    const pinOpts =
+      opts.disableNotification !== undefined
+        ? { disable_notification: opts.disableNotification }
+        : undefined;
+    await requestWithDiag(() => api.pinChatMessage(chatId, messageId, pinOpts), "pinChatMessage");
+    logVerbose(`[telegram] Pinned message ${messageId} in chat ${chatId}`);
+  } else {
+    await requestWithDiag(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
+    logVerbose(`[telegram] Unpinned message ${messageId} in chat ${chatId}`);
+  }
+  return { ok: true };
+}
+
 type TelegramEditOpts = {
   token?: string;
   accountId?: string;
