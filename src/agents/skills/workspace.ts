@@ -392,6 +392,22 @@ export function buildWorkspaceSkillCommandSpecs(
       if (!kindRaw) {
         return undefined;
       }
+      if (kindRaw === "exec") {
+        const execCmd = (
+          entry.frontmatter?.["command-exec"] ??
+          entry.frontmatter?.["command_exec"] ??
+          ""
+        ).trim();
+        if (!execCmd) {
+          debugSkillCommandOnce(
+            `dispatch:missingExec:${rawName}`,
+            `Skill command "/${unique}" requested exec dispatch but did not provide command-exec. Ignoring dispatch.`,
+            { skillName: rawName, command: unique },
+          );
+          return undefined;
+        }
+        return { kind: "exec", command: execCmd, cwd: entry.skill.baseDir } as const;
+      }
       if (kindRaw !== "tool") {
         return undefined;
       }

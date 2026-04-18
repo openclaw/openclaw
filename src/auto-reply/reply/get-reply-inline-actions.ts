@@ -164,6 +164,26 @@ export async function handleInlineActions(params: {
     }
 
     const dispatch = skillInvocation.command.dispatch;
+    if (dispatch?.kind === "exec") {
+      const rawArgs = (skillInvocation.args ?? "").trim();
+      try {
+        const { execFile } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const run = promisify(execFile);
+        const { stdout } = await run(
+          "sh",
+          ["-c", rawArgs ? `${dispatch.command} ${rawArgs}` : dispatch.command],
+          { cwd: dispatch.cwd, timeout: 15_000, maxBuffer: 1_000_000 },
+        );
+        const text = stdout.trim() || "✅ Done.";
+        typing.cleanup();
+        return { kind: "reply", reply: { text } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ ${message}` } };
+      }
+    }
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const channel =

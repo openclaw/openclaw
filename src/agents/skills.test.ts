@@ -129,6 +129,39 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
+
+  it("includes exec-dispatch metadata from frontmatter", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "exec-dispatch");
+    await writeSkill({
+      dir: skillDir,
+      name: "exec-dispatch",
+      description: "Dispatch to a script",
+      frontmatterExtra: "command-dispatch: exec\ncommand-exec: python3 scripts/run.py",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir);
+    const cmd = commands.find((entry) => entry.skillName === "exec-dispatch");
+    expect(cmd?.dispatch).toEqual({
+      kind: "exec",
+      command: "python3 scripts/run.py",
+      cwd: skillDir,
+    });
+  });
+
+  it("ignores exec-dispatch without command-exec", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "exec-missing"),
+      name: "exec-missing",
+      description: "Missing exec command",
+      frontmatterExtra: "command-dispatch: exec",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir);
+    const cmd = commands.find((entry) => entry.skillName === "exec-missing");
+    expect(cmd?.dispatch).toBeUndefined();
+  });
 });
 
 describe("buildWorkspaceSkillsPrompt", () => {

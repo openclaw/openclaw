@@ -37,16 +37,24 @@ export type SkillInvocationPolicy = {
   disableModelInvocation: boolean;
 };
 
-export type SkillCommandDispatchSpec = {
-  kind: "tool";
-  /** Name of the tool to invoke (AnyAgentTool.name). */
-  toolName: string;
-  /**
-   * How to forward user-provided args to the tool.
-   * - raw: forward the raw args string (no core parsing).
-   */
-  argMode?: "raw";
-};
+export type SkillCommandDispatchSpec =
+  | {
+      kind: "tool";
+      /** Name of the tool to invoke (AnyAgentTool.name). */
+      toolName: string;
+      /**
+       * How to forward user-provided args to the tool.
+       * - raw: forward the raw args string (no core parsing).
+       */
+      argMode?: "raw";
+    }
+  | {
+      kind: "exec";
+      /** Shell command to run. User args are appended verbatim. */
+      command: string;
+      /** Working directory (absolute path, usually the skill's baseDir). */
+      cwd: string;
+    };
 
 export type SkillCommandSpec = {
   name: string;
