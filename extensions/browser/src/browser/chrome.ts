@@ -18,7 +18,13 @@ import {
   CHROME_STOP_TIMEOUT_MS,
   CHROME_WS_READY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
-import { assertCdpEndpointAllowed, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  isDirectCdpWebSocketEndpoint,
+  isWebSocketUrl,
+  normalizeCdpHttpBaseForJsonEndpoints,
+  openCdpWebSocket,
+} from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   diagnoseChromeCdp,
@@ -161,11 +167,16 @@ export async function isChromeReachable(
 ): Promise<boolean> {
   try {
     await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-    if (isWebSocketUrl(cdpUrl)) {
-      // Direct WebSocket endpoint — probe via WS handshake.
+    if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+      // Handshake-ready direct WS endpoint — probe via WS handshake.
       return await canOpenWebSocket(cdpUrl, timeoutMs);
     }
-    const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+    // Either an http(s) discovery URL or a bare ws/wss root that needs
+    // /json/version discovery to locate the real handshake path.
+    const discoveryUrl = isWebSocketUrl(cdpUrl)
+      ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+      : cdpUrl;
+    const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
     return Boolean(version);
   } catch {
     return false;
@@ -190,16 +201,23 @@ export async function getChromeWebSocketUrl(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-  if (isWebSocketUrl(cdpUrl)) {
-    // Direct WebSocket endpoint — the cdpUrl is already the WebSocket URL.
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
+    // the WebSocket URL.
     return cdpUrl;
   }
-  const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+  // Either an http(s) endpoint or a bare ws/wss root; discover the
+  // actual WebSocket URL via /json/version. Normalise the scheme so
+  // fetch() can reach the endpoint.
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
     return null;
   }
-  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, cdpUrl);
+  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
   await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy);
   return normalizedWsUrl;
 }

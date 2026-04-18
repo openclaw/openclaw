@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import { isWebSocketUrl } from "./cdp.helpers.js";
+import { isDirectCdpWebSocketEndpoint, isWebSocketUrl } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import { parseHttpUrl } from "./config.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -477,6 +477,41 @@ describe("isWebSocketUrl", () => {
     expect(isWebSocketUrl("not-a-url")).toBe(false);
     expect(isWebSocketUrl("")).toBe(false);
     expect(isWebSocketUrl("ftp://example.com")).toBe(false);
+  });
+});
+
+describe("isDirectCdpWebSocketEndpoint", () => {
+  it("returns true for ws/wss URLs with a /devtools/<kind>/<id> path", () => {
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools/browser/ABC")).toBe(true);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools/page/42")).toBe(true);
+    expect(isDirectCdpWebSocketEndpoint("wss://connect.example.com/devtools/browser/xyz")).toBe(
+      true,
+    );
+    expect(
+      isDirectCdpWebSocketEndpoint("wss://connect.example.com/devtools/browser/xyz?token=secret"),
+    ).toBe(true);
+  });
+
+  it("returns false for bare ws/wss URLs without a /devtools/ path (needs discovery)", () => {
+    // Reproduces the configuration shape reported in #68027.
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("wss://browserless.example")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("wss://browserless.example/?token=abc")).toBe(false);
+  });
+
+  it("returns false for ws URLs whose path is not /devtools/*", () => {
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/json/version")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools/")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/other/path")).toBe(false);
+  });
+
+  it("returns false for http/https URLs, invalid URLs, and empty strings", () => {
+    expect(isDirectCdpWebSocketEndpoint("http://127.0.0.1:9222/devtools/browser/ABC")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("https://host/devtools/browser/ABC")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("not-a-url")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("")).toBe(false);
   });
 });
 

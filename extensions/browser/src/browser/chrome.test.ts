@@ -468,14 +468,47 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
-  it("probes WebSocket URLs via handshake instead of HTTP", async () => {
-    // For ws:// URLs, isChromeReachable should NOT call fetch at all —
-    // it should attempt a WebSocket handshake instead.
+  it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
+    // A direct WS endpoint like ws://host/devtools/browser/<uuid> is already
+    // the handshake target — isChromeReachable must NOT hit /json/version.
     const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
     vi.stubGlobal("fetch", fetchSpy);
     // No WS server listening → handshake fails → not reachable
-    await expect(isChromeReachable("ws://127.0.0.1:19999", 50)).resolves.toBe(false);
+    await expect(isChromeReachable("ws://127.0.0.1:19999/devtools/browser/ABC", 50)).resolves.toBe(
+      false,
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to HTTP /json/version discovery for a bare ws:// CDP URL (issue #68027)", async () => {
+    // A user-supplied cdpUrl of `ws://host:port` without a /devtools/ path
+    // points at Chrome's debug root; Chrome only accepts WS upgrades on the
+    // specific path returned by `GET /json/version`. The reachability probe
+    // must normalise the ws scheme to http for discovery, not attempt a
+    // handshake at the bare root.
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/DISCOVERED",
+      run: async (baseUrl) => {
+        const url = new URL(baseUrl);
+        const wsOnlyBase = `ws://${url.host}`;
+        await expect(isChromeReachable(wsOnlyBase, 300)).resolves.toBe(true);
+        await expect(getChromeWebSocketUrl(wsOnlyBase, 300)).resolves.toBe(
+          `ws://${url.host}/devtools/browser/DISCOVERED`,
+        );
+      },
+    });
+  });
+
+  it("reports unreachable when a bare ws:// CDP URL points at a server missing /json/version", async () => {
+    // Negative counterpart to the #68027 happy path — a bare ws URL
+    // pointed at a port that neither serves /json/version nor accepts
+    // WS upgrades at root must resolve false without hanging.
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("connection refused"));
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(isChromeReachable("ws://127.0.0.1:19998", 50)).resolves.toBe(false);
+    // fetch() must have been invoked — discovery path was taken, not a
+    // bare-root WS handshake that Chrome never accepts.
+    expect(fetchSpy).toHaveBeenCalled();
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {

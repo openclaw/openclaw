@@ -58,6 +58,32 @@ export function isWebSocketUrl(url: string): boolean {
   }
 }
 
+/**
+ * Returns true when `url` is a ws/wss URL with a `/devtools/<kind>/<id>`
+ * path segment — i.e. a handshake-ready per-browser or per-target CDP
+ * endpoint that can be opened directly without HTTP discovery.
+ *
+ * Bare ws roots (`ws://host:port`, `ws://host:port/`) and any other
+ * non-`/devtools/...` paths are NOT direct endpoints: Chrome's debug
+ * port only accepts WebSocket upgrades on the specific path returned
+ * by `GET /json/version`. Callers with a bare ws root must normalise
+ * it to http for discovery instead of attempting a root handshake that
+ * Chrome will reject with HTTP 400.
+ */
+export function isDirectCdpWebSocketEndpoint(url: string): boolean {
+  if (!isWebSocketUrl(url)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
+      parsed.pathname,
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,

@@ -3,8 +3,10 @@ import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   fetchJson,
+  isDirectCdpWebSocketEndpoint,
   isLoopbackHost,
   isWebSocketUrl,
+  normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -179,20 +181,25 @@ export async function createTargetViaCdp(opts: {
   });
 
   let wsUrl: string;
-  if (isWebSocketUrl(opts.cdpUrl)) {
-    // Direct WebSocket URL — skip /json/version discovery.
+  if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
+    // Handshake-ready direct WebSocket URL — skip /json/version discovery.
     await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
-    // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
+    // Either an HTTP(S) CDP endpoint or a bare ws/wss root that needs
+    // /json/version discovery. Normalise ws-scheme bases to http so the
+    // discovery fetch() can actually reach Chrome.
+    const discoveryUrl = isWebSocketUrl(opts.cdpUrl)
+      ? normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl)
+      : opts.cdpUrl;
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
-      appendCdpPath(opts.cdpUrl, "/json/version"),
+      appendCdpPath(discoveryUrl, "/json/version"),
       1500,
       undefined,
       opts.ssrfPolicy,
     );
     const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
-    wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
+    wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, discoveryUrl) : "";
     if (!wsUrl) {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
