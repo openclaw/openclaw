@@ -29,6 +29,24 @@ const YTDLP_CHECKSUM_FILES: Record<string, string> = {
 
 const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
 
+// FIX: Context injection for trusted workspace root
+let trustedWorkspaceRoot: string | null = null;
+
+/**
+ * Sets the trusted workspace root from the runtime context (NOT from tool parameters)
+ * This should be called by the agent runtime when initializing the session
+ */
+export function setTrustedWorkspaceRoot(workspaceRoot: string): void {
+  trustedWorkspaceRoot = workspaceRoot;
+}
+
+/**
+ * Gets the current trusted workspace root
+ */
+export function getTrustedWorkspaceRoot(): string | null {
+  return trustedWorkspaceRoot;
+}
+
 /**
  * Downloads text content from URL with redirect following
  */
@@ -467,58 +485,18 @@ async function ensureFfmpeg(): Promise<void> {
 }
 
 /**
- * FIX: Use injected workspace root instead of heuristic findWorkspaceFolder()
- * This ensures the tool respects per-session workspace selection and sandbox boundaries
+ * FIX: Security-critical - workspace root MUST come from trusted runtime context
+ * NOT from untrusted tool parameters. This function only uses injected trusted root
+ * or falls back to safe defaults, never trusting user input.
  */
-async function resolveWorkspaceRoot(injectedRoot?: string): Promise<string> {
-  // If workspace root is injected from context, use it directly
-  if (injectedRoot) {
-    await fs.mkdir(injectedRoot, { recursive: true });
-    return injectedRoot;
+async function resolveWorkspaceRoot(): Promise<string> {
+  // Priority 1: Use trusted workspace root set by runtime context
+  if (trustedWorkspaceRoot) {
+    await fs.mkdir(trustedWorkspaceRoot, { recursive: true });
+    return trustedWorkspaceRoot;
   }
   
-  // Fallback to heuristic detection only when no context provided
-  // Use session workspace when saving downloaded videos
-  // First check if we're already in a workspace directory
-  let currentPath = path.resolve(process.cwd());
-  const root = path.parse(currentPath).root;
-  
-  // Check for workspace marker files/directories that indicate an active session workspace
-  while (currentPath !== root) {
-    const parent = path.dirname(currentPath);
-    
-    // Check for common workspace indicators
-    const workspaceIndicators = [
-      '.workspace',
-      'workspace.json',
-      '.agent-workspace',
-      'workspace',
-      '.openclaw-workspace'
-    ];
-    
-    for (const indicator of workspaceIndicators) {
-      const indicatorPath = path.join(currentPath, indicator);
-      try {
-        const stat = await fs.stat(indicatorPath);
-        if (indicator === 'workspace' && stat.isDirectory()) {
-          return indicatorPath;
-        } else if (stat.isFile()) {
-          return currentPath;
-        }
-      } catch {
-        // Indicator doesn't exist, continue checking
-      }
-    }
-    
-    // Check if parent directory is named 'workspace'
-    if (path.basename(parent) === 'workspace') {
-      return currentPath;
-    }
-    
-    currentPath = parent;
-  }
-  
-  // Check for environment variable that might indicate workspace
+  // Priority 2: Check environment variables (controlled by runtime, not user)
   const envWorkspace = process.env.OPENCLAW_WORKSPACE || process.env.AGENT_WORKSPACE;
   if (envWorkspace) {
     try {
@@ -529,7 +507,7 @@ async function resolveWorkspaceRoot(injectedRoot?: string): Promise<string> {
     }
   }
   
-  // Fallback to home directory workspace
+  // Priority 3: Fallback to safe home directory workspace (never user-controllable)
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
   return fallback;
@@ -620,11 +598,17 @@ export const downloadVideoTool = {
       await ensureFfmpeg();
       const ytDlpPath = await ensureYtDlp(abortController.signal);
       
-      // FIX: Extract workspace root from context if provided
-      // This allows the tool to respect per-session workspace selection
+      // FIX: SECURITY - workspace root MUST come from trusted runtime context
+      // The typedParams object is untrusted user input - DO NOT read workspaceRoot from it
+      // Instead, use the trusted workspace root set by the agent runtime
+      const workspaceRoot = await resolveWorkspaceRoot();
+      
+      // Validate params structure
       const typedParams = params as Record<string, unknown>;
-      const injectedWorkspaceRoot = typedParams.workspaceRoot as string | undefined;
-      const workspaceRoot = await resolveWorkspaceRoot(injectedWorkspaceRoot);
+      const videoUrl = typedParams.url as string;
+      if (!videoUrl || typeof videoUrl !== 'string') {
+        throw new Error('Invalid or missing URL parameter');
+      }
 
       let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
       if (typedParams.quality === "720") {
@@ -639,7 +623,7 @@ export const downloadVideoTool = {
 
       const { stdout: rawTitle } = await execFileAsync(
         ytDlpPath, 
-        ['--get-title', '--no-playlist', typedParams.url as string],
+        ['--get-title', '--no-playlist', videoUrl],
         { signal: abortController.signal }
       );
       
@@ -664,7 +648,7 @@ export const downloadVideoTool = {
         '--no-progress',
         '-o', outputTemplate,
         '--print', 'after_move:filepath',
-        typedParams.url as string
+        videoUrl
       ], { 
         cwd: workspaceRoot, 
         timeout: 300000,
@@ -718,6 +702,13 @@ export const downloadVideoTool = {
       }
 
       const finalPath = path.join(workspaceRoot, downloadedFile);
+      
+      // Security: Validate the final path is still within workspace (defense in depth)
+      const resolvedPath = path.resolve(finalPath);
+      const resolvedWorkspace = path.resolve(workspaceRoot);
+      if (!resolvedPath.startsWith(resolvedWorkspace)) {
+        throw new Error(`Security violation: Attempted to access file outside workspace: ${resolvedPath}`);
+      }
       
       try {
         const stats = await fs.stat(finalPath);
