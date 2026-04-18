@@ -84,10 +84,30 @@ function getButtonByText(container: Element, text: string) {
 }
 
 describe("cron view", () => {
-  it("shows all-job history mode and toggles the run status filter", () => {
+  it("shows all-job history mode and wires run/job filters", () => {
     const container = document.createElement("div");
     const onRunsFiltersChange = vi.fn();
-    render(renderCron(createProps({ onRunsFiltersChange })), container);
+    const onJobsFiltersChange = vi.fn();
+    const onJobsFiltersReset = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          onRunsFiltersChange,
+          onJobsFiltersChange,
+          runsScope: "all",
+          runs: [
+            {
+              ts: Date.now(),
+              jobId: "job-1",
+              status: "ok",
+              summary: "done",
+              nextRunAtMs: Date.now() - 13 * 60_000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
 
     expect(container.textContent).toContain("Latest runs across all jobs.");
     expect(container.textContent).toContain("Status");
@@ -107,133 +127,9 @@ describe("cron view", () => {
     statusOk.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
-  });
-
-  it("loads run history when clicking a job row", () => {
-    const container = document.createElement("div");
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const row = container.querySelector(".list-item-clickable");
-    expect(row).not.toBeNull();
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
-  });
-
-  it("marks the selected job and keeps History button to a single call", () => {
-    const container = document.createElement("div");
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          runsJobId: "job-1",
-          runsScope: "job",
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const selected = container.querySelector(".list-item-selected");
-    expect(selected).not.toBeNull();
-
-    const historyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "History",
-    );
-    expect(historyButton).not.toBeUndefined();
-    historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onLoadRuns).toHaveBeenCalledTimes(1);
-    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
-  });
-
-  it("shows selected job run history sorted newest first with chat links", () => {
-    const container = document.createElement("div");
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          basePath: "/ui",
-          jobs: [job],
-          runsJobId: "job-1",
-          runsScope: "job",
-          runs: [
-            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
-            {
-              ts: 2,
-              jobId: "job-1",
-              status: "ok",
-              summary: "newer run",
-              sessionKey: "agent:main:cron:job-1:run:abc",
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    const link = container.querySelector("a.session-link");
-    expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toContain(
-      "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
-    );
-
-    expect(container.textContent).toContain("Latest runs for Daily ping.");
-
-    const cards = Array.from(container.querySelectorAll(".card"));
-    const runHistoryCard = cards.find(
-      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
-    );
-    expect(runHistoryCard).not.toBeUndefined();
-
-    const summaries = Array.from(
-      runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
-    ).map((el) => (el.textContent ?? "").trim());
-    expect(summaries[0]).toBe("newer run");
-    expect(summaries[1]).toBe("older run");
-  });
-
-  it("labels past nextRunAtMs as due instead of next", () => {
-    const container = document.createElement("div");
-    render(
-      renderCron(
-        createProps({
-          runsScope: "all",
-          runs: [
-            {
-              ts: Date.now(),
-              jobId: "job-1",
-              status: "ok",
-              summary: "done",
-              nextRunAtMs: Date.now() - 13 * 60_000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
 
     expect(container.textContent).toContain("Due");
     expect(container.textContent).not.toContain("Next 13");
-  });
-
-  it("wires jobs filter changes and reset", () => {
-    const container = document.createElement("div");
-    const onJobsFiltersChange = vi.fn();
-    const onJobsFiltersReset = vi.fn();
-    render(renderCron(createProps({ onJobsFiltersChange })), container);
 
     const scheduleSelect = container.querySelector(
       'select[data-test-id="cron-jobs-schedule-filter"]',
@@ -274,6 +170,72 @@ describe("cron view", () => {
     reset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks the selected job, routes history clicks, and sorts runs newest first", () => {
+    const container = document.createElement("div");
+    const onLoadRuns = vi.fn();
+    const job = createJob("job-1");
+    render(
+      renderCron(
+        createProps({
+          basePath: "/ui",
+          jobs: [job],
+          runsJobId: "job-1",
+          runsScope: "job",
+          runs: [
+            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
+            {
+              ts: 2,
+              jobId: "job-1",
+              status: "ok",
+              summary: "newer run",
+              sessionKey: "agent:main:cron:job-1:run:abc",
+            },
+          ],
+          onLoadRuns,
+        }),
+      ),
+      container,
+    );
+
+    const selected = container.querySelector(".list-item-selected");
+    expect(selected).not.toBeNull();
+
+    const row = container.querySelector(".list-item-clickable");
+    expect(row).not.toBeNull();
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+
+    const historyButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "History",
+    );
+    expect(historyButton).not.toBeUndefined();
+    historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onLoadRuns).toHaveBeenCalledTimes(2);
+    expect(onLoadRuns).toHaveBeenNthCalledWith(1, "job-1");
+    expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-1");
+
+    const link = container.querySelector("a.session-link");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toContain(
+      "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
+    );
+
+    expect(container.textContent).toContain("Latest runs for Daily ping.");
+
+    const cards = Array.from(container.querySelectorAll(".card"));
+    const runHistoryCard = cards.find(
+      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
+    );
+    expect(runHistoryCard).not.toBeUndefined();
+
+    const summaries = Array.from(
+      runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
+    ).map((el) => (el.textContent ?? "").trim());
+    expect(summaries[0]).toBe("newer run");
+    expect(summaries[1]).toBe("older run");
   });
 
   it("renders supported delivery options and normalizes stale announce selection", () => {
@@ -528,25 +490,6 @@ describe("cron view", () => {
   it("wires job row actions and selects the row before acting", () => {
     const container = document.createElement("div");
     const onClone = vi.fn();
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-clone");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onClone,
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const cloneButton = getButtonByText(container, "Clone");
-    expect(cloneButton).not.toBeUndefined();
-    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onClone).toHaveBeenCalledWith(job);
-    expect(onLoadRuns).toHaveBeenCalledWith("job-clone");
-
     const onToggle = vi.fn();
     const onRun = vi.fn();
     const onRemove = vi.fn();
@@ -556,6 +499,7 @@ describe("cron view", () => {
       renderCron(
         createProps({
           jobs: [actionJob],
+          onClone,
           onToggle,
           onRun,
           onRemove,
@@ -565,6 +509,10 @@ describe("cron view", () => {
       container,
     );
 
+    const cloneButton = getButtonByText(container, "Clone");
+    expect(cloneButton).not.toBeUndefined();
+    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
     const enableButton = getButtonByText(container, "Disable");
     expect(enableButton).not.toBeUndefined();
     enableButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -573,35 +521,25 @@ describe("cron view", () => {
     expect(runButton).not.toBeUndefined();
     runButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const removeButton = getButtonByText(container, "Remove");
-    expect(removeButton).not.toBeUndefined();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onToggle).toHaveBeenCalledWith(actionJob, false);
-    expect(onRun).toHaveBeenCalledWith(actionJob, "force");
-    expect(onRemove).toHaveBeenCalledWith(actionJob);
-    expect(actionLoadRuns).toHaveBeenCalledTimes(3);
-    expect(actionLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
-    expect(actionLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
-    expect(actionLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
-
-    const onRunDue = vi.fn();
-    const dueJob = createJob("job-due");
-    render(
-      renderCron(
-        createProps({
-          jobs: [dueJob],
-          onRun: onRunDue,
-        }),
-      ),
-      container,
-    );
-
     const runDueButton = getButtonByText(container, "Run if due");
     expect(runDueButton).not.toBeUndefined();
     runDueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onRunDue).toHaveBeenCalledWith(dueJob, "due");
+    const removeButton = getButtonByText(container, "Remove");
+    expect(removeButton).not.toBeUndefined();
+    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onClone).toHaveBeenCalledWith(actionJob);
+    expect(onToggle).toHaveBeenCalledWith(actionJob, false);
+    expect(onRun).toHaveBeenNthCalledWith(1, actionJob, "force");
+    expect(onRun).toHaveBeenNthCalledWith(2, actionJob, "due");
+    expect(onRemove).toHaveBeenCalledWith(actionJob);
+    expect(actionLoadRuns).toHaveBeenCalledTimes(5);
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(4, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(5, "job-actions");
   });
 
   it("renders suggestion datalists for agent/model/thinking/timezone", () => {
