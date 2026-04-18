@@ -18,22 +18,39 @@ import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
 /**
- * Line-level sentinel for per-line system event prefix injection. Matches both
- * `System:` (trusted) and `System (untrusted):` variants emitted by
- * `session-system-events.ts`. These blocks may span multiple consecutive lines
- * — each continuation line re-uses the same prefix for safety, so a simple
- * consecutive-line sweep is sufficient to remove them.
+ * Line-level sentinel for the first line of an injected system-event block.
+ * Matches both `System:` (trusted) and `System (untrusted):` variants emitted
+ * by `session-system-events.ts`, but ONLY when the prefix is immediately
+ * followed by the bracketed timestamp marker that the injector always places
+ * on the first sub-line of each event (e.g.
+ * `System (untrusted): [Wed 2026-04-17 06:11:17 UTC] Exec completed (…) :: ok`).
+ *
+ * The tighter signature avoids deleting legitimate user content that happens
+ * to start with `System:` or `System (untrusted):` (pasted logs, YAML, exec
+ * output). Continuation sub-lines of a single event, channel-summary lines,
+ * and other `System:` variants without the timestamp marker are left alone
+ * — at worst that leaks one or two non-sensitive lines, which is strictly
+ * better than silently deleting real user input.
  */
-const SYSTEM_EVENT_LINE_RE = /^System(?: \(untrusted\))?:/;
+const SYSTEM_EVENT_LINE_RE =
+  /^System(?: \(untrusted\))?: \[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?[^\]]*\] /;
 
 /**
- * Bare-line sentinels that mark OpenClaw-internal agent instructions leaking
- * into user-visible text (not user input). Stripped as standalone lines so
- * surrounding user prose is preserved.
+ * Patterns for OpenClaw-internal agent-facing instruction lines that must
+ * never surface in user-visible chat. Each pattern matches the exact injected
+ * shape so user-authored look-alikes (pasted logs, note-taking text starting
+ * with "Current time:", etc.) are preserved.
+ *
+ * - `An async command you ran earlier has completed.` — injected verbatim by
+ *   `heartbeat-events-filter.ts`; the full sentence is long and specific
+ *   enough that a `startsWith` guard already avoids user-text collisions.
+ * - `Current time: … (TZ) / YYYY-MM-DD HH:MM UTC` — emitted by
+ *   `resolveCronStyleNow` in `agents/current-time.ts`. The closing UTC
+ *   timestamp after ` / ` is what pins the match to the injected shape.
  */
-const INTERNAL_INSTRUCTION_LINE_PREFIXES = [
-  "An async command you ran earlier has completed.",
-  "Current time: ",
+const INTERNAL_INSTRUCTION_LINE_PATTERNS: readonly RegExp[] = [
+  /^An async command you ran earlier has completed\./,
+  /^Current time: .+ \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\s*$/,
 ];
 
 /**
@@ -56,16 +73,19 @@ const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 const [CONVERSATION_INFO_SENTINEL, SENDER_INFO_SENTINEL] = INBOUND_META_SENTINELS;
 const InboundMetaBlockSchema = z.record(z.string(), z.unknown());
 
-// Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
-// Also catches per-line system-event prefixes and leaked internal instruction
-// lines so those variants still trigger the slow parse below.
+// Pre-compiled fast-path regex — avoids line-by-line parse when no inbound
+// metadata, system-event, or internal-instruction leaks are present.
+// Keeps the literal strings conservatively loose here so the slow path always
+// gets the chance to confirm/reject the tight line-anchored signatures above;
+// a false positive on the fast path only costs the slow parse, not an edit.
 const SENTINEL_FAST_RE = new RegExp(
   [
     ...INBOUND_META_SENTINELS,
     UNTRUSTED_CONTEXT_HEADER,
-    "System:",
-    "System (untrusted):",
-    ...INTERNAL_INSTRUCTION_LINE_PREFIXES,
+    "System: [",
+    "System (untrusted): [",
+    "An async command you ran earlier has completed",
+    "Current time: ",
   ]
     .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|"),
@@ -81,8 +101,7 @@ function isSystemEventLine(line: string): boolean {
 }
 
 function isInternalInstructionLine(line: string): boolean {
-  const trimmed = line.trim();
-  return INTERNAL_INSTRUCTION_LINE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+  return INTERNAL_INSTRUCTION_LINE_PATTERNS.some((pattern) => pattern.test(line));
 }
 
 function restoreNeutralizedMarkdownFences(value: unknown): unknown {
@@ -288,13 +307,23 @@ export function stripLeadingInboundMetadata(text: string): string {
     return text;
   }
 
-  const lines = stripActiveMemoryPromptPrefixBlocks(text.split("\n")).filter(
-    (line) => !isSystemEventLine(line) && !isInternalInstructionLine(line),
-  );
+  const lines = stripActiveMemoryPromptPrefixBlocks(text.split("\n"));
   let index = 0;
 
-  while (index < lines.length && lines[index] === "") {
-    index++;
+  // Leading-only filter: skip blank, timestamped system-event, and injected
+  // internal-instruction lines at the very start of the message. Once we hit
+  // the first line that is neither blank nor an injected prelude sentinel,
+  // stop filtering — user-authored text from that point on must never be
+  // silently removed just because a line happens to match one of these
+  // patterns. (TUI formatter uses this for `user`/`command` turns; a command
+  // transcript body containing `System: …` must not be truncated.)
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line === "" || isSystemEventLine(line) || isInternalInstructionLine(line)) {
+      index++;
+      continue;
+    }
+    break;
   }
   if (index >= lines.length) {
     return "";

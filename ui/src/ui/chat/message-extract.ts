@@ -8,11 +8,11 @@ const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 export function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
-  if (role === "assistant") {
+  const normalizedRole = normalizeLowercaseStringOrEmpty(role);
+  if (normalizedRole === "assistant") {
     return stripThinkingTags(text);
   }
-  return shouldStripInboundMetadata
+  return normalizedRole === "user"
     ? stripInboundMetadata(stripEnvelope(text))
     : stripEnvelope(text);
 }
@@ -20,8 +20,11 @@ export function processMessageText(text: string, role: string): string {
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
+  const normalizedRole = normalizeLowercaseStringOrEmpty(role);
   const raw =
-    role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
+    normalizedRole === "assistant"
+      ? extractSharedAssistantVisibleText(message)
+      : extractRawText(message);
   if (!raw) {
     return null;
   }

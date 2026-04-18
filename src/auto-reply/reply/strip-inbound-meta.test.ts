@@ -247,17 +247,19 @@ describe("builder compatibility", () => {
 });
 
 describe("per-line system events and internal instructions", () => {
-  it("strips consecutive `System (untrusted):` exec lines", () => {
+  it("strips consecutive timestamped `System (untrusted):` exec lines", () => {
     const input = [
-      "System (untrusted): [2026-04-17 06:11:17 UTC] Exec completed (gentle-g, code 0) :: ok",
-      "System (untrusted): [2026-04-17 06:12:04 UTC] Exec completed (swift-co, code 0) :: ok",
+      "System (untrusted): [Wed 2026-04-17 06:11:17 UTC] Exec completed (gentle-g, code 0) :: ok",
+      "System (untrusted): [Wed 2026-04-17 06:12:04 UTC] Exec completed (swift-co, code 0) :: ok",
       "Actual user message",
     ].join("\n");
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
 
-  it("strips `System:` (trusted) prefix lines too", () => {
-    const input = ["System: session started", "real user prose"].join("\n");
+  it("strips timestamped `System:` (trusted) prefix lines too", () => {
+    const input = ["System: [Wed 2026-04-17 06:11:17 UTC] session started", "real user prose"].join(
+      "\n",
+    );
     expect(stripInboundMetadata(input)).toBe("real user prose");
   });
 
@@ -275,9 +277,32 @@ describe("per-line system events and internal instructions", () => {
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
-  it("strips leading System event lines in stripLeadingInboundMetadata for TUI history", () => {
+  it("preserves user-authored `System:` prefix without a timestamp marker", () => {
+    // After `sanitizeInboundSystemTags` rewrites a user line-leading `System:`
+    // to `System (untrusted):`, the resulting line does NOT carry the
+    // session-system-events timestamp signature and must not be stripped.
     const input = [
-      "System (untrusted): [2026-04-17 06:11:17 UTC] Exec completed (gentle-g, code 0) :: ok",
+      "System (untrusted): paste log line from a user",
+      "System: my note to self",
+      "continuing user prose",
+    ].join("\n");
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("preserves user-authored `Current time:` prefix without the injected UTC suffix", () => {
+    // `appendCronStyleCurrentTimeLine` always ends with ` / YYYY-MM-DD HH:MM UTC`;
+    // a plain user note that happens to start with "Current time: ..." must
+    // not match the tighter pattern and must be kept intact.
+    const input = [
+      "Current time: I'll be free after lunch",
+      "Follow-up thought from the user",
+    ].join("\n");
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
+  it("strips leading timestamped System event lines in stripLeadingInboundMetadata for TUI history", () => {
+    const input = [
+      "System (untrusted): [Wed 2026-04-17 06:11:17 UTC] Exec completed (gentle-g, code 0) :: ok",
       "",
       "Actual user message",
     ].join("\n");
@@ -291,6 +316,16 @@ describe("per-line system events and internal instructions", () => {
       "User question goes here",
     ].join("\n");
     expect(stripLeadingInboundMetadata(input)).toBe("User question goes here");
+  });
+
+  it("preserves a mid-body `System:` line in stripLeadingInboundMetadata (command transcript)", () => {
+    // The TUI formatter uses `stripLeadingInboundMetadata` for `user` and
+    // `command` turns. A command transcript body containing a line that
+    // starts with `System:` (pasted log, exec output) must not be truncated.
+    const input = ["User ran: /debug", "System: service is healthy", "Continuing transcript"].join(
+      "\n",
+    );
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
   });
 
   it("preserves inline `Operating System:` prose in stripLeadingInboundMetadata", () => {

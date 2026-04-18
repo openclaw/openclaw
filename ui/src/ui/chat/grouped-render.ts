@@ -20,7 +20,6 @@ import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
-  processMessageText,
 } from "./message-extract.ts";
 import {
   isToolResultMessage,
@@ -169,25 +168,25 @@ export function renderMessageGroup(
   // when every inner message renders empty. Without this, a user turn whose
   // text consists entirely of now-stripped metadata/system-event lines still
   // leaves an orphan "You · 12:34" bubble in Control UI.
+  //
+  // Route text through `extractTextCached` rather than rebuilding it from
+  // `normalizeMessage.content`, so this precheck respects the same
+  // assistant-phase contract (`final_answer` preferred, commentary-only
+  // suppressed) that `renderGroupedMessage` ultimately applies. Reasoning
+  // content is treated as visible too, so an assistant turn that only
+  // produced a reasoning block still shows the group bubble (and the
+  // reasoning panel inside) instead of disappearing.
   const groupHasVisibleContent = group.messages.some(({ message }) => {
-    const m = message as Record<string, unknown>;
-    const role = typeof m.role === "string" ? m.role : "";
-    const normalized = normalizeMessage(message);
-    const rawText = normalized.content
-      .reduce<string[]>((acc, item) => {
-        if (item.type === "text" && typeof item.text === "string") {
-          acc.push(item.text);
-        }
-        return acc;
-      }, [])
-      .join("\n")
-      .trim();
-    if (rawText && processMessageText(rawText, role).trim()) {
+    if (extractTextCached(message)?.trim()) {
+      return true;
+    }
+    if (extractThinkingCached(message)?.trim()) {
       return true;
     }
     if (extractImages(message).length > 0) {
       return true;
     }
+    const normalized = normalizeMessage(message);
     if (normalized.replyTarget) {
       return true;
     }
@@ -1106,20 +1105,13 @@ function renderGroupedMessage(
   const hasImages = images.length > 0;
 
   const normalizedMessage = normalizeMessage(message);
-  const rawExtractedText = normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
-  // Route through processMessageText so <think>/<final> scaffolding and
-  // inbound metadata sentinels are stripped before render. Previously the
-  // reduced text was rendered verbatim, leaking <final>…</final> tags and
-  // injected "Sender (untrusted metadata):" blocks into the Control UI.
-  const extractedText = rawExtractedText ? processMessageText(rawExtractedText, role) : "";
+  // Use `extractTextCached` as the text source rather than a fresh pass over
+  // `normalizedMessage.content`. `extractTextCached` already applies the
+  // shared assistant-visible-text contract (prefer `final_answer` phase,
+  // suppress commentary-only blocks) and runs `processMessageText`, so
+  // Control UI rendering stays aligned with the other surfaces and cannot
+  // re-introduce scaffolding that `normalizeMessage` drops the signature of.
+  const extractedText = extractTextCached(message) ?? "";
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "attachment" }> =>
       item.type === "attachment",
@@ -1142,10 +1134,14 @@ function renderGroupedMessage(
     .filter(Boolean)
     .join(" ");
 
-  // Suppress empty bubbles when tool cards are the only content and toggle is off
+  // Suppress empty bubbles when tool cards are the only content and toggle is off.
+  // Reasoning markdown counts as visible content here: a turn that produced
+  // only a `<think>`/reasoning block (and no visible final answer) should
+  // still render so the reasoning panel can surface.
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
   if (
     !markdown &&
+    !reasoningMarkdown &&
     !visibleToolCards &&
     !hasImages &&
     assistantAttachments.length === 0 &&
