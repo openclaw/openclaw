@@ -229,7 +229,7 @@ const CUSTOM_MODE_ICON = html`<svg
  * synthetic "Custom" `ModeDefinition` is returned that carries the
  * actual values — instead of silently mislabeling the chip as "Ask".
  *
- * Codex P1 (PR #67721 r3094970182): the prior fallback to
+ * Bug-fix history (PR #67721): the prior fallback to
  * `MODE_DEFINITIONS[0]` (Ask) made the UI report Ask for valid
  * non-preset states and could quietly rewrite those states when the
  * user picked from the menu.
@@ -326,7 +326,7 @@ export function renderModeSwitcher(params: {
         ? html`
             <div class="agent-chat__mode-menu">
               <!--
-                Codex/Copilot #67721 r3095798757: previously declared
+                ARIA accessibility note (PR #67721): previously declared
                 role="menu" / role="menuitem" but did NOT implement the
                 WAI-ARIA menu keyboard contract (arrow nav, Home/End,
                 roving tabindex, focus trap). Per WAI-ARIA, claiming the
@@ -376,7 +376,8 @@ export function renderModeSwitcher(params: {
  * with internal `<input>` / `<textarea>` / `[contenteditable]`, the
  * naive read returns the host (e.g. `<openclaw-chat-composer>`) and
  * misses the real focus target — so the focus guard would NOT bail and
- * Ctrl+1-4 would steal keystrokes the user meant for the input.
+ * Ctrl+1..N (where N covers every MODE_DEFINITIONS entry) would steal
+ * keystrokes the user meant for the input.
  *
  * Returns `null` when no element is focused.
  */
