@@ -314,7 +314,7 @@ export function createSessionsSpawnTool(
           }
         }
         return jsonResult(
-          result.status === "error" && requestedAgentId
+          result.status !== "accepted" && requestedAgentId
             ? { ...result, role: requestedAgentId }
             : result,
         );
@@ -356,7 +356,7 @@ export function createSessionsSpawnTool(
       );
 
       return jsonResult(
-        result.status === "error" && requestedAgentId
+        result.status !== "accepted" && requestedAgentId
           ? { ...result, role: requestedAgentId }
           : result,
       );
