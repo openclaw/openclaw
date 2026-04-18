@@ -24,6 +24,15 @@ import {
 } from "./x-search-tool-shared.js";
 
 const PROVIDER_ID = "xai";
+type CodeExecutionModule = typeof import("./code-execution.js");
+
+let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
+
+function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
+  codeExecutionModulePromise ??= import("./code-execution.js");
+  return codeExecutionModulePromise;
+}
+
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
     resolveFallbackXaiAuth(config as never)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
@@ -89,7 +98,7 @@ function createLazyCodeExecutionTool(ctx: {
       }),
     }),
     execute: async (toolCallId: string, args: Record<string, unknown>) => {
-      const { createCodeExecutionTool } = await import("./code-execution.js");
+      const { createCodeExecutionTool } = await loadCodeExecutionModule();
       const tool = createCodeExecutionTool({
         config: ctx.config as never,
         runtimeConfig: (ctx.runtimeConfig as never) ?? null,
