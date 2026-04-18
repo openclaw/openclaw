@@ -4,41 +4,45 @@ import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 
 describe("resolveRequesterOriginForChild", () => {
   it.each([
-    ["channel:conversation-a", "channel:conversation-a"],
-    ["thread:conversation-a/thread-a", "thread:conversation-a/thread-a"],
-  ])("keeps canonical prefixed peer id %s eligible for exact binding lookup", (to, peerId) => {
-    const cfg = {
-      bindings: [
-        {
-          type: "route",
-          agentId: "bot-alpha",
-          match: {
-            channel: "qa-channel",
-            peer: {
-              kind: "channel",
-              id: peerId,
+    ["channel:conversation-a", "channel:conversation-a", "channel"],
+    ["dm:conversation-a", "dm:conversation-a", "direct"],
+    ["thread:conversation-a/thread-a", "thread:conversation-a/thread-a", "channel"],
+  ] as const)(
+    "keeps canonical prefixed peer id %s eligible for exact binding lookup",
+    (to, peerId, peerKind) => {
+      const cfg = {
+        bindings: [
+          {
+            type: "route",
+            agentId: "bot-alpha",
+            match: {
+              channel: "qa-channel",
+              peer: {
+                kind: peerKind,
+                id: peerId,
+              },
+              accountId: "bot-alpha-qa",
             },
-            accountId: "bot-alpha-qa",
           },
-        },
-      ],
-    } as OpenClawConfig;
+        ],
+      } as OpenClawConfig;
 
-    expect(
-      resolveRequesterOriginForChild({
-        cfg,
-        targetAgentId: "bot-alpha",
-        requesterAgentId: "main",
-        requesterChannel: "qa-channel",
-        requesterAccountId: "bot-beta",
-        requesterTo: to,
-      }),
-    ).toMatchObject({
-      channel: "qa-channel",
-      accountId: "bot-alpha-qa",
-      to,
-    });
-  });
+      expect(
+        resolveRequesterOriginForChild({
+          cfg,
+          targetAgentId: "bot-alpha",
+          requesterAgentId: "main",
+          requesterChannel: "qa-channel",
+          requesterAccountId: "bot-beta",
+          requesterTo: to,
+        }),
+      ).toMatchObject({
+        channel: "qa-channel",
+        accountId: "bot-alpha-qa",
+        to,
+      });
+    },
+  );
 
   it("preserves canonical peer ids that start with token-colon after a known wrapper", () => {
     const to = "conversation:a:1:team-thread";
