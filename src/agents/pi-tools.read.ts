@@ -406,7 +406,6 @@ function getAudioMimeType(ext: string): string {
     aac: "audio/aac",
     opus: "audio/opus",
     wma: "audio/x-ms-wma",
-    webm: "audio/webm", // Will be overridden by detection if video
   };
   return mimeMap[ext] ?? "audio/mpeg";
 }
