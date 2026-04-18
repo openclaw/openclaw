@@ -10,4 +10,5 @@ export type FailoverReason =
   | "timeout"
   | "model_not_found"
   | "session_expired"
+  | "incomplete_response"
   | "unknown";

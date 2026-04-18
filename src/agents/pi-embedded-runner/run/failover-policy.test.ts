@@ -27,6 +27,29 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("rotates to fallback model on incomplete-turn when fallbacks are configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "incomplete_turn",
+        fallbackConfigured: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "incomplete_response",
+    });
+  });
+
+  it("returns local error payload for incomplete-turn when no fallbacks are configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "incomplete_turn",
+        fallbackConfigured: false,
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
   it("prefers prompt-side profile rotation before fallback", () => {
     expect(
       resolveRunFailoverDecision({

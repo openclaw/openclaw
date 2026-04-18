@@ -44,7 +44,7 @@ export type TraceAttempt = {
     | "aborted"
     | "error";
   reason?: string;
-  stage?: "prompt" | "assistant";
+  stage?: "prompt" | "assistant" | "incomplete_turn";
   elapsedMs?: number;
   status?: number;
 };

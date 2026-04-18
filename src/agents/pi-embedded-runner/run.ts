@@ -537,8 +537,14 @@ export async function runEmbeddedPiAgent(
         failoverReason: FailoverReason | null,
       ): AuthProfileFailureReason | null => {
         // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
+        // so they should not persist auth-profile failure state. Incomplete
+        // responses are a model-content signal (empty / reasoning-only), not
+        // an auth health issue, so they are treated the same way.
+        if (
+          !failoverReason ||
+          failoverReason === "timeout" ||
+          failoverReason === "incomplete_response"
+        ) {
           return null;
         }
         return failoverReason;
@@ -1792,6 +1798,42 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
+          // If the same-model retries (reasoning-only, empty-response) have
+          // exhausted and we are about to surface "Agent couldn't generate a
+          // response", prefer rotating to the next configured fallback model
+          // instead. This turns a dead-end incomplete turn into a FailoverError
+          // that the outer model-fallback loop catches, so multi-model setups
+          // keep producing a real answer instead of the user-facing error.
+          // Callers without any configured fallback fall through to the
+          // existing error-payload path unchanged.
+          if (incompleteTurnText && !aborted && !timedOut && fallbackConfigured) {
+            const incompleteTurnDecision = resolveRunFailoverDecision({
+              stage: "incomplete_turn",
+              fallbackConfigured,
+            });
+            if (incompleteTurnDecision.action === "fallback_model") {
+              const failoverStatus = resolveFailoverStatus(incompleteTurnDecision.reason);
+              traceAttempts.push({
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
+                result: "fallback_model",
+                reason: incompleteTurnDecision.reason,
+                stage: "incomplete_turn",
+                ...(typeof failoverStatus === "number" ? { status: failoverStatus } : {}),
+              });
+              log.warn(
+                `incomplete turn detected with fallbacks configured: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${activeErrorContext.provider}/${activeErrorContext.model} — rotating to configured fallback model`,
+              );
+              throw new FailoverError(incompleteTurnText, {
+                reason: incompleteTurnDecision.reason,
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status: failoverStatus,
+              });
+            }
+          }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +

@@ -1,8 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  MockedFailoverError,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedLog,
@@ -502,6 +504,94 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("Please try again");
     expect(mockedLog.warn).toHaveBeenCalledWith(
       expect.stringContaining("reasoning-only retries exhausted"),
+    );
+  });
+
+  it("throws FailoverError after exhausting empty-response retries when fallbacks are configured", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-empty-response-exhausted-with-fallback",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["anthropic/claude-opus-4-6"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("Agent couldn't generate a response");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("incomplete turn detected with fallbacks configured"),
+    );
+  });
+
+  it("throws FailoverError after exhausting reasoning-only retries when fallbacks are configured", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: JSON.stringify({
+                id: "rs_reasoning_fallback",
+                type: "reasoning",
+              }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      reasoningLevel: "on",
+      runId: "run-reasoning-only-exhausted-with-fallback",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["anthropic/claude-opus-4-6"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("Agent couldn't generate a response");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("incomplete turn detected with fallbacks configured"),
     );
   });
 

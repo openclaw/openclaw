@@ -7,6 +7,11 @@ export type RunFailoverDecisionAction =
   | "surface_error"
   | "return_error_payload";
 
+export type IncompleteTurnFailoverDecision = Extract<
+  RunFailoverDecision,
+  { action: "fallback_model" | "return_error_payload" }
+>;
+
 export type RunFailoverDecision =
   | {
       action: "continue_normal";
@@ -44,6 +49,11 @@ type RetryLimitDecisionParams = {
   failoverReason: FailoverReason | null;
 };
 
+type IncompleteTurnDecisionParams = {
+  stage: "incomplete_turn";
+  fallbackConfigured: boolean;
+};
+
 type PromptDecisionParams = {
   stage: "prompt";
   aborted: boolean;
@@ -68,6 +78,7 @@ type AssistantDecisionParams = {
 
 export type RunFailoverDecisionParams =
   | RetryLimitDecisionParams
+  | IncompleteTurnDecisionParams
   | PromptDecisionParams
   | AssistantDecisionParams;
 
@@ -103,6 +114,9 @@ export function mergeRetryFailoverReason(params: {
 export function resolveRunFailoverDecision(
   params: RetryLimitDecisionParams,
 ): RetryLimitFailoverDecision;
+export function resolveRunFailoverDecision(
+  params: IncompleteTurnDecisionParams,
+): IncompleteTurnFailoverDecision;
 export function resolveRunFailoverDecision(params: PromptDecisionParams): PromptFailoverDecision;
 export function resolveRunFailoverDecision(
   params: AssistantDecisionParams,
@@ -114,6 +128,18 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       return {
         action: "fallback_model",
         reason: fallbackReason,
+      };
+    }
+    return {
+      action: "return_error_payload",
+    };
+  }
+
+  if (params.stage === "incomplete_turn") {
+    if (params.fallbackConfigured) {
+      return {
+        action: "fallback_model",
+        reason: "incomplete_response",
       };
     }
     return {
