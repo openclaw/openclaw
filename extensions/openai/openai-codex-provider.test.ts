@@ -156,7 +156,7 @@ describe("openai codex provider", () => {
     ).resolves.toMatchObject({
       profiles: [
         {
-          profileId: "openai-codex:default",
+          profileId: "default:codex@example.com",
           credential: expect.objectContaining({
             provider: "openai-codex",
             access: "access-token",
