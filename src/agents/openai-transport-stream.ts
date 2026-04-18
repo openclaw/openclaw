@@ -1135,8 +1135,9 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    const reasoningDelta = getCompletionsReasoningDelta(choice.delta as Record<string, unknown>);
-    if (reasoningDelta) {
+    const reasoningDeltas = getCompletionsReasoningDeltas(choice.delta as Record<string, unknown>);
+    let emittedVisibleTextFromReasoning = false;
+    for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "text") {
         flushPendingThinkingDelta();
         if (!currentBlock || currentBlock.type !== "text") {
@@ -1152,16 +1153,22 @@ async function processOpenAICompletionsStream(
           delta: reasoningDelta.text,
           partial: output,
         });
+        emittedVisibleTextFromReasoning = true;
       } else if (currentBlock?.type === "toolCall") {
-        const thinkingBuffered = { signature: reasoningDelta.signature, text: reasoningDelta.text };
         if (!pendingThinkingDelta) {
-          pendingThinkingDelta = thinkingBuffered;
+          pendingThinkingDelta = { signature: reasoningDelta.signature, text: reasoningDelta.text };
         } else {
           pendingThinkingDelta.text += reasoningDelta.text;
         }
       } else {
         appendThinkingDelta({ signature: reasoningDelta.signature, text: reasoningDelta.text });
       }
+    }
+    // Mirror the `choice.delta.content` branch above: once a chunk emitted
+    // user-visible text, skip `tool_calls` in the same delta so a text block
+    // and tool-call block are not opened in the same iteration.
+    if (emittedVisibleTextFromReasoning) {
+      continue;
     }
     if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
@@ -1211,11 +1218,16 @@ async function processOpenAICompletionsStream(
   }
 }
 
-function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
+type CompletionsReasoningDelta = {
   kind: "thinking" | "text";
   signature: string;
   text: string;
-} | null {
+};
+
+function getCompletionsReasoningDeltas(
+  delta: Record<string, unknown>,
+): CompletionsReasoningDelta[] {
+  const deltas: CompletionsReasoningDelta[] = [];
   const reasoningDetails = delta.reasoning_details;
   if (Array.isArray(reasoningDetails)) {
     let thinkingText = "";
@@ -1239,21 +1251,27 @@ function getCompletionsReasoningDelta(delta: Record<string, unknown>): {
         thinkingText += detail.text;
       }
     }
-    if (visibleText) {
-      return { kind: "text", signature: "reasoning_details", text: visibleText };
-    }
+    // Emit thinking before visible text so within-chunk interleaving keeps
+    // the reasoning trace instead of dropping it when both kinds coexist.
     if (thinkingText) {
-      return { kind: "thinking", signature: "reasoning_details", text: thinkingText };
+      deltas.push({ kind: "thinking", signature: "reasoning_details", text: thinkingText });
+    }
+    if (visibleText) {
+      deltas.push({ kind: "text", signature: "reasoning_details", text: visibleText });
+    }
+    if (deltas.length > 0) {
+      return deltas;
     }
   }
   const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"] as const;
   for (const field of reasoningFields) {
     const value = delta[field];
     if (typeof value === "string" && value.length > 0) {
-      return { kind: "thinking", signature: field, text: value };
+      deltas.push({ kind: "thinking", signature: field, text: value });
+      break;
     }
   }
-  return null;
+  return deltas;
 }
 
 function detectCompat(model: OpenAIModeModel) {
