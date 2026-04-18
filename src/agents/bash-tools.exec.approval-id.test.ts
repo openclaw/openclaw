@@ -272,7 +272,7 @@ describe("exec approvals", () => {
 
   afterAll(async () => {
     if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   });
 
