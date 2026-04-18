@@ -130,10 +130,9 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   
-  // For absolute Unix paths, only treat as local if they're not gateway-routed
-  // This prevents bypassing allowlist checks
+  // Absolute Unix paths ARE local attachments and should go through allowlist check
   if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
-    return false;
+    return true;
   }
   
   return (
