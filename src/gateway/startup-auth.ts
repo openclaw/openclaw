@@ -18,6 +18,10 @@ import {
   hasGatewayTokenEnvCandidate,
   trimToUndefined,
 } from "./credentials.js";
+import {
+  KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS,
+  KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS,
+} from "./known-weak-gateway-secrets.js";
 
 /**
  * Placeholder credentials that have ever shipped in `.env.example` or been
@@ -31,13 +35,13 @@ import {
  * the example file alone does not protect users who follow an older doc
  * snippet or copy a tutorial command line.
  */
-const KNOWN_WEAK_GATEWAY_TOKENS: ReadonlySet<string> = new Set([
-  "change-me-to-a-long-random-token",
-]);
+const KNOWN_WEAK_GATEWAY_TOKENS: ReadonlySet<string> = new Set(
+  KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS,
+);
 
-const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set([
-  "change-me-to-a-strong-password", // pragma: allowlist secret
-]);
+const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set(
+  KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS,
+);
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -269,8 +273,8 @@ export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth): void {
     const token = auth.token?.trim() ?? "";
     if (token && KNOWN_WEAK_GATEWAY_TOKENS.has(token)) {
       throw new Error(
-        "Invalid config: gateway auth token is set to the example placeholder " +
-          "from .env.example. Generate a real secret (e.g. `openssl rand -hex 32`) " +
+        "Invalid config: gateway auth token is set to a published example placeholder " +
+          "from docs or .env.example. Generate a real secret (e.g. `openssl rand -hex 32`) " +
           "and set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token before starting " +
           "the gateway.",
       );
