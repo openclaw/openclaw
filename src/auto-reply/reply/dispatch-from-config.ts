@@ -276,13 +276,16 @@ export async function dispatchReplyFromConfig(
     opts?: {
       reason?: string;
       idleReason?: string;
+      recordLifecycle?: boolean;
     },
   ): DispatchFromConfigResult => {
     if (inboundDedupeClaim.status === "claimed") {
       commitInboundDedupe(inboundDedupeClaim.key);
     }
-    recordProcessed("completed", opts?.reason ? { reason: opts.reason } : undefined);
-    markIdle(opts?.idleReason ?? "message_completed");
+    if (opts?.recordLifecycle !== false) {
+      recordProcessed("completed", opts?.reason ? { reason: opts.reason } : undefined);
+      markIdle(opts?.idleReason ?? "message_completed");
+    }
     return result;
   };
 
@@ -746,10 +749,13 @@ export async function dispatchReplyFromConfig(
         },
       );
       if (replyDispatchResult?.handled) {
-        return completeDispatch({
-          queuedFinal: replyDispatchResult.queuedFinal,
-          counts: replyDispatchResult.counts,
-        });
+        return completeDispatch(
+          {
+            queuedFinal: replyDispatchResult.queuedFinal,
+            counts: replyDispatchResult.counts,
+          },
+          { recordLifecycle: false },
+        );
       }
     }
 
@@ -1047,10 +1053,13 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
-          return completeDispatch({
-            queuedFinal: tailDispatchResult.queuedFinal,
-            counts: tailDispatchResult.counts,
-          });
+          return completeDispatch(
+            {
+              queuedFinal: tailDispatchResult.queuedFinal,
+              counts: tailDispatchResult.counts,
+            },
+            { recordLifecycle: false },
+          );
         }
       }
     }

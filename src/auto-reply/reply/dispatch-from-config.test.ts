@@ -1419,6 +1419,7 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({
       Provider: "telegram",
       Body: "/stop",
+      MessageSid: "fast-abort-handled-1",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
@@ -1428,6 +1429,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
     });
+    expect(claimInboundDedupe(ctx)).toMatchObject({ status: "duplicate" });
   });
 
   it("fast-abort reply includes stopped subagent count when provided", async () => {
@@ -3158,6 +3160,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const ctx = buildTestCtx({
       SessionKey: "test:session",
       AcpDispatchTailAfterReset: true,
+      MessageSid: "tail-reply-dispatch-1",
     });
 
     await dispatchReplyFromConfig({
@@ -3175,6 +3178,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       }),
       expect.any(Object),
     );
+    expect(claimInboundDedupe(ctx)).toMatchObject({ status: "duplicate" });
   });
 
   it("suppresses final reply delivery when sendPolicy is deny", async () => {
