@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/channels: route cross-agent subagent spawns through the target agent's bound channel account while preserving peer and workspace/role-scoped bindings, so child sessions no longer inherit the caller's account in shared rooms, workspaces, or multi-account setups. (#67508) Thanks @lukeboyett and @gumadeiras.
+- Telegram/callbacks: treat permanent callback edit errors as completed updates so stale command pagination buttons no longer wedge the update watermark and block newer Telegram updates. (#68588) Thanks @Lucenx9.
 
 ## 2026.4.18
 
