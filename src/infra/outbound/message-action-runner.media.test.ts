@@ -335,7 +335,7 @@ describe("runMessageAction media behavior", () => {
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[1]).toEqual(
         expect.objectContaining({
-          localRoots: "any",
+          localRoots: expect.any(Array),
           readFile: expect.any(Function),
           hostReadCapability: true,
         }),

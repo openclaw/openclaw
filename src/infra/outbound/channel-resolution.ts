@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -75,8 +75,9 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
+  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
-  const current = resolve();
+  const current = resolveLoaded();
   if (current) {
     return current;
   }
@@ -86,5 +87,5 @@ export function resolveOutboundChannelPlugin(params: {
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolve() ?? resolveDirectFromActiveRegistry(normalized);
+  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
 }
