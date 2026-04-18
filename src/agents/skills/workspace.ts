@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -40,6 +41,10 @@ const skillsLogger = createSubsystemLogger("skills");
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
 function resolveUserHomeDir(): string | undefined {
+  return resolveOsHomeDir(process.env, os.homedir);
+}
+
+function resolveNativeUserHomeDir(): string | undefined {
   try {
     return path.resolve(os.homedir());
   } catch {
@@ -48,7 +53,9 @@ function resolveUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveHomeDir(), resolveUserHomeDir()].filter((home): home is string => !!home);
+  const homes = [resolveHomeDir(), resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
+    (home): home is string => !!home,
+  );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))
@@ -500,7 +507,7 @@ function loadSkillEntries(
     if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
       return loadedSkills
         .slice()
-        .sort((a, b) => a.name.localeCompare(b.name))
+        .sort((a, b) => a.name.localeCompare(b.name, "en"))
         .slice(0, limits.maxSkillsLoadedPerSource);
     }
 
@@ -574,29 +581,31 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
 
-  const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
-    const frontmatter =
-      readSkillFrontmatterSafe({
-        rootDir: skill.baseDir,
-        filePath: skill.filePath,
-        maxBytes: limits.maxSkillFileBytes,
-      }) ?? ({} as ParsedSkillFrontmatter);
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
-    return {
-      skill,
-      frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
-      invocation,
-      exposure: {
-        includeInRuntimeRegistry: true,
-        // Freshly loaded entries preserve the documented disable-model-invocation
-        // contract, while legacy entries without exposure metadata still use the
-        // fallback in isSkillVisibleInAvailableSkillsPrompt().
-        includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
-        userInvocable: invocation.userInvocable !== false,
-      },
-    };
-  });
+  const skillEntries: SkillEntry[] = Array.from(merged.values())
+    .sort((a, b) => a.name.localeCompare(b.name, "en"))
+    .map((skill) => {
+      const frontmatter =
+        readSkillFrontmatterSafe({
+          rootDir: skill.baseDir,
+          filePath: skill.filePath,
+          maxBytes: limits.maxSkillFileBytes,
+        }) ?? ({} as ParsedSkillFrontmatter);
+      const invocation = resolveSkillInvocationPolicy(frontmatter);
+      return {
+        skill,
+        frontmatter,
+        metadata: resolveOpenClawMetadata(frontmatter),
+        invocation,
+        exposure: {
+          includeInRuntimeRegistry: true,
+          // Freshly loaded entries preserve the documented disable-model-invocation
+          // contract, while legacy entries without exposure metadata still use the
+          // fallback in isSkillVisibleInAvailableSkillsPrompt().
+          includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+          userInvocable: invocation.userInvocable !== false,
+        },
+      };
+    });
   return skillEntries;
 }
 
@@ -760,7 +769,9 @@ function resolveWorkspaceSkillPromptState(
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
-  const promptSkills = compactSkillPaths(resolvedSkills);
+  const promptSkills = compactSkillPaths(resolvedSkills)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "en"));
   const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
