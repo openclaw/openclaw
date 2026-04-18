@@ -55,62 +55,150 @@ type ImageBlock = {
   httpUrl?: string;
 };
 
-type ImageRenderOptions = {
-  localMediaPreviewRoots?: readonly string[];
-  basePath?: string;
-  authToken?: string | null;
+type AudioBlock = {
+  type: "audio";
+  data: string;
+  mimeType: string;
+  filename?: string;
 };
 
-type RenderableImageBlock = ImageBlock & {
-  displayUrl: string;
+type VideoBlock = {
+  type: "video";
+  data: string;
+  mimeType: string;
+  filename?: string;
 };
 
-function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
-  if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
-    images.push(block);
+const DETAILS_STATE_KEY = "chat:details_state";
+
+function saveDetailsState(id: string, isOpen: boolean) {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) {return;}  // Add braces
+    const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
+    state[id] = isOpen;
+    storage.setItem(DETAILS_STATE_KEY, JSON.stringify(state));
+  } catch {}
+}
+
+function getDetailsState(id: string): boolean {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) {return true;}  // Add braces
+    const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
+    if (state[id] === undefined) {return true;}
+    return state[id] === true;
+  } catch {
+    return true;
   }
 }
 
-function buildBase64ImageUrl(params: { data: string; mediaType?: string }): string {
-  return params.data.startsWith("data:")
-    ? params.data
-    : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
+function generateDetailsId(message: unknown, index: number): string {
+  const m = message as Record<string, unknown>;
+  const id = m.id || m.messageId || m.timestamp;
+  // Convert id to string safely
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
+  const idString = id ? (typeof id === 'object' ? JSON.stringify(id) : String(id)) : 'unknown';
+  return `tool-${idString}-${index}`;
 }
 
-function getFileExtension(url: string): string | undefined {
-  const source = (() => {
-    try {
-      const trimmed = url.trim();
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {
-      // Fall back to the raw path when URL parsing fails.
-    }
-    return url;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
+// Helper function to check if a path is already a gateway-routed path
+function isGatewayRoutedPath(path: string): boolean {
+  return path.startsWith('/__openclaw__/') || 
+         path.startsWith('/media/') ||
+         path.includes('/__openclaw__/assistant-media');
 }
 
-function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
-    }
-    if (normalized !== "application/octet-stream") {
-      return false;
-    }
+// Helper function to check if a path should be served via media server
+function shouldUseMediaServer(path: string): boolean {
+  // Only use media server for absolute Unix paths that are NOT gateway-routed
+  return path.startsWith('/') && 
+         !path.startsWith('//') && 
+         !isGatewayRoutedPath(path);
+}
+
+// Fixed isLocalAssistantAttachmentSource function
+function isLocalAssistantAttachmentSource(source: string): boolean {
+  const trimmed = source.trim();
+  
+  // Gateway-routed paths are NOT local attachments
+  if (isGatewayRoutedPath(trimmed)) {
+    return false;
   }
-  const ext = getFileExtension(path);
+  
+  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
+    return false;
+  }
+  
+  // Absolute Unix paths ARE local attachments and should go through allowlist check
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
+    return true;
+  }
+  
   return (
-    ext !== undefined &&
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("~") ||
+    /^[a-zA-Z]:[\\/]/.test(trimmed)
   );
 }
 
+// Fixed buildAssistantAttachmentUrl function
+function buildAssistantAttachmentUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  const decoded = source.startsWith('%2F') ? decodeURIComponent(source) : source;
+  
+  // Preserve already-routed gateway paths - don't rewrite them
+  if (isGatewayRoutedPath(decoded)) {
+    // Ensure it has the correct base path if needed
+    const normalizedBasePath = basePath && basePath !== "/" 
+      ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) 
+      : "";
+    if (normalizedBasePath && decoded.startsWith('/')) {
+      return `${normalizedBasePath}${decoded}`;
+    }
+    return decoded;
+  }
+  
+  // Handle media server URLs for absolute Unix paths (non-gateway)
+  if (shouldUseMediaServer(decoded)) {
+    return `http://localhost:18791${decoded}`;
+  }
+  
+  // For other sources that aren't local files, return as-is
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return source;
+  }
+  
+  // Only use assistant-media for file://, ~, and Windows paths
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  const params = new URLSearchParams({ source });
+  const normalizedToken = authToken?.trim();
+  if (normalizedToken) {
+    params.set("token", normalizedToken);
+  }
+  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+}
+
+// Fixed buildAssistantAttachmentMetaUrl function
+function buildAssistantAttachmentMetaUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
+  // Don't add meta param for media server URLs or already-routed paths
+  if (attachmentUrl.startsWith('http://localhost:18791') || 
+      attachmentUrl.includes('/__openclaw__/assistant-media')) {
+    return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+  }
+  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+}
+
+// Fixed extractImages function (only the relevant part showing the fix)
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -126,60 +214,70 @@ function extractImages(message: unknown): ImageBlock[] {
       if (b.type === "image") {
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
+          const mediaType = (source.media_type as string) || "image/png";
+          const raw = source.data;
+          const url = raw.startsWith("data:") ? raw : `data:${mediaType};base64,${raw}`;
+          const filename = typeof b.filename === "string" ? b.filename : undefined;
+          images.push({ url, filename, httpUrl: undefined });
         } else if (typeof b.url === "string") {
-          appendImageBlock(images, { url: b.url });
+          const urlValue = b.url;
+          
+          // Preserve gateway-routed paths - don't rewrite them
+          if (isGatewayRoutedPath(urlValue)) {
+            const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
+            images.push({ url: urlValue, filename, httpUrl: undefined });
+          }
+          // Handle absolute Unix paths (non-gateway) - serve from media server
+          else if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
+            const mediaServerUrl = `http://localhost:18791${urlValue}`;
+            const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
+            images.push({ 
+              url: mediaServerUrl, 
+              filename, 
+              httpUrl: mediaServerUrl 
+            });
+          } else {
+            const isMediaServerUrl = urlValue.startsWith("http://localhost:18791/") || 
+                                     urlValue.startsWith("http://127.0.0.1:18791/");
+            const httpUrl = isMediaServerUrl ? urlValue : undefined;
+            const filename = typeof b.filename === "string" ? b.filename : urlValue.split("/").pop();
+            images.push({ url: urlValue, filename, httpUrl });
+          }
         }
       } else if (b.type === "image_url") {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          appendImageBlock(images, { url: imageUrl.url });
-        }
-      } else if (b.type === "input_image") {
-        const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
-          appendImageBlock(images, { url: imageUrl });
-        } else if (imageUrl && typeof imageUrl === "object") {
-          const url = (imageUrl as Record<string, unknown>).url;
-          if (typeof url === "string") {
-            appendImageBlock(images, { url });
+          const urlValue = imageUrl.url;
+          
+          // Preserve gateway-routed paths - don't rewrite them
+          if (isGatewayRoutedPath(urlValue)) {
+            images.push({
+              url: urlValue,
+              filename: urlValue.split("/").pop(),
+              httpUrl: undefined,
+            });
           }
-        }
-        const source = b.source as Record<string, unknown> | undefined;
-        if (typeof source?.url === "string") {
-          appendImageBlock(images, { url: source.url });
-        } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
+          // Handle absolute Unix paths (non-gateway) - serve from media server
+          else if (urlValue.startsWith("/") && !urlValue.startsWith("//")) {
+            const mediaServerUrl = `http://localhost:18791${urlValue}`;
+            images.push({
+              url: mediaServerUrl,
+              filename: urlValue.split("/").pop(),
+              httpUrl: mediaServerUrl,
+            });
+          } else {
+            const isMediaServerUrl = urlValue.startsWith("http://localhost:18791/") || 
+                                     urlValue.startsWith("http://127.0.0.1:18791/");
+            const httpUrl = isMediaServerUrl ? urlValue : undefined;
+            images.push({
+              url: urlValue,
+              filename: urlValue.split("/").pop(),
+              httpUrl,
+            });
+          }
         }
       }
     }
-  }
-
-  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
-    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
-    : typeof m.MediaPath === "string"
-      ? [m.MediaPath]
-      : [];
-  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
-    ? m.MediaTypes
-    : typeof m.MediaType === "string"
-      ? [m.MediaType]
-      : [];
-  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
-    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
-      continue;
-    }
-    appendImageBlock(images, { url: mediaPath });
   }
 
   return images;
@@ -204,53 +302,45 @@ function extractAudioVideoBlocks(message: unknown): { audio: AudioBlock[]; video
 
     if (b.type === "audio") {
       if (typeof b.url === "string") {
-        if (!audio.some((a) => a.data === b.url)) {
-          audio.push({
-            type: "audio",
-            data: b.url,
-            mimeType: typeof b.mimeType === "string" ? b.mimeType : "audio/ogg",
-            filename: typeof b.filename === "string" ? b.filename : undefined,
-          });
-        }
+        audio.push({
+          type: "audio",
+          data: b.url,
+          mimeType: typeof b.mimeType === "string" ? b.mimeType : "audio/ogg",
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
       } else if (typeof b.data === "string") {
         const mimeTypeValue = typeof b.mimeType === "string" ? b.mimeType : "audio/ogg";
         const dataUrl = b.data.startsWith("data:")
           ? b.data
           : `data:${mimeTypeValue};base64,${b.data}`;
-        if (!audio.some((a) => a.data === dataUrl)) {
-          audio.push({
-            type: "audio",
-            data: dataUrl,
-            mimeType: mimeTypeValue,
-            filename: typeof b.filename === "string" ? b.filename : undefined,
-          });
-        }
+        audio.push({
+          type: "audio",
+          data: dataUrl,
+          mimeType: mimeTypeValue,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
       }
     }
 
     if (b.type === "video") {
       if (typeof b.url === "string") {
-        if (!video.some((v) => v.data === b.url)) {
-          video.push({
-            type: "video",
-            data: b.url,
-            mimeType: typeof b.mimeType === "string" ? b.mimeType : "video/mp4",
-            filename: typeof b.filename === "string" ? b.filename : undefined,
-          });
-        }
+        video.push({
+          type: "video",
+          data: b.url,
+          mimeType: typeof b.mimeType === "string" ? b.mimeType : "video/mp4",
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
       } else if (typeof b.data === "string") {
         const mimeTypeValue = typeof b.mimeType === "string" ? b.mimeType : "video/mp4";
         const dataUrl = b.data.startsWith("data:")
           ? b.data
           : `data:${mimeTypeValue};base64,${b.data}`;
-        if (!video.some((v) => v.data === dataUrl)) {
-          video.push({
-            type: "video",
-            data: dataUrl,
-            mimeType: mimeTypeValue,
-            filename: typeof b.filename === "string" ? b.filename : undefined,
-          });
-        }
+        video.push({
+          type: "video",
+          data: dataUrl,
+          mimeType: mimeTypeValue,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        });
       }
     }
   }
@@ -733,25 +823,7 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-function resolveRenderableMessageImages(
-  images: ImageBlock[],
-  opts?: ImageRenderOptions,
-): RenderableImageBlock[] {
-  return images.flatMap((img) => {
-    const isLocalImage = isLocalAssistantAttachmentSource(img.url);
-    const canProxyLocalImage =
-      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
-    if (isLocalImage && !canProxyLocalImage) {
-      return [];
-    }
-    const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
-      : img.url;
-    return [{ ...img, displayUrl }];
-  });
-}
-
-function renderMessageImages(images: RenderableImageBlock[]) {
+function renderMessageImages(images: ImageBlock[]) {
   if (images.length === 0) {
     return nothing;
   }
@@ -760,12 +832,51 @@ function renderMessageImages(images: RenderableImageBlock[]) {
     <div class="chat-message-images">
       ${images.map(
         (img) => html`
-          <img
-            src=${img.displayUrl}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => openImage(img.displayUrl)}
-          />
+          <div class="chat-image-wrapper">
+            <img
+              src=${img.url}
+              alt=${img.alt ?? "Attached image"}
+              class="chat-message-image"
+              @load=${(e: Event) => {
+                const imgEl = e.target as HTMLImageElement;
+                const naturalWidth = imgEl.naturalWidth;
+                
+                const bubble = imgEl.closest('.chat-bubble') as HTMLElement;
+                if (bubble && !bubble.style.width) {
+                  let targetWidth: number;
+                  
+                  if (naturalWidth >= 3840) {
+                    targetWidth = 400;
+                  } else if (naturalWidth >= 2560) {
+                    targetWidth = 380;
+                  } else if (naturalWidth >= 1920) {
+                    targetWidth = 360;
+                  } else if (naturalWidth >= 1280) {
+                    targetWidth = 340;
+                  } else if (naturalWidth >= 800) {
+                    targetWidth = 320;
+                  } else if (naturalWidth >= 500) {
+                    targetWidth = 300;
+                  } else {
+                    targetWidth = Math.floor(naturalWidth * 0.8);
+                  }
+                  
+                  bubble.style.width = `${targetWidth}px`;
+                }
+              }}
+            />
+            ${img.httpUrl && img.httpUrl.startsWith("http")
+              ? html`<a
+                  href=${img.httpUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="chat-image-filename"
+                  title="Open full-size image"
+                  style="display: block; text-align: center; width: 100%;"
+                  >${img.filename ?? "Open Image"}</a
+                >`
+              : nothing}
+          </div>
         `,
       )}
     </div>
@@ -1124,7 +1235,7 @@ function renderAssistantAttachments(
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
-  hasRawMedia?: boolean,
+  hasRawMedia?: boolean, // Pass this flag to know if media is already rendered elsewhere
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -1167,8 +1278,9 @@ function renderAssistantAttachments(
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
                 target="_blank"
-                rel="noopener noreferrer"
-              >${attachment.label}</a>
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
             </div>
           `;
         }
@@ -1185,13 +1297,14 @@ function renderAssistantAttachments(
           }
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--image">
-              <img src=${attachmentUrl} alt=${attachment.label} @click=${() => openImage(attachmentUrl)} />
+              <img src=${attachmentUrl} alt=${attachment.label} />
               <a
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
                 target="_blank"
-                rel="noopener noreferrer"
-              >${attachment.label}</a>
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
             </div>
           `;
         }
@@ -1213,8 +1326,9 @@ function renderAssistantAttachments(
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
                 target="_blank"
-                rel="noopener noreferrer"
-              >${attachment.label}</a>
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
             </div>
           `;
         }
@@ -1235,8 +1349,9 @@ function renderAssistantAttachments(
               class="chat-assistant-attachment-card__link"
               href=${attachmentUrl}
               target="_blank"
-              rel="noopener noreferrer"
-            >${attachment.label}</a>
+              rel="noreferrer"
+              >${attachment.label}</a
+            >
           </div>
         `;
       })}
@@ -1356,12 +1471,8 @@ function renderGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
-  const imageRenderOptions = {
-    localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
-    basePath: opts.basePath,
-    authToken: opts.assistantAttachmentAuthToken,
-  };
-  const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
+  const images = extractImages(message);
+  const { audio: audioBlocks, video: videoBlocks } = extractAudioVideoBlocks(message);
   const hasImages = images.length > 0;
   const hasMedia = audioBlocks.length > 0 || videoBlocks.length > 0 || hasImages;
 
@@ -1540,7 +1651,7 @@ function renderGroupedMessage(
                 opts.basePath,
                 opts.assistantAttachmentAuthToken,
                 opts.onRequestUpdate,
-                hasMedia,
+                hasMedia, // Pass whether there's raw media from content blocks
               )}
             </div>
           </details>
@@ -1621,7 +1732,7 @@ function renderGroupedMessage(
     `;
   }
 
-  // Regular (non-tool) message rendering
+  // Regular (non-tool) message rendering - unchanged
   return html`
     <div 
       class="${bubbleClasses}"
@@ -1643,7 +1754,6 @@ function renderGroupedMessage(
         opts.basePath,
         opts.assistantAttachmentAuthToken,
         opts.onRequestUpdate,
-        hasMedia,
       )}
       ${reasoningMarkdown
         ? html`<div class="chat-thinking">

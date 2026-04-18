@@ -651,18 +651,42 @@ function sanitizeFilename(title: string): string {
  * The link is created for the included media server which can play the streaming media locally.
  */
 function buildMediaUrl(workspaceRoot: string, filePath: string): string {
-  const resolvedWorkspace = path.resolve(workspaceRoot);
-  const resolvedFilePath = path.resolve(filePath);
-  
-  let relativePath = path.relative(resolvedWorkspace, resolvedFilePath);
-  
-  if (relativePath === '') {
-    relativePath = path.basename(resolvedFilePath);
+  // 1. Cross-platform normalization
+  // path.resolve() handles OS-specific absolute paths.
+  // .replace(/\\/g, '/') handles Windows backslashes so string matching works on all platforms.
+  const normalizedFile = path.resolve(filePath).replace(/\\/g, '/');
+  const normalizedRoot = path.resolve(workspaceRoot).replace(/\\/g, '/');
+
+  let relativePath = "";
+
+  // 2. Locate the "workspace" anchor (case-insensitive for Windows compatibility)
+  const workspaceMarker = "/workspace/";
+  const lowerFile = normalizedFile.toLowerCase();
+  const workspaceIndex = lowerFile.indexOf(workspaceMarker);
+
+  if (workspaceIndex !== -1) {
+    // Slice from the original normalizedFile to preserve folder casing (e.g., "Sasha-Main")
+    relativePath = normalizedFile.slice(workspaceIndex + workspaceMarker.length);
+  } else {
+    // Fallback: If "workspace" isn't in the path, manually strip the provided workspaceRoot
+    const rootDir = normalizedRoot.endsWith('/') ? normalizedRoot : normalizedRoot + '/';
+    
+    if (normalizedFile.startsWith(rootDir)) {
+      relativePath = normalizedFile.slice(rootDir.length);
+    } else {
+      // If the file is somehow outside the tree, just return the filename
+      relativePath = path.basename(normalizedFile);
+    }
   }
-  
-  const posixPath = relativePath.split(path.sep).join('/');
-  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
-  
+
+  // 3. Clean, segment, and encode for URL safety
+  const encodedPath = relativePath
+    .split('/')
+    .filter(Boolean) // Prevents empty segments or double slashes
+    .map(encodeURIComponent)
+    .join('/');
+
+  // Return with the leading slash the media server expects for its routes
   return `/${encodedPath}`;
 }
 

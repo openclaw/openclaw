@@ -593,12 +593,46 @@ function normalizePathForUrl(filePath: string): string {
   return normalized;
 }
 
-function getMediaUrl(filePath: string, getBaseUrl?: () => string): string {
-  const normalizedPath = normalizePathForUrl(filePath);
-  const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
-  const baseUrl = getBaseUrl?.() || "http://localhost:18791";
-  const cleanBaseUrl = baseUrl.replace(/\/$/, "");
-  return `${cleanBaseUrl}${encodedPath}`;
+function getMediaUrl(filePath: string, workspaceRoot: string, getBaseUrl?: () => string): string {
+  // 1. Cross-Platform Normalization
+  // path.resolve() handles the OS-specific absolute path logic.
+  // .replace ensures that even on Windows, we are working with '/' for string manipulation.
+  const normalizedFile = path.resolve(filePath).replace(/\\/g, '/');
+  const normalizedRoot = path.resolve(workspaceRoot).replace(/\\/g, '/');
+
+  let finalRelativePath = "";
+
+  // 2. The "Workspace Anchor" Logic (Case-Insensitive)
+  // This works on Linux (/home/user/workspace/...) and Windows (C:/workspace/...)
+  const workspaceMarker = "/workspace/";
+  const lowerFile = normalizedFile.toLowerCase();
+  const workspaceIndex = lowerFile.indexOf(workspaceMarker);
+
+  if (workspaceIndex !== -1) {
+    // Preserve the actual folder casing from the original path
+    finalRelativePath = normalizedFile.slice(workspaceIndex + workspaceMarker.length);
+  } else {
+    // Fallback if the folder isn't named 'workspace'
+    const rootDir = normalizedRoot.endsWith('/') ? normalizedRoot : normalizedRoot + '/';
+    
+    if (normalizedFile.startsWith(rootDir)) {
+      finalRelativePath = normalizedFile.slice(rootDir.length);
+    } else {
+      finalRelativePath = path.basename(normalizedFile);
+    }
+  }
+
+  // 3. URL Construction
+  // We split by '/' (which we guaranteed in step 1) and encode each part.
+  const urlPath = finalRelativePath
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+
+  const baseUrl = getBaseUrl ? getBaseUrl().replace(/\/+$/, '') : 'http://localhost:18791';
+  
+  return `${baseUrl}/${urlPath}`;
 }
 
 type SandboxToolParams = {
@@ -1152,7 +1186,7 @@ export function createOpenClawReadTool(
         );
         
         const fileName = path.basename(inputPath);
-        const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
+        const mediaUrl = getMediaUrl(inputPath, rootDirResolved, options?.getBaseUrl);
 
         let result: AgentToolResult;
 
