@@ -42,6 +42,9 @@ describe("stripBase64ImagesFromToolResult", () => {
     const message: AgentMessage = {
       role: "toolResult",
       toolCallId: "test-123",
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
       content: [
         { type: "text", text: "MEDIA:/path/to/screenshot.png" },
         {
@@ -71,6 +74,9 @@ describe("stripBase64ImagesFromToolResult", () => {
     const message: AgentMessage = {
       role: "toolResult",
       toolCallId: "test-456",
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
       content: [
         { type: "text", text: "Some text content" },
         { type: "text", text: "More text" },
@@ -87,51 +93,54 @@ describe("stripBase64ImagesFromToolResult", () => {
     const message: AgentMessage = {
       role: "toolResult",
       toolCallId: "test-789",
-    };
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
+    } as AgentMessage;
 
     const result = stripBase64ImagesFromToolResult(message);
     expect(result).toEqual(message);
   });
 
   it("should handle non-array content", () => {
-    const message: AgentMessage = {
+    const message = {
       role: "toolResult",
       toolCallId: "test-999",
-      content: "string content" as unknown as AgentMessage["content"],
-    };
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
+      content: "string content",
+    } as AgentMessage;
 
     const result = stripBase64ImagesFromToolResult(message);
     expect(result).toEqual(message);
   });
 
   it("should not modify non-toolResult messages", () => {
-    const message: AgentMessage = {
+    const message = {
       role: "assistant",
-      content: [
-        { type: "text", text: "Hello" },
-        {
-          type: "image",
-          data: "base64data",
-          mimeType: "image/png",
-        },
-      ],
-    };
+      content: [{ type: "text", text: "Hello" }],
+      timestamp: Date.now(),
+    } as AgentMessage;
 
     const result = stripBase64ImagesFromToolResult(message);
     expect(result).toEqual(message);
   });
 
   it("should default mimeType to image/png if missing", () => {
-    const message: AgentMessage = {
+    const message = {
       role: "toolResult",
       toolCallId: "test-default",
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
       content: [
         {
           type: "image",
           data: "someb64data",
-        } as unknown as Extract<AgentMessage, { role: "toolResult" }>["content"][number],
+        },
       ],
-    };
+    } as AgentMessage;
 
     const result = stripBase64ImagesFromToolResult(message);
 
@@ -143,6 +152,9 @@ describe("stripBase64ImagesFromToolResult", () => {
     const message: AgentMessage = {
       role: "toolResult",
       toolCallId: "test-jpeg",
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
       content: [
         {
           type: "image",
@@ -162,6 +174,9 @@ describe("stripBase64ImagesFromToolResult", () => {
     const message: AgentMessage = {
       role: "toolResult",
       toolCallId: "test-mixed",
+      toolName: "browser",
+      isError: false,
+      timestamp: Date.now(),
       content: [
         { type: "text", text: "First image:" },
         { type: "image", data: "image1base64", mimeType: "image/png" },
