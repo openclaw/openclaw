@@ -79,7 +79,7 @@ describe("resolveRequesterOriginForChild", () => {
     });
   });
 
-  it("keeps plugin-inferred channel kind for ids that start with direct marker characters", () => {
+  it("keeps explicit channel prefixes ahead of ids that start with direct marker characters", () => {
     const to = "channel:@ops";
     const cfg = {
       bindings: [
