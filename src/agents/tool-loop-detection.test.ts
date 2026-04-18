@@ -333,7 +333,6 @@ describe("tool-loop-detection", () => {
 
     it("normalizes update_plan wording churn into the same loop signature", () => {
       const state = createState();
-      const result = { details: { status: "updated" } };
 
       for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
         const toolCallId = `plan-${i}`;
@@ -343,6 +342,15 @@ describe("tool-loop-detection", () => {
             { step: `read file ${i}`, status: "in_progress" },
             { step: `patch code ${i}`, status: "pending" },
           ],
+        };
+        const result = {
+          details: {
+            explanation: `server echoed wording ${i}`,
+            plan: [
+              { step: `read file echoed ${i}`, status: "in_progress" },
+              { step: `patch code echoed ${i}`, status: "pending" },
+            ],
+          },
         };
         recordToolCall(state, "update_plan", params, toolCallId);
         recordToolCallOutcome(state, {
@@ -375,7 +383,6 @@ describe("tool-loop-detection", () => {
 
     it("treats update_plan status changes as real progress", () => {
       const state = createState();
-      const result = { details: { status: "updated" } };
 
       for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD - 1; i += 1) {
         const toolCallId = `plan-repeat-${i}`;
@@ -385,6 +392,15 @@ describe("tool-loop-detection", () => {
             { step: `read file ${i}`, status: "in_progress" },
             { step: `patch code ${i}`, status: "pending" },
           ],
+        };
+        const result = {
+          details: {
+            explanation: `server echoed wording ${i}`,
+            plan: [
+              { step: `read file echoed ${i}`, status: "in_progress" },
+              { step: `patch code echoed ${i}`, status: "pending" },
+            ],
+          },
         };
         recordToolCall(state, "update_plan", params, toolCallId);
         recordToolCallOutcome(state, {
@@ -411,6 +427,71 @@ describe("tool-loop-detection", () => {
       );
 
       expect(loopResult.stuck).toBe(false);
+    });
+
+    it("treats update_plan outcome status changes as progress for no-progress detection", () => {
+      const state = createState();
+
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD - 1; i += 1) {
+        const toolCallId = `plan-result-repeat-${i}`;
+        const params = {
+          explanation: `tiny wording tweak ${i}`,
+          plan: [
+            { step: `read file ${i}`, status: "in_progress" },
+            { step: `patch code ${i}`, status: "pending" },
+          ],
+        };
+        const result = {
+          details: {
+            explanation: `server echoed wording ${i}`,
+            plan: [
+              { step: `read file echoed ${i}`, status: "in_progress" },
+              { step: `patch code echoed ${i}`, status: "pending" },
+            ],
+          },
+        };
+        recordToolCall(state, "update_plan", params, toolCallId);
+        recordToolCallOutcome(state, {
+          toolName: "update_plan",
+          toolParams: params,
+          toolCallId,
+          result,
+        });
+      }
+
+      const unchangedParams = {
+        explanation: "same shape request",
+        plan: [
+          { step: "read file again", status: "in_progress" },
+          { step: "patch code again", status: "pending" },
+        ],
+      };
+      recordToolCall(state, "update_plan", unchangedParams, "plan-result-progress");
+      recordToolCallOutcome(state, {
+        toolName: "update_plan",
+        toolParams: unchangedParams,
+        toolCallId: "plan-result-progress",
+        result: {
+          details: {
+            explanation: "server echoed real progress",
+            plan: [
+              { step: "read file echoed done", status: "completed" },
+              { step: "patch code echoed now", status: "in_progress" },
+            ],
+          },
+        },
+      });
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "update_plan",
+        unchangedParams,
+        enabledLoopDetectionConfig,
+      );
+
+      if (loopResult.stuck) {
+        expect(loopResult.detector).not.toBe("global_circuit_breaker");
+      }
     });
 
     it("applies custom thresholds when detection is enabled", () => {
