@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resetCronActiveJobsForTests } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
@@ -81,6 +82,7 @@ vi.mock("../agents/subagent-control.js", () => ({
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
+  sessionStore?: Record<string, SessionEntry>;
 }): void {
   const emptyAcpEntry = {
     cfg: {} as never,
@@ -92,7 +94,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   } satisfies AcpSessionStoreEntry;
   setTaskRegistryMaintenanceRuntimeForTests({
     readAcpSessionEntry: () => emptyAcpEntry,
-    loadSessionStore: () => ({}),
+    loadSessionStore: () => params.sessionStore ?? {},
     resolveStorePath: () => "",
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
@@ -365,6 +367,8 @@ describe("task-registry", () => {
         active: 2,
         terminal: 1,
         failures: 1,
+        recentFailures: 1,
+        historicalFailures: 0,
         byStatus: {
           queued: 1,
           running: 1,
@@ -1577,6 +1581,133 @@ describe("task-registry", () => {
       status: "succeeded",
       cleanupAfter: now + 60_000,
     });
+  });
+
+  it("suppresses historical delivery_failed warnings when the requester session is already closed", () => {
+    const now = Date.now();
+    const baseTask = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      requesterSessionKey: "agent:main:main",
+      runId: "run-closed-requester",
+      task: "Finished task",
+      status: "succeeded",
+      deliveryStatus: "failed",
+      notifyPolicy: "done_only",
+    });
+    const task = {
+      ...baseTask,
+      endedAt: now - 60_000,
+      lastEventAt: now - 60_000,
+    };
+    const currentTasks = new Map([[task.taskId, task]]);
+    configureTaskRegistryMaintenanceRuntimeForTest({
+      currentTasks,
+      snapshotTasks: [task],
+      sessionStore: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: now - 30_000,
+          endedAt: now - 30_000,
+        },
+      },
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({
+        taskId: task.taskId,
+        status: "succeeded",
+        deliveryStatus: "parent_missing",
+      }),
+    ]);
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      deliveryStatus: "failed",
+    });
+    expect(getInspectableTaskAuditSummary()).toEqual({
+      total: 0,
+      warnings: 0,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+  });
+
+  it("caches session-store loads within a single inspection reconcile pass", () => {
+    const now = Date.now();
+    const loadSessionStore = vi.fn(() => ({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now - 30_000,
+        endedAt: now - 30_000,
+      },
+    }));
+    const taskA = {
+      ...createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-cache-a",
+        task: "Finished task A",
+        status: "succeeded",
+        deliveryStatus: "failed",
+        notifyPolicy: "done_only",
+      }),
+      endedAt: now - 60_000,
+      lastEventAt: now - 60_000,
+    };
+    const taskB = {
+      ...createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-cache-b",
+        task: "Finished task B",
+        status: "succeeded",
+        deliveryStatus: "failed",
+        notifyPolicy: "done_only",
+      }),
+      endedAt: now - 45_000,
+      lastEventAt: now - 45_000,
+    };
+
+    setTaskRegistryMaintenanceRuntimeForTests({
+      readAcpSessionEntry: () => ({
+        cfg: {} as never,
+        storePath: "",
+        sessionKey: "",
+        storeSessionKey: "",
+        entry: undefined,
+        storeReadFailed: false,
+      }),
+      loadSessionStore,
+      resolveStorePath: () => "/tmp/sessions.json",
+      parseAgentSessionKey: () => null,
+      isCronJobActive: () => false,
+      getAgentRunContext: () => undefined,
+      deleteTaskRecordById: () => false,
+      ensureTaskRegistryReady: () => {},
+      getTaskById: () => undefined,
+      listTaskRecords: () => [taskA, taskB],
+      markTaskLostById: () => null,
+      maybeDeliverTaskTerminalUpdate: async () => null,
+      resolveTaskForLookupToken: () => undefined,
+      setTaskCleanupAfterById: () => null,
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({ taskId: taskA.taskId, deliveryStatus: "parent_missing" }),
+      expect.objectContaining({ taskId: taskB.taskId, deliveryStatus: "parent_missing" }),
+    ]);
+    expect(loadSessionStore).toHaveBeenCalledTimes(1);
   });
 
   it("summarizes inspectable task audit findings", async () => {

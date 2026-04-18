@@ -164,6 +164,42 @@ struct ChatMarkdownPreprocessorTests {
         #expect(result.cleaned == "User-visible text")
     }
 
+    @Test func stripsHiddenExecSystemEventBlocks() {
+        let markdown = """
+        System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m
+        System (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m
+
+        Actual assistant reply
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == "Actual assistant reply")
+    }
+
+    @Test func preservesUserTextThatOnlyLooksLikeASystemPrefix() {
+        let markdown = "System (untrusted): [2026-01-01] this is just quoted text"
+
+        let result = ChatMarkdownPreprocessor.preprocess(markdown: markdown)
+
+        #expect(result.cleaned == markdown)
+    }
+
+    @Test func preservesQuotedExecLinesWhenHiddenSystemStrippingIsDisabled() {
+        let markdown = """
+        System (untrusted): [2026-04-17 21:59:00 GMT+8] Exec completed (clear-bl, code 0) :: src[39m
+        System (untrusted): [2m Test Files [22m [1m[32m1 passed[39m[22m
+
+        Can you help me read this log?
+        """
+
+        let result = ChatMarkdownPreprocessor.preprocess(
+            markdown: markdown,
+            stripHiddenSystemEvents: false)
+
+        #expect(result.cleaned == markdown)
+    }
+
     @Test func preservesUntrustedContextHeaderWhenItIsUserContent() {
         let markdown = """
         User-visible text

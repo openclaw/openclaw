@@ -389,6 +389,16 @@ describe("message-normalizer", () => {
 
       expect(result.senderLabel).toBe("Iris");
     });
+
+    it("strips hidden exec system event noise from visible user messages", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content:
+          "System (untrusted): [2026-04-17 23:29:19 GMT+8] Exec completed (cool-har, code 1) :: https://github.com/openclaw/openclaw/actions/runs/24572758991/job/71850025323\nSender (untrusted metadata):\n```json\n{\n  \"label\": \"openclaw-control-ui\"\n}\n```\n\n[Fri 2026-04-17 23:42 GMT+8] 继续",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "继续" }]);
+    });
   });
 
   describe("normalizeRoleForGrouping", () => {

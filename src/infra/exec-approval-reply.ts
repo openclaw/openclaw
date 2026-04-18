@@ -100,15 +100,6 @@ function resolveAllowedDecisions(params: {
   return params.allowedDecisions ?? resolveExecApprovalAllowedDecisions({ ask: params.ask });
 }
 
-function buildApprovalCommandFence(
-  descriptors: readonly ExecApprovalActionDescriptor[],
-): string | null {
-  if (descriptors.length === 0) {
-    return null;
-  }
-  return buildFence(descriptors.map((descriptor) => descriptor.command).join("\n"), "txt");
-}
-
 export function buildExecApprovalCommandText(params: {
   approvalCommandId: string;
   decision: ExecApprovalReplyDecision;
@@ -259,6 +250,50 @@ function buildFence(text: string, language?: string): string {
   return `${fence}${languagePrefix}\n${text}\n${fence}`;
 }
 
+export function buildExecApprovalPendingText(params: ExecApprovalPendingReplyParams): string {
+  const approvalCommandId = params.approvalCommandId?.trim() || params.approvalSlug;
+  const allowedDecisions = resolveAllowedDecisions(params);
+  const descriptors = buildExecApprovalActionDescriptors({
+    approvalCommandId,
+    allowedDecisions,
+  });
+  const primaryAction = descriptors[0] ?? null;
+  const warningText = params.warningText?.trim();
+  const lines: string[] = [];
+
+  if (warningText) {
+    lines.push(warningText);
+  }
+
+  lines.push("Approval needed to continue with that command.");
+  lines.push(`Approval ID: ${params.approvalId}`);
+  lines.push(`Host: ${params.host}`);
+  if (params.nodeId) {
+    lines.push(`Node: ${params.nodeId}`);
+  }
+  if (params.cwd) {
+    lines.push(`CWD: ${params.cwd}`);
+  }
+  lines.push("Command:");
+  lines.push(buildFence(params.command, "sh"));
+
+  if (primaryAction) {
+    lines.push("Approve with:");
+    lines.push(buildFence(primaryAction.command, "txt"));
+
+    const fullApprovalCommand = buildExecApprovalCommandText({
+      approvalCommandId: params.approvalId,
+      decision: primaryAction.decision,
+    });
+    if (fullApprovalCommand !== primaryAction.command) {
+      lines.push("If that short code is ambiguous, use the full ID:");
+      lines.push(buildFence(fullApprovalCommand, "txt"));
+    }
+  }
+
+  return lines.join("\n\n");
+}
+
 export function getExecApprovalReplyMetadata(
   payload: ReplyPayload,
 ): ExecApprovalReplyMetadata | null {
@@ -298,54 +333,10 @@ export function getExecApprovalReplyMetadata(
 export function buildExecApprovalPendingReplyPayload(
   params: ExecApprovalPendingReplyParams,
 ): ReplyPayload {
-  const approvalCommandId = params.approvalCommandId?.trim() || params.approvalSlug;
   const allowedDecisions = resolveAllowedDecisions(params);
-  const descriptors = buildExecApprovalActionDescriptors({
-    approvalCommandId,
-    allowedDecisions,
-  });
-  const primaryAction = descriptors[0] ?? null;
-  const secondaryActions = descriptors.slice(1);
-  const lines: string[] = [];
-  const warningText = params.warningText?.trim();
-  if (warningText) {
-    lines.push(warningText);
-  }
-  lines.push("Approval required.");
-  if (primaryAction) {
-    lines.push("Run:");
-    lines.push(buildFence(primaryAction.command, "txt"));
-  }
-  lines.push("Pending command:");
-  lines.push(buildFence(params.command, "sh"));
-  const secondaryFence = buildApprovalCommandFence(secondaryActions);
-  if (secondaryFence) {
-    lines.push("Other options:");
-    lines.push(secondaryFence);
-  }
-  if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
-  }
-  const info: string[] = [];
-  info.push(`Host: ${params.host}`);
-  if (params.nodeId) {
-    info.push(`Node: ${params.nodeId}`);
-  }
-  if (params.cwd) {
-    info.push(`CWD: ${params.cwd}`);
-  }
-  if (typeof params.expiresAtMs === "number" && Number.isFinite(params.expiresAtMs)) {
-    info.push(
-      `Expires in: ${formatExecApprovalExpiresIn(params.expiresAtMs, params.nowMs ?? Date.now())}`,
-    );
-  }
-  info.push(`Full id: \`${params.approvalId}\``);
-  lines.push(info.join("\n"));
 
   return {
-    text: lines.join("\n\n"),
+    text: buildExecApprovalPendingText(params),
     interactive: buildApprovalInteractiveReply({
       approvalId: params.approvalId,
       allowedDecisions,

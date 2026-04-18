@@ -34,6 +34,8 @@ describe("redactSensitiveStatusSummary", () => {
         active: 1,
         terminal: 1,
         failures: 1,
+        recentFailures: 1,
+        historicalFailures: 0,
         byStatus: {
           queued: 1,
           running: 0,

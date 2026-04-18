@@ -26,15 +26,21 @@ describe("exec approval followup", () => {
     );
 
     expect(prompt).toContain("did not run");
-    expect(prompt).toContain("Do not mention, summarize, or reuse output");
-    expect(prompt).not.toContain("already approved has completed");
+    expect(prompt).toContain("continue silently");
+    expect(prompt).toContain("what the user should do next");
+    expect(prompt).not.toContain("already approved has finished");
   });
 
-  it("tells the agent to continue the task before replying when the command succeeds", () => {
+  it("tells the agent to continue silently unless the completion matters", () => {
     const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
 
-    expect(prompt).toContain("continue from this result before replying to the user");
-    expect(prompt).toContain("Continue the task if needed, then reply to the user");
+    expect(prompt).toContain("continue silently and do not send a status-only reply");
+    expect(prompt).toContain(
+      "Reply only if the result changed user-visible state, unblocked the task, or you are actually blocked.",
+    );
+    expect(prompt).toContain("Use one short plain-language result.");
+    expect(prompt).toContain("Do not mention gateway ids, session ids, exit codes");
+    expect(prompt).toContain("If it failed, give the cause and the next step.");
   });
 
   it("keeps followups internal when no external route is available", async () => {
@@ -148,31 +154,47 @@ describe("exec approval followup", () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "Automatic session resume failed, so sending the status directly.\n\nall good",
+        content: "all good",
         idempotencyKey: "exec-approval-followup:req-session-resume-failed",
       }),
     );
   });
 
-  it("uses a generic summary when a no-session completion has no user-visible output", async () => {
-    await sendExecApprovalFollowup({
-      approvalId: "req-no-session-empty",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "456",
-      resultText: "Exec finished (gateway id=req-no-session-empty, session=sess_2, code 0)",
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "Background command finished.",
-        idempotencyKey: "exec-approval-followup:req-no-session-empty",
+  it("stays silent when a no-session completion has no user-visible output", async () => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-no-session-empty",
+        turnSourceChannel: "discord",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "456",
+        resultText: "Exec finished (gateway id=req-no-session-empty, session=sess_2, code 0)",
       }),
-    );
+    ).resolves.toBe(true);
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses safe denied copy when session resume fails", async () => {
+  it("throws session followup failures instead of silently swallowing empty success output", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-session-empty-resume-failed",
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "456",
+        resultText:
+          "Exec finished (gateway id=req-session-empty-resume-failed, session=sess_2, code 0)",
+      }),
+    ).rejects.toThrow("Session followup failed: session missing");
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("uses safe denied copy with a next step when session resume fails", async () => {
     vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     await sendExecApprovalFollowup({
@@ -188,8 +210,33 @@ describe("exec approval followup", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         content:
-          "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
+          "Command did not run: approval timed out. Rerun the command if you want to try again.",
         idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
+      }),
+    );
+  });
+
+  it.each([
+    "Exec finished (gateway id=req-no-session-failed, session=sess_3, code 1)",
+    "Exec finished (gateway id=req-no-session-failed-body, session=sess_3, code 1)\npermission denied",
+  ])("uses a brief blocker for failed completions: %s", async (resultText) => {
+    const approvalId = resultText.includes("-body")
+      ? "req-no-session-failed-body"
+      : "req-no-session-failed";
+
+    await sendExecApprovalFollowup({
+      approvalId,
+      turnSourceChannel: "discord",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+      resultText,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Background command failed. Rerun it in chat if you still need it.",
+        idempotencyKey: `exec-approval-followup:${approvalId}`,
       }),
     );
   });

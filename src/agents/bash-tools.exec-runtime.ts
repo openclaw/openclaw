@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { buildExecApprovalPendingText } from "../infra/exec-approval-reply.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -319,40 +320,17 @@ export function buildApprovalPendingMessage(params: {
   host: "gateway" | "node";
   nodeId?: string;
 }) {
-  let fence = "```";
-  while (params.command.includes(fence)) {
-    fence += "`";
-  }
-  const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
-  const lines: string[] = [];
-  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
-  const decisionText = allowedDecisions.join("|");
-  const warningText = params.warningText?.trim();
-  if (warningText) {
-    lines.push(warningText, "");
-  }
-  lines.push(`Approval required (id ${params.approvalSlug}, full ${params.approvalId}).`);
-  lines.push(`Host: ${params.host}`);
-  if (params.nodeId) {
-    lines.push(`Node: ${params.nodeId}`);
-  }
-  lines.push(`CWD: ${params.cwd ?? "(node default)"}`);
-  lines.push("Command:");
-  lines.push(commandBlock);
-  lines.push("Mode: foreground (interactive approvals available).");
-  lines.push(
-    allowedDecisions.includes("allow-always")
-      ? "Background mode requires pre-approved policy (allow-always or ask=off)."
-      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
-  );
-  lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
-  if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
-  }
-  lines.push("If the short code is ambiguous, use the full id in /approve.");
-  return lines.join("\n");
+  return buildExecApprovalPendingText({
+    warningText: params.warningText,
+    approvalId: params.approvalId,
+    approvalSlug: params.approvalSlug,
+    approvalCommandId: params.approvalSlug,
+    allowedDecisions: params.allowedDecisions ?? resolveExecApprovalAllowedDecisions(),
+    command: params.command,
+    cwd: params.cwd,
+    host: params.host,
+    nodeId: params.nodeId,
+  });
 }
 
 export function resolveApprovalRunningNoticeMs(value?: number) {

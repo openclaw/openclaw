@@ -4,6 +4,7 @@ import type {
   TaskRuntimeCounts,
   TaskStatusCounts,
 } from "./task-registry.types.js";
+import { summarizeTaskFailureEvidence } from "./task-status.js";
 
 function createEmptyTaskStatusCounts(): TaskStatusCounts {
   return {
@@ -32,14 +33,17 @@ export function createEmptyTaskRegistrySummary(): TaskRegistrySummary {
     active: 0,
     terminal: 0,
     failures: 0,
+    recentFailures: 0,
+    historicalFailures: 0,
     byStatus: createEmptyTaskStatusCounts(),
     byRuntime: createEmptyTaskRuntimeCounts(),
   };
 }
 
 export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistrySummary {
+  const tasks = Array.from(records);
   const summary = createEmptyTaskRegistrySummary();
-  for (const task of records) {
+  for (const task of tasks) {
     summary.total += 1;
     summary.byStatus[task.status] += 1;
     summary.byRuntime[task.runtime] += 1;
@@ -52,5 +56,8 @@ export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistr
       summary.failures += 1;
     }
   }
+  const failureEvidence = summarizeTaskFailureEvidence(tasks);
+  summary.recentFailures = failureEvidence.recentFailures;
+  summary.historicalFailures = failureEvidence.historicalFailures;
   return summary;
 }

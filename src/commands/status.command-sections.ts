@@ -60,11 +60,16 @@ export function buildStatusTasksValue(params: {
     `${params.summary.tasks.active} active`,
     `${params.summary.tasks.byStatus.queued} queued`,
     `${params.summary.tasks.byStatus.running} running`,
-    params.summary.tasks.failures > 0
+    params.summary.tasks.recentFailures > 0
       ? params.warn(
-          `${params.summary.tasks.failures} issue${params.summary.tasks.failures === 1 ? "" : "s"}`,
+          `${params.summary.tasks.recentFailures} recent failure${params.summary.tasks.recentFailures === 1 ? "" : "s"}`,
         )
-      : params.muted("no issues"),
+      : params.muted("no recent failures"),
+    params.summary.tasks.historicalFailures > 0
+      ? params.muted(
+          `${params.summary.tasks.historicalFailures} historical failure${params.summary.tasks.historicalFailures === 1 ? "" : "s"}`,
+        )
+      : params.muted("no historical failures"),
     params.summary.taskAudit.errors > 0
       ? params.warn(
           `audit ${params.summary.taskAudit.errors} error${params.summary.taskAudit.errors === 1 ? "" : "s"} · ${params.summary.taskAudit.warnings} warn`,

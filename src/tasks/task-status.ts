@@ -159,6 +159,11 @@ export type TaskStatusSnapshot = {
   recentFailureCount: number;
 };
 
+export type TaskFailureEvidenceSummary = {
+  recentFailures: number;
+  historicalFailures: number;
+};
+
 export function buildTaskStatusSnapshot(
   tasks: TaskRecord[],
   opts?: { now?: number },
@@ -179,5 +184,23 @@ export function buildTaskStatusSnapshot(
     activeCount: active.length,
     totalCount: visible.length,
     recentFailureCount: recentTerminal.filter(isFailureTask).length,
+  };
+}
+
+export function summarizeTaskFailureEvidence(
+  tasks: TaskRecord[],
+  opts?: { now?: number },
+): TaskFailureEvidenceSummary {
+  const now = opts?.now ?? Date.now();
+  const snapshot = buildTaskStatusSnapshot(tasks, { now });
+  const recentTerminalIds = new Set(snapshot.recentTerminal.map((task) => task.taskId));
+  return {
+    recentFailures: snapshot.recentFailureCount,
+    historicalFailures: tasks.filter((task) => {
+      if (!isFailureTask(task) || isExpiredTask(task, now)) {
+        return false;
+      }
+      return !recentTerminalIds.has(task.taskId);
+    }).length,
   };
 }

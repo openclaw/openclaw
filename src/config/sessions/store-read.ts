@@ -1,22 +1,22 @@
-import fs from "node:fs";
-import { z } from "zod";
-import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import { resolveSessionStoreEntry } from "./store-entry.js";
+import { loadSessionStore } from "./store-load.js";
 import type { SessionEntry } from "./types.js";
 
-const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
-  Record<string, SessionEntry | undefined>
->;
+export { loadSessionStore } from "./store-load.js";
 
-export function readSessionStoreReadOnly(
-  storePath: string,
-): Record<string, SessionEntry | undefined> {
+export function readSessionStoreReadOnly(storePath: string): Record<string, SessionEntry> {
+  return loadSessionStore(storePath);
+}
+
+export function readSessionUpdatedAt(params: {
+  storePath: string;
+  sessionKey: string;
+}): number | undefined {
   try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    if (!raw.trim()) {
-      return {};
-    }
-    return safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
+    const store = loadSessionStore(params.storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+    return resolved.existing?.updatedAt;
   } catch {
-    return {};
+    return undefined;
   }
 }

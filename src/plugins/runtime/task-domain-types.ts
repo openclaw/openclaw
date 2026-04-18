@@ -16,6 +16,8 @@ export type TaskRunAggregateSummary = {
   active: number;
   terminal: number;
   failures: number;
+  recentFailures: number;
+  historicalFailures: number;
   byStatus: TaskStatusCounts;
   byRuntime: TaskRuntimeCounts;
 };

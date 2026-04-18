@@ -29,14 +29,12 @@ function buildExecDeniedFollowupPrompt(resultText: string): string {
     "An async command did not run.",
     "Do not run the command again.",
     "There is no new command output.",
-    "Do not mention, summarize, or reuse output from any earlier run in this session.",
+    "If you can keep going without this command, continue silently.",
+    "Otherwise send one short blocker message that says why it did not run and what the user should do next.",
+    "Do not mention raw exec metadata or earlier output.",
     "",
     "Exact completion details:",
     resultText.trim(),
-    "",
-    "Reply to the user in a helpful way.",
-    "Explain that the command did not run and why.",
-    "Do not claim there is new command output.",
   ].join("\n");
 }
 
@@ -60,17 +58,16 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
   return [
-    "An async command the user already approved has completed.",
+    "An async command the user already approved has finished.",
     "Do not run the command again.",
-    "If the task requires more steps, continue from this result before replying to the user.",
-    "Only ask the user for help if you are actually blocked.",
+    "If you can keep going, continue silently and do not send a status-only reply.",
+    "Reply only if the result changed user-visible state, unblocked the task, or you are actually blocked.",
+    "Use one short plain-language result.",
+    "Do not mention gateway ids, session ids, exit codes, raw stdout or stderr tails, duplicate completion notices, or other exec metadata.",
+    "If it failed, give the cause and the next step.",
     "",
     "Exact completion details:",
     trimmed,
-    "",
-    "Continue the task if needed, then reply to the user in a helpful way.",
-    "If it succeeded, share the relevant output.",
-    "If it failed, explain what went wrong.",
   ].join("\n");
 }
 
@@ -87,37 +84,50 @@ function formatDirectExecApprovalFollowupText(
     return null;
   }
   if (parsed.kind === "denied") {
-    return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
+    if (!opts.allowDenied) {
+      return null;
+    }
+    const blocker = formatExecDeniedUserMessage(parsed.raw);
+    return blocker ? `${blocker} Rerun the command if you want to try again.` : null;
   }
 
   if (parsed.kind === "finished") {
     const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
+    const succeeded = metadata.includes("code 0");
     const body = sanitizeUserFacingText(parsed.body, {
-      errorContext: !metadata.includes("code 0"),
+      errorContext: !succeeded,
     }).trim();
 
-    let prefix = "";
-    if (!body) {
-      prefix = metadata.includes("code 0")
-        ? "Background command finished."
-        : metadata.includes("signal")
-          ? "Background command stopped unexpectedly."
-          : "Background command finished with an error.";
+    if (succeeded) {
+      return body || null;
     }
 
-    return body ? `${prefix ? `${prefix}\n\n` : ""}${body}` : prefix || null;
+    return metadata.includes("signal")
+      ? "Background command stopped unexpectedly. Rerun it in chat if you still need it."
+      : "Background command failed. Rerun it in chat if you still need it.";
   }
 
   if (parsed.kind === "completed") {
     const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
-    return body || "Background command finished.";
+    return body || null;
   }
 
   return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
 }
 
-function buildSessionResumeFallbackPrefix(): string {
-  return "Automatic session resume failed, so sending the status directly.\n\n";
+function isSilentDirectExecApprovalFollowup(resultText: string): boolean {
+  const parsed = parseExecApprovalResultText(resultText);
+  if (parsed.kind === "finished") {
+    const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
+    if (!metadata.includes("code 0")) {
+      return false;
+    }
+    return sanitizeUserFacingText(parsed.body, { errorContext: false }).trim().length === 0;
+  }
+  if (parsed.kind === "completed") {
+    return sanitizeUserFacingText(parsed.body, { errorContext: true }).trim().length === 0;
+  }
+  return false;
 }
 
 function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
@@ -173,13 +183,12 @@ async function sendDirectFollowupFallback(params: {
     return false;
   }
 
-  const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
     accountId: params.deliveryTarget.accountId,
     threadId: params.deliveryTarget.threadId,
-    content: `${prefix}${directText}`,
+    content: directText,
     agentId: undefined,
     idempotencyKey: `exec-approval-followup:${params.approvalId}`,
   });
@@ -244,6 +253,10 @@ export async function sendExecApprovalFollowup(
       sessionError,
     })
   ) {
+    return true;
+  }
+
+  if (!sessionError && isSilentDirectExecApprovalFollowup(resultText)) {
     return true;
   }
 

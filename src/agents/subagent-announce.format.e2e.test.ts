@@ -18,6 +18,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -203,6 +204,7 @@ describe("subagent announce formatting", () => {
   });
 
   afterAll(() => {
+    resetAnnounceQueuesForTests();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
@@ -213,6 +215,7 @@ describe("subagent announce formatting", () => {
   });
 
   beforeEach(() => {
+    resetAnnounceQueuesForTests();
     // OPENCLAW_TEST_FAST is set in beforeAll before module import
     // to ensure the module-level constant picks it up.
     agentSpy
@@ -1702,8 +1705,8 @@ describe("subagent announce formatting", () => {
     expect(new Set(idempotencyKeys).size).toBe(2);
   });
 
-  it("prefers direct delivery first for completion-mode and then queues on direct failure", async () => {
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+  it("keeps direct-first completion delivery when the requester session is not active", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
@@ -1714,13 +1717,10 @@ describe("subagent announce formatting", () => {
         queueDebounceMs: 0,
       },
     };
-    agentSpy
-      .mockRejectedValueOnce(new Error("direct delivery unavailable"))
-      .mockResolvedValueOnce({ runId: "run-main", status: "ok" });
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-completion-direct-fallback",
+      childRunId: "run-completion-direct-primary",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
       expectsCompletionMessage: true,
@@ -1729,15 +1729,105 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(2);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
       method: "agent",
       params: { sessionKey: "agent:main:main", channel: "whatsapp", to: "+1555", deliver: true },
     });
-    expect(agentSpy.mock.calls[1]?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: "agent:main:main" },
+  });
+
+  it("uses queue-first completion delivery when an active followup queue can accept it", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-followup-completion",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "followup",
+        queueDebounceMs: 0,
+        queueCap: 1,
+        queueDrop: "new",
+      },
+    };
+
+    let resolveFirstSend = () => {};
+    const firstSendPending = new Promise<void>((resolve) => {
+      resolveFirstSend = resolve;
     });
+    agentSpy.mockImplementation(async (_req: AgentCallRequest) => {
+      await firstSendPending;
+      return { runId: "run-main", status: "ok" };
+    });
+
+    const firstDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-queued-first",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    const secondDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-queued-dropped",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(firstDidAnnounce).toBe(true);
+    expect(secondDidAnnounce).toBe(false);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:main",
+        channel: "whatsapp",
+        to: "+1555",
+        deliver: true,
+      },
+    });
+
+    resolveFirstSend();
+    await Promise.resolve();
+  });
+
+  it("steers completion delivery first when the requester session is still active", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(true);
+    embeddedRunMock.queueEmbeddedPiMessage.mockReturnValue(true);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-steer-completion",
+        lastChannel: "discord",
+        lastTo: "channel:12345",
+        queueMode: "steer",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-steer-first",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
+      "session-steer-completion",
+      expect.stringContaining("[Internal task completion event]"),
+    );
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 
   it("falls back to internal requester-session injection when completion route is missing", async () => {

@@ -1,15 +1,19 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import {
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
+  isGatewayOwnedLocalPortUsage,
   type PortUsage,
 } from "../../infra/ports.js";
 import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import type { UpdateCheckResult } from "../../infra/update-check.js";
 import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
@@ -50,6 +54,12 @@ type ChannelIssueLike = {
   fix?: string;
 };
 
+type GatewayServiceInstallLike = {
+  label: string;
+  packageRoot?: string | null;
+  sourcePath?: string | null;
+};
+
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -60,6 +70,8 @@ export async function appendStatusAllDiagnosis(params: {
   connectionDetailsForReport: string;
   snap: ConfigSnapshotLike | null;
   remoteUrlMissing: boolean;
+  update: UpdateCheckResult;
+  gatewayService: GatewayServiceInstallLike;
   secretDiagnostics: string[];
   sentinel: { payload?: RestartSentinelPayload | null } | null;
   lastErr: string | null;
@@ -77,6 +89,16 @@ export async function appendStatusAllDiagnosis(params: {
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
+  const resolveCanonicalPath = async (value: string | null | undefined): Promise<string | null> => {
+    if (!value) {
+      return null;
+    }
+    try {
+      return await fs.realpath(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
 
   const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
     const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
@@ -117,6 +139,46 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
   }
 
+  lines.push("");
+  const installState = params.update.installState;
+  const servicePackageRoot = params.gatewayService.packageRoot ?? null;
+  const activeRoot = installState?.activeRoot ?? params.update.root ?? null;
+  const activeResolvedRoot = installState?.resolvedRoot ?? activeRoot;
+  const serviceResolvedRoot = await resolveCanonicalPath(servicePackageRoot);
+  const serviceMismatch =
+    activeResolvedRoot && serviceResolvedRoot
+      ? (await resolveCanonicalPath(activeResolvedRoot)) !== serviceResolvedRoot
+      : false;
+  const installStateWarn = installState?.suspicious || serviceMismatch;
+  emitCheck("Install state integrity", installStateWarn ? "warn" : "ok");
+  if (activeRoot) {
+    lines.push(`  ${muted(`active root: ${activeRoot}`)}`);
+  }
+  if (installState && activeResolvedRoot && activeResolvedRoot !== activeRoot) {
+    lines.push(`  ${muted(`resolved root: ${activeResolvedRoot}`)}`);
+  }
+  if (servicePackageRoot) {
+    lines.push(`  ${muted(`${params.gatewayService.label} package root: ${servicePackageRoot}`)}`);
+  }
+  if (params.gatewayService.sourcePath) {
+    lines.push(
+      `  ${muted(`${params.gatewayService.label} source: ${params.gatewayService.sourcePath}`)}`,
+    );
+  }
+  for (const reason of installState?.reasons ?? []) {
+    lines.push(`  ${muted(`drift risk: ${reason}`)}`);
+  }
+  if (serviceMismatch && activeRoot && servicePackageRoot) {
+    lines.push(
+      `  ${muted(`drift risk: service package root does not match active runtime root (${servicePackageRoot} vs ${activeResolvedRoot ?? activeRoot})`)}`,
+    );
+  }
+  if (installStateWarn) {
+    lines.push(
+      `  ${muted(installState?.recoveryHint ?? "Fix: reinstall or relink the intended package root, restart the gateway service, then rerun status.")}`,
+    );
+  }
+
   emitCheck(
     `Secret diagnostics (${params.secretDiagnostics.length})`,
     params.secretDiagnostics.length === 0 ? "ok" : "warn",
@@ -150,12 +212,21 @@ export async function appendStatusAllDiagnosis(params: {
       params.portUsage.listeners,
       params.port,
     );
-    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
+    const gatewayOwnedLocalPort = isGatewayOwnedLocalPortUsage(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk =
+      params.portUsage.listeners.length === 0 || benignDualStackLoopback || gatewayOwnedLocalPort;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
       for (const line of formatPortDiagnostics(params.portUsage)) {
         lines.push(`  ${muted(line)}`);
       }
+    } else if (gatewayOwnedLocalPort) {
+      lines.push(
+        `  ${muted("Detected the local OpenClaw gateway listening on its configured port.")}`,
+      );
     } else if (benignDualStackLoopback) {
       lines.push(
         `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
@@ -171,7 +242,9 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale: ${params.tailscaleMode} · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
+    const tailscaleStatus =
+      params.tailscaleMode === "off" ? "ok" : okBackend && hasDns ? "ok" : "warn";
+    emitCheck(label, tailscaleStatus);
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
@@ -196,9 +269,12 @@ export async function appendStatusAllDiagnosis(params: {
     );
   }
 
+  const pluginCompatibilityHasWarn = params.pluginCompatibility.some(
+    (notice) => notice.severity === "warn",
+  );
   emitCheck(
     `Plugin compatibility (${params.pluginCompatibility.length || "none"})`,
-    params.pluginCompatibility.length === 0 ? "ok" : "warn",
+    pluginCompatibilityHasWarn ? "warn" : "ok",
   );
   for (const notice of params.pluginCompatibility.slice(0, 12)) {
     const severity = notice.severity === "warn" ? "warn" : "info";

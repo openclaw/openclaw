@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ProgressReporter } from "../../cli/progress.js";
+import type { UpdateCheckResult } from "../../infra/update-check.js";
 
 vi.mock("../../daemon/launchd.js", () => ({
   resolveGatewayLogPaths: () => {
@@ -25,6 +29,15 @@ function createProgressReporter(): ProgressReporter {
   };
 }
 
+function createBaseUpdate(partial?: Partial<UpdateCheckResult>): UpdateCheckResult {
+  return {
+    root: "/usr/local/lib/node_modules/openclaw",
+    installKind: "package",
+    packageManager: "pnpm",
+    ...partial,
+  };
+}
+
 function createBaseParams(
   listeners: NonNullable<DiagnosisParams["portUsage"]>["listeners"],
 ): DiagnosisParams {
@@ -38,6 +51,12 @@ function createBaseParams(
     connectionDetailsForReport: "ws://127.0.0.1:18789",
     snap: null,
     remoteUrlMissing: false,
+    update: createBaseUpdate(),
+    gatewayService: {
+      label: "LaunchAgent",
+      packageRoot: "/usr/local/lib/node_modules/openclaw",
+      sourcePath: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    },
     secretDiagnostics: [],
     sentinel: null,
     lastErr: null,
@@ -61,8 +80,102 @@ function createBaseParams(
   };
 }
 
+describe("status-all diagnosis install-state checks", () => {
+  it("surfaces suspicious runtime roots and service mismatches", async () => {
+    const params = createBaseParams([]);
+    params.update = createBaseUpdate({
+      root: "/Users/test/workspace/tmp/openclaw-src",
+      installKind: "git",
+      installState: {
+        activeRoot: "/Users/test/workspace/tmp/openclaw-src",
+        resolvedRoot: "/Users/test/workspace/tmp/openclaw-src",
+        rootIsSymlink: false,
+        suspicious: true,
+        reasons: ["active package root resolves into a restore/tmp-like path"],
+        recoveryHint:
+          "Reinstall or relink to the intended package root, restart the gateway service, then rerun status.",
+      },
+    });
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Install state integrity");
+    expect(output).toContain("active root: /Users/test/workspace/tmp/openclaw-src");
+    expect(output).toContain("LaunchAgent package root: /usr/local/lib/node_modules/openclaw");
+    expect(output).toContain(
+      "drift risk: active package root resolves into a restore/tmp-like path",
+    );
+    expect(output).toContain("drift risk: service package root does not match active runtime root");
+    expect(output).toContain("Reinstall or relink to the intended package root");
+  });
+
+  it("keeps install state healthy when runtime and service roots agree", async () => {
+    const params = createBaseParams([]);
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("✓ Install state integrity");
+    expect(output).not.toContain("drift risk:");
+  });
+
+  it("does not flag symlinked service installs when resolved roots match", async () => {
+    const params = createBaseParams([]);
+    params.update = createBaseUpdate({
+      root: "/opt/openclaw/current",
+      installState: {
+        activeRoot: "/opt/openclaw/current",
+        resolvedRoot: "/usr/local/lib/node_modules/openclaw",
+        rootIsSymlink: true,
+        suspicious: false,
+        reasons: [],
+        recoveryHint: undefined,
+      },
+    });
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("✓ Install state integrity");
+    expect(output).not.toContain("service package root does not match active runtime root");
+  });
+
+  it("realpaths the service package root before mismatch comparison", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diagnosis-root-"));
+    const canonicalRoot = path.join(tempRoot, "canonical");
+    const symlinkRoot = path.join(tempRoot, "current");
+    fs.mkdirSync(canonicalRoot, { recursive: true });
+    fs.symlinkSync(canonicalRoot, symlinkRoot);
+
+    try {
+      const params = createBaseParams([]);
+      params.update = createBaseUpdate({
+        root: symlinkRoot,
+        installState: {
+          activeRoot: symlinkRoot,
+          resolvedRoot: canonicalRoot,
+          rootIsSymlink: true,
+          suspicious: false,
+          reasons: [],
+          recoveryHint: undefined,
+        },
+      });
+      params.gatewayService.packageRoot = symlinkRoot;
+
+      await appendStatusAllDiagnosis(params);
+
+      const output = params.lines.join("\n");
+      expect(output).toContain("✓ Install state integrity");
+      expect(output).not.toContain("service package root does not match active runtime root");
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("status-all diagnosis port checks", () => {
-  it("treats same-process dual-stack loopback listeners as healthy", async () => {
+  it("treats gateway-owned local listeners as healthy", async () => {
     const params = createBaseParams([
       { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
       { pid: 5001, commandLine: "openclaw-gateway", address: "[::1]:18789" },
@@ -72,11 +185,26 @@ describe("status-all diagnosis port checks", () => {
 
     const output = params.lines.join("\n");
     expect(output).toContain("✓ Port 18789");
-    expect(output).toContain("Detected dual-stack loopback listeners");
+    expect(output).toContain(
+      "Detected the local OpenClaw gateway listening on its configured port.",
+    );
     expect(output).not.toContain("Port 18789 is already in use.");
   });
 
   it("keeps warning for multi-process listener conflicts", async () => {
+    const params = createBaseParams([
+      { pid: 5001, commandLine: "python -m http.server", address: "127.0.0.1:18789" },
+      { pid: 5002, commandLine: "nc -lk 18789", address: "[::1]:18789" },
+    ]);
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 is already in use.");
+  });
+
+  it("keeps warning for multi-process gateway listener conflicts", async () => {
     const params = createBaseParams([
       { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
       { pid: 5002, commandLine: "openclaw-gateway", address: "[::1]:18789" },
@@ -87,6 +215,9 @@ describe("status-all diagnosis port checks", () => {
     const output = params.lines.join("\n");
     expect(output).toContain("! Port 18789");
     expect(output).toContain("Port 18789 is already in use.");
+    expect(output).not.toContain(
+      "Detected the local OpenClaw gateway listening on its configured port.",
+    );
   });
 
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {

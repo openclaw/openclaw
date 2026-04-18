@@ -42,6 +42,7 @@ import {
   buildExecApprovalInteractiveReply,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
+  formatExecApprovalExpiresIn,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
@@ -282,11 +283,22 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
-    expect(payload.text).toContain("Heads up.");
-    expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
-    expect(payload.text).toContain("```sh\necho ok\n```");
-    expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
-    expect(payload.text).toContain("Full id: `req-1`");
+    expect(payload.text).toBe(
+      [
+        "Heads up.",
+        "Approval needed to continue with that command.",
+        "Approval ID: req-1",
+        "Host: gateway",
+        "Node: node-1",
+        "CWD: /tmp/work",
+        "Command:",
+        "```sh\necho ok\n```",
+        "Approve with:",
+        "```txt\n/approve slug-1 allow-once\n```",
+        "If that short code is ambiguous, use the full ID:",
+        "```txt\n/approve req-1 allow-once\n```",
+      ].join("\n\n"),
+    );
   });
 
   it("omits allow-always actions when the effective policy requires approval every time", () => {
@@ -306,11 +318,20 @@ describe("exec approval reply helpers", () => {
         allowedDecisions: ["allow-once", "deny"],
       },
     });
-    expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
-    expect(payload.text).not.toContain("allow-always");
-    expect(payload.text).toContain(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    expect(payload.text).toBe(
+      [
+        "Approval needed to continue with that command.",
+        "Approval ID: req-ask-always",
+        "Host: gateway",
+        "Command:",
+        "```sh\necho ok\n```",
+        "Approve with:",
+        "```txt\n/approve slug-always allow-once\n```",
+        "If that short code is ambiguous, use the full ID:",
+        "```txt\n/approve req-ask-always allow-once\n```",
+      ].join("\n\n"),
     );
+    expect(payload.text).not.toContain("allow-always");
     expect(payload.interactive).toEqual({
       blocks: [
         {
@@ -363,35 +384,24 @@ describe("exec approval reply helpers", () => {
       host: "sandbox",
     });
 
-    expect(payload.text).toContain("```txt\n/approve req-cmd-2 allow-once\n```");
-    expect(payload.text).toContain("````sh\necho ```danger```\n````");
-    expect(payload.text).not.toContain("Expires in:");
+    expect(payload.text).toBe(
+      [
+        "Approval needed to continue with that command.",
+        "Approval ID: req-2",
+        "Host: sandbox",
+        "Command:",
+        "````sh\necho ```danger```\n````",
+        "Approve with:",
+        "```txt\n/approve req-cmd-2 allow-once\n```",
+        "If that short code is ambiguous, use the full ID:",
+        "```txt\n/approve req-2 allow-once\n```",
+      ].join("\n\n"),
+    );
   });
 
-  it("clamps pending reply expiration to zero seconds", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "req-3",
-      approvalSlug: "slug-3",
-      command: "echo later",
-      host: "gateway",
-      expiresAtMs: 1000,
-      nowMs: 3000,
-    });
-
-    expect(payload.text).toContain("Expires in: 0s");
-  });
-
-  it("formats longer approval windows in minutes", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
-      approvalId: "req-30m",
-      approvalSlug: "slug-30m",
-      command: "echo later",
-      host: "gateway",
-      expiresAtMs: 1_801_000,
-      nowMs: 1_000,
-    });
-
-    expect(payload.text).toContain("Expires in: 30m");
+  it("formats approval expiration windows", () => {
+    expect(formatExecApprovalExpiresIn(1000, 3000)).toBe("0s");
+    expect(formatExecApprovalExpiresIn(1_801_000, 1_000)).toBe("30m");
   });
 
   it("builds shared exec approval action descriptors and interactive replies", () => {

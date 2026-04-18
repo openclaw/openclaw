@@ -248,6 +248,7 @@ function createGatewayPlugin(params: {
   };
 }): carbonGateway.GatewayPlugin {
   class SafeGatewayPlugin extends carbonGateway.GatewayPlugin {
+    declare firstHeartbeatTimeout: ReturnType<typeof setTimeout> | undefined;
     private gatewayInfoUsedFallback = false;
 
     constructor() {

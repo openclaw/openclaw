@@ -71,6 +71,84 @@ const formatDurationParts = (ms: number): string => {
   return parts.join(" ");
 };
 
+function normalizeAgentHeartbeatSummary(
+  heartbeat: AgentHealthSummary["heartbeat"] | null | undefined,
+): AgentHealthSummary["heartbeat"] {
+  const record = asNullableRecord(heartbeat);
+  const everyMs =
+    typeof record?.everyMs === "number" && Number.isFinite(record.everyMs) && record.everyMs > 0
+      ? record.everyMs
+      : null;
+  const model = typeof record?.model === "string" && record.model.trim() ? record.model : undefined;
+  const every =
+    typeof record?.every === "string" && record.every.trim()
+      ? record.every
+      : everyMs === null
+        ? "disabled"
+        : `${Math.round(everyMs / 1000)}s`;
+  return {
+    enabled: everyMs !== null && record?.enabled === true,
+    every: everyMs === null ? "disabled" : every,
+    everyMs,
+    prompt: typeof record?.prompt === "string" ? record.prompt : "",
+    target: typeof record?.target === "string" && record.target.trim() ? record.target : "none",
+    ...(model ? { model } : {}),
+    ackMaxChars:
+      typeof record?.ackMaxChars === "number" && Number.isFinite(record.ackMaxChars)
+        ? Math.max(0, record.ackMaxChars)
+        : 0,
+  };
+}
+
+function normalizeHealthSummary(summary: HealthSummary): HealthSummary {
+  const hasAgentArray = Array.isArray(summary.agents);
+  const rawAgents = hasAgentArray ? summary.agents : [];
+  const agents = rawAgents.flatMap((agent) => {
+    const record = asNullableRecord(agent);
+    if (!record) {
+      return [];
+    }
+    return [
+      {
+        ...record,
+        heartbeat: normalizeAgentHeartbeatSummary(
+          record.heartbeat as AgentHealthSummary["heartbeat"],
+        ),
+      } as AgentHealthSummary,
+    ];
+  });
+  const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const defaultRawAgent =
+    rawAgents.find((agent) => {
+      const record = asNullableRecord(agent);
+      return record?.isDefault === true;
+    }) ?? rawAgents[0];
+  const defaultRawHeartbeat = asNullableRecord(asNullableRecord(defaultRawAgent)?.heartbeat);
+  const hasExplicitDisabledHeartbeat =
+    defaultRawHeartbeat !== null &&
+    (defaultRawHeartbeat.enabled === false ||
+      (typeof defaultRawHeartbeat.everyMs === "number" &&
+        Number.isFinite(defaultRawHeartbeat.everyMs) &&
+        defaultRawHeartbeat.everyMs <= 0) ||
+      defaultRawHeartbeat.every === "disabled" ||
+      defaultRawHeartbeat.every === "0m" ||
+      defaultRawHeartbeat.every === "0s");
+  const reportedHeartbeatSeconds =
+    typeof summary.heartbeatSeconds === "number" && Number.isFinite(summary.heartbeatSeconds)
+      ? Math.max(0, summary.heartbeatSeconds)
+      : 0;
+  return {
+    ...summary,
+    agents,
+    heartbeatSeconds:
+      defaultAgent?.heartbeat.everyMs != null
+        ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+        : hasExplicitDisabledHeartbeat
+          ? 0
+          : reportedHeartbeatSeconds,
+  };
+}
+
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
@@ -389,19 +467,21 @@ export async function healthCommand(
 ) {
   const cfg = opts.config ?? (await readBestEffortHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
-  const summary = await withProgress(
-    {
-      label: "Checking gateway health…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway<HealthSummary>({
-        method: "health",
-        params: opts.verbose ? { probe: true } : undefined,
-        timeoutMs: opts.timeoutMs,
-        config: cfg,
-      }),
+  const summary = normalizeHealthSummary(
+    await withProgress(
+      {
+        label: "Checking gateway health…",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway<HealthSummary>({
+          method: "health",
+          params: opts.verbose ? { probe: true } : undefined,
+          timeoutMs: opts.timeoutMs,
+          config: cfg,
+        }),
+    ),
   );
   // Gateway reachability defines success; channel issues are reported but not fatal here.
   const fatal = false;

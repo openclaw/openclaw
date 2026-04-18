@@ -32,6 +32,8 @@ enum ChatMarkdownPreprocessor {
 
     private static let markdownImagePattern = #"!\[([^\]]*)\]\(([^)]+)\)"#
     private static let messageIdHintPattern = #"^\s*\[message_id:\s*[^\]]+\]\s*$"#
+    private static let systemEventPrefixPattern = #"^\s*System(?: \(untrusted\))?:\s*(?:\[[^\]]+\]\s*)?"#
+    private static let hiddenSystemEventHeaderPattern = #"(?i)^Exec (?:completed|finished|started|denied)\b"#
 
     struct InlineImage: Identifiable {
         let id = UUID()
@@ -44,11 +46,14 @@ enum ChatMarkdownPreprocessor {
         let images: [InlineImage]
     }
 
-    static func preprocess(markdown raw: String) -> Result {
+    static func preprocess(markdown raw: String, stripHiddenSystemEvents: Bool = true) -> Result {
         let withoutEnvelope = self.stripEnvelope(raw)
         let withoutMessageIdHints = self.stripMessageIdHints(withoutEnvelope)
         let withoutContextBlocks = self.stripInboundContextBlocks(withoutMessageIdHints)
-        let withoutTimestamps = self.stripPrefixedTimestamps(withoutContextBlocks)
+        let withoutHiddenSystemEvents = stripHiddenSystemEvents
+            ? self.stripHiddenSystemEventBlocks(withoutContextBlocks)
+            : withoutContextBlocks
+        let withoutTimestamps = self.stripPrefixedTimestamps(withoutHiddenSystemEvents)
         guard let re = try? NSRegularExpression(pattern: self.markdownImagePattern) else {
             return Result(cleaned: self.normalize(withoutTimestamps), images: [])
         }
@@ -205,6 +210,52 @@ enum ChatMarkdownPreprocessor {
         return probe.range(
             of: #"<<<EXTERNAL_UNTRUSTED_CONTENT|UNTRUSTED channel metadata \(|Source:\s+"#,
             options: .regularExpression) != nil
+    }
+
+    private static func stripHiddenSystemEventBlocks(_ raw: String) -> String {
+        guard raw.contains("System") else {
+            return raw
+        }
+
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var outputLines: [String] = []
+        var hidingSystemEventBlock = false
+
+        for line in lines {
+            if self.hiddenSystemEventBody(line) != nil {
+                hidingSystemEventBlock = true
+                continue
+            }
+
+            if hidingSystemEventBlock, self.systemEventBody(line) != nil {
+                continue
+            }
+
+            hidingSystemEventBlock = false
+            outputLines.append(line)
+        }
+
+        return outputLines.joined(separator: "\n")
+    }
+
+    private static func hiddenSystemEventBody(_ line: String) -> String? {
+        guard let body = self.systemEventBody(line),
+              body.range(of: self.hiddenSystemEventHeaderPattern, options: .regularExpression) != nil
+        else {
+            return nil
+        }
+        return body
+    }
+
+    private static func systemEventBody(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.range(of: self.systemEventPrefixPattern, options: .regularExpression) != nil else {
+            return nil
+        }
+        return trimmed
+            .replacingOccurrences(of: self.systemEventPrefixPattern, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {

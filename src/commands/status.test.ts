@@ -239,9 +239,9 @@ function createSessionStatusRows() {
     });
     return { agentId: agent.id, path, count: recent.length, recent };
   });
-  const recent = byAgent.flatMap((entry) => entry.recent);
+  const recent = byAgent.flatMap((entry: (typeof byAgent)[number]) => entry.recent);
   return {
-    paths: byAgent.map((entry) => entry.path),
+    paths: byAgent.map((entry: (typeof byAgent)[number]) => entry.path),
     count: recent.length,
     defaults: {
       model: recent[0]?.model ?? "pi:opus",
@@ -417,6 +417,8 @@ const mocks = vi.hoisted(() => ({
     active: 0,
     terminal: 0,
     failures: 0,
+    recentFailures: 0,
+    historicalFailures: 0,
     byStatus: {
       queued: 0,
       running: 0,
@@ -887,6 +889,8 @@ describe("statusCommand", () => {
       active: 0,
       terminal: 0,
       failures: 0,
+      recentFailures: 0,
+      historicalFailures: 0,
       byStatus: {
         queued: 0,
         running: 0,
@@ -1071,6 +1075,8 @@ describe("statusCommand", () => {
       active: 1,
       terminal: 0,
       failures: 1,
+      recentFailures: 1,
+      historicalFailures: 0,
       byStatus: {
         queued: 0,
         running: 1,

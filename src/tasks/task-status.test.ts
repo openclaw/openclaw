@@ -5,6 +5,7 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
   sanitizeTaskStatusText,
+  summarizeTaskFailureEvidence,
 } from "./task-status.js";
 
 const NOW = 1_000_000_000_000;
@@ -54,6 +55,26 @@ describe("task status snapshot", () => {
 
     expect(snapshot.totalCount).toBe(0);
     expect(snapshot.focus).toBeUndefined();
+  });
+
+  it("separates recent failures from historical residue", () => {
+    const recentFailure = makeTask({
+      taskId: "task-recent",
+      status: "failed",
+      endedAt: NOW - 60_000,
+      lastEventAt: NOW - 60_000,
+    });
+    const historicalFailure = makeTask({
+      taskId: "task-historical",
+      status: "timed_out",
+      endedAt: NOW - 20 * 60_000,
+      lastEventAt: NOW - 20 * 60_000,
+    });
+
+    expect(summarizeTaskFailureEvidence([recentFailure, historicalFailure], { now: NOW })).toEqual({
+      recentFailures: 1,
+      historicalFailures: 1,
+    });
   });
 });
 

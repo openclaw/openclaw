@@ -141,4 +141,55 @@ describe("healthCommand (coverage)", () => {
     expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
     expect(logWebSelfIdMock).toHaveBeenCalled();
   });
+
+  it("normalizes zero-cadence heartbeat payloads in json mode", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      ts: Date.now(),
+      durationMs: 5,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [
+        {
+          agentId: "main",
+          isDefault: true,
+          heartbeat: {
+            enabled: true,
+            every: "0m",
+            everyMs: 0,
+            prompt: "hi",
+            target: "last",
+            ackMaxChars: 160,
+          },
+          sessions: {
+            path: "/tmp/sessions.json",
+            count: 0,
+            recent: [],
+          },
+        },
+      ],
+      sessions: {
+        path: "/tmp/sessions.json",
+        count: 0,
+        recent: [],
+      },
+    } satisfies HealthSummary);
+
+    await healthCommand({ json: true, verbose: true, timeoutMs: 1000 }, runtime as never);
+
+    const logged = runtime.log.mock.calls[0]?.[0] as string;
+    const parsed = JSON.parse(logged) as HealthSummary;
+    expect(parsed.heartbeatSeconds).toBe(0);
+    expect(parsed.agents[0]?.heartbeat).toMatchObject({
+      enabled: false,
+      every: "disabled",
+      everyMs: null,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "health", params: { probe: true } }),
+    );
+  });
 });

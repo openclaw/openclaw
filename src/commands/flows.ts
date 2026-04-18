@@ -10,6 +10,9 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { summarizeTaskFailureEvidence } from "../tasks/task-status.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -18,6 +21,7 @@ const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
+const TASKS_PAD = 42;
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -65,20 +69,35 @@ function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
   return theme.muted(padded);
 }
 
-function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
+function formatFlowTaskEvidence(tasks: TaskRecord[]): string {
+  const taskSummary = summarizeTaskRecords(tasks);
+  const { recentFailures, historicalFailures } = summarizeTaskFailureEvidence(tasks);
+  return [
+    `${taskSummary.active} active`,
+    `${recentFailures} recent failure${recentFailures === 1 ? "" : "s"}`,
+    `${historicalFailures} historical failure${historicalFailures === 1 ? "" : "s"}`,
+  ].join(" · ");
+}
+
+function formatFlowRows(
+  flows: TaskFlowRecord[],
+  taskEvidenceByFlowId: Map<string, string>,
+  rich: boolean,
+) {
   const header = [
     "TaskFlow".padEnd(ID_PAD),
     "Mode".padEnd(MODE_PAD),
     "Status".padEnd(STATUS_PAD),
     "Rev".padEnd(REV_PAD),
     "Controller".padEnd(CTRL_PAD),
-    "Tasks".padEnd(14),
+    "Tasks".padEnd(TASKS_PAD),
     "Goal",
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
   for (const flow of flows) {
-    const taskSummary = getFlowTaskSummary(flow.flowId);
-    const counts = `${taskSummary.active} active/${taskSummary.total} total`;
+    const counts =
+      taskEvidenceByFlowId.get(flow.flowId) ??
+      "0 active · 0 recent failures · 0 historical failures";
     lines.push(
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
@@ -86,7 +105,7 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
         formatFlowStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
         safeFlowDisplayText(flow.controllerId, CTRL_PAD).padEnd(CTRL_PAD),
-        counts.padEnd(14),
+        counts.padEnd(TASKS_PAD),
         safeFlowDisplayText(flow.goal, 80),
       ].join(" "),
     );
@@ -177,7 +196,10 @@ export async function flowsListCommand(
     return;
   }
   const rich = isRich();
-  for (const line of formatFlowRows(flows, rich)) {
+  const taskEvidenceByFlowId = new Map(
+    flows.map((flow) => [flow.flowId, formatFlowTaskEvidence(listTasksForFlowId(flow.flowId))]),
+  );
+  for (const line of formatFlowRows(flows, taskEvidenceByFlowId, rich)) {
     runtime.log(line);
   }
 }

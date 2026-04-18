@@ -5,6 +5,7 @@ import {
   formatPortDiagnostics,
   formatPortListener,
   isDualStackLoopbackGatewayListeners,
+  isGatewayOwnedLocalPortUsage,
 } from "./ports-format.js";
 
 describe("ports-format", () => {
@@ -12,9 +13,31 @@ describe("ports-format", () => {
     [{ commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" }, "ssh"],
     [{ command: "ssh" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ commandLine: "/usr/local/bin/openclaw-gateway" }, "gateway"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
+  });
+
+  it("does not trust unrelated processes just because their path contains openclaw", () => {
+    expect(
+      classifyPortListener(
+        { commandLine: "/opt/helpers/openclaw-proxy relay --listen 127.0.0.1:18789" },
+        18789,
+      ),
+    ).toBe("unknown");
+    expect(
+      isGatewayOwnedLocalPortUsage(
+        [
+          {
+            pid: 4242,
+            commandLine: "/opt/helpers/openclaw-proxy relay --listen 127.0.0.1:18789",
+            address: "127.0.0.1:18789",
+          },
+        ],
+        18789,
+      ),
+    ).toBe(false);
   });
 
   it("builds ordered hints for mixed listener kinds and multiplicity", () => {
@@ -42,8 +65,22 @@ describe("ports-format", () => {
       { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
     ];
     expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
+    expect(isGatewayOwnedLocalPortUsage(listeners, 18789)).toBe(true);
+    expect(buildPortHints(listeners, 18789)).toEqual([
+      "Gateway is already listening on its configured local port.",
+    ]);
+  });
+
+  it("keeps multi-process gateway listeners classified as conflicts", () => {
+    const listeners = [
+      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      { pid: 5252, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+    ];
+    expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(false);
+    expect(isGatewayOwnedLocalPortUsage(listeners, 18789)).toBe(false);
     expect(buildPortHints(listeners, 18789)).toEqual([
       expect.stringContaining("Gateway already running locally."),
+      expect.stringContaining("Multiple listeners detected"),
     ]);
   });
 
