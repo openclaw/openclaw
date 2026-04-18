@@ -8,6 +8,7 @@ import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
+  resolveOutboundMediaLocalRoots,
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
@@ -16,6 +17,7 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
@@ -59,6 +61,7 @@ function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): st
 export function resolveExtraActionMediaSourceParamKeys(params: {
   cfg: OpenClawConfig;
   action?: ChannelMessageActionName;
+  args: Record<string, unknown>;
   channel?: string;
   accountId?: string | null;
   sessionKey?: string | null;
@@ -67,6 +70,9 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): string[] {
+  if (!hasPotentialPluginActionParam(params.args)) {
+    return [];
+  }
   return resolveChannelMessageToolMediaSourceParamKeys({
     cfg: params.cfg,
     action: params.action,
@@ -177,12 +183,14 @@ export type AttachmentMediaPolicy =
   | {
       mode: "host";
       mediaAccess?: OutboundMediaAccess;
+      mediaLocalRoots?: readonly string[] | "any";
+      mediaReadFile?: OutboundMediaReadFile;
     };
 
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
   mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
+  mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
 }): AttachmentMediaPolicy {
   const sandboxRoot = params.sandboxRoot?.trim();
@@ -192,13 +200,20 @@ export function resolveAttachmentMediaPolicy(params: {
       sandboxRoot,
     };
   }
+  const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
   return {
     mode: "host",
     mediaAccess: resolveOutboundMediaAccess({
       mediaAccess: params.mediaAccess,
-      mediaLocalRoots: params.mediaLocalRoots,
-      mediaReadFile: params.mediaReadFile,
+      mediaLocalRoots: explicitLocalRoots === "any" ? undefined : explicitLocalRoots,
+      mediaReadFile: params.mediaAccess?.readFile ? undefined : params.mediaReadFile,
     }),
+    ...(explicitLocalRoots !== undefined ? { mediaLocalRoots: explicitLocalRoots } : {}),
+    ...(params.mediaAccess?.readFile
+      ? {}
+      : params.mediaReadFile
+        ? { mediaReadFile: params.mediaReadFile }
+        : {}),
   };
 }
 
@@ -230,6 +245,8 @@ function buildAttachmentMediaLoadOptions(params: {
   return buildOutboundMediaLoadOptions({
     maxBytes: params.maxBytes,
     mediaAccess: params.policy.mediaAccess,
+    mediaLocalRoots: params.policy.mediaLocalRoots,
+    mediaReadFile: params.policy.mediaReadFile,
   });
 }
 
