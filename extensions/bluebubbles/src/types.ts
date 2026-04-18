@@ -191,22 +191,17 @@ export async function blueBubblesFetchWithTimeout(
     }
   }
   const dispatcherAwareInit = (init ?? {}) as DispatcherAwareRequestInit;
-  // Strip `dispatcher` from init — the SSRF guard may have attached a bundled-undici
-  // dispatcher that is incompatible with Node 22+'s built-in undici backing globalThis.fetch().
-  // Passing it through causes a silent TypeError (invalid onRequestStart method). When an
-  // upstream caller already attached a dispatcher (for example fetchRemoteMedia's SSRF guard),
-  // preserve it by routing through the runtime fetch that supports per-request dispatchers.
+  // Route through the runtime fetch helper so BlueBubbles avoids raw global fetch calls in
+  // channel/plugin code. When an upstream caller already attached a dispatcher (for example
+  // fetchRemoteMedia's SSRF guard), preserve it; otherwise the helper falls back to a safe
+  // non-dispatcher runtime fetch path.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    if (dispatcherAwareInit.dispatcher !== undefined) {
-      return await fetchWithRuntimeDispatcherOrMockedGlobal(url, {
-        ...dispatcherAwareInit,
-        signal: controller.signal,
-      });
-    }
-    const { dispatcher: _dispatcher, ...safeInit } = dispatcherAwareInit;
-    return await fetch(url, { ...safeInit, signal: controller.signal });
+    return await fetchWithRuntimeDispatcherOrMockedGlobal(url, {
+      ...dispatcherAwareInit,
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timer);
   }

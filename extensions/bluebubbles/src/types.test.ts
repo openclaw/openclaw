@@ -49,8 +49,10 @@ describe("blueBubblesFetchWithTimeout", () => {
   it("falls back to the ambient fetch when no dispatcher is attached", async () => {
     const globalFetch = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
     vi.stubGlobal("fetch", globalFetch);
+    const response = new Response("ok", { status: 200 });
+    runtimeFetchMock.mockResolvedValueOnce(response);
 
-    await blueBubblesFetchWithTimeout(
+    const result = await blueBubblesFetchWithTimeout(
       "https://bluebubbles.example.com/api/v1/test",
       {
         method: "POST",
@@ -59,9 +61,9 @@ describe("blueBubblesFetchWithTimeout", () => {
       250,
     );
 
-    expect(runtimeFetchMock).not.toHaveBeenCalled();
-    expect(globalFetch).toHaveBeenCalledTimes(1);
-    expect(globalFetch).toHaveBeenCalledWith(
+    expect(result).toBe(response);
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+    expect(runtimeFetchMock).toHaveBeenCalledWith(
       "https://bluebubbles.example.com/api/v1/test",
       expect.objectContaining({
         method: "POST",
@@ -69,5 +71,6 @@ describe("blueBubblesFetchWithTimeout", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+    expect(globalFetch).not.toHaveBeenCalled();
   });
 });
