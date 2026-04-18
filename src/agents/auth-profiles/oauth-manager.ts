@@ -310,7 +310,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           if (existing && existing.provider !== params.refreshed.provider) {
             return false;
           }
-          if (existing && !isSafeToOverwriteStoredOAuthIdentity(existing, params.refreshed)) {
+          if (existing && !isSafeToAdoptMainStoreOAuthIdentity(existing, params.refreshed)) {
             log.warn("refused to mirror OAuth credential: identity mismatch or regression", {
               profileId: params.profileId,
             });
