@@ -157,6 +157,10 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:media`      | image, image_generate, music_generate, video_generate, tts                                                |
 | `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 
+If you use a restrictive allowlist and want memory tools, include
+`group:memory` (or explicit `memory_search` + `memory_get`). Without that
+entry, memory may appear configured but remain unavailable to the agent.
+
 `sessions_history` returns a bounded, safety-filtered recall view. It strips
 thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML
 payloads (including `<tool_call>...</tool_call>`,
