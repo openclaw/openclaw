@@ -34,9 +34,14 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = "C:\OpenClaw"
 $LauncherPath = Join-Path $RepoRoot "scripts\autofix-loop.ps1"
+$HiddenWrapperPath = Join-Path $RepoRoot "scripts\autofix-loop-hidden.vbs"
 
 if (-not (Test-Path $LauncherPath)) {
     Write-Error "Launcher not found at $LauncherPath"
+    exit 1
+}
+if (-not (Test-Path $HiddenWrapperPath)) {
+    Write-Error "Hidden wrapper not found at $HiddenWrapperPath"
     exit 1
 }
 
@@ -49,15 +54,19 @@ if (-not $TokenCheck) {
     Write-Warning "in cmd, then sign out + back in."
 }
 
-# Build the PowerShell argument string up-front so we don't have to deal
-# with nested quote escaping inside a parameter value on a backtick-
-# continued line (the PowerShell parser mis-handles that combination).
-# Doubled double-quotes are the single-quoted-string way to emit a real
-# double-quote, so this expands to:
-#   -NoProfile -ExecutionPolicy Bypass -File "C:\OpenClaw\scripts\autofix-loop.ps1" -Repo "openclaw/openclaw" -PrNumber 68135
-$LauncherArg = '-NoProfile -ExecutionPolicy Bypass -File "' + $LauncherPath + '" -Repo "' + $Repo + '" -PrNumber ' + $PrNumber
+# Task action: invoke the VBScript wrapper via wscript.exe, which in
+# turn launches autofix-loop.ps1 with WindowStyle=Hidden. wscript +
+# .vbs is the only combo that reliably avoids a console-window flash
+# on every 10-minute firing -- `powershell -WindowStyle Hidden` still
+# briefly shows a console because the OS allocates it before PS can
+# suppress it. Args after the .vbs path are forwarded verbatim to the
+# PS launcher.
+#
+# Built as a single string to sidestep PowerShell's quote-escape
+# parsing on multi-arg lines.
+$WrapperArg = '"' + $HiddenWrapperPath + '" -Repo "' + $Repo + '" -PrNumber ' + $PrNumber
 
-$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $LauncherArg -WorkingDirectory $RepoRoot
+$Action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $WrapperArg -WorkingDirectory $RepoRoot
 
 # Build two triggers so the task runs reliably whether the user is
 # already logged in at registration time, or logs in later:
