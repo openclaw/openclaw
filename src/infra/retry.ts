@@ -131,7 +131,16 @@ export async function retryAsync<T>(
       // retries land before the requested time and invite escalation. Use
       // positive-only jitter in that case so clients still spread but never
       // dip below the server's hint.
-      delay = applyJitter(delay, jitter, hasRetryAfter ? "positive" : "symmetric");
+      //
+      // Exception: when retryAfterMs > maxDelayMs the base is already capped
+      // to maxDelayMs, so positive jitter would be erased by the final clamp
+      // below and every retry would land at exactly maxDelayMs — reintroducing
+      // the thundering herd we are trying to avoid. In that case the server
+      // contract is already unsatisfiable, so fall back to symmetric jitter
+      // to preserve spread.
+      const canHonorRetryAfter =
+        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= maxDelayMs;
+      delay = applyJitter(delay, jitter, canHonorRetryAfter ? "positive" : "symmetric");
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
 
       options.onRetry?.({
