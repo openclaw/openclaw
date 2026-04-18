@@ -3384,6 +3384,43 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not swallow unprefixed command pagination edit failures", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+
+    const ctx = {
+      update: { update_id: 778 },
+      callbackQuery: {
+        id: "cbq-commands-non-telegram-edit-1",
+        data: "commands_page_2:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 21,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    editMessageTextSpy.mockRejectedValueOnce(new Error("message can't be edited"));
+
+    await expect(
+      runTelegramMiddlewareChain({
+        ctx,
+        finalHandler: callbackHandler,
+      }),
+    ).rejects.toThrow("message can't be edited");
+
+    await runTelegramMiddlewareChain({
+      ctx,
+      finalHandler: callbackHandler,
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("retries command pagination callbacks after a bubbled preflight failure", async () => {
     const listSkillCommandsMock = listSkillCommandsForAgents as unknown as ReturnType<typeof vi.fn>;
     listSkillCommandsMock.mockClear();
