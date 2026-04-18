@@ -174,4 +174,30 @@ describe("auth external oauth helpers", () => {
       refresh: "healthy-local-refresh-token",
     });
   });
+
+  it("keeps explicit local non-oauth auth over external cli oauth overlays", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "sk-local",
+        },
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      type: "api_key",
+      provider: "openai-codex",
+      key: "sk-local",
+    });
+  });
 });

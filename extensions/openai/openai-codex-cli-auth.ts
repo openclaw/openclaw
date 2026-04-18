@@ -144,6 +144,14 @@ export function readOpenAICodexCliOAuthProfile(params: {
   const existing = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
   const existingOAuth =
     existing?.type === "oauth" && existing.provider === PROVIDER_ID ? existing : undefined;
+  if (existing && !existingOAuth) {
+    log.debug("kept explicit local auth over Codex CLI bootstrap", {
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      localType: existing.type,
+      localProvider: existing.provider,
+    });
+    return null;
+  }
   if (
     existingOAuth &&
     hasUsableOAuthCredential(existingOAuth) &&

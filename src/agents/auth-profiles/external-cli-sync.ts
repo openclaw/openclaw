@@ -138,7 +138,19 @@ export function resolveExternalCliAuthProfiles(
       continue;
     }
     const existing = store.profiles[providerConfig.profileId];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    const existingOAuth =
+      existing?.type === "oauth" && existing.provider === providerConfig.provider
+        ? existing
+        : undefined;
+    if (existing && !existingOAuth) {
+      log.debug("kept explicit local auth over external cli bootstrap", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+        localType: existing.type,
+        localProvider: existing.provider,
+      });
+      continue;
+    }
     if (
       !shouldBootstrapFromExternalCliCredential({
         existing: existingOAuth,

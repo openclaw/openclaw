@@ -96,6 +96,33 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     expect(parsed).toBeNull();
   });
 
+  it("does not override explicit local non-oauth auth with Codex CLI bootstrap", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+        },
+      }),
+    );
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-local",
+          },
+        },
+      },
+    });
+
+    expect(parsed).toBeNull();
+  });
+
   it("allows Codex CLI bootstrap when the stored default is expired", () => {
     const accessToken = buildJwt({
       exp: Math.floor(Date.now() / 1000) + 600,
