@@ -216,6 +216,19 @@ export const SessionsPatchParamsSchema = Type.Object(
           // PR-10 auto-mode: "auto" — toggles the session's auto-approve
           // flag without resolving any specific approval. Routed when
           // the user toggles "Plan (auto)" in the chip / via /plan auto.
+          //
+          // PR-8 review fix (Codex P1 #3098235203 — Decision C option (b)):
+          // `action: "edit"` currently semantically equals "approve with
+          // no diff" — the agent executes the ORIGINAL plan when edit
+          // fires (mode → normal, [PLAN_DECISION]: edited injection).
+          // The wire schema deliberately does NOT carry an edited
+          // step list; clients should NOT send one. True
+          // edit-and-approve UX (where the user submits a modified
+          // step list that the agent executes instead) is deferred to
+          // a follow-up PR which would add `steps` here + a
+          // server-side handler to apply the edit before approving.
+          // For now `edit` is a UX hint signaling "user reviewed" while
+          // executing the original plan as proposed.
           action: Type.Union([
             Type.Literal("approve"),
             Type.Literal("reject"),
