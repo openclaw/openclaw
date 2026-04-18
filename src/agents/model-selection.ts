@@ -298,7 +298,7 @@ function resolveConfiguredOpenRouterCompatAlias(params: {
 }): ModelRef | null {
   const normalized = normalizeLowercaseStringOrEmpty(params.raw);
   if (normalized === "openrouter:auto") {
-    return parseModelRef("openrouter:auto", params.defaultProvider, {
+    return normalizeModelRef("openrouter", "auto", {
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
@@ -800,6 +800,25 @@ export function resolveAllowedModelRef(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
+
+  const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
+    cfg: params.cfg,
+    raw: trimmed,
+    defaultProvider: params.defaultProvider,
+  });
+  if (openrouterCompatRef) {
+    const status = getModelRefStatus({
+      cfg: params.cfg,
+      catalog: params.catalog,
+      ref: openrouterCompatRef,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
+    if (!status.allowed) {
+      return { error: `model not allowed: ${status.key}` };
+    }
+    return { ref: openrouterCompatRef, key: status.key };
+  }
 
   // When the model string has no provider prefix ("/"), try to infer the
   // correct provider from the configured allowlist before falling back to the

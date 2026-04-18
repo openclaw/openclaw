@@ -1205,6 +1205,41 @@ describe("model-selection", () => {
         model: "deepseek/deepseek-r1-0528:free",
       });
     });
+
+    it("resolves openrouter:free through the allowed-model interactive path", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        {
+          provider: "openrouter",
+          id: "meta-llama/llama-3.3-70b-instruct:free",
+          name: "Llama 3.3 70B Free",
+        },
+      ];
+
+      expect(
+        resolveAllowedModelRef({
+          cfg,
+          catalog,
+          raw: "openrouter:free",
+          defaultProvider: "anthropic",
+        }),
+      ).toEqual({
+        ref: {
+          provider: "openrouter",
+          model: "meta-llama/llama-3.3-70b-instruct:free",
+        },
+        key: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+      });
+    });
   });
 
   describe("resolveThinkingDefault", () => {
