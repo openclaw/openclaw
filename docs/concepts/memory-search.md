@@ -131,6 +131,19 @@ earlier conversations. This is opt-in via
 
 ## Troubleshooting
 
+**Tool appears in `/tools` but the model says it cannot use memory?**
+Check your effective tool policy in the same agent/session. If you run a
+restrictive allowlist, include `group:memory` (or both `memory_search` and
+`memory_get`) under `tools.allow` or the matching per-agent allowlist.
+
+```json5
+{
+  tools: {
+    allow: ["group:memory"],
+  },
+}
+```
+
 **No results?** Run `openclaw memory status` to check the index. If empty, run
 `openclaw memory index --force`.
 
