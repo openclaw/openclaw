@@ -555,7 +555,7 @@ vi.mock("../compaction-safety-timeout.js", () => ({
 vi.mock("../history.js", () => ({
   getDmHistoryLimitFromSessionKey: (sessionKey: string | undefined, config: unknown) =>
     hoisted.getDmHistoryLimitFromSessionKeyMock(sessionKey, config),
-  limitHistoryTurns: <T>(messages: T, limit: number | undefined) =>
+  limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
     hoisted.limitHistoryTurnsMock(messages, limit),
 }));
 

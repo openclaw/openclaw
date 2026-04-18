@@ -10,6 +10,7 @@ import {
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { stripInvalidGoogleThinkingBudget } from "./google-thinking-compat.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -213,14 +214,14 @@ function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThin
   throw new Error("Unsupported thinking level");
 }
 
-function getDisabledThinkingConfig(modelId: string): Record<string, unknown> {
+function getDisabledThinkingConfig(modelId: string): Record<string, unknown> | undefined {
   if (isGemini3ProModel(modelId)) {
     return { thinkingLevel: "LOW" };
   }
   if (isGemini3FlashModel(modelId)) {
     return { thinkingLevel: "MINIMAL" };
   }
-  return { thinkingBudget: 0 };
+  return normalizeGoogleThinkingConfig(modelId, { thinkingBudget: 0 });
 }
 
 function getGoogleThinkingBudget(
@@ -258,7 +259,7 @@ function resolveGoogleThinkingConfig(
     } else if (typeof options.thinking.budgetTokens === "number") {
       config.thinkingBudget = options.thinking.budgetTokens;
     }
-    return config;
+    return normalizeGoogleThinkingConfig(model.id, config);
   }
   if (!options?.reasoning) {
     return getDisabledThinkingConfig(model.id);
@@ -270,10 +271,18 @@ function resolveGoogleThinkingConfig(
     };
   }
   const budget = getGoogleThinkingBudget(model.id, options.reasoning, options.thinkingBudgets);
-  return {
+  return normalizeGoogleThinkingConfig(model.id, {
     includeThoughts: true,
     ...(typeof budget === "number" ? { thinkingBudget: budget } : {}),
-  };
+  });
+}
+
+function normalizeGoogleThinkingConfig(
+  modelId: string,
+  thinkingConfig: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  stripInvalidGoogleThinkingBudget({ thinkingConfig, modelId });
+  return Object.keys(thinkingConfig).length > 0 ? thinkingConfig : undefined;
 }
 
 function convertGoogleMessages(model: GoogleTransportModel, context: Context) {

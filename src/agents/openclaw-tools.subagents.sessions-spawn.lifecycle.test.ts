@@ -39,17 +39,6 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
-vi.mock("./pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("./pi-embedded.js")>("./pi-embedded.js");
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: () => false,
-    isEmbeddedPiRunStreaming: () => false,
-    queueEmbeddedPiMessage: () => false,
-    waitForEmbeddedPiRunEnd: async () => true,
-  };
-});
-
 vi.mock("./tools/agent-step.js", () => ({
   readLatestAssistantReply: async () => "done",
 }));
@@ -76,7 +65,7 @@ const waitFor = async (label: string, predicate: () => boolean, timeoutMs = 30_0
     () => {
       expect(predicate(), label).toBe(true);
     },
-    { timeout: timeoutMs, interval: 20 },
+    { timeout: timeoutMs, interval: 1 },
   );
 };
 

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { clearSessionQueues } from "../auto-reply/reply/queue.js";
+import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
 import {
   resolveSubagentLabel,
   resolveSubagentTargetFromRuns,
@@ -15,7 +15,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { abortEmbeddedPiRun } from "./pi-embedded-runner/runs.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
@@ -57,6 +56,8 @@ const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
+type AbortEmbeddedPiRun = (sessionId: string) => boolean;
+type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
   callGateway,
@@ -64,7 +65,34 @@ const defaultSubagentControlDeps = {
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
+  abortEmbeddedPiRun?: AbortEmbeddedPiRun;
+  clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
+
+let subagentControlRuntimePromise: Promise<typeof import("./subagent-control.runtime.js")> | null =
+  null;
+
+function loadSubagentControlRuntime() {
+  subagentControlRuntimePromise ??= import("./subagent-control.runtime.js");
+  return subagentControlRuntimePromise;
+}
+
+async function resolveSubagentControlRuntime(): Promise<{
+  abortEmbeddedPiRun: AbortEmbeddedPiRun;
+  clearSessionQueues: ClearSessionQueues;
+}> {
+  if (subagentControlDeps.abortEmbeddedPiRun && subagentControlDeps.clearSessionQueues) {
+    return {
+      abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun,
+      clearSessionQueues: subagentControlDeps.clearSessionQueues,
+    };
+  }
+  const runtime = await loadSubagentControlRuntime();
+  return {
+    abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun ?? runtime.abortEmbeddedPiRun,
+    clearSessionQueues: subagentControlDeps.clearSessionQueues ?? runtime.clearSessionQueues,
+  };
+}
 
 export type ResolvedSubagentController = {
   controllerSessionKey: string;
@@ -152,8 +180,9 @@ async function killSubagentRun(params: {
     cache: params.cache,
   });
   const sessionId = resolved.entry?.sessionId;
-  const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
-  const cleared = clearSessionQueues([childSessionKey, sessionId]);
+  const runtime = await resolveSubagentControlRuntime();
+  const aborted = sessionId ? runtime.abortEmbeddedPiRun(sessionId) : false;
+  const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
       `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
@@ -512,9 +541,11 @@ export async function steerControlledSubagentRun(params: {
       : undefined;
 
   if (sessionId) {
-    abortEmbeddedPiRun(sessionId);
+    const runtime = await resolveSubagentControlRuntime();
+    runtime.abortEmbeddedPiRun(sessionId);
   }
-  const cleared = clearSessionQueues([params.entry.childSessionKey, sessionId]);
+  const runtime = await resolveSubagentControlRuntime();
+  const cleared = runtime.clearSessionQueues([params.entry.childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
       `subagents control steer: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
@@ -709,7 +740,13 @@ export function resolveControlledSubagentTarget(
 }
 
 export const __testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
+  setDepsForTest(
+    overrides?: Partial<{
+      callGateway: GatewayCaller;
+      abortEmbeddedPiRun: AbortEmbeddedPiRun;
+      clearSessionQueues: ClearSessionQueues;
+    }>,
+  ) {
     subagentControlDeps = overrides
       ? {
           ...defaultSubagentControlDeps,

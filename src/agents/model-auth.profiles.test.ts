@@ -5,13 +5,88 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+} from "./auth-profiles/store.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
 } from "./model-auth.js";
+
+vi.mock("../plugins/setup-registry.js", async () => {
+  const { readFileSync } = await import("node:fs");
+  return {
+    resolvePluginSetupProvider: ({ provider }: { provider: string; env: NodeJS.ProcessEnv }) => {
+      if (provider !== "anthropic-vertex") {
+        return undefined;
+      }
+      return {
+        resolveConfigApiKey: ({ env }: { env: NodeJS.ProcessEnv }) => {
+          const metadataOptIn = env.ANTHROPIC_VERTEX_USE_GCP_METADATA?.trim().toLowerCase();
+          if (metadataOptIn === "1" || metadataOptIn === "true") {
+            return "gcp-vertex-credentials";
+          }
+          const credentialsPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+          if (!credentialsPath) {
+            return undefined;
+          }
+          try {
+            readFileSync(credentialsPath, "utf8");
+            return "gcp-vertex-credentials";
+          } catch {
+            return undefined;
+          }
+        },
+      };
+    },
+  };
+});
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => {
+    const normalized = provider.trim().toLowerCase();
+    if (normalized === "modelstudio" || normalized === "qwencloud") {
+      return "qwen";
+    }
+    if (normalized === "z.ai" || normalized === "z-ai") {
+      return "zai";
+    }
+    if (normalized === "opencode-go-auth") {
+      return "opencode-go";
+    }
+    if (normalized === "bedrock" || normalized === "aws-bedrock") {
+      return "amazon-bedrock";
+    }
+    return normalized;
+  },
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  const candidates = {
+    anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+    ollama: ["OLLAMA_API_KEY"],
+    "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+    openai: ["OPENAI_API_KEY"],
+    qianfan: ["QIANFAN_API_KEY"],
+    qwen: ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+    synthetic: ["SYNTHETIC_API_KEY"],
+    "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+    voyage: ["VOYAGE_API_KEY"],
+    zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+  } as const;
+  return {
+    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+  };
+});
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: (params: {
@@ -66,6 +141,11 @@ vi.mock("../plugins/provider-runtime.js", () => ({
           : undefined;
     return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
   },
+}));
+
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
 }));
 
 vi.mock("./cli-credentials.js", () => ({

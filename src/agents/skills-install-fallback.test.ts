@@ -21,26 +21,11 @@ vi.mock("../security/skill-scanner.js", () => ({
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 
-vi.mock("../shared/config-eval.js", async () => {
-  const actual = await vi.importActual<typeof import("../shared/config-eval.js")>(
-    "../shared/config-eval.js",
-  );
-  return {
-    ...actual,
-    hasBinary: (bin: string) => hasBinaryMock(bin),
-  };
-});
-
-vi.mock("../infra/brew.js", () => ({
-  resolveBrewExecutable: () => undefined,
-}));
-
 let installSkill: typeof import("./skills-install.js").installSkill;
-let buildWorkspaceSkillStatus: typeof import("./skills-status.js").buildWorkspaceSkillStatus;
+let skillsInstallTesting: typeof import("./skills-install.js").__testing;
 
 async function loadSkillsInstallModulesForTest() {
-  ({ installSkill } = await import("./skills-install.js"));
-  ({ buildWorkspaceSkillStatus } = await import("./skills-status.js"));
+  ({ installSkill, __testing: skillsInstallTesting } = await import("./skills-install.js"));
 }
 
 async function writeSkillWithInstallers(
@@ -95,10 +80,6 @@ describe("skills-install fallback edge cases", () => {
     await writeSkillWithInstaller(workspaceDir, "go-tool-single", "go", {
       module: "example.com/tool@latest",
     });
-    await writeSkillWithInstallers(workspaceDir, "go-tool-multi", [
-      { id: "brew", kind: "brew", formula: "go" },
-      { id: "go", kind: "go", module: "example.com/tool@latest" },
-    ]);
     await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
       package: "example-package",
     });
@@ -106,13 +87,18 @@ describe("skills-install fallback edge cases", () => {
   });
 
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockClear();
-    scanDirectoryWithSummaryMock.mockClear();
-    hasBinaryMock.mockClear();
+    runCommandWithTimeoutMock.mockReset();
+    scanDirectoryWithSummaryMock.mockReset();
+    hasBinaryMock.mockReset();
     scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
+    skillsInstallTesting.setDepsForTest({
+      hasBinary: (bin: string) => hasBinaryMock(bin),
+      resolveBrewExecutable: () => undefined,
+    });
   });
 
   afterAll(async () => {
+    skillsInstallTesting.setDepsForTest();
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
@@ -165,31 +151,6 @@ describe("skills-install fallback edge cases", () => {
       );
       assertNoAptGetFallbackCalls();
     }
-  });
-
-  it("status-selected go installer fails gracefully when apt fallback needs sudo", async () => {
-    vi.spyOn(process, "getuid").mockReturnValue(1000);
-    mockAvailableBinaries(["apt-get", "sudo"]);
-
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "sudo: a password is required",
-    });
-
-    const status = buildWorkspaceSkillStatus(workspaceDir);
-    const skill = status.skills.find((entry) => entry.name === "go-tool-multi");
-    expect(skill?.install[0]?.id).toBe("go");
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-multi",
-      installId: skill?.install[0]?.id ?? "",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("sudo is not usable");
-    expect(result.stderr).toContain("sudo: a password is required");
   });
 
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {

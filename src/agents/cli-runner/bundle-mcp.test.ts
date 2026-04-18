@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createBundleMcpTempHarness,
@@ -12,7 +12,7 @@ import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 const tempHarness = createBundleMcpTempHarness();
 
-afterEach(async () => {
+afterAll(async () => {
   await tempHarness.cleanup();
 });
 

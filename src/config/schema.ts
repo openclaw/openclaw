@@ -28,7 +28,7 @@ type JsonSchemaObject = JsonSchemaNode & {
 };
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
-  asSchemaObject<JsonSchemaObject>(value);
+  asSchemaObject(value) as JsonSchemaObject | null;
 
 const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
