@@ -138,7 +138,7 @@ describe("mcp loopback server", () => {
       expect.objectContaining({
         sessionKey: "agent:main:matrix:dm:test",
         messageProvider: "matrix",
-        senderIsOwner: true,
+        senderIsOwner: false,
         surface: "loopback",
       }),
     );

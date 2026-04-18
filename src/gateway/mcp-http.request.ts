@@ -125,15 +125,11 @@ export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
 ): McpRequestContext {
-  const senderIsOwnerRaw = normalizeOptionalLowercaseString(
-    getHeader(req, "x-openclaw-sender-is-owner"),
-  );
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
-    senderIsOwner:
-      senderIsOwnerRaw === "true" ? true : senderIsOwnerRaw === "false" ? false : undefined,
+    senderIsOwner: false,
   };
 }

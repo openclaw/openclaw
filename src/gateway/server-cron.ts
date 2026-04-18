@@ -288,7 +288,7 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        trusted: opts?.trusted,
+        trusted: opts?.trusted ?? true,
       });
     },
     requestHeartbeatNow: (opts) => {

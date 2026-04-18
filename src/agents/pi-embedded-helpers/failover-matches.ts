@@ -191,7 +191,10 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 }
 
 export function isTimeoutErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+  return (
+    matchesErrorPatterns(raw, ERROR_PATTERNS.timeout) ||
+    STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(normalizeLowercaseStringOrEmpty(raw))
+  );
 }
 
 export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
@@ -242,9 +245,6 @@ export function isServerErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value)) {
-    return true;
-  }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
-  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+  return (scrubbed.length === 0 ? matchesErrorPatterns(value, ERROR_PATTERNS.serverError) : matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError));
 }
