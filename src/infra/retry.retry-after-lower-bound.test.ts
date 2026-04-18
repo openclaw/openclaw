@@ -39,12 +39,17 @@ beforeEach(() => {
 });
 
 describe("retryAsync respects server-supplied Retry-After as a lower bound", () => {
-  it("preserves symmetric jitter when retryAfterMs equals maxDelayMs (boundary)", async () => {
-    // At the boundary `retryAfterMs === maxDelayMs`, positive jitter would only
-    // produce values >= maxDelayMs, which the final `Math.min(delay, maxDelayMs)`
-    // clamp collapses back to exactly maxDelayMs for every retry — the same
-    // thundering-herd shape the fallback is meant to avoid. Symmetric jitter is
-    // the right answer at and above the cap.
+  it("honors Retry-After at the maxDelayMs boundary without undercut", async () => {
+    // When `retryAfterMs === maxDelayMs`, positive jitter plus the final clamp
+    // collapses every retry to exactly maxDelayMs. That is thundering-herd-
+    // shaped but the entire herd fires at — not before — the server-cleared
+    // instant, which is strictly preferable to a symmetric spread that would
+    // let ~50% of retries land below retryAfterMs and violate the Retry-After
+    // contract. Only the strict `>` case (retryAfterMs above the local cap,
+    // already unsatisfiable) falls back to symmetric jitter.
+    //
+    // Pick fraction=0 as the adversarial case: symmetric would produce 500 ms
+    // here, which is the violation we are guarding against.
     randomMocks.generateSecureFraction.mockReturnValue(0);
 
     vi.useFakeTimers();
@@ -66,10 +71,9 @@ describe("retryAsync respects server-supplied Retry-After as a lower bound", () 
     await expect(promise).resolves.toBe("ok");
 
     expect(delays).toHaveLength(1);
-    // With symmetric fallback (fraction=0 → offset=-0.5 → delay=500), the
-    // scheduled delay spreads below the cap. Without the strict-less-than
-    // fix, positive mode would have snapped every retry to exactly 1000.
-    expect(delays[0]).toBeLessThan(1_000);
+    // Strict Retry-After honor at the boundary: exactly the server-supplied
+    // lower bound, never below it.
+    expect(delays[0]).toBe(1_000);
   });
 
   it("preserves symmetric jitter when retryAfterMs exceeds maxDelayMs (avoids thundering herd)", async () => {
