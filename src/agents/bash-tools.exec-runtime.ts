@@ -511,7 +511,7 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
-  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void | Promise<void>;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
@@ -570,15 +570,14 @@ export async function runExecProcess(opts: {
     }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
-    // throw — so a try-catch here would be ineffective.  Instead we rely
-    // on the `updatesDisabled` flag being set proactively: by the promise
-    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
-    // signal (Layer 2) — both of which prevent this call from ever being
-    // reached after the agent run has ended.
+    // throw.  The `updatesDisabled` flag is set proactively on process exit
+    // and abort signal, but race conditions can still allow a late call to
+    // slip through (see #68376).  Catch the returned Promise to prevent
+    // unhandled rejections from crashing the gateway.
     opts.onUpdate({
       content: [{ type: "text", text: warningText + (tailText || "") }],
       details: {
@@ -589,7 +588,7 @@ export async function runExecProcess(opts: {
         cwd: session.cwd,
         tail: session.tail,
       },
-    });
+    })?.catch(() => {});
   };
 
   const handleStdout = (data: string) => {
