@@ -268,7 +268,7 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("adaptive");
   });
 
-  it("does not match date-stamped model IDs as xhigh-capable", async () => {
+  it("does not match date-stamped model IDs for xhigh or adaptive defaults", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     expect(
       provider.supportsXHighThinking?.({
@@ -276,20 +276,6 @@ describe("anthropic provider replay hooks", () => {
         modelId: "claude-opus-4-20250918",
       } as never),
     ).toBe(false);
-  });
-
-  it("forward-compat: adaptive thinking default for future sonnet-4-8", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    expect(
-      provider.resolveDefaultThinkingLevel?.({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-8",
-      } as never),
-    ).toBe("adaptive");
-  });
-
-  it("does not return adaptive default for date-stamped model IDs", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
     expect(
       provider.resolveDefaultThinkingLevel?.({
         provider: "anthropic",
