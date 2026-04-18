@@ -2798,6 +2798,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           supportsStore: {
                             type: "boolean",
                           },
+                          supportsPromptCacheKey: {
+                            type: "boolean",
+                          },
                           supportsDeveloperRole: {
                             type: "boolean",
                           },
@@ -3233,7 +3236,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Bootstrap Max Chars",
                 description:
-                  "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+                  "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
               },
               bootstrapTotalMaxChars: {
                 type: "integer",
@@ -3241,7 +3244,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Bootstrap Total Max Chars",
                 description:
-                  "Max total characters across all injected workspace bootstrap files (default: 150000).",
+                  "Max total characters across all injected workspace bootstrap files (default: 60000).",
               },
               experimental: {
                 type: "object",
@@ -23519,7 +23522,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.cdpUrl": {
       label: "Browser CDP URL",
       help: "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
-      tags: ["advanced"],
+      tags: ["advanced", "url-secret"],
     },
     "browser.color": {
       label: "Browser Accent Color",
@@ -23569,7 +23572,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.profiles.*.cdpUrl": {
       label: "Browser Profile CDP URL",
       help: "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
-      tags: ["storage"],
+      tags: ["storage", "url-secret"],
     },
     "browser.profiles.*.userDataDir": {
       label: "Browser Profile User Data Dir",
@@ -24679,12 +24682,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
-      help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+      help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
       tags: ["performance"],
     },
     "agents.defaults.bootstrapTotalMaxChars": {
       label: "Bootstrap Total Max Chars",
-      help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
+      help: "Max total characters across all injected workspace bootstrap files (default: 60000).",
       tags: ["performance"],
     },
     "agents.defaults.experimental": {
@@ -27461,6 +27464,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.15-beta.1",
+  version: "2026.4.16",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -19,7 +19,7 @@ const { countActiveDescendantRunsMock } = vi.hoisted(() => ({
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
@@ -122,7 +122,7 @@ function makeBaseParams(overrides: {
   runSessionId?: string;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
-}) {
+}): Parameters<typeof dispatchCronDelivery>[0] {
   const resolvedDelivery = makeResolvedDelivery();
   return {
     cfg: {} as never,
@@ -324,7 +324,34 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:run-123:telegram::123456:",
+      trusted: false,
     });
+  });
+
+  it("skips awareness text when direct delivery strips a silent caption", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { mediaUrl: "https://example.com/image.png", text: "All done\n\nNO_REPLY" },
+    ];
+    params.outputText = "All done\n\nNO_REPLY";
+    params.summary = "All done\n\nNO_REPLY";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ mediaUrl: "https://example.com/image.png", text: undefined }],
+      }),
+    );
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("keeps the cron run successful when awareness queueing throws after delivery", async () => {
@@ -826,6 +853,34 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("cleans up the direct cron session after threaded direct delivery when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "Final weather summary" });
+    params.resolvedDelivery = {
+      ...makeResolvedDelivery(),
+      mode: "implicit",
+      threadId: 42,
+    };
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("delivers structured heartbeat/media payloads once through the outbound adapter", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -855,6 +910,33 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
       }),
     );
+  });
+
+  it("cleans up the direct cron session after structured direct delivery when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK" });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+    ] as never;
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 
   it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
@@ -939,6 +1021,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       timeoutMs: 10_000,
     });
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses trailing NO_REPLY after summary text in direct delivery (#64976)", async () => {
@@ -984,6 +1067,75 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.result).toEqual(
       expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
+    );
+  });
+
+  it("delivers substantive text that mentions NO_REPLY in non-trailing content (text delivery)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText:
+        "The NO_REPLY sentinel tells the agent to skip delivery when nothing changes.",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers substantive text that mentions NO_REPLY in non-trailing content (direct delivery)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText:
+        "Reminder: reply NO_REPLY when there is nothing to announce, otherwise send a summary.",
+    });
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers non-trailing NO_REPLY mention with trailing whitespace", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Use NO_REPLY when nothing actionable changed.\n",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops only the payload with trailing NO_REPLY in a multi-payload direct delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloads = [
+      { text: "Working on it..." },
+      { text: "Final weather summary\n\nNO_REPLY" },
+    ];
+    params.summary = "Working on it...";
+    params.outputText = "Working on it...";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Working on it..." }],
+      }),
     );
   });
 });
