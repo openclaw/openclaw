@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -5,6 +6,41 @@ import {
   type InputProvenance,
 } from "../sessions/input-provenance.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+
+/**
+ * Strip base64 image data from tool result content to reduce context bloat.
+ * Browser screenshots are saved to disk and referenced via MEDIA: paths.
+ * The model sees the full image in the immediate API response, but we don't
+ * need to persist 1.2MB base64 blobs in the conversation history forever.
+ */
+function stripBase64ImagesFromToolResult(message: AgentMessage): AgentMessage {
+  const toolResult = message as Extract<AgentMessage, { role: "toolResult" }>;
+
+  if (toolResult.role !== "toolResult" || !toolResult.content) {
+    return message;
+  }
+
+  if (!Array.isArray(toolResult.content)) {
+    return message;
+  }
+
+  const strippedContent = toolResult.content.map((item) => {
+    if (typeof item === "object" && item !== null && "type" in item && item.type === "image") {
+      // Keep the image type marker and MEDIA path (from text content), but strip base64 data
+      return {
+        type: "image" as const,
+        data: "", // Empty string instead of multi-MB base64
+        mimeType: item.mimeType || "image/png",
+      };
+    }
+    return item;
+  });
+
+  return {
+    ...toolResult,
+    content: strippedContent,
+  };
+}
 
 export type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
@@ -60,10 +96,26 @@ export function guardSessionManager(
       }
     : undefined;
 
+  // Compose the plugin hook (if exists) with base64 stripping
+  const transformToolResult = (
+    message: AgentMessage,
+    meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
+  ): AgentMessage => {
+    let transformed = message;
+
+    // First apply plugin hooks if registered
+    if (transform) {
+      transformed = transform(message, meta);
+    }
+
+    // Then strip base64 images
+    return stripBase64ImagesFromToolResult(transformed);
+  };
+
   const guard = installSessionToolResultGuard(sessionManager, {
     transformMessageForPersistence: (message) =>
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
-    transformToolResultForPersistence: transform,
+    transformToolResultForPersistence: transformToolResult,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
