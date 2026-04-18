@@ -24,13 +24,6 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
         self.directory = os.getcwd()
         super().__init__(*args, **kwargs)
     
-    def strip_to_last_workspace(self, path):
-        """Remove everything up to and including the last '/workspace/' in the path"""
-        match = re.search(r'/workspace/(.*)$', path)
-        if match:
-            return match.group(1)
-        return path
-    
     def get_full_file_path(self, requested_path):
         """Convert requested path to absolute file path, supporting both absolute and relative paths"""
         # If the path is absolute (starts with /), treat it as absolute path
@@ -129,7 +122,7 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
                         mime_type = mime_map.get(ext, f'{media_type}/x-unknown')
                     
                     media_files.append({
-                        'path': self.strip_to_last_workspace(rel_path_file),
+                        'path': rel_path_file,  # ✅ Now uses relative path directly
                         'full_path': abs_path,
                         'filename': file,
                         'mimeType': mime_type,
@@ -158,9 +151,9 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
         # Generate file listing HTML with compact spacing
         file_list_html = ''
         for media in all_media:
-            # Extract directory path and filename
-            full_path = media['full_path']
-            dir_path = os.path.dirname(full_path)
+            # ✅ Use RELATIVE path for display and actions
+            rel_path = media['path']
+            dir_path = os.path.dirname(rel_path)
             if not dir_path:
                 dir_path = "."
             filename = media['filename']
@@ -174,8 +167,8 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
                     </div>
                 </td>
                 <td>
-                    <button class="action-btn" onclick="window.open('{media['full_path']}', '_blank')">▶ Open</button>
-                    <button class="action-btn" onclick="copyToClipboard('{media['full_path']}')">📋 Copy Path</button>
+                    <button class="action-btn" onclick="window.open('{rel_path}', '_blank')">▶ Open</button>
+                    <button class="action-btn" onclick="copyToClipboard('{rel_path}')">📋 Copy Path</button>
                 </td>
                 <td><span class="badge badge-{media['type']}">{media['type']}</span></td>
                 <td>{media['mimeType']}</td>
@@ -481,7 +474,6 @@ body {{
             self.send_error(400, 'Missing path parameter')
             return
         
-        # Strip workspace prefix and get the actual file path
         safe_path = self.get_full_file_path(media_path)
         if not safe_path:
             self.send_error(403, 'Access denied')
@@ -498,7 +490,6 @@ body {{
         mime_type, _ = mimetypes.guess_type(safe_path)
         ext = os.path.splitext(safe_path)[1].lower()
         
-        # Handle common audio/video MIME types
         if not mime_type:
             mime_map = {
                 '.ogg': 'audio/ogg',
@@ -542,14 +533,12 @@ body {{
     
     def serve_file_with_range(self, path):
         """Serve file with support for range requests (for seeking in audio/video)"""
-        # Strip workspace prefix and get the actual file path
         safe_path = self.get_full_file_path(path)
         
         if not safe_path:
             self.send_error(403, 'Access denied')
             return
         
-        # Check if it's a directory
         if os.path.isdir(safe_path):
             self.send_error(404, 'Not found')
             return
@@ -558,10 +547,8 @@ body {{
             self.send_error(404, 'File not found')
             return
         
-        # Get file size
         file_size = os.path.getsize(safe_path)
         
-        # Parse Range header
         range_header = self.headers.get('Range')
         start = 0
         end = file_size - 1
@@ -577,14 +564,12 @@ body {{
                 if parts[1]:
                     end = int(parts[1])
         
-        # Validate range
         if start >= file_size or end >= file_size or start > end:
             self.send_error(416, 'Requested range not satisfiable')
             return
         
         content_length = end - start + 1
         
-        # Get MIME type
         mime_type, _ = mimetypes.guess_type(safe_path)
         ext = os.path.splitext(safe_path)[1].lower()
         if not mime_type:
@@ -616,7 +601,6 @@ body {{
         self.send_header('Cache-Control', 'no-cache')
         self.end_headers()
         
-        # Send the requested range
         with open(safe_path, 'rb') as f:
             f.seek(start)
             remaining = content_length
@@ -652,7 +636,7 @@ def main():
     parser.add_argument('--max-depth', type=int, default=2, help='Maximum directory depth to scan (default: 2)')
     args = parser.parse_args()
     
-    # Change to the specified directory
+    # Change to the specified directory - this becomes the root for relative paths
     os.chdir(args.directory)
     
     # Store args for access in handler

@@ -650,43 +650,20 @@ function sanitizeFilename(title: string): string {
  * Builds a media URL for accessing downloaded files
  * The link is created for the included media server which can play the streaming media locally.
  */
-function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
-  // Ensure paths are absolute and resolved
+function buildMediaUrl(workspaceRoot: string, filePath: string): string {
   const resolvedWorkspace = path.resolve(workspaceRoot);
   const resolvedFilePath = path.resolve(filePath);
   
-  // Calculate relative path from workspace root
   let relativePath = path.relative(resolvedWorkspace, resolvedFilePath);
   
-  // Handle case where file is exactly the workspace root
   if (relativePath === '') {
     relativePath = path.basename(resolvedFilePath);
   }
   
-  // Convert Windows backslashes to forward slashes for URLs
   const posixPath = relativePath.split(path.sep).join('/');
-  
-  // Encode each path segment for URL safety (spaces, special chars, etc.)
   const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
   
-  // Determine the base origin
-  let baseOrigin: string;
-  if (gatewayOrigin) {
-    baseOrigin = gatewayOrigin.replace(/\/$/, '');
-  } else {
-    baseOrigin = `http://localhost:${MEDIA_SERVER_PORT}`;
-  }
-  
-  // Construct direct file URL for the media server
-  const mediaUrl = `${baseOrigin}/${encodedPath}`;
-  
-  // Log for debugging (remove in production if needed)
-  console.log(`Media URL constructed: ${mediaUrl}`);
-  console.log(`  Workspace: ${resolvedWorkspace}`);
-  console.log(`  File: ${resolvedFilePath}`);
-  console.log(`  Relative: ${relativePath}`);
-  
-  return mediaUrl;
+  return `/${encodedPath}`;
 }
 
 export const downloadVideoTool = {
@@ -819,7 +796,7 @@ export const downloadVideoTool = {
       }
       
       const gatewayOrigin = process.env.GATEWAY_ORIGIN || process.env.ASSISTANT_API_BASE;
-      const fileUrl = buildMediaUrl(workspaceRoot, finalPath, gatewayOrigin);
+      const fileUrl = buildMediaUrl(workspaceRoot, finalPath);
 
       return {
         content: [{
