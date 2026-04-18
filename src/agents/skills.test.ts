@@ -174,7 +174,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(commands.find((entry) => entry.skillName === "hidden-skill")).toBeUndefined();
   });
 
-  it("truncates descriptions longer than 100 characters for Discord compatibility", async () => {
+  it("truncates descriptions and preserves tool-dispatch metadata", async () => {
     const workspaceDir = await makeWorkspace();
     const longDescription =
       "This is a very long description that exceeds Discord's 100 character limit for slash command descriptions and should be truncated";
@@ -188,22 +188,6 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       name: "short-desc",
       description: "Short description",
     });
-
-    const commands = buildWorkspaceSkillCommandSpecs(
-      workspaceDir,
-      resolveTestSkillDirs(workspaceDir),
-    );
-
-    const longCmd = commands.find((entry) => entry.skillName === "long-desc");
-    const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
-
-    expect(longCmd?.description.length).toBeLessThanOrEqual(100);
-    expect(longCmd?.description.endsWith("…")).toBe(true);
-    expect(shortCmd?.description).toBe("Short description");
-  });
-
-  it("includes tool-dispatch metadata from frontmatter", async () => {
-    const workspaceDir = await makeWorkspace();
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "tool-dispatch"),
       name: "tool-dispatch",
@@ -215,7 +199,14 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       workspaceDir,
       resolveTestSkillDirs(workspaceDir),
     );
+
+    const longCmd = commands.find((entry) => entry.skillName === "long-desc");
+    const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
+
+    expect(longCmd?.description.length).toBeLessThanOrEqual(100);
+    expect(longCmd?.description.endsWith("…")).toBe(true);
+    expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
 
@@ -460,9 +451,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Extra version");
   });
 
-  it("loads skills from workspace skills/", async () => {
+  it("loads workspace skills while omitting disable-model-invocation entries", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "demo-skill");
+    const hiddenSkillDir = path.join(workspaceDir, "skills", "hidden-skill");
 
     await writeSkill({
       dir: skillDir,
@@ -470,19 +462,8 @@ describe("buildWorkspaceSkillsPrompt", () => {
       description: "Does demo things",
       body: "# Demo Skill\n",
     });
-
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
-    expect(prompt).toContain("demo-skill");
-    expect(prompt).toContain("Does demo things");
-    expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
-  });
-
-  it("omits disable-model-invocation skills from available_skills for freshly loaded entries", async () => {
-    const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "hidden-skill");
-
     await writeSkill({
-      dir: skillDir,
+      dir: hiddenSkillDir,
       name: "hidden-skill",
       description: "Hidden from the prompt",
       frontmatterExtra: "disable-model-invocation: true",
@@ -490,9 +471,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
+    expect(prompt).toContain("demo-skill");
+    expect(prompt).toContain("Does demo things");
+    expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
     expect(prompt).not.toContain("hidden-skill");
     expect(prompt).not.toContain("Hidden from the prompt");
-    expect(prompt).not.toContain(path.join(skillDir, "SKILL.md"));
+    expect(prompt).not.toContain(path.join(hiddenSkillDir, "SKILL.md"));
   });
 });
 
