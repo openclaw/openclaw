@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Agents/TTS: report failed speech synthesis as a real tool error so unconfigured providers no longer feed successful TTS failure output back into agent loops. (#67980) Thanks @lawrence3699.
 - Gateway/wake: allow unknown properties on wake payloads so external senders like Paperclip can attach opaque metadata without failing schema validation. (#68355) Thanks @kagura-agent.
 - Matrix: honor `channels.matrix.network.dangerouslyAllowPrivateNetwork` when creating clients for private-network homeservers. (#68332) Thanks @kagura-agent.
+- Agents/OpenAI completions stream: unpack Anthropic-style typed-block `delta.content` arrays (e.g. Mistral with reasoning enabled emits `[{type:"thinking", thinking:[…]}, {type:"text", text:"…"}]`) into separate text and thinking deltas instead of coercing the array via JS string concatenation, so assistant replies no longer leak `[object Object][object Object]…` tokens before the real answer. Plain string `delta.content` keeps the existing fast path. (#68309)
 
 ## 2026.4.15
 

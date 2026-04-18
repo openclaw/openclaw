@@ -2017,4 +2017,143 @@ describe("openai transport stream", () => {
       { type: "thinking", thinking: " Still thinking.", thinkingSignature: "reasoning_details" },
     ]);
   });
+
+  it("unpacks Anthropic-style typed-block delta.content arrays without [object Object] coercion", async () => {
+    // Reproduces #68309: Mistral with reasoning enabled (mistral-small-latest)
+    // streams `delta.content` as an Anthropic-style typed-block array
+    // (`[{type:"thinking", thinking:"..."}, {type:"text", text:"..."}]`)
+    // instead of a string. Before the fix, the parser concatenated the array
+    // into the assembled text via `text += [obj, obj]`, surfacing
+    // `[object Object][object Object]…` tokens before the real model answer.
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small Latest",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const recordedDeltas: string[] = [];
+    const stream: { push(event: unknown): void } = {
+      push(event) {
+        const evt = event as { type?: string; delta?: unknown };
+        if (evt.type === "text_delta" && typeof evt.delta === "string") {
+          recordedDeltas.push(evt.delta);
+        }
+      },
+    };
+
+    const mockChunks = [
+      // Chunk 1: thinking arrives nested inside delta.content as a typed-block
+      // array. The thinking block uses a nested `thinking: [{type:"text",...}]`
+      // shape observed in Mistral reasoning streams.
+      {
+        id: "chatcmpl-mistral-thinking",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                {
+                  type: "thinking",
+                  thinking: [
+                    { type: "text", text: "Let me reason: " },
+                    { type: "text", text: "step one." },
+                  ],
+                },
+              ],
+            } as unknown,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      // Chunk 2: another typed-block delta with both more thinking (string
+      // shape) and the start of the user-facing text.
+      {
+        id: "chatcmpl-mistral-thinking",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                { type: "thinking", thinking: " Step two." },
+                { type: "text", text: "Hello!" },
+              ],
+            } as unknown,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      // Chunk 3: legacy string content keeps streaming on the existing fast
+      // path so the unpacker must not break the original behavior.
+      {
+        id: "chatcmpl-mistral-thinking",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: " How can I help?" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-mistral-thinking",
+        object: "chat.completion.chunk" as const,
+        choices: [{ index: 0, delta: {}, logprobs: null, finish_reason: "stop" }],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    const assembledText = output.content
+      .filter((block) => (block as { type: string }).type === "text")
+      .map((block) => (block as { text: string }).text)
+      .join("");
+    const assembledThinking = output.content
+      .filter((block) => (block as { type: string }).type === "thinking")
+      .map((block) => (block as { thinking: string }).thinking)
+      .join("");
+
+    expect(assembledText).not.toContain("[object Object]");
+    for (const recorded of recordedDeltas) {
+      expect(recorded).not.toContain("[object Object]");
+    }
+    expect(assembledText).toBe("Hello! How can I help?");
+    expect(assembledThinking).toBe("Let me reason: step one. Step two.");
+  });
 });
