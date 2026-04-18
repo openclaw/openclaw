@@ -220,6 +220,54 @@ describe("anthropic provider replay hooks", () => {
     ).toBe(false);
   });
 
+  it("resolves claude-sonnet-4-7 refs from the 4.6 template family", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-7",
+      modelRegistry: createModelRegistry([
+        {
+          id: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 32_000,
+        } as ProviderRuntimeModel,
+      ]),
+    } as ProviderResolveDynamicModelContext);
+
+    expect(resolved).toMatchObject({
+      provider: "anthropic",
+      id: "claude-sonnet-4-7",
+      api: "anthropic-messages",
+      reasoning: true,
+    });
+  });
+
+  it("forward-compat: supportsXHighThinking matches future opus-4-8 model", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    expect(
+      provider.supportsXHighThinking?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-8",
+      } as never),
+    ).toBe(true);
+  });
+
+  it("forward-compat: adaptive thinking default for sonnet-4-7", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    expect(
+      provider.resolveDefaultThinkingLevel?.({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-7",
+      } as never),
+    ).toBe("adaptive");
+  });
+
   it("resolves claude-cli synthetic oauth auth", async () => {
     readClaudeCliCredentialsForRuntimeMock.mockReset();
     readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
