@@ -26,6 +26,21 @@ import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js"
 const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 
 const ExitPlanModeToolSchema = Type.Object({
+  // PR-9 Tier 1: explicit plan title field. Without this the agent's
+  // chat text above the tool call became the de-facto title (brittle —
+  // sometimes the agent's narration leaked in instead of a real title).
+  // Title is required-ish at the schema level but tolerated when
+  // omitted (the runtime falls back to a generated default).
+  title: Type.Optional(
+    Type.String({
+      description:
+        "Concise plan name (under 80 chars). Used as the approval-card header, " +
+        "the sidebar title, and (when persisted) the markdown filename slug. " +
+        'Examples: "Migrate VM provisioning to golden snapshot", ' +
+        '"Fix websocket reconnect race in PR-67721". ' +
+        "Do NOT put plan content here — that goes in `plan` and `summary`.",
+    }),
+  ),
   plan: Type.Array(
     Type.Object(
       {
@@ -113,6 +128,10 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
     execute: async (_toolCallId, args, _signal) => {
       const params = args as Record<string, unknown>;
       const summary = readStringParam(params, "summary");
+      // PR-9 Tier 1: explicit title field; trim + clamp to 80 chars so
+      // the approval-card / sidebar header stays scannable.
+      const rawTitle = readStringParam(params, "title");
+      const title = rawTitle ? rawTitle.trim().slice(0, 80) : undefined;
       const plan = readPlanSteps(params);
 
       // PR-8 follow-up: hard-block plan submission while any subagents
@@ -147,13 +166,18 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
       // into the agent's read-time context. Non-empty content satisfies
       // the pairing check and keeps the agent's view of past turns clean.
       const stepCount = plan.length;
-      const text = summary
-        ? `Plan submitted for approval — ${summary} (${stepCount} ${stepCount === 1 ? "step" : "steps"}).`
+      // PR-9 Tier 1: prefer the explicit `title` field for the
+      // confirmation text when provided; fall back to summary, then to
+      // the bare step-count phrasing.
+      const headlineLabel = title ?? summary;
+      const text = headlineLabel
+        ? `Plan submitted for approval — ${headlineLabel} (${stepCount} ${stepCount === 1 ? "step" : "steps"}).`
         : `Plan submitted for approval (${stepCount} ${stepCount === 1 ? "step" : "steps"}).`;
       return {
         content: [{ type: "text" as const, text }],
         details: {
           status: "approval_requested" as const,
+          ...(title ? { title } : {}),
           ...(summary ? { summary } : {}),
           plan,
         },

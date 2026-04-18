@@ -308,6 +308,16 @@ export type AgentDefaultsConfig = {
       /** Pause when any attempt in the run produces mutating tool calls. Default: true. */
       stopOnMutation?: boolean;
     };
+    /**
+     * PR-9 Tier 1: outer-loop turn budget for the embedded Pi runner.
+     * When set, fully replaces the default (which scales with auth-profile
+     * count and is now floored at 500). Use this to give long research /
+     * build runs more headroom — the previous 32-turn floor cut many
+     * legitimate sessions short. Range [1, 100_000]; values outside are
+     * clamped. Subagents (`lightContext: true` spawns) keep a separate
+     * lower cap and ignore this setting.
+     */
+    maxIterations?: number;
   };
   /**
    * Plan mode toggle (PR-8 integration). Default OFF — opt-in.

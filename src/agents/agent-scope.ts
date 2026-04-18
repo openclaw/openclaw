@@ -116,6 +116,28 @@ export function resolveAgentAutoContinue(
   };
 }
 
+/**
+ * PR-9 Tier 1: read the per-agent or per-defaults `embeddedPi.maxIterations`
+ * override, if any, used by `resolveMaxRunRetryIterations` to optionally
+ * replace the scaled-by-profile-count default. Returns `undefined` when no
+ * override is set so the historical scaled formula applies.
+ *
+ * Cascade: per-agent → agents.defaults → undefined (let scaled formula run).
+ */
+export function resolveAgentMaxIterations(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): number | undefined {
+  const defaultMax = cfg?.agents?.defaults?.embeddedPi?.maxIterations;
+  const agentMax =
+    agentId && cfg ? resolveAgentConfig(cfg, agentId)?.embeddedPi?.maxIterations : undefined;
+  const candidate = agentMax ?? defaultMax;
+  if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+    return Math.floor(candidate);
+  }
+  return undefined;
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
