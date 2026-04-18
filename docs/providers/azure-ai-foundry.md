@@ -28,7 +28,7 @@ name.
 ## Prerequisites
 
 1. An [Azure AI Foundry](https://ai.azure.com/) resource with at least one model deployed.
-2. Your resource endpoint URL (e.g. `https://<resource>-<region>.services.ai.azure.com`).
+2. Your resource endpoint URL (e.g. `https://<resource>.services.ai.azure.com` or `https://<resource>-<region>.services.ai.azure.com`).
 3. An API key from the Foundry portal (**Keys and Endpoint** section).
 
 ## Getting started
