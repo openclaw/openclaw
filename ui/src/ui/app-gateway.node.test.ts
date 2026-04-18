@@ -794,6 +794,37 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("reloads chat history after the tracked final when a same-session update was deferred", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "engine-run-3";
+    host.chatStream = "";
+    host.chatStreamStartedAt = 127;
+
+    client.emitEvent({
+      event: "session.message",
+      payload: { sessionKey: "main" },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-3",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+          timestamp: 128,
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect((host as Record<string, unknown>).pendingSessionMessageReloadForSessionKey).toBeNull();
+  });
+
   it("reloads chat history once after the final chat event when tool output was used", () => {
     const { client } = connectHostGateway();
     emitToolResultEvent(client);

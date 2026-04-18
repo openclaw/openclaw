@@ -114,17 +114,74 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResultTerminalRuns?: Set<string>;
 };
 
-type GatewayHostWithSessionMessageSuppression = GatewayHost & {
+const SESSION_MESSAGE_RELOAD_SUPPRESSION_TTL_MS = 5_000;
+
+type GatewayHostWithSessionMessageReloadState = GatewayHost & {
+  pendingSessionMessageReloadForSessionKey?: string | null;
   suppressNextSessionMessageReloadForSessionKey?: string | null;
+  suppressNextSessionMessageReloadExpiresAtMs?: number | null;
 };
 
 function isActiveChatFlow(host: GatewayHost & Partial<ChatState>): boolean {
-  return (
-    host.chatLoading === true ||
-    host.chatSending === true ||
-    Boolean(host.chatRunId) ||
-    (host.chatStream !== null && host.chatStream !== undefined)
-  );
+  return Boolean(host.chatRunId) || (host.chatStream !== null && host.chatStream !== undefined);
+}
+
+function clearDeferredSessionMessageReload(host: GatewayHost, sessionKey?: string | null) {
+  const reloadHost = host as GatewayHostWithSessionMessageReloadState;
+  if (!sessionKey || reloadHost.pendingSessionMessageReloadForSessionKey === sessionKey) {
+    reloadHost.pendingSessionMessageReloadForSessionKey = null;
+  }
+}
+
+function queueDeferredSessionMessageReload(host: GatewayHost, sessionKey: string) {
+  const reloadHost = host as GatewayHostWithSessionMessageReloadState;
+  reloadHost.pendingSessionMessageReloadForSessionKey = sessionKey;
+}
+
+function flushDeferredSessionMessageReload(host: GatewayHost): boolean {
+  const reloadHost = host as GatewayHostWithSessionMessageReloadState;
+  const sessionKey = reloadHost.pendingSessionMessageReloadForSessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  if (sessionKey !== host.sessionKey) {
+    reloadHost.pendingSessionMessageReloadForSessionKey = null;
+    return false;
+  }
+  if (isActiveChatFlow(host as GatewayHost & Partial<ChatState>)) {
+    return false;
+  }
+  reloadHost.pendingSessionMessageReloadForSessionKey = null;
+  void loadChatHistory(host as unknown as ChatState);
+  return true;
+}
+
+function clearSessionMessageReloadSuppression(host: GatewayHost) {
+  const reloadHost = host as GatewayHostWithSessionMessageReloadState;
+  reloadHost.suppressNextSessionMessageReloadForSessionKey = null;
+  reloadHost.suppressNextSessionMessageReloadExpiresAtMs = null;
+}
+
+function suppressNextSessionMessageReload(host: GatewayHost, sessionKey: string) {
+  const reloadHost = host as GatewayHostWithSessionMessageReloadState;
+  reloadHost.suppressNextSessionMessageReloadForSessionKey = sessionKey;
+  reloadHost.suppressNextSessionMessageReloadExpiresAtMs =
+    Date.now() + SESSION_MESSAGE_RELOAD_SUPPRESSION_TTL_MS;
+}
+
+function shouldSuppressNextSessionMessageReload(host: GatewayHost, sessionKey: string): boolean {
+  const reloadHost = host as GatewayHostWithSessionMessageReloadState;
+  const suppressionSessionKey = reloadHost.suppressNextSessionMessageReloadForSessionKey;
+  const expiresAt = reloadHost.suppressNextSessionMessageReloadExpiresAtMs;
+  const isExpired = typeof expiresAt === "number" && expiresAt <= Date.now();
+  if (isExpired) {
+    clearSessionMessageReloadSuppression(host);
+  }
+  if (suppressionSessionKey !== sessionKey) {
+    return false;
+  }
+  clearSessionMessageReloadSuppression(host);
+  return !isExpired;
 }
 
 function isTerminalChatState(
@@ -423,16 +480,22 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  if (historyReloaded) {
+    clearDeferredSessionMessageReload(host, payload?.sessionKey);
+    return;
+  }
+  if (isTerminalChatState(state) && flushDeferredSessionMessageReload(host)) {
+    return;
+  }
   if (state === "final" && !historyReloaded) {
     const shouldReload = shouldReloadHistoryForFinalEvent(payload, {
       trackedRunId: trackedRunIdBeforeEvent,
     });
     if (shouldReload) {
+      clearDeferredSessionMessageReload(host, payload?.sessionKey);
       void loadChatHistory(host as unknown as ChatState);
     } else {
-      const suppressionHost = host as GatewayHostWithSessionMessageSuppression;
-      suppressionHost.suppressNextSessionMessageReloadForSessionKey =
-        payload?.sessionKey?.trim() || host.sessionKey;
+      suppressNextSessionMessageReload(host, payload?.sessionKey?.trim() || host.sessionKey);
     }
   }
 }
@@ -445,14 +508,14 @@ function handleSessionMessageGatewayEvent(
   if (!sessionKey || sessionKey !== host.sessionKey) {
     return;
   }
-  const suppressionHost = host as GatewayHostWithSessionMessageSuppression;
-  if (suppressionHost.suppressNextSessionMessageReloadForSessionKey === sessionKey) {
-    suppressionHost.suppressNextSessionMessageReloadForSessionKey = null;
+  if (shouldSuppressNextSessionMessageReload(host, sessionKey)) {
     return;
   }
   if (isActiveChatFlow(host as GatewayHost & Partial<ChatState>)) {
+    queueDeferredSessionMessageReload(host, sessionKey);
     return;
   }
+  clearDeferredSessionMessageReload(host, sessionKey);
   void loadChatHistory(host as unknown as ChatState);
 }
 
