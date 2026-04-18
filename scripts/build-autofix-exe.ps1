@@ -33,11 +33,16 @@ if (-not $pyExe) {
 }
 Write-Host "Using Python at $pyExe"
 
-# Ensure PyInstaller is installed. Use `python -m pip` so we target the
-# same interpreter we're going to build with.
-$piCheck = & $pyExe -m PyInstaller --version 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installing PyInstaller..."
+# Ensure PyInstaller is installed. Use `python -m pip show` instead of
+# `python -m PyInstaller --version` so the check doesn't write a
+# ModuleNotFoundError to stderr -- which, combined with
+# $ErrorActionPreference = "Stop", would crash the script before the
+# install step runs.
+$ErrorActionPreference = "Continue"
+$piShow = & $pyExe -m pip show pyinstaller 2>&1
+$ErrorActionPreference = "Stop"
+if ($LASTEXITCODE -ne 0 -or -not ($piShow -match "^Name:")) {
+    Write-Host "PyInstaller not found; installing via pip..."
     & $pyExe -m pip install --user pyinstaller
     if ($LASTEXITCODE -ne 0) {
         Write-Error "PyInstaller install failed."
