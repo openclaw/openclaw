@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Anthropic replay: preserve signed and redacted `thinking` blocks verbatim across cross-model replays in `transformTransportMessages`, not only same-model replays. Any mutation of a signed thinking block — including the prior cross-model downgrade to a plain `text` block — invalidates Anthropic's extended-thinking signature and produces a 400 "thinking block cannot be modified" on the next Anthropic-bound retry. Unsigned thinking blocks still downgrade to text on cross-model replay, which is correct because Anthropic requires a signature to replay a thinking block. Fixes #24612, #25347, #35023, #45010, #16825.
 - Agents/bootstrap: resolve bootstrap from workspace truth instead of stale session transcript markers, keep embedded bootstrap instructions on a hidden user-context prelude, suppress normal `/new` and `/reset` greetings while `BOOTSTRAP.md` is still pending, and make the embedded runner read the bootstrap ritual before replying normally.
 - WhatsApp/multi-account: centralize named-account inbound policy, isolate per-account group activation and scoped session keys, preserve legacy activation backfill, and keep `accounts.default` shared defaults aligned across runtime, setup, and compat migration paths. Thanks @mcaxtr.
 - Cron/delivery: clean up isolated sessions after direct deliveries when `deleteAfterRun` is enabled, covering structured and threaded branches that previously bypassed cleanup. (#67807) Thanks @MonkeyLeeT.
