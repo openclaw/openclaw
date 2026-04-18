@@ -41,12 +41,12 @@ describe("setDefaultSecurityHeaders", () => {
     expect(setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
   });
 
-  it("sets Permissions-Policy", () => {
+  it("sets Permissions-Policy that allows microphone for same-origin", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res);
     expect(setHeader).toHaveBeenCalledWith(
       "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=()",
+      "camera=(), microphone=(self), geolocation=()",
     );
   });
 
