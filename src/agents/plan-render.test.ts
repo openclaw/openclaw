@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  renderFullPlanArchetypeMarkdown,
   renderPlanChecklist,
   renderPlanWithHeader,
   type PlanStepForRender,
@@ -398,5 +399,162 @@ describe("HTML escaping", () => {
       expect(out).toContain("&lt;tag&gt;");
       expect(out).toContain("&quot;quoted&quot;");
     });
+  });
+});
+
+describe("renderFullPlanArchetypeMarkdown (PR-14)", () => {
+  const FIXED_DATE = new Date("2026-04-18T12:00:00Z");
+  const minimalSteps: PlanStepForRender[] = [
+    { step: "Step 1", status: "pending" },
+    { step: "Step 2", status: "in_progress", activeForm: "Doing step 2" },
+  ];
+
+  it("renders a minimal plan with only title + steps (optional sections omitted)", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "Minimal plan",
+      plan: minimalSteps,
+      generatedAt: FIXED_DATE,
+    });
+    expect(out).toContain("# Minimal plan");
+    expect(out).toContain("## Plan");
+    // Optional sections must NOT appear when fields are absent.
+    expect(out).not.toContain("## Summary");
+    expect(out).not.toContain("## Analysis");
+    expect(out).not.toContain("## Assumptions");
+    expect(out).not.toContain("## Risks");
+    expect(out).not.toContain("## Verification");
+    expect(out).not.toContain("## References");
+    // Footer is always present.
+    expect(out).toContain("2026-04-18");
+    expect(out).toContain("/plan accept");
+  });
+
+  it("renders the full archetype with all sections in canonical order", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "Full plan",
+      summary: "Refactor the websocket reconnect race condition.",
+      analysis: "Current state: races on close.\n\nProposed: idempotent close + retry.",
+      plan: minimalSteps,
+      assumptions: ["Tests pass on first run", "API is stable"],
+      risks: [{ risk: "Reconnect storm", mitigation: "Exponential backoff" }],
+      verification: ["pnpm test src/ws/ passes", "Manual reconnect smoke"],
+      references: ["src/ws/reconnect.ts:42", "PR #67999"],
+      generatedAt: FIXED_DATE,
+    });
+    // Canonical section order
+    const titleIdx = out.indexOf("# Full plan");
+    const summaryIdx = out.indexOf("## Summary");
+    const analysisIdx = out.indexOf("## Analysis");
+    const planIdx = out.indexOf("## Plan");
+    const assumptionsIdx = out.indexOf("## Assumptions");
+    const risksIdx = out.indexOf("## Risks");
+    const verificationIdx = out.indexOf("## Verification");
+    const referencesIdx = out.indexOf("## References");
+    expect(titleIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeGreaterThan(titleIdx);
+    expect(analysisIdx).toBeGreaterThan(summaryIdx);
+    expect(planIdx).toBeGreaterThan(analysisIdx);
+    expect(assumptionsIdx).toBeGreaterThan(planIdx);
+    expect(risksIdx).toBeGreaterThan(assumptionsIdx);
+    expect(verificationIdx).toBeGreaterThan(risksIdx);
+    expect(referencesIdx).toBeGreaterThan(verificationIdx);
+    // Risk + mitigation rendered as bold + colon
+    expect(out).toContain("**Reconnect storm**: Exponential backoff");
+  });
+
+  it("preserves analysis paragraph breaks (paragraph separator preserved through escape)", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "Para test",
+      analysis: "First paragraph.\n\nSecond paragraph.\n\nThird.",
+      plan: minimalSteps,
+      generatedAt: FIXED_DATE,
+    });
+    // escapeMarkdown escapes the period, but the paragraph TEXT is intact.
+    expect(out).toContain("First paragraph");
+    expect(out).toContain("Second paragraph");
+    expect(out).toContain("Third");
+    // The paragraph break is preserved (\n\n separator between paragraphs).
+    const analysisIdx = out.indexOf("## Analysis");
+    const planIdx = out.indexOf("## Plan");
+    const analysisBody = out.slice(analysisIdx, planIdx);
+    expect(
+      analysisBody.split(/\n\n/).filter((p) => p.trim().length > 0).length,
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it("filters empty entries from list-shaped sections", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "Filter test",
+      plan: minimalSteps,
+      assumptions: ["valid", "  ", ""],
+      verification: ["", "real check"],
+      references: ["   "],
+      generatedAt: FIXED_DATE,
+    });
+    expect(out).toContain("- valid");
+    expect(out).toContain("- real check");
+    // References was all empty/whitespace → section omitted
+    expect(out).not.toContain("## References");
+  });
+
+  it("filters risks entries missing risk OR mitigation", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "Risk filter",
+      plan: minimalSteps,
+      risks: [
+        { risk: "valid risk", mitigation: "valid mitigation" },
+        { risk: "lone risk", mitigation: "" },
+        { risk: "", mitigation: "lone mitigation" },
+      ],
+      generatedAt: FIXED_DATE,
+    });
+    expect(out).toContain("**valid risk**: valid mitigation");
+    expect(out).not.toContain("lone risk");
+    expect(out).not.toContain("lone mitigation");
+  });
+
+  it("neutralizes mention bombs in title + analysis (PR-11 B1 parity)", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "@everyone deploy now",
+      analysis: "Notify @channel and ping <@!12345>",
+      plan: minimalSteps,
+      generatedAt: FIXED_DATE,
+    });
+    // The literal @-mention triggers must NOT appear unbroken
+    expect(out).not.toMatch(/@everyone\b/);
+    expect(out).not.toMatch(/@channel\b/);
+    // Discord raw mention must not survive intact
+    expect(out).not.toContain("<@!12345>");
+  });
+
+  it("escapes markdown special chars in user-controlled fields", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "[evil](link)",
+      summary: "`code injection` attempt",
+      plan: minimalSteps,
+      generatedAt: FIXED_DATE,
+    });
+    // [, ], (, ), ` should all be escaped with backslashes
+    expect(out).toContain("\\[evil\\]\\(link\\)");
+    expect(out).toContain("\\`code injection\\`");
+  });
+
+  it("emits placeholder when plan steps array is empty", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "Empty plan",
+      plan: [],
+      generatedAt: FIXED_DATE,
+    });
+    expect(out).toContain("## Plan");
+    expect(out).toContain("_No plan steps provided._");
+  });
+
+  it("falls back to 'Untitled plan' when title is empty", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "",
+      plan: minimalSteps,
+      generatedAt: FIXED_DATE,
+    });
+    expect(out).toContain("# Untitled plan");
   });
 });

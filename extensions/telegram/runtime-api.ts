@@ -70,12 +70,20 @@ export {
   pinMessageTelegram,
   reactMessageTelegram,
   renameForumTopicTelegram,
+  // PR-14: standalone document/file upload — used by the plan-mode
+  // bridge to deliver a markdown plan file to Telegram chats so users
+  // can read the full plan archetype on their primary platform.
+  // Resolution stays text-based via PR-11's universal /plan slash
+  // commands, sidestepping the dual approval-id problem of trying to
+  // bridge inline buttons through the gateway plugin-approval pipeline.
+  sendDocumentTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
   sendTypingTelegram,
   unpinMessageTelegram,
 } from "./src/send.js";
+export type { TelegramDocumentOpts } from "./src/send.js";
 export {
   createTelegramThreadBindingManager,
   getTelegramThreadBindingManager,

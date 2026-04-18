@@ -1540,6 +1540,151 @@ export async function sendStickerTelegram(
   return { messageId: String(messageId), chatId: resolvedChatId };
 }
 
+/**
+ * PR-14: standalone document/file upload helper. Wraps `api.sendDocument`
+ * with the same retry/diag/threading machinery as `sendMessageTelegram`'s
+ * media branch. Used by the plan-mode bridge to deliver a markdown plan
+ * file to a Telegram chat as an attachment so the user can read the full
+ * plan from their primary platform.
+ *
+ * - `filePath`: absolute path to a local file on disk. Read into a Buffer.
+ * - `caption`: optional caption text. Truncated to 1024 chars (Telegram
+ *   document caption limit). Defaults to `parse_mode: "HTML"` so the
+ *   universal-/plan resolution hint can use `<code>` markup.
+ * - `messageThreadId` / `replyToMessageId`: standard threading shape
+ *   shared with sendMessageTelegram.
+ *
+ * Telegram's document size cap is 50 MiB. We pre-check and reject with a
+ * descriptive error so the caller can fall back to a text-only message
+ * if needed (in practice, plan markdowns are tiny — ~10-50 KB).
+ */
+export type TelegramDocumentOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
+  /** Caption shown beneath the file in the chat. Truncated to 1024 chars. */
+  caption?: string;
+  /** Defaults to "HTML". Pass "MarkdownV2" or omit/empty to disable. */
+  parseMode?: "HTML" | "MarkdownV2";
+  /** Disable the upload + caption notification (silent attachment). */
+  silent?: boolean;
+  /** Message ID to reply to (for threading). */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups). */
+  messageThreadId?: number;
+};
+
+const TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024; // Telegram bot API limit
+const TELEGRAM_CAPTION_MAX_CHARS = 1024;
+
+export async function sendDocumentTelegram(
+  to: string,
+  filePath: string,
+  opts: TelegramDocumentOpts = {},
+): Promise<TelegramSendResult> {
+  if (!filePath?.trim()) {
+    throw new Error("Telegram document filePath is required");
+  }
+  // Defer the fs/path imports to avoid pulling Node-only modules into
+  // any browser/edge runtime that might import this file.
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  let buffer: Buffer;
+  try {
+    buffer = await fs.readFile(filePath);
+  } catch (err) {
+    throw new Error(
+      `sendDocumentTelegram: failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  if (buffer.byteLength > TELEGRAM_DOCUMENT_MAX_BYTES) {
+    throw new Error(
+      `sendDocumentTelegram: file too large for Telegram (${buffer.byteLength} bytes > ${TELEGRAM_DOCUMENT_MAX_BYTES} byte cap)`,
+    );
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+
+  const fileName = path.basename(filePath);
+  const file = new InputFileCtor(buffer, fileName);
+
+  const threadParams = buildTelegramThreadReplyParams({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+    replyToMessageId: opts.replyToMessageId,
+  });
+
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  const captionRaw = opts.caption?.trim() ?? "";
+  const caption =
+    captionRaw.length > TELEGRAM_CAPTION_MAX_CHARS
+      ? captionRaw.slice(0, TELEGRAM_CAPTION_MAX_CHARS - 1) + "…"
+      : captionRaw;
+  const parseMode = opts.parseMode ?? (caption ? "HTML" : undefined);
+
+  const sendParams: Record<string, unknown> = {
+    ...threadParams,
+    ...(caption ? { caption } : {}),
+    ...(parseMode && caption ? { parse_mode: parseMode } : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+  const hasParams = Object.keys(sendParams).length > 0;
+
+  const result = await withTelegramThreadFallback(
+    hasParams ? (sendParams as TelegramThreadScopedParams) : undefined,
+    "document",
+    opts.verbose,
+    async (effectiveParams, label) =>
+      requestWithChatNotFound(
+        () =>
+          api.sendDocument(
+            chatId,
+            file,
+            effectiveParams as Parameters<typeof api.sendDocument>[2],
+          ) as Promise<TelegramMessageLike>,
+        label,
+      ),
+  );
+
+  const messageId = resolveTelegramMessageIdOrThrow(result, "document send");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId);
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { messageId: String(messageId), chatId: resolvedChatId };
+}
+
 type TelegramPollOpts = {
   cfg: OpenClawConfig;
   token?: string;

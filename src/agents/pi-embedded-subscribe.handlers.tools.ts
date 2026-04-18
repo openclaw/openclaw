@@ -1685,6 +1685,32 @@ export async function handleToolExecutionEnd(
         stream: "approval",
         data: approvalData,
       });
+      // PR-14: Telegram plan-mode visibility — generate the full
+      // archetype as a markdown file, persist to disk, send to the
+      // originating Telegram chat as a document attachment.
+      // Resolution still goes through PR-11's universal /plan slash
+      // commands; this bridge is read-only (visibility), no
+      // approval-id translator required.
+      //
+      // void-fired so it never blocks the approval emit or the
+      // autoApproveIfEnabled path that follows. Failures log at warn
+      // and never propagate.
+      if (ctx.params.sessionKey && ctx.params.agentId) {
+        void (async () => {
+          try {
+            const { dispatchPlanArchetypeAttachment } =
+              await import("./plan-mode/plan-archetype-bridge.js");
+            await dispatchPlanArchetypeAttachment({
+              sessionKey: ctx.params.sessionKey!,
+              agentId: ctx.params.agentId!,
+              details,
+              log: ctx.log,
+            });
+          } catch (err) {
+            ctx.log?.warn?.(`plan-bridge import/dispatch failed: ${String(err)}`);
+          }
+        })();
+      }
       // PR-10 auto-mode: if the session has autoApprove=true, fire
       // `sessions.patch { planApproval: { action: "approve" } }`
       // immediately so the agent doesn't wait. The user-visible
