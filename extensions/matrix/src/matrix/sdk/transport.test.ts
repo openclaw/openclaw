@@ -159,4 +159,34 @@ describe("performMatrixRequest", () => {
       (runtimeFetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
     ).toBeDefined();
   });
+
+  it("keeps mocked ambient fetch active in test environments", async () => {
+    const ambientFetch = vi.fn(
+      async () =>
+        new Response('{"ok":true}', {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+    );
+    vi.stubGlobal("fetch", ambientFetch as typeof fetch);
+    const runtimeFetch = vi.fn(async () => {
+      throw new Error("mocked ambient fetch should bypass runtime dispatcher");
+    });
+    stubRuntimeFetch(runtimeFetch as typeof fetch);
+
+    const result = await performMatrixRequest({
+      homeserver: "http://127.0.0.1:8008",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result.text).toBe('{"ok":true}');
+    expect(ambientFetch).toHaveBeenCalledTimes(1);
+    expect(runtimeFetch).not.toHaveBeenCalled();
+  });
 });

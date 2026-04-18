@@ -22,10 +22,7 @@ async function resolveServicePackageRoot(
   }
   const candidates = command.programArguments.filter((value) => /[/\\]/.test(value));
   for (const candidate of candidates) {
-    const root = await resolveOpenClawPackageRoot({
-      argv1: candidate,
-      cwd: command.workingDirectory,
-    }).catch(() => null);
+    const root = await resolveOpenClawPackageRoot({ argv1: candidate }).catch(() => null);
     if (root) {
       return root;
     }

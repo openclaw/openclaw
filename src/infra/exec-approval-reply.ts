@@ -250,6 +250,50 @@ function buildFence(text: string, language?: string): string {
   return `${fence}${languagePrefix}\n${text}\n${fence}`;
 }
 
+export function buildExecApprovalPendingText(params: ExecApprovalPendingReplyParams): string {
+  const approvalCommandId = params.approvalCommandId?.trim() || params.approvalSlug;
+  const allowedDecisions = resolveAllowedDecisions(params);
+  const descriptors = buildExecApprovalActionDescriptors({
+    approvalCommandId,
+    allowedDecisions,
+  });
+  const primaryAction = descriptors[0] ?? null;
+  const warningText = params.warningText?.trim();
+  const lines: string[] = [];
+
+  if (warningText) {
+    lines.push(warningText);
+  }
+
+  lines.push("Approval needed to continue with that command.");
+  lines.push(`Approval ID: ${params.approvalId}`);
+  lines.push(`Host: ${params.host}`);
+  if (params.nodeId) {
+    lines.push(`Node: ${params.nodeId}`);
+  }
+  if (params.cwd) {
+    lines.push(`CWD: ${params.cwd}`);
+  }
+  lines.push("Command:");
+  lines.push(buildFence(params.command, "sh"));
+
+  if (primaryAction) {
+    lines.push("Approve with:");
+    lines.push(buildFence(primaryAction.command, "txt"));
+
+    const fullApprovalCommand = buildExecApprovalCommandText({
+      approvalCommandId: params.approvalId,
+      decision: primaryAction.decision,
+    });
+    if (fullApprovalCommand !== primaryAction.command) {
+      lines.push("If that short code is ambiguous, use the full ID:");
+      lines.push(buildFence(fullApprovalCommand, "txt"));
+    }
+  }
+
+  return lines.join("\n\n");
+}
+
 export function getExecApprovalReplyMetadata(
   payload: ReplyPayload,
 ): ExecApprovalReplyMetadata | null {
@@ -289,25 +333,10 @@ export function getExecApprovalReplyMetadata(
 export function buildExecApprovalPendingReplyPayload(
   params: ExecApprovalPendingReplyParams,
 ): ReplyPayload {
-  const approvalCommandId = params.approvalCommandId?.trim() || params.approvalSlug;
   const allowedDecisions = resolveAllowedDecisions(params);
-  const descriptors = buildExecApprovalActionDescriptors({
-    approvalCommandId,
-    allowedDecisions,
-  });
-  const primaryAction = descriptors[0] ?? null;
-  const lines: string[] = [];
-  const warningText = params.warningText?.trim();
-  if (warningText) {
-    lines.push(warningText);
-  }
-  lines.push("Approval needed to continue with that command.");
-  if (primaryAction) {
-    lines.push(buildFence(primaryAction.command, "txt"));
-  }
 
   return {
-    text: lines.join("\n\n"),
+    text: buildExecApprovalPendingText(params),
     interactive: buildApprovalInteractiveReply({
       approvalId: params.approvalId,
       allowedDecisions,

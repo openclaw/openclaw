@@ -72,32 +72,63 @@ const formatDurationParts = (ms: number): string => {
 };
 
 function normalizeAgentHeartbeatSummary(
-  heartbeat: AgentHealthSummary["heartbeat"],
+  heartbeat: AgentHealthSummary["heartbeat"] | null | undefined,
 ): AgentHealthSummary["heartbeat"] {
-  if (typeof heartbeat.everyMs === "number" && heartbeat.everyMs > 0) {
-    return heartbeat;
-  }
+  const record = asNullableRecord(heartbeat);
+  const everyMs =
+    typeof record?.everyMs === "number" && Number.isFinite(record.everyMs) && record.everyMs > 0
+      ? record.everyMs
+      : null;
+  const model = typeof record?.model === "string" && record.model.trim() ? record.model : undefined;
+  const every =
+    typeof record?.every === "string" && record.every.trim()
+      ? record.every
+      : everyMs === null
+        ? "disabled"
+        : `${Math.round(everyMs / 1000)}s`;
   return {
-    ...heartbeat,
-    enabled: false,
-    every: "disabled",
-    everyMs: null,
+    enabled: everyMs !== null && record?.enabled === true,
+    every: everyMs === null ? "disabled" : every,
+    everyMs,
+    prompt: typeof record?.prompt === "string" ? record.prompt : "",
+    target: typeof record?.target === "string" && record.target.trim() ? record.target : "none",
+    ...(model ? { model } : {}),
+    ackMaxChars:
+      typeof record?.ackMaxChars === "number" && Number.isFinite(record.ackMaxChars)
+        ? Math.max(0, record.ackMaxChars)
+        : 0,
   };
 }
 
 function normalizeHealthSummary(summary: HealthSummary): HealthSummary {
-  const rawAgents = Array.isArray(summary.agents) ? summary.agents : [];
-  const agents = rawAgents.map((agent) => ({
-    ...agent,
-    heartbeat: normalizeAgentHeartbeatSummary(agent.heartbeat),
-  }));
+  const hasAgentArray = Array.isArray(summary.agents);
+  const rawAgents = hasAgentArray ? summary.agents : [];
+  const agents = rawAgents.flatMap((agent) => {
+    const record = asNullableRecord(agent);
+    if (!record) {
+      return [];
+    }
+    return [
+      {
+        ...record,
+        heartbeat: normalizeAgentHeartbeatSummary(
+          record.heartbeat as AgentHealthSummary["heartbeat"],
+        ),
+      } as AgentHealthSummary,
+    ];
+  });
   const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const reportedHeartbeatSeconds =
+    typeof summary.heartbeatSeconds === "number" && Number.isFinite(summary.heartbeatSeconds)
+      ? Math.max(0, summary.heartbeatSeconds)
+      : 0;
   return {
     ...summary,
     agents,
-    heartbeatSeconds: defaultAgent?.heartbeat.everyMs
-      ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
-      : 0,
+    heartbeatSeconds:
+      defaultAgent?.heartbeat.everyMs != null
+        ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+        : reportedHeartbeatSeconds,
   };
 }
 

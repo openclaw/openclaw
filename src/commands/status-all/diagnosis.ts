@@ -133,9 +133,10 @@ export async function appendStatusAllDiagnosis(params: {
   const servicePackageRoot = params.gatewayService.packageRoot ?? null;
   const activeRoot = installState?.activeRoot ?? params.update.root ?? null;
   const activeResolvedRoot = installState?.resolvedRoot ?? activeRoot;
+  const serviceResolvedRoot = servicePackageRoot ? path.resolve(servicePackageRoot) : null;
   const serviceMismatch =
-    activeRoot && servicePackageRoot
-      ? path.resolve(activeRoot) !== path.resolve(servicePackageRoot)
+    activeResolvedRoot && serviceResolvedRoot
+      ? path.resolve(activeResolvedRoot) !== serviceResolvedRoot
       : false;
   const installStateWarn = installState?.suspicious || serviceMismatch;
   emitCheck("Install state integrity", installStateWarn ? "warn" : "ok");
@@ -158,7 +159,7 @@ export async function appendStatusAllDiagnosis(params: {
   }
   if (serviceMismatch && activeRoot && servicePackageRoot) {
     lines.push(
-      `  ${muted(`drift risk: service package root does not match active runtime root (${servicePackageRoot} vs ${activeRoot})`)}`,
+      `  ${muted(`drift risk: service package root does not match active runtime root (${servicePackageRoot} vs ${activeResolvedRoot ?? activeRoot})`)}`,
     );
   }
   if (installStateWarn) {

@@ -116,6 +116,27 @@ describe("status-all diagnosis install-state checks", () => {
     expect(output).toContain("✓ Install state integrity");
     expect(output).not.toContain("drift risk:");
   });
+
+  it("does not flag symlinked service installs when resolved roots match", async () => {
+    const params = createBaseParams([]);
+    params.update = createBaseUpdate({
+      root: "/opt/openclaw/current",
+      installState: {
+        activeRoot: "/opt/openclaw/current",
+        resolvedRoot: "/usr/local/lib/node_modules/openclaw",
+        rootIsSymlink: true,
+        suspicious: false,
+        reasons: [],
+        recoveryHint: undefined,
+      },
+    });
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("✓ Install state integrity");
+    expect(output).not.toContain("service package root does not match active runtime root");
+  });
 });
 
 describe("status-all diagnosis port checks", () => {

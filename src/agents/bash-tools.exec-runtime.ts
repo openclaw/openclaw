@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { buildExecApprovalPendingText } from "../infra/exec-approval-reply.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -319,16 +320,17 @@ export function buildApprovalPendingMessage(params: {
   host: "gateway" | "node";
   nodeId?: string;
 }) {
-  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
-  const primaryDecision = allowedDecisions[0] ?? "allow-once";
-  const lines: string[] = [];
-  const warningText = params.warningText?.trim();
-  if (warningText) {
-    lines.push(warningText);
-  }
-  lines.push("Approval needed to continue with that command.");
-  lines.push(`\`\`\`txt\n/approve ${params.approvalSlug} ${primaryDecision}\n\`\`\``);
-  return lines.join("\n\n");
+  return buildExecApprovalPendingText({
+    warningText: params.warningText,
+    approvalId: params.approvalId,
+    approvalSlug: params.approvalSlug,
+    approvalCommandId: params.approvalSlug,
+    allowedDecisions: params.allowedDecisions ?? resolveExecApprovalAllowedDecisions(),
+    command: params.command,
+    cwd: params.cwd,
+    host: params.host,
+    nodeId: params.nodeId,
+  });
 }
 
 export function resolveApprovalRunningNoticeMs(value?: number) {

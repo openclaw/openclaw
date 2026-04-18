@@ -73,14 +73,22 @@ function expectPendingApprovalText(
   const primaryDecision = (options.allowedDecisions ?? "allow-once|allow-always|deny").split(
     "|",
   )[0];
-  expect(pendingText).toBe(
-    `Approval needed to continue with that command.\n\n\`\`\`txt\n/approve ${details.approvalSlug} ${primaryDecision}\n\`\`\``,
+  expect(pendingText).toContain("Approval needed to continue with that command.");
+  expect(pendingText).toContain(`Approval ID: ${details.approvalId}`);
+  expect(pendingText).toContain("Host:");
+  if (options.host === "node") {
+    expect(pendingText).toContain("Node:");
+  }
+  if (options.cwdText && options.cwdText !== "(node default)") {
+    expect(pendingText).toContain(`CWD: ${options.cwdText}`);
+  }
+  expect(pendingText).toContain("Command:\n\n```sh\n");
+  expect(pendingText).toContain(
+    `\`\`\`txt\n/approve ${details.approvalSlug} ${primaryDecision}\n\`\`\``,
   );
-  expect(pendingText).not.toContain(details.approvalId);
-  expect(pendingText).not.toContain("Host:");
-  expect(pendingText).not.toContain("Node:");
-  expect(pendingText).not.toContain("CWD:");
-  expect(pendingText).not.toContain("Command:");
+  expect(pendingText).toContain(
+    `\`\`\`txt\n/approve ${details.approvalId} ${primaryDecision}\n\`\`\``,
+  );
   return details;
 }
 
@@ -94,8 +102,12 @@ function expectPendingCommandText(
   expect(result.details.status).toBe("approval-pending");
   const text = getResultText(result);
   expect(text).toContain("Approval needed to continue with that command.");
+  expect(text).toContain("Approval ID:");
   expect(text).toContain("```txt\n/approve ");
-  expect(text).not.toContain("Command:\n```sh\n");
+  expect(text).toContain("Command:\n\n```sh\n");
+  if (_expectedCommandText) {
+    expect(text).toContain(_expectedCommandText);
+  }
 }
 
 function mockGatewayOkCalls(calls: string[]) {

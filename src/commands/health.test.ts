@@ -115,7 +115,33 @@ describe("healthCommand", () => {
     const logged = runtime.log.mock.calls[0]?.[0] as string;
     const parsed = JSON.parse(logged) as HealthSummary;
     expect(parsed.agents).toEqual([]);
-    expect(parsed.heartbeatSeconds).toBe(0);
+    expect(parsed.heartbeatSeconds).toBe(123);
+  });
+
+  it("keeps malformed agent heartbeat payloads from crashing json output", async () => {
+    const malformed = {
+      ...createHealthSummary({
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+      }),
+      agents: [null, { agentId: "main", isDefault: true, sessions: defaultSessions }],
+      heartbeatSeconds: 45,
+    } as unknown as HealthSummary;
+    callGatewayMock.mockResolvedValueOnce(malformed);
+
+    await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const logged = runtime.log.mock.calls[0]?.[0] as string;
+    const parsed = JSON.parse(logged) as HealthSummary;
+    expect(parsed.agents).toHaveLength(1);
+    expect(parsed.agents[0]?.heartbeat).toMatchObject({
+      enabled: false,
+      every: "disabled",
+      everyMs: null,
+    });
+    expect(parsed.heartbeatSeconds).toBe(45);
   });
 
   it("formats per-account probe timings", () => {

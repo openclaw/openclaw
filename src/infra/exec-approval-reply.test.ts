@@ -284,7 +284,20 @@ describe("exec approval reply helpers", () => {
       ],
     });
     expect(payload.text).toBe(
-      "Heads up.\n\nApproval needed to continue with that command.\n\n```txt\n/approve slug-1 allow-once\n```",
+      [
+        "Heads up.",
+        "Approval needed to continue with that command.",
+        "Approval ID: req-1",
+        "Host: gateway",
+        "Node: node-1",
+        "CWD: /tmp/work",
+        "Command:",
+        "```sh\necho ok\n```",
+        "Approve with:",
+        "```txt\n/approve slug-1 allow-once\n```",
+        "If that short code is ambiguous, use the full ID:",
+        "```txt\n/approve req-1 allow-once\n```",
+      ].join("\n\n"),
     );
   });
 
@@ -306,7 +319,17 @@ describe("exec approval reply helpers", () => {
       },
     });
     expect(payload.text).toBe(
-      "Approval needed to continue with that command.\n\n```txt\n/approve slug-always allow-once\n```",
+      [
+        "Approval needed to continue with that command.",
+        "Approval ID: req-ask-always",
+        "Host: gateway",
+        "Command:",
+        "```sh\necho ok\n```",
+        "Approve with:",
+        "```txt\n/approve slug-always allow-once\n```",
+        "If that short code is ambiguous, use the full ID:",
+        "```txt\n/approve req-ask-always allow-once\n```",
+      ].join("\n\n"),
     );
     expect(payload.text).not.toContain("allow-always");
     expect(payload.interactive).toEqual({
@@ -362,7 +385,17 @@ describe("exec approval reply helpers", () => {
     });
 
     expect(payload.text).toBe(
-      "Approval needed to continue with that command.\n\n```txt\n/approve req-cmd-2 allow-once\n```",
+      [
+        "Approval needed to continue with that command.",
+        "Approval ID: req-2",
+        "Host: sandbox",
+        "Command:",
+        "````sh\necho ```danger```\n````",
+        "Approve with:",
+        "```txt\n/approve req-cmd-2 allow-once\n```",
+        "If that short code is ambiguous, use the full ID:",
+        "```txt\n/approve req-2 allow-once\n```",
+      ].join("\n\n"),
     );
   });
 
