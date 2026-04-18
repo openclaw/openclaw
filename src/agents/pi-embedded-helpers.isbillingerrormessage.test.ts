@@ -1237,6 +1237,13 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("file lock timeout for /tmp/openclaw-oauth-refresh.lock"),
     ).toBe("refresh_contention");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        code: "refresh_contention",
+        message:
+          "OAuth token refresh failed for openai-codex: OAuth refresh failed (refresh_contention): another process is already refreshing openai-codex for openai-codex:default. Please wait for the in-flight refresh to finish and retry.",
+      }),
+    ).toBe("refresh_contention");
   });
 
   it("classifies wrapped OpenAI Codex callback validation failures distinctly", () => {

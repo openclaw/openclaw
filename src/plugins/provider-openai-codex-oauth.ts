@@ -16,8 +16,26 @@ const localManualFallbackDelayMs = 15_000;
 
 type OpenAICodexOAuthFailureCode = "callback_timeout" | "callback_validation_failed";
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function waitForLocalManualFallbackOutcome(params: {
+  fallbackDelayMs: number;
+  waitForLoginToSettle: Promise<void>;
+}): Promise<"prompt" | "settled"> {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (outcome: "prompt" | "settled") => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      clearTimeout(timeoutHandle);
+      resolve(outcome);
+    };
+    const timeoutHandle = setTimeout(() => finish("prompt"), params.fallbackDelayMs);
+    params.waitForLoginToSettle.then(
+      () => finish("settled"),
+      () => finish("settled"),
+    );
+  });
 }
 
 function createOpenAICodexOAuthError(
@@ -52,11 +70,15 @@ function createManualCodeInputHandler(params: {
   }
 
   return async () => {
-    const outcome = await Promise.race([
-      delay(localManualFallbackDelayMs).then(() => "prompt" as const),
-      params.waitForLoginToSettle.then(() => "settled" as const),
-    ]);
+    const outcome = await waitForLocalManualFallbackOutcome({
+      fallbackDelayMs: localManualFallbackDelayMs,
+      waitForLoginToSettle: params.waitForLoginToSettle,
+    });
     if (outcome === "settled") {
+      // markLoginSettled() runs in loginOpenAICodexOAuth's finally block, so
+      // reaching this branch means the outer login call has already completed.
+      // Return a never-settling promise to suppress an unnecessary manual
+      // prompt without feeding placeholder input back into the upstream flow.
       return await new Promise<string>(() => undefined);
     }
     params.spin.update("Browser callback did not finish. Paste the redirect URL to continue…");

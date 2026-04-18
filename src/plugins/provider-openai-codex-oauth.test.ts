@@ -260,6 +260,33 @@ describe("loginOpenAICodexOAuth", () => {
     vi.useRealTimers();
   });
 
+  it("clears the local manual fallback timer when browser callback settles first", async () => {
+    vi.useFakeTimers();
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: { onManualCodeInput?: () => Promise<string> }) => {
+        expect(opts.onManualCodeInput).toBeTypeOf("function");
+        void opts.onManualCodeInput?.();
+        return {
+          provider: "openai-codex" as const,
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+        };
+      },
+    );
+
+    await expect(runCodexOAuth({ isRemote: false })).resolves.toMatchObject({
+      result: expect.objectContaining({
+        access: "access-token",
+        refresh: "refresh-token",
+      }),
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
   it("continues OAuth flow on non-certificate preflight failures", async () => {
     const creds = {
       provider: "openai-codex" as const,

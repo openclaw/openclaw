@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   acquireFileLock,
   drainFileLockStateForTest,
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
 } from "./file-lock.js";
 
@@ -23,8 +24,9 @@ describe("acquireFileLock", () => {
     }
   });
 
-  it("keeps retrying beyond the configured attempt count when stale windows are much larger", async () => {
+  it("respects the configured retry budget even when stale windows are much larger", async () => {
     const filePath = path.join(tempDir, "oauth-refresh");
+    const lockPath = `${filePath}.lock`;
     const options = {
       retries: {
         retries: 1,
@@ -35,13 +37,22 @@ describe("acquireFileLock", () => {
       stale: 100,
     } as const;
 
-    const first = await acquireFileLock(filePath, options);
-    const second = acquireFileLock(filePath, options);
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+      "utf8",
+    );
     setTimeout(() => {
-      void first.release();
+      void fs.rm(lockPath, { force: true });
     }, 50);
 
-    const acquired = await second;
-    await acquired.release();
+    await expect(acquireFileLock(filePath, options)).rejects.toSatisfy((error) => {
+      expect(error).toMatchObject({
+        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      });
+      expect((error as { lockPath?: string }).lockPath).toBeTruthy();
+      expect((error as { lockPath?: string }).lockPath).toMatch(/oauth-refresh\.lock$/);
+      return true;
+    });
   }, 5_000);
 });

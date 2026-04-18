@@ -451,8 +451,9 @@ function isOAuthRefreshTimeoutMessage(raw: string): boolean {
 
 function isOAuthRefreshContentionMessage(raw: string): boolean {
   return (
-    /\bfile lock timeout\b/i.test(raw) &&
-    /\boauth\b|\bauth-profile\b|\bauth profiles\b|\brefresh\b/i.test(raw)
+    /\brefresh_contention\b/i.test(raw) ||
+    (/\bfile lock timeout\b/i.test(raw) &&
+      /\boauth\b|\bauth-profile\b|\bauth profiles\b|\brefresh\b/i.test(raw))
   );
 }
 
@@ -847,6 +848,9 @@ export function classifyProviderRuntimeFailureKind(
 
   if (!message && typeof status !== "number") {
     return "unknown";
+  }
+  if (normalizedSignal.code === "refresh_contention") {
+    return "refresh_contention";
   }
   if (message && isOAuthRefreshContentionMessage(message)) {
     return "refresh_contention";
