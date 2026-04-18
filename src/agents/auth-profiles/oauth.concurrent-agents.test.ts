@@ -5,23 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
+  OAUTH_AGENT_ENV_KEYS,
+  createExpiredOauthStore,
+  resolveApiKeyForProfileInTest,
+} from "./oauth-test-utils.js";
+import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { OAuthCredential } from "./types.js";
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
 
 async function loadOAuthModuleForTest() {
   ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
-}
-
-function resolveApiKeyForProfileInTest(
-  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
-) {
-  return resolveApiKeyForProfile({ cfg: {}, ...params });
 }
 
 const {
@@ -80,36 +79,8 @@ vi.mock("./external-cli-sync.js", () => ({
     existing !== incoming,
 }));
 
-function createExpiredOauthStore(params: {
-  profileId: string;
-  provider: string;
-  access?: string;
-  refresh?: string;
-  accountId?: string;
-  email?: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access ?? "cached-access-token",
-        refresh: params.refresh ?? "refresh-token",
-        expires: Date.now() - 60_000,
-        accountId: params.accountId,
-        email: params.email,
-      } satisfies OAuthCredential,
-    },
-  };
-}
-
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let mainAgentDir = "";
 
@@ -183,7 +154,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     // performed; the remaining agents adopt the resulting fresh credentials.
     const results = await Promise.all(
       subAgents.map((agentDir) =>
-        resolveApiKeyForProfileInTest({
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
           store: ensureAuthProfileStore(agentDir),
           profileId,
           agentDir,
