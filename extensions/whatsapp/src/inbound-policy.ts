@@ -89,10 +89,9 @@ export function resolveWhatsAppInboundPolicy(params: {
   const dmPolicy = account.dmPolicy ?? "pairing";
   const dmAllowFrom =
     configuredAllowFrom.length > 0 ? configuredAllowFrom : params.selfE164 ? [params.selfE164] : [];
-  const groupAllowFrom =
-    account.groupAllowFrom ??
-    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined) ??
-    [];
+  // Only use explicit groupAllowFrom. DM allowFrom entries (from pairing)
+  // should not grant group access or bypass the group allowlist gate.
+  const groupAllowFrom = account.groupAllowFrom ?? [];
   const { effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
     allowFrom: configuredAllowFrom,
     groupAllowFrom,
