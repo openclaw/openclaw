@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/io.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
@@ -494,66 +494,68 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
-  it("uses exec-approvals ask=off to suppress gateway prompts", async () => {
-    await expectGatewayExecWithoutApproval({
-      config: {
-        version: 1,
-        defaults: { security: "full", ask: "off", askFallback: "full" },
-        agents: {
-          main: { security: "full", ask: "off", askFallback: "full" },
+  it("uses exec-approvals defaults to suppress gateway prompts", async () => {
+    const cases: Array<{
+      config: Record<string, unknown>;
+      ask?: "always" | "on-miss" | "off";
+      security?: "allowlist" | "full";
+    }> = [
+      {
+        config: {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {
+            main: { security: "full", ask: "off", askFallback: "full" },
+          },
+        },
+        ask: "on-miss",
+      },
+      {
+        config: {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {},
         },
       },
-      command: "echo ok",
-      ask: "on-miss",
-    });
-  });
-
-  it("inherits ask=off from exec-approvals defaults when tool ask is unset", async () => {
-    await expectGatewayExecWithoutApproval({
-      config: {
-        version: 1,
-        defaults: { security: "full", ask: "off", askFallback: "full" },
-        agents: {},
+      {
+        config: {
+          version: 1,
+          defaults: { security: "full", ask: "off", askFallback: "full" },
+          agents: {},
+        },
+        security: undefined,
       },
-      command: "echo ok",
-    });
+    ];
+
+    for (const testCase of cases) {
+      await expectGatewayExecWithoutApproval({
+        ...testCase,
+        command: "echo ok",
+      });
+    }
   });
 
-  it("inherits security=full from exec-approvals defaults when tool security is unset", async () => {
-    await expectGatewayExecWithoutApproval({
-      config: {
-        version: 1,
-        defaults: { security: "full", ask: "off", askFallback: "full" },
-        agents: {},
-      },
-      command: "echo ok",
-      security: undefined,
-    });
-  });
-
-  it("keeps ask=always prompts even when durable allow-always trust matches", async () => {
-    const result = await expectGatewayAskAlwaysPrompt({
+  it("keeps ask=always prompts for durable and static allowlist entries", async () => {
+    const durable = await expectGatewayAskAlwaysPrompt({
       turnId: "call-gateway-durable-still-prompts",
       allowlist: [{ pattern: process.execPath, source: "allow-always" }],
     });
 
-    expect(result.details.status).toBe("approval-pending");
-    expect(result.details).toMatchObject({
+    expect(durable.details.status).toBe("approval-pending");
+    expect(durable.details).toMatchObject({
       allowedDecisions: ["allow-once", "deny"],
     });
-    expect(getResultText(result)).toContain("Reply with: /approve ");
-    expect(getResultText(result)).toContain("allow-once|deny");
-    expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
-    expect(getResultText(result)).toContain("Allow Always is unavailable");
-  });
+    expect(getResultText(durable)).toContain("Reply with: /approve ");
+    expect(getResultText(durable)).toContain("allow-once|deny");
+    expect(getResultText(durable)).not.toContain("allow-once|allow-always|deny");
+    expect(getResultText(durable)).toContain("Allow Always is unavailable");
 
-  it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
-    const result = await expectGatewayAskAlwaysPrompt({
+    const staticAllowlist = await expectGatewayAskAlwaysPrompt({
       turnId: "call-static-allowlist-still-prompts",
       allowlist: [{ pattern: process.execPath }],
     });
 
-    expect(result.details.status).toBe("approval-pending");
+    expect(staticAllowlist.details.status).toBe("approval-pending");
   });
 
   it("reuses gateway allow-always approvals for repeated exact commands", async () => {
