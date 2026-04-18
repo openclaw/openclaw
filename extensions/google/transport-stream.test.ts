@@ -1,18 +1,32 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
+vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
+  ...(await importOriginal()),
   buildGuardedModelFetch: buildGuardedModelFetchMock,
 }));
 
-let buildGoogleGenerativeAiParams: typeof import("./google-transport-stream.js").buildGoogleGenerativeAiParams;
-let createGoogleGenerativeAiTransportStreamFn: typeof import("./google-transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
+let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
+let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
+
+const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRequestTransport",
+);
+
+function attachModelProviderRequestTransport<TModel extends object>(
+  model: TModel,
+  request: unknown,
+): TModel {
+  return {
+    ...model,
+    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request,
+  };
+}
 
 function buildGeminiModel(
   overrides: Partial<Model<"google-generative-ai">> = {},
@@ -50,7 +64,7 @@ function buildSseResponse(events: unknown[]): Response {
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({ buildGoogleGenerativeAiParams, createGoogleGenerativeAiTransportStreamFn } =
-      await import("./google-transport-stream.js"));
+      await import("./transport-stream.js"));
   });
 
   beforeEach(() => {
@@ -70,7 +84,10 @@ describe("google transport stream", () => {
                 parts: [
                   { thought: true, text: "draft", thoughtSignature: "sig_1" },
                   { text: "answer" },
-                  { functionCall: { name: "lookup", args: { q: "hello" } } },
+                  {
+                    thoughtSignature: "call_sig_1",
+                    functionCall: { name: "lookup", args: { q: "hello" } },
+                  },
                 ],
               },
               finishReason: "STOP",
@@ -182,7 +199,12 @@ describe("google transport stream", () => {
       content: [
         { type: "thinking", thinking: "draft", thinkingSignature: "sig_1" },
         { type: "text", text: "answer" },
-        { type: "toolCall", name: "lookup", arguments: { q: "hello" } },
+        {
+          type: "toolCall",
+          name: "lookup",
+          arguments: { q: "hello" },
+          thoughtSignature: "call_sig_1",
+        },
       ],
     });
   });
@@ -260,6 +282,45 @@ describe("google transport stream", () => {
     expect(params.contents[0]).toMatchObject({
       role: "model",
       parts: [{ functionCall: { name: "lookup", args: {} } }],
+    });
+  });
+
+  it("replays Gemini tool call thought signatures for same-model history", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3-flash-preview",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: { q: "hello" },
+              thoughtSignature: "call_sig_1",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "call_sig_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
     });
   });
 

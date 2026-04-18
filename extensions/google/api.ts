@@ -2,7 +2,8 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
-import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
+import { parseGeminiAuth } from "./gemini-auth.js";
+export { parseGeminiAuth };
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -24,6 +25,10 @@ export {
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
 export {
+  buildGoogleGenerativeAiParams,
+  createGoogleGenerativeAiTransportStreamFn,
+} from "./transport-stream.js";
+export {
   DEFAULT_GOOGLE_API_BASE_URL,
   isGoogleGenerativeAiApi,
   normalizeGoogleApiBaseUrl,
@@ -36,25 +41,6 @@ export {
 } from "./provider-policy.js";
 export { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 export { buildGoogleProvider } from "./provider-registration.js";
-
-export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  const parsed = apiKey.startsWith("{") ? parseGoogleOauthApiKey(apiKey) : null;
-  if (parsed?.token) {
-    return {
-      headers: {
-        Authorization: `Bearer ${parsed.token}`,
-        "Content-Type": "application/json",
-      },
-    };
-  }
-
-  return {
-    headers: {
-      "x-goog-api-key": apiKey,
-      "Content-Type": "application/json",
-    },
-  };
-}
 
 function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
   const normalized =
