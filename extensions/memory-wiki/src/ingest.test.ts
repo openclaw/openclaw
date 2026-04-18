@@ -260,10 +260,11 @@ describe("ingestMemoryWikiSource", () => {
       title: "Shared Source",
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
     });
+    const canonicalActualPath = await fs.realpath(actualPath);
 
     expect(first.pageId).toBe(second.pageId);
     expect(first.pagePath).toBe(second.pagePath);
     expect(second.created).toBe(false);
-    expect(second.sourcePath).toBe(actualPath);
+    expect(second.sourcePath).toBe(canonicalActualPath);
   });
 });
