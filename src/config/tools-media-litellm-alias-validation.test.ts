@@ -64,6 +64,44 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
+  it("accepts CLI media entries even when legacy provider/model fields resemble LiteLLM aliases", () => {
+    const sharedCli = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              type: "cli",
+              command: "echo",
+              args: ["ok"],
+              provider: "litellm",
+              model: "vision",
+            },
+          ],
+        },
+      },
+    });
+    const imageCli = validateConfigObject({
+      tools: {
+        media: {
+          image: {
+            models: [
+              {
+                type: "cli",
+                command: "echo",
+                args: ["ok"],
+                provider: "litellm",
+                model: "complex",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(sharedCli.ok).toBe(true);
+    expect(imageCli.ok).toBe(true);
+  });
+
   it("rejects agents.defaults.imageModel aliases when tools.media.image may fall back to them", () => {
     const res = validateConfigObject({
       tools: {
@@ -157,6 +195,43 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
+  it("rejects agents.defaults.imageModel aliases when explicit image entries cannot resolve for image", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                type: "provider",
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: "litellm/vision",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel",
+        }),
+      ]),
+    );
+  });
+
   it("accepts agents.defaults.imageModel aliases when shared media provider capability is unknown", () => {
     const res = validateConfigObject({
       tools: {
@@ -168,6 +243,39 @@ describe("tools.media LiteLLM alias validation", () => {
               type: "provider",
             },
           ],
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "litellm/vision",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.defaults.imageModel aliases when shared media providers are plugin-capable but config-only", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "custom-image",
+              model: "custom-model",
+              type: "provider",
+            },
+          ],
+        },
+      },
+      models: {
+        providers: {
+          "custom-image": {
+            baseUrl: "https://example.com/v1",
+            models: [],
+          },
         },
       },
       agents: {

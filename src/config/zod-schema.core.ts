@@ -784,10 +784,15 @@ export function formatLiteLLMMediaRoutingAliasMessage(): string {
 }
 
 function addLiteLLMMediaAliasIssue(params: {
-  value: { provider?: string; model?: string } | undefined;
+  value:
+    | { provider?: string; model?: string; type?: "provider" | "cli"; command?: string }
+    | undefined;
   ctx: z.RefinementCtx;
   pathPrefix: Array<string | number>;
 }) {
+  if (params.value?.type === "cli" || params.value?.command) {
+    return;
+  }
   const model = normalizeLiteLLMMediaRoutingAliasModel(params.value?.provider, params.value?.model);
   if (!model) {
     return;

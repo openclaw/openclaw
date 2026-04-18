@@ -166,7 +166,7 @@ type MediaAliasValidationConfig = {
       models?: Array<MediaUnderstandingModelConfig | undefined>;
       image?: {
         enabled?: boolean;
-        models?: unknown[];
+        models?: Array<MediaUnderstandingModelConfig | undefined>;
       };
     };
   };
@@ -179,6 +179,16 @@ type MediaAliasValidationConfig = {
 };
 
 type SharedMediaImageCapability = "image" | "non-image" | "unknown";
+
+function resolveCapabilityConfigImageEntry(
+  entry: MediaUnderstandingModelConfig | undefined,
+): boolean {
+  const configuredCapabilities = entry ? resolveConfiguredMediaEntryCapabilities(entry) : undefined;
+  if (!configuredCapabilities) {
+    return Boolean(entry);
+  }
+  return configuredCapabilities.includes("image");
+}
 
 function resolveConfigProviderImageCapability(params: {
   cfg: MediaAliasValidationConfig;
@@ -195,7 +205,7 @@ function resolveConfigProviderImageCapability(params: {
     const hasImageModel = (providerCfg.models ?? []).some(
       (model) => Array.isArray(model?.input) && model.input.includes("image"),
     );
-    return hasImageModel ? "image" : "non-image";
+    return hasImageModel ? "image" : "unknown";
   }
   return "unknown";
 }
@@ -233,11 +243,12 @@ function toolsMediaImageCanFallBackToAgentDefaults(cfg: MediaAliasValidationConf
   if (media?.image?.enabled === false) {
     return false;
   }
-  if ((media?.image?.models?.length ?? 0) > 0) {
-    return false;
-  }
   if (!media) {
     return true;
+  }
+  const imageModels = media.image?.models ?? [];
+  if (imageModels.some((entry) => resolveCapabilityConfigImageEntry(entry))) {
+    return false;
   }
   const sharedModels = media.models ?? [];
   if (sharedModels.length === 0) {
