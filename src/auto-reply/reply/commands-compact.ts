@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -34,6 +35,17 @@ function extractCompactInstructions(params: {
     rest = rest.slice(1).trimStart();
   }
   return rest.length ? rest : undefined;
+}
+
+function estimateTokensFromSessionFile(sessionFile: string | undefined): number | undefined {
+  if (!sessionFile) return undefined;
+  try {
+    const stat = statSync(sessionFile);
+    if (!stat.isFile() || stat.size <= 0) return undefined;
+    return Math.floor(stat.size / 4);
+  } catch {
+    return undefined;
+  }
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
@@ -109,6 +121,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
+  const observedContextTokens =
+    typeof params.contextTokens === "number" && params.contextTokens > 0
+      ? params.contextTokens
+      : typeof targetSessionEntry.contextTokens === "number" &&
+          targetSessionEntry.contextTokens > 0
+        ? targetSessionEntry.contextTokens
+        : undefined;
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
@@ -143,6 +162,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       defaultLevel: "off",
     },
     customInstructions,
+    currentTokenCount: observedContextTokens,
     trigger: "manual",
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
@@ -151,11 +171,22 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const compactLabel =
     result.ok || isCompactionSkipReason(result.reason)
       ? result.compacted
-        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-          : result.result?.tokensBefore
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
-            : "Compacted"
+        ? (() => {
+            const before = result.result?.tokensBefore;
+            const after = result.result?.tokensAfter;
+            const hasBefore = typeof before === "number" && before > 0;
+            const hasAfter = typeof after === "number" && after >= 0;
+            if (hasBefore && hasAfter && before > after) {
+              return `Compacted (${runtime.formatTokenCount(before)} → ${runtime.formatTokenCount(after)})`;
+            }
+            if (hasBefore) {
+              return `Compacted (${runtime.formatTokenCount(before)} before)`;
+            }
+            if (hasAfter) {
+              return `Compacted (≈${runtime.formatTokenCount(after)} after)`;
+            }
+            return "Compacted";
+          })()
         : "Compaction skipped"
       : "Compaction failed";
   if (result.ok && result.compacted) {
@@ -169,10 +200,26 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       tokensAfter: result.result?.tokensAfter,
     });
   }
-  // Use the post-compaction token count for context summary if available
+  // Use the post-compaction token count for context summary if available.
+  // Fall back to a JSONL file-size estimate when the stored totalTokens is
+  // stale — this can happen for backends that don't report usage back on
+  // every turn, leaving the stored value near zero.
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+  const storedTotal = runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+  const sessionFilePath = runtime.resolveSessionFilePath(
+    sessionId,
+    targetSessionEntry,
+    runtime.resolveSessionFilePathOptions({
+      agentId: sessionAgentId,
+      storePath: params.storePath,
+    }),
+  );
+  const fileEstimate = estimateTokensFromSessionFile(sessionFilePath);
+  const fallbackTotal =
+    typeof storedTotal === "number" && typeof fileEstimate === "number"
+      ? Math.max(storedTotal, fileEstimate)
+      : (storedTotal ?? fileEstimate);
+  const totalTokens = tokensAfterCompaction ?? fallbackTotal;
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? targetSessionEntry.contextTokens ?? null,
