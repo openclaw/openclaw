@@ -36,6 +36,7 @@ import { logVerbose } from "../../globals.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -51,12 +52,13 @@ type PlanSubcommand =
   | { kind: "restate" }
   | { kind: "auto"; autoEnabled: boolean }
   | { kind: "accept"; allowEdits: boolean }
-  | { kind: "revise"; feedback: string };
+  | { kind: "revise"; feedback: string }
+  | { kind: "answer"; answer: string };
 
 type ParsedPlanCommand = { ok: true; sub: PlanSubcommand } | { ok: false; error: string };
 
 const PLAN_USAGE_TEXT =
-  "Usage: /plan <accept|accept edits|revise <feedback>|on|off|status|view|auto on|auto off|restate>";
+  "Usage: /plan <accept|accept edits|revise <feedback>|answer <text>|on|off|status|view|auto on|auto off|restate>";
 
 function parsePlanCommand(raw: string, channel: string): ParsedPlanCommand | null {
   const trimmed = raw.trim();
@@ -121,6 +123,22 @@ function parsePlanCommand(raw: string, channel: string): ParsedPlanCommand | nul
       }
       return { ok: false, error: `Unrecognized /plan auto value "${second}". Use on|off.` };
     }
+    case "answer": {
+      // PR-11 review fix (Codex P1 #3105075577): text-channel users
+      // need a way to answer ask_user_question prompts since the
+      // approval card with inline option buttons only renders in
+      // webchat (and Telegram via the markdown-attachment path,
+      // which doesn't include buttons). Routes to
+      // sessions.patch { planApproval: { action: "answer", answer }}.
+      if (!tail) {
+        return {
+          ok: false,
+          error:
+            "Usage: /plan answer <text> — answer the agent's ask_user_question prompt. The text becomes the chosen option (or a free-text response if the agent allowed it).",
+        };
+      }
+      return { ok: true, sub: { kind: "answer", answer: tail } };
+    }
     default:
       return { ok: false, error: PLAN_USAGE_TEXT };
   }
@@ -132,36 +150,20 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
-// Channels that ONLY accept plaintext (no markdown / HTML rendering).
-// Includes SMS-like surfaces, voice surfaces, and chats where markdown
-// markers leak as raw text (IRC, line, qqbot, zalo). Sourced from the
-// bundled-plugin manifests + extension capability docs.
-const PLAINTEXT_ONLY_CHANNELS = new Set([
-  "imessage",
-  "bluebubbles",
-  "sms",
-  "signal",
-  "irc",
-  "nostr",
-  "voice-call",
-  "voice",
-  "line",
-  "qqbot",
-  "zalo",
-  "zalouser",
-]);
-
 function pickPlanRenderFormat(channel: string): PlanRenderFormat {
   // Map the channel id to the closest renderer the channel can show
   // natively.
   // - Telegram supports HTML parse_mode.
   // - Slack uses mrkdwn (`*bold*`, `~strike~`).
-  // - SMS-like / voice / pre-markdown channels need plaintext (raw `**`
-  //   would render literally).
-  // - Markdown is the safe default for everything else (Discord,
-  //   Matrix, Mattermost, MSTeams, GoogleChat, Feishu, web, cli, etc).
-  // Review M4: broaden the plaintext list to cover irc/nostr/voice/line/
-  // qqbot/zalo/zalouser per the bundled-plugin channel inventory.
+  // - All other channels: consult the channel-meta registry's
+  //   `markdownCapable` flag (PR-11 review fix Codex P2 #3104742929).
+  //   Markdown-capable channels (Discord, Matrix, Mattermost, MSTeams,
+  //   GoogleChat, Feishu, web, CLI, WhatsApp, etc) get markdown.
+  //   Channels that declare `markdownCapable: false` (SMS-like, voice,
+  //   pre-markdown surfaces) get plaintext so raw `**bold**` doesn't
+  //   leak as literal text. This delegates to the same registry that
+  //   `isMarkdownCapableMessageChannel` uses elsewhere — no separate
+  //   hardcoded list to drift out of sync.
   const lc = channel.toLowerCase();
   if (lc === "telegram") {
     return "html";
@@ -169,7 +171,10 @@ function pickPlanRenderFormat(channel: string): PlanRenderFormat {
   if (lc === "slack") {
     return "slack-mrkdwn";
   }
-  if (PLAINTEXT_ONLY_CHANNELS.has(lc)) {
+  // Lazy-load the registry helper to keep this module's eager
+  // dependencies minimal (the helper pulls in the channel registry
+  // which has its own startup cost).
+  if (!isMarkdownCapableMessageChannel(lc)) {
     return "plaintext";
   }
   return "markdown";
@@ -274,17 +279,26 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
     // PLAN_STEP_STATUSES). Coerce here so the call type-checks; if a
     // future runtime shape diverges, the renderer's switch falls
     // through to the pending case as a defensive default.
-    let checklist = renderPlanChecklist(steps as PlanStepForRender[], format);
-    // PR-11 deep-dive review M7: cap the rendered checklist below the
-    // tightest channel limit (Telegram + WhatsApp = 4096 chars). Long
-    // multi-step plans with `acceptanceCriteria` would otherwise be
-    // rejected by the channel transport or truncated mid-step.
-    // 3500 chars leaves headroom for the title prefix + footer.
+    //
+    // PR-11 review fix (Codex P1 #3104742928): truncate the STEPS
+    // array first, then render. Pre-fix the truncation sliced the
+    // rendered string at an arbitrary char boundary, which on
+    // Telegram (HTML format) could cut through `<b>...</b>` /
+    // `<s>...</s>` tags and produce malformed parse_mode content
+    // that Telegram rejects entirely. Step-aware truncation keeps
+    // each rendered line whole.
     const RESTATE_SOFT_CAP = 3500;
-    if (checklist.length > RESTATE_SOFT_CAP) {
-      const truncated = checklist.slice(0, RESTATE_SOFT_CAP);
-      const remainingSteps = steps.length - (truncated.match(/\n/g)?.length ?? 0) - 1;
-      checklist = `${truncated}\n… (${Math.max(remainingSteps, 0)} more line(s) — open the plan-view sidebar in Control UI for the full checklist)`;
+    let renderedSteps = steps as PlanStepForRender[];
+    let droppedCount = 0;
+    let checklist = renderPlanChecklist(renderedSteps, format);
+    while (checklist.length > RESTATE_SOFT_CAP && renderedSteps.length > 1) {
+      droppedCount += 1;
+      renderedSteps = renderedSteps.slice(0, -1);
+      checklist = renderPlanChecklist(renderedSteps, format);
+    }
+    if (droppedCount > 0) {
+      const footerNote = `\n… (${droppedCount} more step(s) truncated — open the plan-view sidebar in Control UI for the full checklist)`;
+      checklist = `${checklist}${footerNote}`;
     }
     return {
       shouldContinue: false,
@@ -338,6 +352,27 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
           text: sub.autoEnabled
             ? "Plan auto-approve **enabled** — future plan submissions resolve as approved without confirmation."
             : "Plan auto-approve **disabled** — plan submissions require manual confirmation.",
+        },
+      };
+    }
+    if (sub.kind === "answer") {
+      // PR-11 review fix (Codex P1 #3105075577): /plan answer routes
+      // through the same sessions.patch action="answer" path as the
+      // webchat question card. Server-side is a no-op (state stays
+      // in plan mode) — the actual injection happens via the runtime
+      // synthesizing the [QUESTION_ANSWER] user message.
+      await callPatch({
+        planApproval: { action: "answer", answer: sub.answer },
+      });
+      // Also inject the answer as a synthetic user message so the
+      // agent's next turn picks it up (mirrors the webchat flow).
+      const safeEcho = sub.answer
+        .replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1")
+        .replace(/<@/g, "<\u200B@");
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `Question answered: "${safeEcho}"`,
         },
       };
     }

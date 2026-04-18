@@ -75,7 +75,29 @@ export function startGatewayEventSubscriptions(params: {
   // after each update_plan call so the Control UI can rebuild the
   // live-plan sidebar after a hard refresh. See
   // `plan-snapshot-persister.ts` for details.
-  const planSnapshotUnsub = params.minimalTestGateway ? null : startPlanSnapshotPersister({});
+  //
+  // PR-11 review fix (Copilot #3105169600): wire `emitSessionsChanged`
+  // so the persister broadcasts `sessions.changed` to UI subscribers
+  // when it writes `lastPlanSteps` or auto-flips `planMode → "normal"`
+  // on close-on-complete. Without this, the persister silently mutates
+  // session state outside the `sessions.patch` RPC handler and the UI
+  // never gets a refresh signal — the live-plan sidebar drifts behind
+  // the runtime until the user manually refreshes.
+  const planSnapshotUnsub = params.minimalTestGateway
+    ? null
+    : startPlanSnapshotPersister({
+        emitSessionsChanged: ({ sessionKey, reason }) => {
+          const connIds = params.sessionEventSubscribers.getAll();
+          if (connIds.size === 0) {
+            return;
+          }
+          params.broadcastToConnIds(
+            "sessions.changed",
+            { sessionKey, reason, ts: Date.now() },
+            connIds,
+          );
+        },
+      });
 
   return {
     agentUnsub,

@@ -2481,20 +2481,27 @@ export function renderApp(state: AppViewState) {
                 // Render the proposed plan as a markdown document and
                 // hand it to the existing markdown-sidebar viewer (same
                 // surface tool-output details use).
+                //
+                // PR-10 review fix (Copilot #3104741606): build the
+                // strikethrough as `~~${label}~~` (no space between
+                // `~~` and the label) so the rendered output is clean
+                // markdown. Pre-fix the marker `"[ ] ~~"` left a
+                // leading space inside the strikethrough that
+                // produced inconsistent rendering vs other markdown
+                // surfaces.
                 const stepLines = request.plan
                   .map((step, i) => {
-                    const marker =
-                      step.status === "completed"
-                        ? "[x]"
-                        : step.status === "cancelled"
-                          ? "[ ] ~~"
-                          : "[ ]";
-                    const close = step.status === "cancelled" ? "~~" : "";
                     const label =
                       step.status === "in_progress" && step.activeForm
                         ? step.activeForm
                         : step.step;
-                    return `${i + 1}. ${marker} ${label}${close}`;
+                    if (step.status === "completed") {
+                      return `${i + 1}. [x] ${label}`;
+                    }
+                    if (step.status === "cancelled") {
+                      return `${i + 1}. [ ] ~~${label}~~ (cancelled)`;
+                    }
+                    return `${i + 1}. [ ] ${label}`;
                   })
                   .join("\n");
                 const md = `# ${request.summary || "Proposed plan"}\n\n${stepLines}\n`;

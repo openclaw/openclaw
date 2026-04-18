@@ -16,8 +16,18 @@
  * `/plan answer <choice>` text command on plain channels.
  */
 import { Type } from "@sinclair/typebox";
-import { describeAskUserQuestionTool } from "../tool-description-presets.js";
+import {
+  ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY,
+  describeAskUserQuestionTool,
+} from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
+
+// PR-10 review fix (Copilot #3104741583 / #3105169120): re-export the
+// preset so existing callers that imported the constant from this
+// module keep working, but the canonical definition lives in
+// tool-description-presets.ts (single source of truth — same pattern
+// as enter_plan_mode / exit_plan_mode display summaries).
+export { ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY };
 
 const AskUserQuestionToolSchema = Type.Object({
   question: Type.String({
@@ -48,9 +58,6 @@ export interface CreateAskUserQuestionToolOptions {
   /** Stable run identifier — used to scope question approvals to the run. */
   runId?: string;
 }
-
-export const ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY =
-  "Ask the user a multiple-choice question and pause for the answer.";
 
 export function createAskUserQuestionTool(
   _options?: CreateAskUserQuestionToolOptions,

@@ -146,6 +146,32 @@ export async function executeSlashCommand(
  * All paths are validated against the gateway's
  * `agents.defaults.planMode.enabled` opt-in gate.
  */
+/**
+ * PR-11 review: shared error mapper for the universal /plan
+ * subcommands. Maps gateway errors to friendly chat messages.
+ */
+function mapPlanCommandError(err: unknown, verb: string): SlashCommandResult {
+  const msg = String(err);
+  if (msg.includes("plan mode is disabled")) {
+    return {
+      content:
+        "Plan mode is disabled at the config level. Set `agents.defaults.planMode.enabled: true` and restart the gateway.",
+    };
+  }
+  if (msg.includes("stale approvalId") || msg.includes("terminal approval state")) {
+    return {
+      content:
+        "Plan was already resolved (likely a duplicate command). Use `/plan status` to see the current state.",
+    };
+  }
+  if (msg.includes("requires an active plan-mode session")) {
+    return {
+      content: `No pending plan to ${verb} — the agent hasn't submitted a plan via exit_plan_mode yet, or the previous one was already resolved.`,
+    };
+  }
+  return { content: `Failed to ${verb}: ${msg}` };
+}
+
 async function executePlan(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -197,17 +223,89 @@ async function executePlan(
       return { content: `Failed to set plan auto-approve: ${msg}` };
     }
   }
+  // PR-11 review fix (Copilot #3105169610): the universal /plan
+  // subcommands (accept | accept edits | revise <feedback> | restate |
+  // answer <text>) were intercepted by the local executor's old
+  // "on/off/status/view/auto only" gate and rejected before reaching
+  // the backend handler. Route them to the same sessions.patch shapes
+  // that backend `commands-plan.ts` uses so webchat has parity with
+  // every other channel (Telegram/Discord/Slack/etc).
+  if (raw === "accept" || raw.startsWith("accept ")) {
+    const allowEdits = raw === "accept edits" || raw === "accept edit";
+    try {
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        planApproval: { action: allowEdits ? "edit" : "approve" },
+      });
+      return {
+        content: allowEdits
+          ? "Plan **accepted with edits** — agent may adjust steps as it executes."
+          : "Plan **accepted** — agent will execute as proposed.",
+        action: "refresh",
+      };
+    } catch (err) {
+      return mapPlanCommandError(err, "accept");
+    }
+  }
+  if (raw === "revise" || raw.startsWith("revise ")) {
+    const feedback = args.trim().slice(6).trim();
+    if (!feedback) {
+      return {
+        content:
+          "Usage: `/plan revise <feedback>` — give the agent something to revise toward, e.g. `/plan revise add error handling for the websocket reconnect`.",
+      };
+    }
+    try {
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        planApproval: { action: "reject", feedback },
+      });
+      return {
+        content: `Plan returned for revision with feedback: "${feedback}"`,
+        action: "refresh",
+      };
+    } catch (err) {
+      return mapPlanCommandError(err, "revise");
+    }
+  }
+  if (raw === "answer" || raw.startsWith("answer ")) {
+    const answer = args.trim().slice(6).trim();
+    if (!answer) {
+      return {
+        content: "Usage: `/plan answer <text>` — answer the agent's `ask_user_question` prompt.",
+      };
+    }
+    try {
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        planApproval: { action: "answer", answer },
+      });
+      return { content: `Question answered: "${answer}"`, action: "refresh" };
+    } catch (err) {
+      return mapPlanCommandError(err, "answer");
+    }
+  }
+  if (raw === "restate") {
+    // Webchat already shows the live plan in the sidebar; redirect to
+    // /plan view rather than duplicating the rendered plan in chat.
+    return {
+      content:
+        "On webchat, use `/plan view` (or click the Plan view button in the chat controls) to see the active plan in the sidebar.",
+      action: "toggle-plan-view",
+    };
+  }
+
   if (!raw || raw === "status") {
     return {
       content: formatDirectiveOptions(
-        "Usage: `/plan on` to enter plan mode, `/plan off` to exit, `/plan view` to toggle the sidebar, `/plan auto on|off` to toggle auto-approve.",
-        "on, off, status, view, auto",
+        "Usage: `/plan on` to enter plan mode, `/plan off` to exit, `/plan view` to toggle the sidebar, `/plan auto on|off` to toggle auto-approve, `/plan accept`/`/plan accept edits`/`/plan revise <feedback>`/`/plan answer <text>` to resolve.",
+        "on, off, status, view, auto, accept, revise, answer",
       ),
     };
   }
   if (raw !== "on" && raw !== "off") {
     return {
-      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status, view, auto.`,
+      content: `Unrecognized plan-mode value "${args.trim()}". Valid: on, off, status, view, auto, accept, revise, answer.`,
     };
   }
   const mode: "plan" | "normal" = raw === "on" ? "plan" : "normal";

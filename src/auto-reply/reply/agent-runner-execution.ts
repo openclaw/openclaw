@@ -1100,10 +1100,18 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             let attemptCompactionCount = 0;
             try {
+              // PR-11 review fix (Codex P1): forward the session's
+              // `planMode` flag into the runner so `checkMutationGate`
+              // activates. Without this, the agent could call
+              // mutating tools (apply_patch/exec/edit/write) before
+              // an `exit_plan_mode` approval — defeating the entire
+              // purpose of plan mode.
+              const sessionPlanModeMode = params.getActiveSessionEntry()?.planMode?.mode;
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
+                ...(sessionPlanModeMode === "plan" ? { planMode: "plan" as const } : {}),
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   normalizeOptionalString(params.sessionCtx.GroupChannel) ??

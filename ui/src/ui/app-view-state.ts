@@ -465,10 +465,11 @@ export type AppViewState = {
      * PR-10 ask_user_question: route the chosen answer back through
      * the same approval-card surface. Persists via
      * sessions.patch { planApproval: { action: "answer", answer }} and
-     * injects `[QUESTION_ANSWER] <answer>` as a synthetic user message
-     * so the agent's next turn can act on it. Plan-mode state is NOT
-     * transitioned — the agent stays in plan mode while waiting on
-     * follow-on planning steps.
+     * injects `[QUESTION_ANSWER]: <answer text>` as a synthetic user
+     * message (PR-10 hardening canonical format with COLON, mirroring
+     * `[PLAN_DECISION]: ...`) so the agent's next turn can act on it.
+     * Plan-mode state is NOT transitioned — the agent stays in plan
+     * mode while waiting on follow-on planning steps.
      */
     handlePlanApprovalAnswer: (answer: string) => Promise<void>;
     handleGatewayUrlConfirm: () => void;

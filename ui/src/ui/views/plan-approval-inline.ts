@@ -182,6 +182,14 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
   // option list instead of (as window.prompt cancellation appeared to
   // do) exiting the entire sequence.
   const otherOpen = props.questionOtherOpen === true;
+  // PR-11 review fix (Copilot #3104741709): the props interface types
+  // `onAnswerOption` as optional + uses optional-chaining at the call
+  // site, so a host that forgets to wire `onPlanApprovalAnswer`
+  // would render interactive-looking buttons that silently no-op.
+  // When the handler is missing, disable the buttons + surface a
+  // visible warning so the wiring gap is obvious instead of mute.
+  const answerHandlerMissing = typeof props.onAnswerOption !== "function";
+  const answerButtonsDisabled = busy || answerHandlerMissing;
   return html`
     <div class="plan-inline-card" role="region" aria-label="Agent question">
       <div class="plan-inline-card__header">
@@ -194,6 +202,12 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
         ${question.options.length} options${question.allowFreetext ? " + free text" : ""}
       </div>
       ${error ? html`<div class="plan-inline-card__error">${error}</div>` : nothing}
+      ${answerHandlerMissing
+        ? html`<div class="plan-inline-card__error">
+            ⚠️ Question handler not wired (host did not pass
+            <code>onPlanApprovalAnswer</code>). Buttons disabled.
+          </div>`
+        : nothing}
       ${otherOpen
         ? html`
             <textarea
@@ -247,9 +261,11 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
                       ? "plan-inline-card__btn--primary"
                       : ""}"
                     type="button"
-                    ?disabled=${busy}
+                    ?disabled=${answerButtonsDisabled}
                     @click=${() => props.onAnswerOption?.(option)}
-                    title=${`Answer: ${option}`}
+                    title=${answerHandlerMissing
+                      ? "Disabled: question handler not wired"
+                      : `Answer: ${option}`}
                   >
                     ${option}
                   </button>
@@ -260,9 +276,11 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
                     <button
                       class="plan-inline-card__btn plan-inline-card__btn--secondary"
                       type="button"
-                      ?disabled=${busy}
+                      ?disabled=${answerButtonsDisabled}
                       @click=${() => props.onQuestionOtherOpen?.()}
-                      title="Type a free-text answer"
+                      title=${answerHandlerMissing
+                        ? "Disabled: question handler not wired"
+                        : "Type a free-text answer"}
                     >
                       Other…
                     </button>
