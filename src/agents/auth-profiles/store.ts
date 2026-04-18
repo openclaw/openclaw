@@ -279,7 +279,25 @@ export function loadAuthProfileStoreForRuntime(
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+  // Skip overlayExternalAuthProfiles to avoid triggering plugin loading during secrets runtime
+  // snapshot. The external CLI OAuth credentials are not needed for secret reference resolution,
+  // and overlayExternalAuthProfiles → resolveProviderPluginsForHooks causes ~60s of jiti plugin
+  // compilation on first call. The plugin-based auth profiles are merged later during normal
+  // runtime operation after loadGatewayStartupPlugins has established the plugin cache.
+  const store = loadAuthProfileStoreForAgent(agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  });
+  const authPath = resolveAuthStorePath(agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (!agentDir || authPath === mainAuthPath) {
+    return store;
+  }
+  const mainStore = loadAuthProfileStoreForAgent(undefined, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+  });
+  return mergeAuthProfileStores(mainStore, store);
 }
 
 export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): AuthProfileStore {
