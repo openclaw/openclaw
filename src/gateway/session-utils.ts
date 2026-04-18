@@ -8,7 +8,7 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
@@ -1000,10 +1000,13 @@ export async function resolveGatewayModelSupportsImages(params: {
 
   try {
     const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = catalog.find(
-      (entry) =>
-        entry.id === params.model && (!params.provider || entry.provider === params.provider),
-    );
+    const modelEntry = params.provider
+      ? findModelInCatalog(catalog, params.provider, params.model)
+      : catalog.find(
+          (entry) =>
+            normalizeLowercaseStringOrEmpty(entry.id) ===
+            normalizeLowercaseStringOrEmpty(params.model),
+        );
     const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
     const normalizedCandidates = [
       normalizeLowercaseStringOrEmpty(params.model),

@@ -1004,4 +1004,65 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("recognizes image support for custom models with mixed-case IDs", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "MiniMax-M2.7",
+        provider: "minimax",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "MiniMax-M2.7",
+            name: "MiniMax-M2.7",
+            provider: "minimax",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("matches model via normalized comparison when casing differs", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "minimax-m2.7",
+        provider: "minimax",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "MiniMax-M2.7",
+            name: "MiniMax-M2.7",
+            provider: "minimax",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("returns false for custom model without image in input", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "MiniMax-M2.7",
+        provider: "minimax",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "MiniMax-M2.7",
+            name: "MiniMax-M2.7",
+            provider: "minimax",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("returns false when custom model is not in catalog at all", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "unknown-model",
+        provider: "minimax",
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toBe(false);
+  });
 });
