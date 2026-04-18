@@ -713,6 +713,20 @@ export async function runAgentTurnWithFallback(params: {
       ...(activeSessionEntry?.pendingAgentInjection !== undefined
         ? { pendingAgentInjection: activeSessionEntry.pendingAgentInjection }
         : {}),
+      // Bug 3+4 fix: live-read accessor so the mutation gate can read
+      // the LATEST planMode on every tool call (the cached
+      // inPlanMode/planApproval are snapshots from run-start and go
+      // stale when sessions.patch flips mode → "normal" mid-turn after
+      // user approval). `getActiveSessionEntry` is an in-memory
+      // O(1) map lookup so calling it per tool call is cheap.
+      getLatestPlanMode: () => {
+        const entry = params.getActiveSessionEntry();
+        const mode = entry?.planMode?.mode;
+        if (mode === "plan" || mode === "normal") {
+          return mode;
+        }
+        return undefined;
+      },
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -1160,6 +1174,17 @@ export async function runAgentTurnWithFallback(params: {
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 ...(sessionPlanModeMode === "plan" ? { planMode: "plan" as const } : {}),
+                // Bug 3+4 fix: live-read accessor so the mutation gate
+                // can re-check planMode after mid-turn approval
+                // transitions. O(1) in-memory lookup, safe per tool call.
+                getLatestPlanMode: () => {
+                  const entry = params.getActiveSessionEntry();
+                  const mode = entry?.planMode?.mode;
+                  if (mode === "plan" || mode === "normal") {
+                    return mode;
+                  }
+                  return undefined;
+                },
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   normalizeOptionalString(params.sessionCtx.GroupChannel) ??

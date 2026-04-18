@@ -41,6 +41,21 @@ export type HookContext = {
    * session store on every tool call.
    */
   planMode?: PlanMode;
+  /**
+   * Bug 3+4 fix: live-read accessor for the session's current planMode.
+   * Returns the LATEST mode from the in-memory SessionEntry on every
+   * call (O(1) map lookup, no disk I/O), bypassing the stale
+   * `planMode` snapshot captured at run-start. Used by the mutation
+   * gate below to handle mid-turn approval transitions where the
+   * cached `planMode` is stale (sessions.patch flipped mode → "normal"
+   * but the runtime still has "plan" cached for the rest of the
+   * current run).
+   *
+   * Returning `undefined` is fine — caller falls back to the cached
+   * `planMode` snapshot. Optional so test contexts and unit fixtures
+   * don't have to provide it.
+   */
+  getLatestPlanMode?: () => PlanMode | undefined;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -244,7 +259,21 @@ export async function runBeforeToolCallHook(args: {
   // detection should still trip on stuck patterns even in plan mode)
   // and BEFORE the plugin hookRunner (so plugins can't bypass the gate
   // by handling the call earlier in the pipeline).
-  if (args.ctx?.planMode === "plan") {
+  //
+  // Bug 3+4 fix: read the LATEST planMode from the in-memory
+  // SessionEntry on every tool call (via `getLatestPlanMode` callback
+  // wired in agent-runner-execution.ts) instead of trusting the
+  // cached `args.ctx.planMode` snapshot from run start. After the user
+  // approves a plan via `sessions.patch { planApproval: { action:
+  // "approve" } }`, the SessionEntry flips mode → "normal" but the
+  // cached `args.ctx.planMode === "plan"` would otherwise stay stale
+  // for the rest of the current run, blocking mutations indefinitely
+  // until the next agent run starts. The callback is O(1) (in-memory
+  // map lookup) so per-tool-call overhead is nanoseconds.
+  // Falls back to cached value if the callback is missing (test
+  // contexts) or returns undefined (no live entry).
+  const latestPlanMode = args.ctx?.getLatestPlanMode?.() ?? args.ctx?.planMode;
+  if (latestPlanMode === "plan") {
     let execCommand: string | undefined;
     if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {
       const cmd = params.command;
@@ -252,7 +281,7 @@ export async function runBeforeToolCallHook(args: {
         execCommand = cmd;
       }
     }
-    const gateResult = checkMutationGate(toolName, args.ctx.planMode, execCommand);
+    const gateResult = checkMutationGate(toolName, latestPlanMode, execCommand);
     if (gateResult.blocked) {
       return {
         blocked: true,

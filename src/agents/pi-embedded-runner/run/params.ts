@@ -91,6 +91,17 @@ export type RunEmbeddedPiAgentParams = {
    * `resolveYieldDuringApprovedPlanInstruction`) pure lookups.
    */
   planMode?: "plan" | "normal";
+  /**
+   * Bug 3+4 fix: live-read accessor for the session's current planMode.
+   * Returns the LATEST mode from the in-memory SessionEntry on every
+   * call (O(1) map lookup, no disk I/O), bypassing the stale
+   * `planMode` snapshot captured at run-start. Threaded through to the
+   * mutation gate's HookContext so the gate can re-check after
+   * mid-turn approval transitions where the cached `planMode` is
+   * stale (sessions.patch flipped mode → "normal" but the runtime
+   * still has "plan" cached for the rest of the current run).
+   */
+  getLatestPlanMode?: () => "plan" | "normal" | undefined;
   prompt: string;
   /** User-visible prompt body to persist instead of runtime-enriched prompt text. */
   transcriptPrompt?: string;

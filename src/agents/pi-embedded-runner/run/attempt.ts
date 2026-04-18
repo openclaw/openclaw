@@ -795,6 +795,9 @@ export async function runEmbeddedAttempt(
             // before-tool-call hook arms the mutation gate without
             // re-loading the session store on every tool call.
             ...(params.planMode ? { planMode: params.planMode } : {}),
+            // Bug 3+4 fix: also forward the live-read accessor so the
+            // hook can re-check after mid-turn approval transitions.
+            ...(params.getLatestPlanMode ? { getLatestPlanMode: params.getLatestPlanMode } : {}),
             agentDir,
             workspaceDir: effectiveWorkspace,
             // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points

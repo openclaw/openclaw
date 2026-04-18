@@ -201,12 +201,16 @@ const PLAN_MODE_INVESTIGATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION =
-  "Plan mode is active. Your previous response acknowledged the request but did " +
-  "not call exit_plan_mode. The next response MUST call exit_plan_mode(plan=[...]) " +
-  "with the proposed plan steps. Brief acknowledgement is fine, but the plan body " +
-  "belongs inside the tool call — do not write the plan as chat text. If you need " +
-  "to investigate first, call a read-only tool (read, lcm_grep, web_search) this " +
-  "turn instead of stopping.";
+  "Plan mode is active and you're still in the PLANNING phase (no user " +
+  "approval yet). Your previous response stopped without calling " +
+  "exit_plan_mode OR a read-only investigative tool. Brief progress " +
+  "updates are fine, but they must NOT end the turn — keep calling tools " +
+  "after them. The next response MUST either: (a) continue planning " +
+  "investigation with a read-only tool (read, lcm_grep, grep, glob, ls, " +
+  "find, web_search, web_fetch, update_plan), or (b) call " +
+  "exit_plan_mode(title=..., plan=[...]) with the proposed plan. A " +
+  "status line followed by another tool call is the right pattern; a " +
+  "status line alone is treated as yielding without acting.";
 
 export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM =
   "CRITICAL: plan mode is active and you have acknowledged twice without calling " +

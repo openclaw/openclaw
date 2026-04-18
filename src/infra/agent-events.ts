@@ -295,6 +295,26 @@ export type AgentRunContext = {
    * synthetic marker into user-visible chat history).
    */
   pendingAgentInjection?: string;
+  /**
+   * Bug 3+4 fix: live-read accessor for the session's current planMode.
+   * Returns the LATEST mode from the in-memory SessionEntry on every
+   * call (O(1) map lookup, no disk I/O), bypassing the stale
+   * `inPlanMode`/`planApproval` snapshots captured at run-start.
+   *
+   * Used by the mutation gate (`pi-tools.before-tool-call.ts`) to
+   * avoid the cached-state divergence where:
+   *   1. Agent enters plan mode → ctx.planMode === "plan" cached
+   *   2. Agent submits exit_plan_mode → user approves
+   *   3. sessions.patch flips SessionEntry.planMode → "normal"
+   *   4. Same agent run continues executing
+   *   5. ctx.planMode is STILL "plan" → mutation gate blocks
+   *      mutations even though approval already cleared the gate
+   *
+   * Returning `undefined` is fine — caller falls back to the cached
+   * snapshot. Optional so test contexts and unit fixtures don't have
+   * to provide it.
+   */
+  getLatestPlanMode?: () => "plan" | "normal" | undefined;
 };
 
 type AgentEventState = {

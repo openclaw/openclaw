@@ -192,10 +192,26 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
     execute: async (_toolCallId, args, _signal) => {
       const params = args as Record<string, unknown>;
       const summary = readStringParam(params, "summary");
-      // PR-9 Tier 1: explicit title field; trim + clamp to 80 chars so
-      // the approval-card / sidebar header stays scannable.
+      // PR-9 Tier 1 + Bug 2/6 fix: title is REQUIRED. Without it the
+      // approval card defaults to "Active Plan" / "Plan approval
+      // requested" which is uninformative for the user reviewing the
+      // plan and unhelpful for the persisted markdown filename slug
+      // (would become `plan-YYYY-MM-DD-untitled.md`). Reject the call
+      // with a clear actionable error so the agent retries with a
+      // proper title on the next attempt — schema enforcement is the
+      // cleanest signal vs a silent fallback.
       const rawTitle = readStringParam(params, "title");
-      const title = rawTitle ? rawTitle.trim().slice(0, 80) : undefined;
+      const trimmedTitle = rawTitle?.trim();
+      if (!trimmedTitle) {
+        throw new ToolInputError(
+          "exit_plan_mode requires a `title` field — a concise plan name " +
+            "(under 80 chars) used as the approval-card header, sidebar " +
+            "title, and persisted markdown filename slug. " +
+            'Example: title: "Refactor websocket reconnect race". ' +
+            "Re-call exit_plan_mode with the title field included.",
+        );
+      }
+      const title = trimmedTitle.slice(0, 80);
       const plan = readPlanSteps(params);
       // PR-10 archetype fields. All optional; readPlanArchetypeFields
       // does the parsing + sanitization (trim + drop blank entries).

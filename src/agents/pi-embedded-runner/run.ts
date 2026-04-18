@@ -2008,8 +2008,21 @@ export async function runEmbeddedPiAgent(
           // clean stop. Reuses the planningOnlyRetryInstruction
           // injection slot (already wired into prompt-additions, also
           // reused by auto-continue at line ~1850 — established pattern).
+          // Bug 4 fix: read the LATEST planMode from the in-memory
+          // SessionEntry on every ACK-retry decision. The cached
+          // `params.planMode` is stale after the user approves the
+          // plan (mode flips to "normal" but the runtime still has
+          // "plan" cached for the rest of the current run). ACK retry
+          // should fire ONLY when the agent is genuinely still
+          // planning, NOT when it's executing post-approval — otherwise
+          // we pressure the agent to call exit_plan_mode again on
+          // every status update during execution.
+          const ackRetryAckCtx = getAgentRunContext(params.runId);
+          const ackRetryLatestPlanMode =
+            ackRetryAckCtx?.getLatestPlanMode?.() ??
+            (params.planMode === "plan" ? "plan" : "normal");
           const planModeAckOnlyInstruction = resolvePlanModeAckOnlyRetryInstruction({
-            planModeActive: params.planMode === "plan",
+            planModeActive: ackRetryLatestPlanMode === "plan",
             aborted,
             timedOut,
             attempt,

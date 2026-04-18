@@ -128,8 +128,50 @@ async function persistSnapshot(params: {
     const recentlyApprovedAt = existing?.recentlyApprovedAt;
     const isRecentlyApproved =
       typeof recentlyApprovedAt === "number" && Date.now() - recentlyApprovedAt < 5 * 60_000;
-    allowAutoClose = approval === "approved" || approval === "edited" || isRecentlyApproved;
+    // Bug 5 fix: explicit pending guard. Without this, when a prior
+    // plan cycle's `recentlyApprovedAt` is still within the 5-minute
+    // window, ANY new `update_plan` with all-terminal steps would
+    // auto-close — including during an ACTIVE pending approval (the
+    // user has the dialog open but hasn't clicked yet). The close
+    // would delete planMode → user click fires sessions.patch with a
+    // stale approvalId → server rejects with "current state: none"
+    // → user is stuck with an undismissable dialog.
+    //
+    // The guard: NEVER auto-close when there's an active pending
+    // approval. The pending approval must be explicitly resolved
+    // (approve/reject/edit/timeout) before any structural close.
+    if (approval === "pending") {
+      allowAutoClose = false;
+    } else if (approval === "approved" || approval === "edited") {
+      // Explicit approval signal — close is the right next step.
+      allowAutoClose = true;
+    } else if (approval !== "rejected" && isRecentlyApproved) {
+      // Post-approval grace window (planMode may already be deleted
+      // from a prior close; recentlyApprovedAt survives at root).
+      // Skip when current approval is "rejected" — user said no, do
+      // not auto-close around them.
+      allowAutoClose = true;
+    } else {
+      allowAutoClose = false;
+    }
   }
+  // Bug 6 fix: when the plan auto-closes, also emit a [PLAN_COMPLETE]
+  // injection so the agent's NEXT turn explicitly knows the plan is
+  // done (and can summarize what was accomplished). Uses the same
+  // pendingAgentInjection mechanism as the [PLAN_DECISION] /
+  // [QUESTION_ANSWER] injections from sessions-patch.ts — single source
+  // of truth across all channels. The agent prompt contract is "if
+  // you see [PLAN_COMPLETE]: <title> — <N>/<M> steps, post a brief
+  // summary of what was done and stop". Without this, the agent has
+  // no signal that the plan auto-closed and may keep churning.
+  const completionStepCount = params.snapshot.length;
+  const completionInjection =
+    params.closeOnComplete && allowAutoClose
+      ? `[PLAN_COMPLETE]: ${completionStepCount} step${
+          completionStepCount === 1 ? "" : "s"
+        } completed. Post a brief summary of what was done and stop. The plan has been auto-closed; the user can start a new plan cycle if needed.`
+      : undefined;
+
   await updateSessionStore(target.storePath, async (store) => {
     return await applySessionsPatchToStore({
       cfg,
@@ -158,6 +200,33 @@ async function persistSnapshot(params: {
     // re-read on the spawn hot path).
     clearInPlanModeForSession(params.sessionKey);
     log.info(`plan completed → planMode auto-flipped to normal: sessionKey=${params.sessionKey}`);
+    // Bug 6: write the [PLAN_COMPLETE] injection. Server-internal
+    // direct write — the runtime's `consumePendingAgentInjection`
+    // (PR-15 consumer) reads + clears it on the next agent turn.
+    if (completionInjection) {
+      try {
+        const { updateSessionStoreEntry } = await import("../config/sessions/store.js");
+        await updateSessionStoreEntry({
+          storePath: target.storePath,
+          sessionKey: params.sessionKey,
+          update: async (entry) => {
+            // Don't clobber an existing pending injection (e.g.,
+            // [QUESTION_ANSWER] or [PLAN_DECISION] from a recent
+            // sessions.patch). Append instead so both signals land in
+            // the agent's next turn.
+            const existing = entry.pendingAgentInjection;
+            entry.pendingAgentInjection = existing
+              ? `${existing}\n\n${completionInjection}`
+              : completionInjection;
+            return entry;
+          },
+        });
+      } catch (err) {
+        log.warn(
+          `[PLAN_COMPLETE] injection write failed: sessionKey=${params.sessionKey} err=${String(err)}`,
+        );
+      }
+    }
   } else if (params.closeOnComplete && !allowAutoClose) {
     log.info(
       `plan completed but auto-close suppressed (no approved state): sessionKey=${params.sessionKey} — ` +

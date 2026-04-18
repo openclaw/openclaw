@@ -26,7 +26,11 @@ describe("createExitPlanModeTool — subagent gate", () => {
     clearAgentRunContext(testRunId);
   });
 
+  // Bug 2/6 fix: title is now REQUIRED. All test args include a title
+  // so the schema check passes. Tests asserting the no-title rejection
+  // are explicitly named (see "rejects calls without title").
   const validPlanArgs = {
+    title: "Test plan",
     plan: [{ step: "do the thing", status: "pending" }],
   };
 
@@ -102,6 +106,30 @@ describe("createExitPlanModeTool — subagent gate", () => {
 
 describe("createExitPlanModeTool — PR-10 archetype fields", () => {
   const planSteps = [{ step: "do thing", status: "pending" }];
+  // Bug 2/6 fix: title is REQUIRED in the schema. Provide a default
+  // title for archetype-field tests so they exercise the
+  // archetype-specific behavior, not the title-required gate.
+  const defaultTitle = "Test plan";
+
+  // Bug 2/6 fix: title is REQUIRED. The agent must call exit_plan_mode
+  // with a title field — without it the schema rejects the call so the
+  // agent's next attempt includes one (preferred over a silent fallback
+  // because "Active Plan" / "Untitled plan" are unhelpful for the user
+  // reviewing the approval card and for the persisted markdown
+  // filename).
+  it("rejects calls without title (Bug 2/6 fix)", async () => {
+    const tool = createExitPlanModeTool();
+    await expect(
+      tool.execute("c1", { plan: planSteps }, new AbortController().signal),
+    ).rejects.toThrow(/exit_plan_mode requires a `title` field/);
+  });
+
+  it("rejects calls with whitespace-only title", async () => {
+    const tool = createExitPlanModeTool();
+    await expect(
+      tool.execute("c1", { title: "   ", plan: planSteps }, new AbortController().signal),
+    ).rejects.toThrow(/exit_plan_mode requires a `title` field/);
+  });
 
   it("forwards title (clamped to 80 chars)", async () => {
     const tool = createExitPlanModeTool();
@@ -120,7 +148,7 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const tool = createExitPlanModeTool();
     const result = await tool.execute(
       "c1",
-      { plan: planSteps, analysis: "  Multi-paragraph analysis text.  " },
+      { title: defaultTitle, plan: planSteps, analysis: "  Multi-paragraph analysis text.  " },
       new AbortController().signal,
     );
     expect(result.details).toMatchObject({
@@ -132,7 +160,7 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const tool = createExitPlanModeTool();
     const result = await tool.execute(
       "c1",
-      { plan: planSteps, analysis: "   " },
+      { title: defaultTitle, plan: planSteps, analysis: "   " },
       new AbortController().signal,
     );
     expect((result.details as Record<string, unknown>).analysis).toBeUndefined();
@@ -142,7 +170,11 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const tool = createExitPlanModeTool();
     const result = await tool.execute(
       "c1",
-      { plan: planSteps, assumptions: [" tests pass first run ", "", "  ", "auth exports stable"] },
+      {
+        title: defaultTitle,
+        plan: planSteps,
+        assumptions: [" tests pass first run ", "", "  ", "auth exports stable"],
+      },
       new AbortController().signal,
     );
     expect(result.details).toMatchObject({
@@ -154,7 +186,7 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const tool = createExitPlanModeTool();
     const result = await tool.execute(
       "c1",
-      { plan: planSteps, assumptions: ["", "  "] },
+      { title: defaultTitle, plan: planSteps, assumptions: ["", "  "] },
       new AbortController().signal,
     );
     expect((result.details as Record<string, unknown>).assumptions).toBeUndefined();
@@ -165,6 +197,7 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const result = await tool.execute(
       "c1",
       {
+        title: defaultTitle,
         plan: planSteps,
         risks: [
           { risk: "race condition", mitigation: "use mutex" },
@@ -190,7 +223,7 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const tool = createExitPlanModeTool();
     const result = await tool.execute(
       "c1",
-      { plan: planSteps, risks: [{ risk: "alone" }] },
+      { title: defaultTitle, plan: planSteps, risks: [{ risk: "alone" }] },
       new AbortController().signal,
     );
     expect((result.details as Record<string, unknown>).risks).toBeUndefined();
@@ -201,6 +234,7 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     const result = await tool.execute(
       "c1",
       {
+        title: defaultTitle,
         plan: planSteps,
         verification: ["pnpm test passes", " "],
         references: ["src/x.ts:1", "PR #123", ""],
@@ -213,9 +247,13 @@ describe("createExitPlanModeTool — PR-10 archetype fields", () => {
     });
   });
 
-  it("omits all archetype fields when none supplied (backwards-compat)", async () => {
+  it("omits OPTIONAL archetype fields when none supplied (only title + plan required)", async () => {
     const tool = createExitPlanModeTool();
-    const result = await tool.execute("c1", { plan: planSteps }, new AbortController().signal);
+    const result = await tool.execute(
+      "c1",
+      { title: defaultTitle, plan: planSteps },
+      new AbortController().signal,
+    );
     const details = result.details as Record<string, unknown>;
     expect(details.analysis).toBeUndefined();
     expect(details.assumptions).toBeUndefined();

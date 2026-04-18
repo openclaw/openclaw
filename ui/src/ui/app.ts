@@ -1182,10 +1182,36 @@ export class OpenClawApp extends LitElement {
         this.lastError = `Plan accepted but failed to notify agent: ${String(err)}`;
       });
     } catch (err) {
-      // Restore card so the user can retry.
-      this.planApprovalRequest = snapshotRequest;
-      this.planApprovalReviseDraft = snapshotReviseDraft;
-      this.planApprovalError = `Plan approval failed: ${String(err)}`;
+      // Bug 5 fix: gracefully dismiss the dialog when the server
+      // reports the approval is no longer pending (e.g., another
+      // surface resolved it, OR the auto-close fired due to a
+      // race with subagent return / update_plan-with-all-terminal).
+      // Without this, the user is stuck with an undismissable dialog
+      // and forced to refresh the page.
+      const errMsg = String(err);
+      const staleStateError =
+        errMsg.includes("requires a pending approval") ||
+        errMsg.includes("current state: none") ||
+        errMsg.includes("stale approvalId") ||
+        errMsg.includes("terminal approval state");
+      if (staleStateError) {
+        // Clear the dialog + show a transient toast-style message.
+        // The plan was already resolved on another surface (or was
+        // structurally closed by a plan-event race); don't fight it,
+        // just dismiss + tell the user.
+        this.planApprovalRequest = null;
+        this.planApprovalReviseDraft = "";
+        this.planApprovalReviseOpen = false;
+        this.planApprovalError =
+          "This plan was already resolved (another surface acted, or the " +
+          "plan auto-closed). Dialog dismissed; the agent's current state " +
+          "is reflected in the mode chip.";
+      } else {
+        // Restore card so the user can retry on transient errors.
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalReviseDraft = snapshotReviseDraft;
+        this.planApprovalError = `Plan approval failed: ${errMsg}`;
+      }
     } finally {
       this.planApprovalBusy = false;
     }
