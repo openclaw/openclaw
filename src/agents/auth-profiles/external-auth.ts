@@ -5,7 +5,7 @@ import {
   overlayRuntimeExternalOAuthProfiles,
   shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
-} from "./oauth-manager.js";
+} from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;

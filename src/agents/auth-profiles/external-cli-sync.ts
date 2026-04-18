@@ -8,7 +8,7 @@ import {
   isSafeToOverwriteStoredOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
-} from "./oauth-manager.js";
+} from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export {
@@ -18,7 +18,7 @@ export {
   isSafeToOverwriteStoredOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
-} from "./oauth-manager.js";
+} from "./oauth-shared.js";
 
 export type ExternalCliResolvedProfile = {
   profileId: string;
