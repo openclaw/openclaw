@@ -177,10 +177,13 @@ vi.mock("../../media/store.js", async () => {
       }
       mockState.savedMediaCalls.push({ contentType, subdir, size: buffer.byteLength });
       const next = mockState.savedMediaResults.shift();
+      const savedPath = next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`;
       try {
+        fs.mkdirSync(path.dirname(savedPath), { recursive: true });
+        fs.writeFileSync(savedPath, buffer);
         return {
           id: "saved-media",
-          path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
+          path: savedPath,
           size: buffer.byteLength,
           contentType: next?.contentType ?? contentType,
         };
@@ -248,6 +251,22 @@ function extractFirstTextBlock(payload: unknown): string | undefined {
   }
   const firstText = (first as { text?: unknown }).text;
   return typeof firstText === "string" ? firstText : undefined;
+}
+
+function extractFirstContentBlock(payload: unknown): Record<string, unknown> | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const message = (payload as { message?: unknown }).message;
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const first = content[0];
+  return first && typeof first === "object" ? (first as Record<string, unknown>) : undefined;
 }
 
 function createScopedCliClient(
@@ -1858,7 +1877,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("preserves media-only final replies in the final broadcast message", async () => {
     createTranscriptFixture("openclaw-chat-send-media-only-final-");
-    mockState.finalPayload = { mediaUrl: "https://example.com/final.png" };
+    mockState.finalPayload = {
+      mediaUrl:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1868,14 +1890,25 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-media-only-final",
     });
 
-    expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
+    expect(extractFirstContentBlock(payload)).toEqual(
+      expect.objectContaining({
+        type: "image",
+        url: expect.stringContaining("/api/chat/media/outgoing/"),
+        openUrl: expect.stringContaining("/full"),
+        alt: "Generated image 1",
+        mimeType: "image/png",
+        width: 1,
+        height: 1,
+      }),
+    );
   });
 
   it("strips NO_REPLY from transcript text when final replies only carry media", async () => {
     createTranscriptFixture("openclaw-chat-send-media-only-silent-final-");
     mockState.finalPayload = {
       text: "NO_REPLY",
-      mediaUrl: "https://example.com/final.png",
+      mediaUrl:
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1886,7 +1919,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-media-only-silent-final",
     });
 
-    expect(extractFirstTextBlock(payload)).toBe("MEDIA:https://example.com/final.png");
+    expect(extractFirstTextBlock(payload)).toBeUndefined();
+    expect(extractFirstContentBlock(payload)).toEqual(
+      expect.objectContaining({
+        type: "image",
+        url: expect.stringContaining("/api/chat/media/outgoing/"),
+        openUrl: expect.stringContaining("/full"),
+        alt: "Generated image 1",
+        mimeType: "image/png",
+        width: 1,
+        height: 1,
+      }),
+    );
   });
 
   it("drops image attachments for text-only session models", async () => {

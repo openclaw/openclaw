@@ -767,7 +767,10 @@ describe("gateway server chat", () => {
             type: "image",
             url: expect.stringContaining("/api/chat/media/outgoing/"),
             openUrl: expect.stringContaining("/full"),
-            downloadUrl: expect.stringContaining("/download"),
+            alt: "Generated image 1",
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
           }),
         ]);
         const serializedAssistant = JSON.stringify(assistantMessage);

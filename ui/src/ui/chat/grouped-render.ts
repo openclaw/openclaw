@@ -1127,15 +1127,7 @@ async function openImageUrl(
       requesterSessionKey: opts.requesterSessionKey,
     });
     if (blobUrl) {
-      try {
-        window.open(blobUrl, "_blank", "noopener,noreferrer");
-      } catch {
-        const link = document.createElement("a");
-        link.href = blobUrl;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.click();
-      }
+      openExternalUrlSafe(blobUrl);
       return;
     }
   }
