@@ -2,20 +2,9 @@ import type { Model } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
-const {
-  anthropicCtorMock,
-  anthropicMessagesStreamMock,
-  buildGuardedModelFetchMock,
-  guardedFetchMock,
-} = vi.hoisted(() => ({
-  anthropicCtorMock: vi.fn(),
-  anthropicMessagesStreamMock: vi.fn(),
+const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
   guardedFetchMock: vi.fn(),
-}));
-
-vi.mock("@anthropic-ai/sdk", () => ({
-  default: anthropicCtorMock,
 }));
 
 vi.mock("./provider-transport-fetch.js", () => ({
@@ -24,8 +13,21 @@ vi.mock("./provider-transport-fetch.js", () => ({
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
 
-function emptyEventStream(): AsyncIterable<Record<string, unknown>> {
-  return (async function* () {})();
+function createSseResponse(events: Record<string, unknown>[] = []): Response {
+  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function latestAnthropicRequest() {
+  const [, init] = guardedFetchMock.mock.calls.at(-1) ?? [];
+  const body = init?.body;
+  return {
+    init,
+    payload: typeof body === "string" ? (JSON.parse(body) as Record<string, unknown>) : {},
+  };
 }
 
 describe("anthropic transport stream", () => {
@@ -35,19 +37,10 @@ describe("anthropic transport stream", () => {
   });
 
   beforeEach(() => {
-    anthropicCtorMock.mockReset();
-    anthropicMessagesStreamMock.mockReset();
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
-    anthropicMessagesStreamMock.mockReturnValue(emptyEventStream());
-    anthropicCtorMock.mockImplementation(function mockAnthropicClient() {
-      return {
-        messages: {
-          stream: anthropicMessagesStreamMock,
-        },
-      };
-    });
+    guardedFetchMock.mockResolvedValue(createSseResponse());
   });
 
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
@@ -89,12 +82,14 @@ describe("anthropic transport stream", () => {
     await stream.result();
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
-    expect(anthropicCtorMock).toHaveBeenCalledWith(
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://api.anthropic.com/v1/messages",
       expect.objectContaining({
-        apiKey: "sk-ant-api",
-        baseURL: "https://api.anthropic.com",
-        fetch: guardedFetchMock,
-        defaultHeaders: expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "x-api-key": "sk-ant-api",
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
           "X-Provider": "anthropic",
@@ -102,13 +97,10 @@ describe("anthropic transport stream", () => {
         }),
       }),
     );
-    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "claude-sonnet-4-6",
-        stream: true,
-      }),
-      undefined,
-    );
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "claude-sonnet-4-6",
+      stream: true,
+    });
   });
 
   it("ignores non-positive runtime maxTokens overrides and falls back to the model limit", async () => {
@@ -147,14 +139,11 @@ describe("anthropic transport stream", () => {
     );
     await stream.result();
 
-    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "claude-sonnet-4-6",
-        max_tokens: 8192,
-        stream: true,
-      }),
-      undefined,
-    );
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      stream: true,
+    });
   });
 
   it("ignores fractional runtime maxTokens overrides that floor to zero", async () => {
@@ -193,14 +182,11 @@ describe("anthropic transport stream", () => {
     );
     await stream.result();
 
-    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "claude-sonnet-4-6",
-        max_tokens: 8192,
-        stream: true,
-      }),
-      undefined,
-    );
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      stream: true,
+    });
   });
 
   it("fails locally when Anthropic maxTokens is non-positive after resolution", async () => {
@@ -243,17 +229,17 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toContain(
       "Anthropic Messages transport requires a positive maxTokens value",
     );
-    expect(anthropicMessagesStreamMock).not.toHaveBeenCalled();
+    expect(guardedFetchMock).not.toHaveBeenCalled();
   });
 
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
-    anthropicMessagesStreamMock.mockReturnValueOnce(
-      (async function* () {
-        yield {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
           type: "message_start",
           message: { id: "msg_1", usage: { input_tokens: 10, output_tokens: 0 } },
-        };
-        yield {
+        },
+        {
           type: "content_block_start",
           index: 0,
           content_block: {
@@ -262,17 +248,17 @@ describe("anthropic transport stream", () => {
             name: "Read",
             input: { path: "/tmp/a" },
           },
-        };
-        yield {
+        },
+        {
           type: "content_block_stop",
           index: 0,
-        };
-        yield {
+        },
+        {
           type: "message_delta",
           delta: { stop_reason: "tool_use" },
           usage: { input_tokens: 10, output_tokens: 5 },
-        };
-      })(),
+        },
+      ]),
     );
     const model = attachModelProviderRequestTransport(
       {
@@ -321,21 +307,17 @@ describe("anthropic transport stream", () => {
     );
     const result = await stream.result();
 
-    expect(anthropicCtorMock).toHaveBeenCalledWith(
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://api.anthropic.com/v1/messages",
       expect.objectContaining({
-        apiKey: null,
-        authToken: "sk-ant-oat-example",
-        fetch: guardedFetchMock,
-        defaultHeaders: expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer sk-ant-oat-example",
           "x-app": "cli",
           "user-agent": expect.stringContaining("claude-cli/"),
         }),
       }),
     );
-    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
-      string,
-      unknown
-    >;
+    const firstCallParams = latestAnthropicRequest().payload;
     expect(firstCallParams.system).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -407,10 +389,7 @@ describe("anthropic transport stream", () => {
     );
     await stream.result();
 
-    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
-      string,
-      unknown
-    >;
+    const firstCallParams = latestAnthropicRequest().payload;
     expect(firstCallParams.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -463,13 +442,10 @@ describe("anthropic transport stream", () => {
     );
     await stream.result();
 
-    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        thinking: { type: "adaptive" },
-        output_config: { effort: "max" },
-      }),
-      undefined,
-    );
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+    });
   });
 
   it("maps xhigh thinking effort for Claude Opus 4.7 transport runs", async () => {
@@ -508,12 +484,9 @@ describe("anthropic transport stream", () => {
     );
     await stream.result();
 
-    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        thinking: { type: "adaptive" },
-        output_config: { effort: "xhigh" },
-      }),
-      undefined,
-    );
+    expect(latestAnthropicRequest().payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
+    });
   });
 });
