@@ -157,7 +157,7 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
-  it("rejects agents.defaults.imageModel aliases when shared media models have no image capability", () => {
+  it("accepts agents.defaults.imageModel aliases when shared media provider capability is unknown", () => {
     const res = validateConfigObject({
       tools: {
         media: {
@@ -179,17 +179,7 @@ describe("tools.media LiteLLM alias validation", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
-    if (res.ok) {
-      throw new Error("expected config validation to fail");
-    }
-    expect(res.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "agents.defaults.imageModel.primary",
-        }),
-      ]),
-    );
+    expect(res.ok).toBe(true);
   });
 
   it("rejects agents.defaults.imageModel aliases when shared bundled providers are audio-only", () => {

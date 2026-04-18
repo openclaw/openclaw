@@ -1,10 +1,9 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { resolveBundledDefaultMediaModel } from "../media-understanding/bundled-defaults.js";
-import { resolveEffectiveMediaEntryCapabilities } from "../media-understanding/entry-capabilities.js";
+import { getBundledMediaProviderDefaults } from "../media-understanding/bundled-defaults.js";
+import { resolveConfiguredMediaEntryCapabilities } from "../media-understanding/entry-capabilities.js";
 import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
-import type { MediaUnderstandingCapability } from "../media-understanding/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -179,55 +178,54 @@ type MediaAliasValidationConfig = {
   models?: z.input<typeof ModelsConfigSchema>;
 };
 
-function buildMediaAliasValidationProviderRegistry(
-  cfg: MediaAliasValidationConfig,
-): Map<string, { capabilities?: MediaUnderstandingCapability[] }> {
-  const registry = new Map<string, { capabilities?: MediaUnderstandingCapability[] }>();
+type SharedMediaImageCapability = "image" | "non-image" | "unknown";
 
-  for (const model of cfg.tools?.media?.models ?? []) {
-    const providerId = normalizeMediaProviderId(model?.provider ?? "");
-    if (!providerId || registry.has(providerId)) {
+function resolveConfigProviderImageCapability(params: {
+  cfg: MediaAliasValidationConfig;
+  providerId: string;
+}): SharedMediaImageCapability {
+  const configProviders = params.cfg.models?.providers;
+  if (!configProviders || typeof configProviders !== "object") {
+    return "unknown";
+  }
+  for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
+    if (normalizeMediaProviderId(providerKey) !== params.providerId) {
       continue;
     }
-    if (resolveBundledDefaultMediaModel({ providerId, capability: "image" })) {
-      registry.set(providerId, { capabilities: ["image"] });
-    }
+    const hasImageModel = (providerCfg.models ?? []).some(
+      (model) => Array.isArray(model?.input) && model.input.includes("image"),
+    );
+    return hasImageModel ? "image" : "non-image";
   }
-
-  const configProviders = cfg.models?.providers;
-  if (configProviders && typeof configProviders === "object") {
-    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
-      if (!providerKey?.trim()) {
-        continue;
-      }
-      const normalizedKey = normalizeMediaProviderId(providerKey);
-      if (registry.has(normalizedKey)) {
-        continue;
-      }
-      const hasImageModel = (providerCfg.models ?? []).some(
-        (model) => Array.isArray(model?.input) && model.input.includes("image"),
-      );
-      if (hasImageModel) {
-        registry.set(normalizedKey, { capabilities: ["image"] });
-      }
-    }
-  }
-
-  return registry;
+  return "unknown";
 }
 
-function sharedMediaModelCanResolveForImage(params: {
+function resolveSharedMediaModelImageCapability(params: {
+  cfg: MediaAliasValidationConfig;
   model: MediaUnderstandingModelConfig | undefined;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): boolean {
-  const capabilities =
-    params.model &&
-    resolveEffectiveMediaEntryCapabilities({
-      entry: params.model,
-      source: "shared",
-      providerRegistry: params.providerRegistry,
-    });
-  return Array.isArray(capabilities) && capabilities.includes("image");
+}): SharedMediaImageCapability {
+  const configuredCapabilities = params.model
+    ? resolveConfiguredMediaEntryCapabilities(params.model)
+    : undefined;
+  if (configuredCapabilities) {
+    return configuredCapabilities.includes("image") ? "image" : "non-image";
+  }
+  if (!params.model) {
+    return "unknown";
+  }
+  if (params.model.type === "cli" || params.model.command) {
+    // Shared CLI entries without explicit capabilities are skipped by runtime resolution.
+    return "non-image";
+  }
+  const providerId = normalizeMediaProviderId(params.model.provider ?? "");
+  if (!providerId) {
+    return "unknown";
+  }
+  const bundledDefaults = getBundledMediaProviderDefaults(providerId);
+  if (bundledDefaults) {
+    return bundledDefaults.defaultModels?.image ? "image" : "non-image";
+  }
+  return resolveConfigProviderImageCapability({ cfg: params.cfg, providerId });
 }
 
 function toolsMediaImageCanFallBackToAgentDefaults(cfg: MediaAliasValidationConfig): boolean {
@@ -245,10 +243,13 @@ function toolsMediaImageCanFallBackToAgentDefaults(cfg: MediaAliasValidationConf
   if (sharedModels.length === 0) {
     return true;
   }
-  const providerRegistry = buildMediaAliasValidationProviderRegistry(cfg);
-  return !sharedModels.some((model) =>
-    sharedMediaModelCanResolveForImage({ model, providerRegistry }),
+  const sharedCapabilities = sharedModels.map((model) =>
+    resolveSharedMediaModelImageCapability({ cfg, model }),
   );
+  if (sharedCapabilities.includes("image")) {
+    return false;
+  }
+  return sharedCapabilities.every((capability) => capability === "non-image");
 }
 
 function addToolsMediaImageFallbackAliasIssues(
