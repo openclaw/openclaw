@@ -1013,7 +1013,7 @@ async function detectMediaTypeFromBytes(
     let buffer: Buffer;
     
     if (useBridge && bridge) {
-      // Use helper that reads only first maxBytesForSniffing bytes
+      // FIXED: Use helper that reads only first maxBytesForSniffing bytes
       buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForSniffing, signal);
     } else {
       const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: maxBytesForSniffing });
@@ -1225,28 +1225,19 @@ export function createOpenClawReadTool(
             throw new Error("Read operation aborted");
           }
 
-          // Use adaptive max bytes for image reading
-          const maxBytesForImage = resolveAdaptiveReadMaxBytes(fileSize);
-          
+          // FIXED: Don't cap image reads - we need the full image for proper sanitization/resizing
           let fileBuffer: Buffer;
           if (useBridge) {
+            // FIXED: Read full file for images to allow proper sanitization
             const buffer = await options.bridge!.readFile({
               filePath: inputPath,
               cwd: rootDirResolved,
               signal,
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-            // Apply byte limit after reading if needed
-            if (maxBytesForImage && fileBuffer.length > maxBytesForImage) {
-              fileBuffer = fileBuffer.slice(0, maxBytesForImage);
-            }
           } else {
-            if (maxBytesForImage) {
-              const { buffer } = await readLocalFileSafely({ filePath: inputPath, maxBytes: maxBytesForImage });
-              fileBuffer = buffer;
-            } else {
-              fileBuffer = await fs.readFile(inputPath);
-            }
+            // FIXED: Read full file for images instead of using capped readLocalFileSafely
+            fileBuffer = await fs.readFile(inputPath);
           }
 
           let finalMimeType = mimeType;
