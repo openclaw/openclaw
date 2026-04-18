@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, type FileLockTimeoutError } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
@@ -10,10 +10,6 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 let resetOAuthRefreshQueuesForTest: typeof import("./oauth.js").resetOAuthRefreshQueuesForTest;
-
-async function loadOAuthModuleForTest() {
-  ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
-}
 
 function resolveApiKeyForProfileInTest(
   params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
@@ -115,6 +111,12 @@ describe("OAuth refresh lock timeout classification", () => {
   ]);
   let tempRoot = "";
   let agentDir = "";
+  let caseIndex = 0;
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-lock-timeout-"));
+    ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
+  });
 
   beforeEach(async () => {
     withFileLockMock.mockReset();
@@ -122,25 +124,23 @@ describe("OAuth refresh lock timeout classification", () => {
       async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => await run(),
     );
     clearRuntimeAuthProfileStoreSnapshots();
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-lock-timeout-"));
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    agentDir = path.join(tempRoot, "agents", "main", "agent");
+    const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
+    process.env.OPENCLAW_STATE_DIR = caseRoot;
+    agentDir = path.join(caseRoot, "agents", "main", "agent");
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
     await fs.mkdir(agentDir, { recursive: true });
-    await loadOAuthModuleForTest();
     resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
     envSnapshot.restore();
     clearRuntimeAuthProfileStoreSnapshots();
-    if (resetOAuthRefreshQueuesForTest) {
-      resetOAuthRefreshQueuesForTest();
-    }
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    resetOAuthRefreshQueuesForTest();
+  });
+
+  afterAll(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
   it("maps only global refresh lock timeouts to refresh_contention", async () => {
