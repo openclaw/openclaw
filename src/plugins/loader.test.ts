@@ -1878,6 +1878,46 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
+  it("does not execute plugin register during non-activating loads", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "snapshot-register-skip",
+      filename: "snapshot-register-skip.cjs",
+      body: `module.exports = {
+        id: "snapshot-register-skip",
+        register(api) {
+          api.registerCommand({
+            id: "snapshot-register-skip.test",
+            description: "test",
+            execute() {
+              return { ok: true };
+            },
+          });
+        },
+      };`,
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-register-skip"],
+        },
+      },
+      onlyPluginIds: ["snapshot-register-skip"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-register-skip")?.status).toBe(
+      "loaded",
+    );
+    expect(getPluginCommandSpecs().map((spec) => spec.name)).not.toContain(
+      "snapshot-register-skip.test",
+    );
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryEmbeddingProvider({
