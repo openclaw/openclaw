@@ -9,6 +9,7 @@ import http from 'http';
 import { ClientRequest } from 'http';
 import crypto from 'crypto';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
+import { AsyncLocalStorage } from 'async_hooks';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -30,8 +31,6 @@ const YTDLP_CHECKSUM_FILES: Record<string, string> = {
 const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
 
 // FIX: Context injection for trusted workspace root - use AsyncLocalStorage for per-session isolation
-import { AsyncLocalStorage } from 'async_hooks';
-
 interface WorkspaceContext {
   trustedWorkspaceRoot: string;
 }
@@ -120,7 +119,8 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
         return reject(new Error(`Too many redirects: ${url}`));
       }
 
-      currentRequest = https.get(currentUrl, (response) => {
+      const protocol = currentUrl.startsWith('https') ? https : http;
+      const request = protocol.get(currentUrl, (response) => {
         currentResponse = response;
         
         if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
@@ -150,7 +150,11 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
           signal?.removeEventListener('abort', abortHandler);
           reject(err);
         });
-      }).on('error', (err) => {
+      });
+      
+      currentRequest = request;
+      
+      request.on('error', (err) => {
         cleanup();
         signal?.removeEventListener('abort', abortHandler);
         reject(err);
@@ -291,7 +295,8 @@ async function downloadFileWithVerification(
           return reject(new Error(`Too many redirects: ${url}`));
         }
 
-        currentRequest = https.get(currentUrl, (response) => {
+        const protocol = currentUrl.startsWith('https') ? https : http;
+        const request = protocol.get(currentUrl, (response) => {
           currentResponse = response;
           
           if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
@@ -364,7 +369,11 @@ async function downloadFileWithVerification(
               reject(error);
             }
           });
-        }).on('error', (err) => {
+        });
+        
+        currentRequest = request;
+        
+        request.on('error', (err) => {
           cleanup();
           combinedSignal.removeEventListener('abort', abortHandler);
           reject(err);
@@ -431,40 +440,36 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
           shouldDeleteBinary = true;
         }
       } catch (checksumError) {
-        // FIX: Don't fail closed when checksum fetch fails due to network issues
-        // Only delete binary on explicit hash mismatch, not on network errors
-        console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
+        // FIX: CRITICAL SECURITY - Never trust a binary without hash verification
+        // Even if checksum fetch fails due to network issues, we cannot verify authenticity
+        // Fail closed - delete binary and re-download rather than risk executing tampered code
+        console.error('CRITICAL: Checksum verification failed, cannot trust existing binary:', checksumError);
+        console.warn('Deleting unverifiable yt-dlp binary and will re-download');
+        shouldDeleteBinary = true;
         
-        // Verify the binary can at least execute before trusting it
+        // Do NOT attempt to execute the binary - this would be a security vulnerability
+        // Even if --version works, it doesn't prove the binary hasn't been tampered with
+      }
+      
+      if (shouldDeleteBinary) {
+        console.warn('Removing unverifiable yt-dlp binary');
+        await fs.unlink(ytDlpPath).catch(() => {});
+      }
+      
+      if (integrityCheckPassed && !shouldDeleteBinary) {
+        // Only execute after integrity is cryptographically verified
         try {
           await execFileAsync(ytDlpPath, ['--version'], { 
             signal: abortController.signal,
             timeout: 5000 
           });
-          // Binary executes successfully, trust it despite checksum fetch failure
-          integrityCheckPassed = true;
-          console.log('Existing yt-dlp binary executes successfully, continuing with existing installation');
+          return ytDlpPath;
         } catch (execError) {
-          console.warn('Existing yt-dlp binary failed to execute:', execError);
-          shouldDeleteBinary = true;
+          // If verified binary fails to execute, something is wrong
+          console.warn('Verified yt-dlp binary failed to execute:', execError);
+          await fs.unlink(ytDlpPath).catch(() => {});
+          // Fall through to download fresh copy
         }
-      }
-      
-      if (shouldDeleteBinary) {
-        console.warn('Removing compromised/non-functional yt-dlp binary');
-        await fs.unlink(ytDlpPath).catch(() => {});
-      }
-      
-      if (integrityCheckPassed && !shouldDeleteBinary) {
-        // ONLY execute version check after integrity is verified or binary is confirmed working
-        await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
-        return ytDlpPath;
-      }
-      
-      // Integrity check failed - delete the compromised binary if not already deleted
-      if (!shouldDeleteBinary) {
-        console.warn('Removing unverified yt-dlp binary');
-        await fs.unlink(ytDlpPath).catch(() => {});
       }
     }
     
