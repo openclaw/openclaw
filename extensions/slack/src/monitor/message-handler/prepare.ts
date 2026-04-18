@@ -15,6 +15,13 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import {
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageReceivedContext,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -525,19 +532,57 @@ export async function prepareSlackMessage(params: {
         ? "[Slack file]"
         : "";
     const pendingBody = pendingText || fallbackFile;
+    const senderName = pendingBody ? await resolveSenderName() : undefined;
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey,
       limit: ctx.historyLimit,
       entry: pendingBody
         ? {
-            sender: await resolveSenderName(),
+            sender: senderName,
             body: pendingBody,
             timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
             messageId: message.ts,
           }
         : null,
     });
+    const slackGroupPolicy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "slack",
+      groupId: message.channel,
+      accountId: account.accountId,
+    });
+    const ingestEnabled =
+      slackGroupPolicy.groupConfig?.ingest ?? slackGroupPolicy.defaultConfig?.ingest;
+    if (ingestEnabled === true && sessionKey && pendingBody) {
+      const slackFrom = isRoom ? `slack:channel:${message.channel}` : `slack:group:${message.channel}`;
+      const slackTo = `channel:${message.channel}`;
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "received",
+            sessionKey,
+            toInternalMessageReceivedContext({
+              from: slackFrom,
+              to: slackTo,
+              content: pendingBody,
+              timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+              channelId: "slack",
+              accountId: account.accountId,
+              conversationId: slackTo,
+              messageId: message.ts,
+              senderId: senderId || undefined,
+              senderName,
+              provider: "slack",
+              surface: "slack",
+              threadId: threadContext.messageThreadId,
+            }),
+          ),
+        ),
+        "slack: mention-skip message hook failed",
+      );
+    }
     return null;
   }
 
