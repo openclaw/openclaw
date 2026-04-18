@@ -24,6 +24,7 @@ import {
 import { getMessageApi, accountToCreds } from "../../engine/messaging/sender.js";
 import type { ChatScope, InlineKeyboard, MessageResponse } from "../../engine/types.js";
 import {
+  matchesQQBotApprovalAccount,
   resolveQQBotExecApprovalConfig,
   isQQBotExecApprovalClientEnabled,
   shouldHandleQQBotExecApprovalRequest,
@@ -106,10 +107,23 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
         return result;
       }
       const target = resolveQQTarget(request as ApprovalRequest);
+      if (target === null) {
+        getBridgeLogger().debug?.(
+          `[qqbot:approval-runtime] shouldHandle(fallback) accountId=${accountId} target=null → false`,
+        );
+        return false;
+      }
+      const accountMatches = matchesQQBotApprovalAccount({
+        cfg,
+        accountId,
+        request: request as ApprovalRequest,
+      });
       getBridgeLogger().debug?.(
-        `[qqbot:approval-runtime] shouldHandle(fallback) accountId=${accountId} target=${JSON.stringify(target)} → ${target !== null}`,
+        `[qqbot:approval-runtime] shouldHandle(fallback) accountId=${accountId} target=${JSON.stringify(
+          target,
+        )} accountMatches=${accountMatches} → ${accountMatches}`,
       );
-      return target !== null;
+      return accountMatches;
     },
   },
 

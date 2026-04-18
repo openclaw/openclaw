@@ -24,6 +24,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveApprovalTarget } from "../../engine/approval/index.js";
 import {
   isQQBotExecApprovalClientEnabled,
+  matchesQQBotApprovalAccount,
   shouldHandleQQBotExecApprovalRequest,
   isQQBotExecApprovalAuthorizedSender,
   isQQBotExecApprovalApprover,
@@ -34,8 +35,11 @@ import { getBridgeLogger } from "../logger.js";
 
 /**
  * When `execApprovals` is configured, delegate to the profile-based
- * check.  Otherwise fall back to target-resolvability: if we can figure
- * out *where* to send the approval message, we handle it.
+ * check.  Otherwise fall back to target-resolvability plus the shared
+ * per-account ownership rule in `matchesQQBotApprovalAccount` so that
+ * each QQBot account handler only delivers approvals that originated
+ * from its own account (openids are account-scoped — cross-account
+ * delivery fails with 500 on the QQ Bot API).
  */
 function shouldHandleRequest(params: {
   cfg: OpenClawConfig;
@@ -45,13 +49,21 @@ function shouldHandleRequest(params: {
       sessionKey?: string | null;
       turnSourceTo?: string | null;
       turnSourceChannel?: string | null;
+      turnSourceAccountId?: string | null;
     };
   };
 }): boolean {
   if (hasExecApprovalConfig(params)) {
     return shouldHandleQQBotExecApprovalRequest(params as never);
   }
-  return canResolveTarget(params.request);
+  if (!canResolveTarget(params.request)) {
+    return false;
+  }
+  return matchesQQBotApprovalAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    request: params.request as never,
+  });
 }
 
 function hasExecApprovalConfig(params: {
