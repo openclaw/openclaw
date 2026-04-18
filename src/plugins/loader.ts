@@ -98,7 +98,12 @@ import {
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
-import type { OpenClawPluginDefinition, OpenClawPluginModule, PluginLogger } from "./types.js";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginLogger,
+} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -247,6 +252,162 @@ function profilePluginLoaderSync<T>(params: {
     console.error(
       `[plugin-load-profile] phase=${params.phase} plugin=${params.pluginId ?? "(core)"} elapsedMs=${elapsedMs.toFixed(1)} source=${params.source}`,
     );
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+type PluginRegistrySnapshot = {
+  arrays: {
+    tools: PluginRegistry["tools"];
+    hooks: PluginRegistry["hooks"];
+    typedHooks: PluginRegistry["typedHooks"];
+    channels: PluginRegistry["channels"];
+    channelSetups: PluginRegistry["channelSetups"];
+    providers: PluginRegistry["providers"];
+    cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
+    textTransforms: PluginRegistry["textTransforms"];
+    speechProviders: PluginRegistry["speechProviders"];
+    realtimeTranscriptionProviders: PluginRegistry["realtimeTranscriptionProviders"];
+    realtimeVoiceProviders: PluginRegistry["realtimeVoiceProviders"];
+    mediaUnderstandingProviders: PluginRegistry["mediaUnderstandingProviders"];
+    imageGenerationProviders: PluginRegistry["imageGenerationProviders"];
+    videoGenerationProviders: PluginRegistry["videoGenerationProviders"];
+    musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
+    webFetchProviders: PluginRegistry["webFetchProviders"];
+    webSearchProviders: PluginRegistry["webSearchProviders"];
+    memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
+    agentHarnesses: PluginRegistry["agentHarnesses"];
+    httpRoutes: PluginRegistry["httpRoutes"];
+    cliRegistrars: PluginRegistry["cliRegistrars"];
+    reloads: NonNullable<PluginRegistry["reloads"]>;
+    nodeHostCommands: NonNullable<PluginRegistry["nodeHostCommands"]>;
+    securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
+    services: PluginRegistry["services"];
+    commands: PluginRegistry["commands"];
+    conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
+    diagnostics: PluginRegistry["diagnostics"];
+  };
+  gatewayHandlers: PluginRegistry["gatewayHandlers"];
+  gatewayMethodScopes: NonNullable<PluginRegistry["gatewayMethodScopes"]>;
+};
+
+function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapshot {
+  return {
+    arrays: {
+      tools: [...registry.tools],
+      hooks: [...registry.hooks],
+      typedHooks: [...registry.typedHooks],
+      channels: [...registry.channels],
+      channelSetups: [...registry.channelSetups],
+      providers: [...registry.providers],
+      cliBackends: [...(registry.cliBackends ?? [])],
+      textTransforms: [...registry.textTransforms],
+      speechProviders: [...registry.speechProviders],
+      realtimeTranscriptionProviders: [...registry.realtimeTranscriptionProviders],
+      realtimeVoiceProviders: [...registry.realtimeVoiceProviders],
+      mediaUnderstandingProviders: [...registry.mediaUnderstandingProviders],
+      imageGenerationProviders: [...registry.imageGenerationProviders],
+      videoGenerationProviders: [...registry.videoGenerationProviders],
+      musicGenerationProviders: [...registry.musicGenerationProviders],
+      webFetchProviders: [...registry.webFetchProviders],
+      webSearchProviders: [...registry.webSearchProviders],
+      memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
+      agentHarnesses: [...registry.agentHarnesses],
+      httpRoutes: [...registry.httpRoutes],
+      cliRegistrars: [...registry.cliRegistrars],
+      reloads: [...(registry.reloads ?? [])],
+      nodeHostCommands: [...(registry.nodeHostCommands ?? [])],
+      securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
+      services: [...registry.services],
+      commands: [...registry.commands],
+      conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
+      diagnostics: [...registry.diagnostics],
+    },
+    gatewayHandlers: { ...registry.gatewayHandlers },
+    gatewayMethodScopes: { ...registry.gatewayMethodScopes },
+  };
+}
+
+function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistrySnapshot): void {
+  registry.tools = snapshot.arrays.tools;
+  registry.hooks = snapshot.arrays.hooks;
+  registry.typedHooks = snapshot.arrays.typedHooks;
+  registry.channels = snapshot.arrays.channels;
+  registry.channelSetups = snapshot.arrays.channelSetups;
+  registry.providers = snapshot.arrays.providers;
+  registry.cliBackends = snapshot.arrays.cliBackends;
+  registry.textTransforms = snapshot.arrays.textTransforms;
+  registry.speechProviders = snapshot.arrays.speechProviders;
+  registry.realtimeTranscriptionProviders = snapshot.arrays.realtimeTranscriptionProviders;
+  registry.realtimeVoiceProviders = snapshot.arrays.realtimeVoiceProviders;
+  registry.mediaUnderstandingProviders = snapshot.arrays.mediaUnderstandingProviders;
+  registry.imageGenerationProviders = snapshot.arrays.imageGenerationProviders;
+  registry.videoGenerationProviders = snapshot.arrays.videoGenerationProviders;
+  registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
+  registry.webFetchProviders = snapshot.arrays.webFetchProviders;
+  registry.webSearchProviders = snapshot.arrays.webSearchProviders;
+  registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
+  registry.agentHarnesses = snapshot.arrays.agentHarnesses;
+  registry.httpRoutes = snapshot.arrays.httpRoutes;
+  registry.cliRegistrars = snapshot.arrays.cliRegistrars;
+  registry.reloads = snapshot.arrays.reloads;
+  registry.nodeHostCommands = snapshot.arrays.nodeHostCommands;
+  registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
+  registry.services = snapshot.arrays.services;
+  registry.commands = snapshot.arrays.commands;
+  registry.conversationBindingResolvedHandlers =
+    snapshot.arrays.conversationBindingResolvedHandlers;
+  registry.diagnostics = snapshot.arrays.diagnostics;
+  registry.gatewayHandlers = snapshot.gatewayHandlers;
+  registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
+}
+
+function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
+  api: OpenClawPluginApi;
+  close: () => void;
+} {
+  let closed = false;
+  return {
+    api: new Proxy(api, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") {
+          return value;
+        }
+        return (...args: unknown[]) => {
+          if (closed) {
+            return undefined;
+          }
+          return Reflect.apply(value, target, args);
+        };
+      },
+    }),
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+function runPluginRegisterSync(
+  register: NonNullable<OpenClawPluginDefinition["register"]>,
+  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+): void {
+  const guarded = createGuardedPluginRegistrationApi(api);
+  try {
+    const result = register(guarded.api);
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => {});
+      throw new Error("plugin register must be synchronous");
+    }
+  } finally {
+    guarded.close();
   }
 }
 
@@ -638,15 +799,20 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
-function mergeSetupPluginSection<T>(
+function mergeChannelPluginSection<T>(
   baseValue: T | undefined,
-  setupValue: T | undefined,
+  overrideValue: T | undefined,
 ): T | undefined {
-  if (baseValue && setupValue && typeof baseValue === "object" && typeof setupValue === "object") {
+  if (
+    baseValue &&
+    overrideValue &&
+    typeof baseValue === "object" &&
+    typeof overrideValue === "object"
+  ) {
     const merged = {
       ...(baseValue as Record<string, unknown>),
     };
-    for (const [key, value] of Object.entries(setupValue as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(overrideValue as Record<string, unknown>)) {
       if (value !== undefined) {
         merged[key] = value;
       }
@@ -655,11 +821,102 @@ function mergeSetupPluginSection<T>(
       ...merged,
     } as T;
   }
-  return setupValue ?? baseValue;
+  return overrideValue ?? baseValue;
+}
+
+function mergeSetupRuntimeChannelPlugin(
+  runtimePlugin: ChannelPlugin,
+  setupPlugin: ChannelPlugin,
+): ChannelPlugin {
+  return {
+    ...runtimePlugin,
+    ...setupPlugin,
+    meta: mergeChannelPluginSection(runtimePlugin.meta, setupPlugin.meta),
+    capabilities: mergeChannelPluginSection(runtimePlugin.capabilities, setupPlugin.capabilities),
+    commands: mergeChannelPluginSection(runtimePlugin.commands, setupPlugin.commands),
+    doctor: mergeChannelPluginSection(runtimePlugin.doctor, setupPlugin.doctor),
+    reload: mergeChannelPluginSection(runtimePlugin.reload, setupPlugin.reload),
+    config: mergeChannelPluginSection(runtimePlugin.config, setupPlugin.config),
+    setup: mergeChannelPluginSection(runtimePlugin.setup, setupPlugin.setup),
+    messaging: mergeChannelPluginSection(runtimePlugin.messaging, setupPlugin.messaging),
+    actions: mergeChannelPluginSection(runtimePlugin.actions, setupPlugin.actions),
+    secrets: mergeChannelPluginSection(runtimePlugin.secrets, setupPlugin.secrets),
+  } as ChannelPlugin;
+}
+
+function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
+  id?: string;
+  loadChannelPlugin?: () => ChannelPlugin;
+  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+} {
+  const resolved = unwrapDefaultModuleExport(moduleExport);
+  if (!resolved || typeof resolved !== "object") {
+    return {};
+  }
+  const entryRecord = resolved as {
+    kind?: unknown;
+    id?: unknown;
+    loadChannelPlugin?: unknown;
+    loadChannelSecrets?: unknown;
+    setChannelRuntime?: unknown;
+  };
+  if (
+    entryRecord.kind !== "bundled-channel-entry" ||
+    typeof entryRecord.id !== "string" ||
+    typeof entryRecord.loadChannelPlugin !== "function"
+  ) {
+    return {};
+  }
+  return {
+    id: entryRecord.id,
+    loadChannelPlugin: entryRecord.loadChannelPlugin as () => ChannelPlugin,
+    ...(typeof entryRecord.loadChannelSecrets === "function"
+      ? {
+          loadChannelSecrets: entryRecord.loadChannelSecrets as () =>
+            | ChannelPlugin["secrets"]
+            | undefined,
+        }
+      : {}),
+    ...(typeof entryRecord.setChannelRuntime === "function"
+      ? {
+          setChannelRuntime: entryRecord.setChannelRuntime as (runtime: PluginRuntime) => void,
+        }
+      : {}),
+  };
+}
+
+function loadBundledRuntimeChannelPlugin(params: {
+  registration: ReturnType<typeof resolveBundledRuntimeChannelRegistration>;
+}): {
+  plugin?: ChannelPlugin;
+  loadError?: unknown;
+} {
+  if (typeof params.registration.loadChannelPlugin !== "function") {
+    return {};
+  }
+  try {
+    const loadedPlugin = params.registration.loadChannelPlugin();
+    const loadedSecrets = params.registration.loadChannelSecrets?.();
+    if (!loadedPlugin || typeof loadedPlugin !== "object") {
+      return {};
+    }
+    const mergedSecrets = mergeChannelPluginSection(loadedPlugin.secrets, loadedSecrets);
+    return {
+      plugin: {
+        ...loadedPlugin,
+        ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
+      },
+    };
+  } catch (err) {
+    return { loadError: err };
+  }
 }
 
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
+  usesBundledSetupContract?: boolean;
   loadError?: unknown;
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport);
@@ -670,6 +927,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
     kind?: unknown;
     loadSetupPlugin?: unknown;
     loadSetupSecrets?: unknown;
+    setChannelRuntime?: unknown;
   };
   if (
     setupEntryRecord.kind === "bundled-channel-setup-entry" &&
@@ -682,7 +940,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
           ? (setupEntryRecord.loadSetupSecrets() as ChannelPlugin["secrets"] | undefined)
           : undefined;
       if (loadedPlugin && typeof loadedPlugin === "object") {
-        const mergedSecrets = mergeSetupPluginSection(
+        const mergedSecrets = mergeChannelPluginSection(
           (loadedPlugin as ChannelPlugin).secrets,
           loadedSecrets,
         );
@@ -691,6 +949,14 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
             ...(loadedPlugin as ChannelPlugin),
             ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
           },
+          usesBundledSetupContract: true,
+          ...(typeof setupEntryRecord.setChannelRuntime === "function"
+            ? {
+                setChannelRuntime: setupEntryRecord.setChannelRuntime as (
+                  runtime: PluginRuntime,
+                ) => void,
+              }
+            : {}),
         };
       }
     } catch (err) {
@@ -1296,6 +1562,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const {
       registry,
       createApi,
+      rollbackPluginGlobalSideEffects,
       registerReload,
       registerNodeHostCommand,
       registerSecurityAuditCollector,
@@ -1709,7 +1976,147 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             hookPolicy: entry?.hooks,
             registrationMode,
           });
-          api.registerChannel(setupRegistration.plugin);
+          let mergedSetupRegistration = setupRegistration;
+          let runtimeSetterApplied = false;
+          if (
+            registrationMode === "setup-runtime" &&
+            setupRegistration.usesBundledSetupContract &&
+            candidate.source !== safeSource
+          ) {
+            const runtimeOpened = openBoundaryFileSync({
+              absolutePath: candidate.source,
+              rootPath: pluginRoot,
+              boundaryLabel: "plugin root",
+              rejectHardlinks: candidate.origin !== "bundled",
+              skipLexicalRootCheck: true,
+            });
+            if (!runtimeOpened.ok) {
+              pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+              continue;
+            }
+            const safeRuntimeSource = runtimeOpened.path;
+            fs.closeSync(runtimeOpened.fd);
+            const safeRuntimeImportSource = toSafeImportPath(safeRuntimeSource);
+            let runtimeMod: OpenClawPluginModule | null = null;
+            try {
+              runtimeMod = profilePluginLoaderSync({
+                phase: "load-setup-runtime-entry",
+                pluginId: record.id,
+                source: safeRuntimeSource,
+                run: () =>
+                  getJiti(safeRuntimeSource)(safeRuntimeImportSource) as OpenClawPluginModule,
+              });
+            } catch (err) {
+              recordPluginError({
+                logger,
+                registry,
+                record,
+                seenIds,
+                pluginId,
+                origin: candidate.origin,
+                phase: "load",
+                error: err,
+                logPrefix: `[plugins] ${record.id} failed to load setup-runtime entry from ${record.source}: `,
+                diagnosticMessagePrefix: "failed to load setup-runtime entry: ",
+              });
+              continue;
+            }
+            const runtimeRegistration = resolveBundledRuntimeChannelRegistration(runtimeMod);
+            if (runtimeRegistration.id && runtimeRegistration.id !== record.id) {
+              pushPluginLoadError(
+                `plugin id mismatch (config uses "${record.id}", runtime entry uses "${runtimeRegistration.id}")`,
+              );
+              continue;
+            }
+            if (runtimeRegistration.setChannelRuntime) {
+              try {
+                runtimeRegistration.setChannelRuntime(api.runtime);
+                runtimeSetterApplied = true;
+              } catch (err) {
+                recordPluginError({
+                  logger,
+                  registry,
+                  record,
+                  seenIds,
+                  pluginId,
+                  origin: candidate.origin,
+                  phase: "load",
+                  error: err,
+                  logPrefix: `[plugins] ${record.id} failed to apply setup-runtime channel runtime from ${record.source}: `,
+                  diagnosticMessagePrefix: "failed to apply setup-runtime channel runtime: ",
+                });
+                continue;
+              }
+            }
+            const runtimePluginRegistration = loadBundledRuntimeChannelPlugin({
+              registration: runtimeRegistration,
+            });
+            if (runtimePluginRegistration.loadError) {
+              recordPluginError({
+                logger,
+                registry,
+                record,
+                seenIds,
+                pluginId,
+                origin: candidate.origin,
+                phase: "load",
+                error: runtimePluginRegistration.loadError,
+                logPrefix: `[plugins] ${record.id} failed to load setup-runtime channel entry from ${record.source}: `,
+                diagnosticMessagePrefix: "failed to load setup-runtime channel entry: ",
+              });
+              continue;
+            }
+            if (runtimePluginRegistration.plugin) {
+              if (
+                runtimePluginRegistration.plugin.id &&
+                runtimePluginRegistration.plugin.id !== record.id
+              ) {
+                pushPluginLoadError(
+                  `plugin id mismatch (config uses "${record.id}", runtime export uses "${runtimePluginRegistration.plugin.id}")`,
+                );
+                continue;
+              }
+              mergedSetupRegistration = {
+                ...setupRegistration,
+                plugin: mergeSetupRuntimeChannelPlugin(
+                  runtimePluginRegistration.plugin,
+                  setupRegistration.plugin,
+                ),
+                setChannelRuntime:
+                  runtimeRegistration.setChannelRuntime ?? setupRegistration.setChannelRuntime,
+              };
+            }
+          }
+          const mergedSetupPlugin = mergedSetupRegistration.plugin;
+          if (!mergedSetupPlugin) {
+            continue;
+          }
+          if (mergedSetupPlugin.id && mergedSetupPlugin.id !== record.id) {
+            pushPluginLoadError(
+              `plugin id mismatch (config uses "${record.id}", setup export uses "${mergedSetupPlugin.id}")`,
+            );
+            continue;
+          }
+          if (!runtimeSetterApplied) {
+            try {
+              mergedSetupRegistration.setChannelRuntime?.(api.runtime);
+            } catch (err) {
+              recordPluginError({
+                logger,
+                registry,
+                record,
+                seenIds,
+                pluginId,
+                origin: candidate.origin,
+                phase: "load",
+                error: err,
+                logPrefix: `[plugins] ${record.id} failed to apply setup channel runtime from ${record.source}: `,
+                diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
+              });
+              continue;
+            }
+          }
+          api.registerChannel(mergedSetupPlugin);
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);
           continue;
@@ -1802,6 +2209,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         hookPolicy: entry?.hooks,
         registrationMode,
       });
+      const registrySnapshot = snapshotPluginRegistry(registry);
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
@@ -1812,15 +2220,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryRuntime = getMemoryRuntime();
 
       try {
-        const result = register(api);
-        if (result && typeof result.then === "function") {
-          registry.diagnostics.push({
-            level: "warn",
-            pluginId: record.id,
-            source: record.source,
-            message: "plugin register returned a promise; async registration is ignored",
-          });
-        }
+        runPluginRegisterSync(register, api);
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
@@ -1837,6 +2237,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
       } catch (err) {
+        rollbackPluginGlobalSideEffects(record.id);
+        restorePluginRegistry(registry, registrySnapshot);
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
@@ -2232,11 +2634,13 @@ export async function loadOpenClawPluginCliRegistry(
       },
     });
 
+    const registrySnapshot = snapshotPluginRegistry(registry);
     try {
-      await register(api);
+      runPluginRegisterSync(register, api);
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
+      restorePluginRegistry(registry, registrySnapshot);
       recordPluginError({
         logger,
         registry,
