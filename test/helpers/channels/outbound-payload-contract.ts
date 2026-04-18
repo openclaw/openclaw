@@ -21,12 +21,12 @@ const discordOutboundAdapterModuleId = resolveRelativeBundledPluginPublicModuleI
 const slackTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "slack",
-  artifactBasename: "test-api.js",
+  artifactBasename: "outbound-payload-test-api.js",
 });
 const whatsappTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "whatsapp",
-  artifactBasename: "test-api.js",
+  artifactBasename: "outbound-payload-test-api.js",
 });
 
 let discordOutboundCache: Promise<ChannelOutboundAdapter> | undefined;
