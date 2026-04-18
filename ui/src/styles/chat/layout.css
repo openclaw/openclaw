@@ -63,6 +63,13 @@
   background: transparent;
 }
 
+/* Chat thread inner - constrain width for readability */
+.chat-thread-inner {
+  max-width: 920px;
+  margin: 0 auto;
+  width: 100%;
+}
+
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
 }
@@ -477,12 +484,14 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  margin: 0 auto 14px;
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   flex-shrink: 0;
+  max-width: 920px;
+  width: calc(100% - 36px);
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
