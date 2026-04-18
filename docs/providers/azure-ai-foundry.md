@@ -13,10 +13,10 @@ title: "Azure AI Foundry"
 (Anthropic, OpenAI, Meta, Mistral, etc.) behind a single Azure endpoint. OpenClaw
 supports two API adapters for Foundry, depending on which model family you deploy:
 
-| Model family | API adapter              | Base URL suffix  | Auth header   |
-| ------------ | ------------------------ | ---------------- | ------------- |
-| Anthropic    | `anthropic-messages`     | `/anthropic/`    | `x-api-key`   |
-| OpenAI       | `azure-openai-responses` | `/openai`        | `api-key`     |
+| Model family | API adapter              | Base URL suffix | Auth header |
+| ------------ | ------------------------ | --------------- | ----------- |
+| Anthropic    | `anthropic-messages`     | `/anthropic/`   | `x-api-key` |
+| OpenAI       | `azure-openai-responses` | `/openai`       | `api-key`   |
 
 <Note>
 Azure AI Foundry uses **deployment names** as model IDs. The deployment name may
@@ -154,6 +154,7 @@ name.
         ```
       </Step>
     </Steps>
+
   </Tab>
 
   <Tab title="OpenAI (GPT)">
@@ -215,19 +216,20 @@ name.
         ```
       </Step>
     </Steps>
+
   </Tab>
 </Tabs>
 
 ## Adapter comparison
 
-| Feature                | `anthropic-messages`        | `azure-openai-responses`       |
-| ---------------------- | --------------------------- | ------------------------------ |
-| SDK client             | Anthropic SDK               | AzureOpenAI SDK                |
-| Base URL suffix        | `/anthropic/`               | `/openai`                      |
-| Auth header            | `x-api-key: <key>`          | `api-key: <key>`               |
-| Model field            | Deployment name directly    | Deployment-name mapping        |
-| API version            | `anthropic-version` header  | `api-version` query param      |
-| Streaming              | SSE                         | SSE                            |
+| Feature         | `anthropic-messages`       | `azure-openai-responses`  |
+| --------------- | -------------------------- | ------------------------- |
+| SDK client      | Anthropic SDK              | AzureOpenAI SDK           |
+| Base URL suffix | `/anthropic/`              | `/openai`                 |
+| Auth header     | `x-api-key: <key>`         | `api-key: <key>`          |
+| Model field     | Deployment name directly   | Deployment-name mapping   |
+| API version     | `anthropic-version` header | `api-version` query param |
+| Streaming       | SSE                        | SSE                       |
 
 ## Troubleshooting
 
@@ -250,6 +252,7 @@ name.
     ```json5
     { agents: { defaults: { compaction: { mode: "safeguard" } } } }
     ```
+
   </Accordion>
   <Accordion title="Double-path in URL (e.g. /v1/v1/messages)">
     Your `baseUrl` likely includes `/v1`. Remove it — the adapter appends the
@@ -260,8 +263,8 @@ name.
 
 ## Environment variables
 
-| Variable                              | Description                                      |
-| ------------------------------------- | ------------------------------------------------ |
-| `AZURE_OPENAI_API_VERSION`            | Override default API version (OpenAI adapter)     |
-| `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`    | Custom model-to-deployment mapping (OpenAI)       |
-| `AZURE_OPENAI_BASE_URL`              | Override base URL (OpenAI adapter)                |
+| Variable                           | Description                                   |
+| ---------------------------------- | --------------------------------------------- |
+| `AZURE_OPENAI_API_VERSION`         | Override default API version (OpenAI adapter) |
+| `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` | Custom model-to-deployment mapping (OpenAI)   |
+| `AZURE_OPENAI_BASE_URL`            | Override base URL (OpenAI adapter)            |
