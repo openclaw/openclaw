@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
+  hasUnredactedSessionsSpawnAttachments,
   isAllowedToolCallName,
-  isRedactedSessionsSpawnAttachment,
   normalizeAllowedToolNames,
 } from "./tool-call-shared.js";
 
@@ -118,24 +117,7 @@ function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
   if (rawName && rawName !== trimmedName) {
     return true;
   }
-  if (normalizeLowercaseStringOrEmpty(trimmedName) !== "sessions_spawn") {
-    return false;
-  }
-  for (const payload of [block.arguments, block.input]) {
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const attachments = (payload as { attachments?: unknown }).attachments;
-    if (!Array.isArray(attachments)) {
-      continue;
-    }
-    for (const attachment of attachments) {
-      if (!isRedactedSessionsSpawnAttachment(attachment)) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return hasUnredactedSessionsSpawnAttachments(block);
 }
 
 function isReplaySafeThinkingAssistantMessage(

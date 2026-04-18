@@ -65,3 +65,33 @@ export function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
   }
   return true;
 }
+
+export type SessionsSpawnAttachmentToolCallBlock = {
+  name?: unknown;
+  input?: unknown;
+  arguments?: unknown;
+};
+
+export function hasUnredactedSessionsSpawnAttachments(
+  block: SessionsSpawnAttachmentToolCallBlock,
+): boolean {
+  const rawName = typeof block.name === "string" ? block.name.trim() : "";
+  if (normalizeLowercaseStringOrEmpty(rawName) !== "sessions_spawn") {
+    return false;
+  }
+  for (const payload of [block.arguments, block.input]) {
+    if (!payload || typeof payload !== "object") {
+      continue;
+    }
+    const attachments = (payload as { attachments?: unknown }).attachments;
+    if (!Array.isArray(attachments)) {
+      continue;
+    }
+    for (const attachment of attachments) {
+      if (!isRedactedSessionsSpawnAttachment(attachment)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
