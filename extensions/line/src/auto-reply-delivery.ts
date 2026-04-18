@@ -139,7 +139,7 @@ export async function deliverLineAutoReply(params: {
       return { replyTokenUsed };
     }
     // Invalid sticker-only payload should not disappear silently.
-    if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent) {
+    if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent && !lineData?.sticker) {
       await sendLineMessages([{ type: "text", text: stickerInvalidFormatText }], true);
       return { replyTokenUsed };
     }

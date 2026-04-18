@@ -134,7 +134,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         return createEmptyChannelResult("line", lastResult ?? { messageId: "sticker", chatId: to });
       }
       // Malformed sticker token with no other sendable content: surface as error.
-      if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent) {
+      if (!hasTextContent && mediaUrls.length === 0 && !hasLineRichContent && !lineData?.sticker) {
         await sendMessageBatch([
           { type: "text", text: "[Sticker send error: invalid sticker format]" },
         ]);
