@@ -155,26 +155,6 @@ describe("resolveBootstrapContextForRun", () => {
       "reviewer addendum",
       "utf8",
     );
-    await fs.mkdir(
-      path.join(workspaceDir, ".openclaw", "lab", "overrides", "gpt-5.4", "defaults"),
-      {
-        recursive: true,
-      },
-    );
-    await fs.writeFile(
-      path.join(
-        workspaceDir,
-        ".openclaw",
-        "lab",
-        "overrides",
-        "gpt-5.4",
-        "defaults",
-        "research.md",
-      ),
-      "example only",
-      "utf8",
-    );
-
     const result = await resolveBootstrapContextForRun({
       workspaceDir,
       agentId: "reviewer",
@@ -221,9 +201,6 @@ describe("resolveBootstrapContextForRun", () => {
     expect(contextPaths).toContain(modelAddendumPath);
     expect(contextPaths).toContain(agentAddendumPath);
     expect(contextPaths).toContain(finalReminderPath);
-    expect(contextPaths.some((pathValue) => pathValue.endsWith("/defaults/research.md"))).toBe(
-      false,
-    );
     expect(contextPaths.indexOf(modelAddendumPath)).toBeGreaterThanOrEqual(0);
     expect(contextPaths.indexOf(agentAddendumPath)).toBeGreaterThan(
       contextPaths.indexOf(modelAddendumPath),

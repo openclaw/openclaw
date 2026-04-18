@@ -132,7 +132,7 @@ occurs, OpenClaw can inject a warning block in Project Context; control this wit
 default: `once`).
 
 Lab addenda behave like normal prompt files for budgeting, reporting, and
-truncation. The non-runtime Lab `defaults/` files do not load into the prompt.
+truncation.
 
 OpenClaw also appends `FINAL_REMINDER.md` at the very end of the full system
 prompt when that template exists.

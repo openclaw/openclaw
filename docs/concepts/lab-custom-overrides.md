@@ -57,25 +57,6 @@ Examples:
 Agent ids are normalized from the active session key. The override is keyed by
 the **agent id**, not by an arbitrary folder name.
 
-## Instructional defaults
-
-Under the same model folder, Lab can also ship instructional reference files:
-
-```txt
-.openclaw/lab/overrides/<model-id>/defaults/<name>.md
-```
-
-Examples:
-
-```txt
-.openclaw/lab/overrides/gpt-5.4/defaults/research.md
-.openclaw/lab/overrides/gpt-5.4/defaults/memo.md
-.openclaw/lab/overrides/gpt-5.4/defaults/frontend.md
-```
-
-These files are **not runtime inputs**. They do not load into the prompt, do
-not appear in active addenda, and do not participate in truncation reporting.
-
 ## Prompt precedence
 
 When present, Lab addenda are prepended ahead of the normal repo `AGENTS.md`:

@@ -16,7 +16,6 @@ Right now, the first Lab feature is **custom overrides**:
 
 - a model-level `AGENTS.md` addendum
 - an optional higher-priority agent-specific `AGENTS.md` addendum
-- a non-runtime `defaults/` folder for shipped reference material
 
 Lab is intentionally separate from stable config because this surface is still
 changing. Use it when you want to tune agent behavior without pretending the
@@ -56,15 +55,6 @@ Live files:
 <workspace>/.openclaw/lab/overrides/<model-id>/AGENTS.md
 <workspace>/.openclaw/lab/agents/<agent-id>/overrides/<model-id>/AGENTS.md
 ```
-
-Instructional-only files:
-
-```txt
-<workspace>/.openclaw/lab/overrides/<model-id>/defaults/*.md
-```
-
-`defaults/` does **not** load into the system prompt. It exists so users have a
-safe place to start from when copying or tuning their own live overrides.
 
 See [Custom Overrides](/concepts/lab-custom-overrides) for the full path and
 precedence rules.
