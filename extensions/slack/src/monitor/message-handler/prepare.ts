@@ -15,6 +15,7 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -596,7 +597,9 @@ export async function prepareSlackMessage(params: {
         }).then(
           () => true,
           (err) => {
-            logVerbose(`slack react failed for channel ${message.channel}: ${String(err)}`);
+            logVerbose(
+              `slack react failed for channel ${message.channel}: ${formatErrorMessage(err)}`,
+            );
             return false;
           },
         )
@@ -804,7 +807,7 @@ export async function prepareSlackMessage(params: {
     onRecordError: (err) => {
       ctx.logger.warn(
         {
-          error: String(err),
+          error: formatErrorMessage(err),
           storePath,
           sessionKey,
         },
