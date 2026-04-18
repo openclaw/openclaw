@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw capabilities across channels, routing, media, and UX."
+summary: "OpenClaw assistant capabilities across channels, routing, media, and UX."
 read_when:
   - You want a full list of what OpenClaw supports
 title: "Features"
@@ -11,7 +11,7 @@ title: "Features"
 
 <Columns>
   <Card title="Channels" icon="message-square">
-    Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway.
+    Message your OpenClaw assistant across Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more.
   </Card>
   <Card title="Plugins" icon="plug">
     Bundled plugins add Matrix, Nextcloud Talk, Nostr, Twitch, Zalo, and more without separate installs in normal current releases.
@@ -23,7 +23,7 @@ title: "Features"
     Images, audio, video, documents, and image/video generation.
   </Card>
   <Card title="Apps and UI" icon="monitor">
-    Web Control UI and macOS companion app.
+    Web Control UI and companion apps for interacting with your assistant.
   </Card>
   <Card title="Mobile nodes" icon="smartphone">
     iOS and Android nodes with pairing, voice/chat, and rich device commands.

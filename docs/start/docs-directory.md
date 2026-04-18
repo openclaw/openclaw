@@ -1,5 +1,5 @@
 ---
-summary: "Curated links to the most used OpenClaw docs."
+summary: "Curated links to the most used docs for setting up and using OpenClaw."
 read_when:
   - You want quick access to key docs pages
 title: "Docs directory"
@@ -8,7 +8,7 @@ title: "Docs directory"
 # Docs Directory
 
 <Note>
-This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
+This page is a curated index for the docs most people need first. If you are new, start with [Getting Started](/start/getting-started).
 For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 
