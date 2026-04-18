@@ -1,5 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type StrictInlineEvalBoundary =
+  typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
+
 const INLINE_EVAL_HIT = {
   executable: "python3",
   normalizedExecutable: "python3",
@@ -54,15 +57,10 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
 const runExecProcessMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
-  vi.fn(
-    (value: {
-      approvedByAsk: boolean;
-      deniedReason: string | null;
-    }): {
-      approvedByAsk: boolean;
-      deniedReason: string | null;
-    } => value,
-  ),
+  vi.fn<StrictInlineEvalBoundary>((value) => ({
+    approvedByAsk: value.approvedByAsk,
+    deniedReason: value.deniedReason,
+  })),
 );
 const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   vi.fn(
@@ -171,9 +169,10 @@ describe("processGatewayAllowlist", () => {
     runExecProcessMock.mockReset();
     sendExecApprovalFollowupResultMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
-    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation(
-      (value: { approvedByAsk: boolean; deniedReason: string | null }) => value,
-    );
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) => ({
+      approvedByAsk: value.approvedByAsk,
+      deniedReason: value.deniedReason,
+    }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     buildExecApprovalPendingToolResultMock.mockReturnValue({
@@ -192,6 +191,47 @@ describe("processGatewayAllowlist", () => {
       unavailableReason: null,
     });
   });
+
+  async function runTimedOutStrictInlineEval(params: {
+    security: "full" | "allowlist";
+    askFallback: "full" | "allowlist";
+    approvedByAsk: boolean;
+  }) {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: params.security,
+      hostAsk: "always",
+      askFallback: params.askFallback,
+    });
+    detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: params.approvedByAsk,
+      deniedReason: null,
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+
+    return processGatewayAllowlist({
+      command: "python3 -c 'print(1)'",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: params.security,
+      ask: "always",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      strictInlineEval: true,
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+  }
 
   it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
     const result = await processGatewayAllowlist({
@@ -303,39 +343,10 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "full",
-      hostAsk: "always",
-      askFallback: "full",
-    });
-    detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: true },
-      approvedByAsk: true,
-      deniedReason: null,
-    });
-    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
-    });
-
-    const result = await processGatewayAllowlist({
-      command: "python3 -c 'print(1)'",
-      workdir: process.cwd(),
-      env: process.env as Record<string, string>,
-      pty: false,
-      defaultTimeoutSec: 30,
+    const result = await runTimedOutStrictInlineEval({
       security: "full",
-      ask: "always",
-      safeBins: new Set(),
-      safeBinProfiles: {},
-      strictInlineEval: true,
-      warnings: [],
-      approvalRunningNoticeMs: 0,
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
+      askFallback: "full",
+      approvedByAsk: true,
     });
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
@@ -349,39 +360,10 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("denies allowlist timeout fallback for strict inline-eval commands", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "always",
-      askFallback: "allowlist",
-    });
-    detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: true },
-      approvedByAsk: false,
-      deniedReason: null,
-    });
-    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
-    });
-
-    const result = await processGatewayAllowlist({
-      command: "python3 -c 'print(1)'",
-      workdir: process.cwd(),
-      env: process.env as Record<string, string>,
-      pty: false,
-      defaultTimeoutSec: 30,
+    const result = await runTimedOutStrictInlineEval({
       security: "allowlist",
-      ask: "always",
-      safeBins: new Set(),
-      safeBinProfiles: {},
-      strictInlineEval: true,
-      warnings: [],
-      approvalRunningNoticeMs: 0,
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
+      askFallback: "allowlist",
+      approvedByAsk: false,
     });
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");

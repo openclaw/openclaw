@@ -63,15 +63,6 @@ function resolveProviderDocsById(params?: {
   );
 }
 
-export function resolveProviderSetupFlowOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowOption[] {
-  return resolveProviderSetupFlowContributions(params).map((contribution) => contribution.option);
-}
-
 export function resolveProviderSetupFlowContributions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;

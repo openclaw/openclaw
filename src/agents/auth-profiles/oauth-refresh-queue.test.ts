@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
@@ -107,6 +107,11 @@ describe("OAuth refresh in-process queue", () => {
   ]);
   let tempRoot = "";
   let agentDir = "";
+  let caseIndex = 0;
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-queue-"));
+  });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
@@ -115,9 +120,9 @@ describe("OAuth refresh in-process queue", () => {
     formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
     formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-queue-"));
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    agentDir = path.join(tempRoot, "agents", "main", "agent");
+    const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
+    process.env.OPENCLAW_STATE_DIR = caseRoot;
+    agentDir = path.join(caseRoot, "agents", "main", "agent");
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
     await fs.mkdir(agentDir, { recursive: true });
@@ -129,57 +134,10 @@ describe("OAuth refresh in-process queue", () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     resetOAuthRefreshQueuesForTest();
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
   });
 
-  it("serializes concurrent same-PID callers FIFO", async () => {
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
-
-    const order: number[] = [];
-    let seq = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      const n = ++seq;
-      order.push(n);
-      // Small delay so concurrent callers have time to interleave if they can.
-      await new Promise((r) => setTimeout(r, 10));
-      return {
-        type: "oauth",
-        provider,
-        access: `refreshed-${n}`,
-        refresh: `refreshed-refresh-${n}`,
-        // Each refresh returns a token already expired again, so the next
-        // queued caller also proceeds to refresh (proves the queue releases
-        // cleanly and the next caller actually runs).
-        expires: Date.now() - 1_000,
-      } as never;
-    });
-
-    // Fire three resolves concurrently against the same agent+profile.
-    const results = await Promise.all([
-      resolveApiKeyForProfileInTest({
-        store: ensureAuthProfileStore(agentDir),
-        profileId,
-        agentDir,
-      }).catch((e) => e),
-      resolveApiKeyForProfileInTest({
-        store: ensureAuthProfileStore(agentDir),
-        profileId,
-        agentDir,
-      }).catch((e) => e),
-      resolveApiKeyForProfileInTest({
-        store: ensureAuthProfileStore(agentDir),
-        profileId,
-        agentDir,
-      }).catch((e) => e),
-    ]);
-
-    // All three should have completed in order (FIFO queue).
-    expect(order).toEqual([1, 2, 3]);
-    expect(results).toHaveLength(3);
+  afterAll(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
   it("releases the queue even when the refresh throws", async () => {
@@ -254,8 +212,8 @@ describe("OAuth refresh in-process queue", () => {
       startOrder.push(n);
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      // Small delay so any non-serialized overlap would be observable.
-      await new Promise((r) => setTimeout(r, 5));
+      // Yield once so any non-serialized overlap is observable without wall-clock sleep.
+      await Promise.resolve();
       inFlight -= 1;
       endOrder.push(n);
       return {
