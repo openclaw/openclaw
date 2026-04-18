@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
-import { buildThreadResumeParams, buildTurnStartParams } from "./thread-lifecycle.js";
+import {
+  buildThreadResumeParams,
+  buildTurnStartParams,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 let tempDir: string;
 
@@ -511,5 +515,47 @@ describe("runCodexAppServerAttempt", () => {
         serviceTier: "priority",
       }),
     );
+  });
+
+  it("preserves the bound auth profile when resume params omit authProfileId", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      authProfileId: "openai-codex:bound",
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    delete params.authProfileId;
+
+    const binding = await startOrResumeThread({
+      client: {
+        request: async (method) => {
+          if (method === "thread/resume") {
+            return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: {
+        start: {
+          transport: "stdio",
+          command: "codex",
+          args: ["app-server"],
+          headers: {},
+        },
+        requestTimeoutMs: 60_000,
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: "workspace-write",
+      },
+    });
+
+    expect(binding.authProfileId).toBe("openai-codex:bound");
   });
 });

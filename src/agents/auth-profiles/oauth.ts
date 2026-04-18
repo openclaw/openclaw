@@ -470,6 +470,12 @@ export async function resolveApiKeyForProfile(
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+    const surfacedCause =
+      error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
+    const surfacedMessageError =
+      error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
+        ? error
+        : surfacedCause;
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
       store: refreshedStore,
@@ -492,7 +498,7 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = extractErrorMessage(error);
+    const message = extractErrorMessage(surfacedMessageError);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,

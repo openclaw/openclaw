@@ -50,10 +50,11 @@ export async function startOrResumeThread(params: {
             appServer: params.appServer,
           }),
         );
+        const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
-          authProfileId: params.params.authProfileId,
+          authProfileId: boundAuthProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
           dynamicToolsFingerprint,
@@ -63,7 +64,7 @@ export async function startOrResumeThread(params: {
           ...binding,
           threadId: response.thread.id,
           cwd: params.cwd,
-          authProfileId: params.params.authProfileId,
+          authProfileId: boundAuthProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
           dynamicToolsFingerprint,
