@@ -137,6 +137,58 @@ function checkFormattedBodyMention(params: {
   return false;
 }
 
+/**
+ * Strip a leading bot mention from a message body so slash command matching
+ * still recognizes "/cmd" when the user addresses the bot directly. Mirrors
+ * the behavior of other channels (Slack, MSTeams, Tlon, Feishu, Mattermost,
+ * WhatsApp, ZaloUser).
+ *
+ * Examples:
+ *   "@bot:server /new"           -> "/new"
+ *   "@bot:server /new extra"     -> "/new extra"
+ *   "@bot /new"                  -> "/new"
+ *   "BotDisplayName: /new"       -> "/new"  (Element plaintext fallback)
+ *   "/new"                       -> "/new"  (unchanged)
+ */
+export function stripMatrixMentionPrefix(params: {
+  text: string;
+  userId?: string | null;
+  displayName?: string | null;
+}): string {
+  const text = params.text ?? "";
+  if (!text) {
+    return text;
+  }
+  const candidates: string[] = [];
+  const userId = typeof params.userId === "string" ? params.userId.trim() : "";
+  if (userId) {
+    candidates.push(userId);
+    const localpart = resolveMatrixUserLocalpart(userId);
+    if (localpart) {
+      candidates.push(`@${localpart}`);
+    }
+  }
+  const displayName = typeof params.displayName === "string" ? params.displayName.trim() : "";
+  if (displayName) {
+    candidates.push(`@${displayName}`);
+    candidates.push(displayName);
+  }
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Match the label at the start, allowing an optional ":" or "," separator
+    // before the rest of the message. Requires at least one trailing whitespace
+    // so we don't strip messages like "@bot" with no further content.
+    const pattern = new RegExp(`^\\s*${escaped}\\s*[:,]?\\s+`, "i");
+    if (pattern.test(text)) {
+      return text.replace(pattern, "").trimStart();
+    }
+  }
+  return text;
+}
+
 export function resolveMentions(params: {
   content: RoomMessageEventContent;
   userId?: string | null;

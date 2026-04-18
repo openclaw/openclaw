@@ -39,7 +39,7 @@ import { resolveMatrixAllowListMatch } from "./allowlist.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
-import { resolveMentions } from "./mentions.js";
+import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
@@ -850,8 +850,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           surface: "matrix",
         });
         const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+        // Strip the bot mention prefix so "@bot:server /new" or "BotName: /new"
+        // is recognized as a slash command, matching the behavior of Slack,
+        // MSTeams, Tlon, Feishu, Mattermost, WhatsApp, and ZaloUser.
+        const commandPrecheckText = stripMatrixMentionPrefix({
+          text: mentionPrecheckText,
+          userId: selfUserId,
+          displayName: selfDisplayName,
+        });
         const hasControlCommandInMessage = core.channel.text.hasControlCommand(
-          mentionPrecheckText,
+          commandPrecheckText,
           cfg,
         );
         const commandGate = resolveControlCommandGate({
