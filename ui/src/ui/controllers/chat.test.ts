@@ -621,6 +621,63 @@ describe("loadChatHistory", () => {
 
     expect(state.chatMessages).toEqual(messages);
   });
+
+  it("filters system-event-only user messages from history", async () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "System: [2026-04-18 10:00:00] Exec completed.\nSystem: [2026-04-18 10:00:00] Node: gateway",
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "Got it" }] },
+      {
+        role: "user",
+        content: [{ type: "text", text: "System (untrusted): [2026-04-18 10:01:00] cron fired" }],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    // Only the real user message and the assistant reply should remain
+    expect(state.chatMessages).toEqual([messages[0], messages[2]]);
+  });
+
+  it("keeps user messages that mix system event lines with real content", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "System: [2026-04-18 10:00:00] Node connected.\n\nWhat is the weather?",
+          },
+        ],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(messages);
+  });
 });
 
 describe("sendChatMessage", () => {

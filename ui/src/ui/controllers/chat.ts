@@ -11,6 +11,12 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+/**
+ * Matches lines that are purely system event signals injected by the runtime
+ * (e.g. "System: [timestamp] Exec completed", "System (untrusted): ...").
+ * These are agent-only signals and should not be visible in the chat transcript.
+ */
+const SYSTEM_EVENT_LINE_RE = /^System(?:\s*\(untrusted\))?:\s/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
@@ -71,8 +77,37 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
+/**
+ * Detect user messages whose visible content consists entirely of system event
+ * lines (e.g. cron/exec completion notifications). These are internal signals
+ * for the agent and should not appear in the user-facing chat transcript.
+ */
+function isSystemEventOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "user") {
+    return false;
+  }
+  const text = extractText(message);
+  if (typeof text !== "string" || !text.trim()) {
+    return false;
+  }
+  const lines = text.split("\n");
+  return lines.every((line) => {
+    const trimmed = line.trim();
+    return trimmed === "" || SYSTEM_EVENT_LINE_RE.test(trimmed);
+  });
+}
+
 function shouldHideHistoryMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+  return (
+    isAssistantSilentReply(message) ||
+    isSyntheticTranscriptRepairToolResult(message) ||
+    isSystemEventOnlyMessage(message)
+  );
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
