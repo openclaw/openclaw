@@ -61,16 +61,18 @@ function buildSessionEntryWithoutStoreClassification(filePath: string) {
 }
 
 describe("listSessionFilesForAgent", () => {
-  it("includes reset and deleted transcripts in session file listing", async () => {
+  it("includes only primary transcripts and excludes checkpoint variants", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
-    const included = [
-      "active.jsonl",
-      "active.jsonl.reset.2026-02-16T22-26-33.000Z",
-      "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    const included = ["active.jsonl"];
+    const excluded = [
+      "active.jsonl.bak.2026-02-16T22-28-33.000Z",
+      "active.checkpoint.test.jsonl",
+      "active.jsonl.checkpoint.2026-02-16T22-28-33.000Z",
+      "sessions.json",
+      "notes.md",
     ];
-    const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
 
     for (const fileName of [...included, ...excluded]) {
       fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
