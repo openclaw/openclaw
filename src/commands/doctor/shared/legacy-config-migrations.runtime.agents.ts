@@ -27,11 +27,45 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 
+// Keys removed from the memorySearch schema; still present in pre-migration
+// user configs. Stripping them here lets validation pass without requiring
+// users to run `openclaw doctor --fix` manually after every update.
+const MEMORY_SEARCH_OBSOLETE_KEYS = new Set(["chunkSize", "chunkOverlap", "maxResults"]);
+
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
     'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
 };
+
+const MEMORY_SEARCH_OBSOLETE_KEYS_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "memorySearch"],
+    message:
+      'agents.defaults.memorySearch contains obsolete keys (chunkSize, chunkOverlap, maxResults); run "openclaw doctor --fix" to clean up.',
+    match: (value) => hasObsoleteMemorySearchKeys(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'One or more agents.list[].memorySearch entries contain obsolete keys (chunkSize, chunkOverlap, maxResults); run "openclaw doctor --fix" to clean up.',
+    match: (value) => {
+      if (!Array.isArray(value)) {
+        return false;
+      }
+      return value.some((agent) => hasObsoleteMemorySearchKeys(getRecord(agent)?.memorySearch));
+    },
+  },
+];
+
+function hasObsoleteMemorySearchKeys(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.keys(value as Record<string, unknown>).some((k) =>
+    MEMORY_SEARCH_OBSOLETE_KEYS.has(k),
+  );
+}
 
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
@@ -191,6 +225,43 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
       });
       delete raw.memorySearch;
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.memorySearch-obsolete-keys",
+    describe:
+      "Strip obsolete keys (chunkSize, chunkOverlap, maxResults) from agents.defaults.memorySearch and agents.list[].memorySearch",
+    legacyRules: MEMORY_SEARCH_OBSOLETE_KEYS_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      const defaultMemorySearch = getRecord(defaults?.memorySearch);
+
+      const strip = (ms: Record<string, unknown>, pathLabel: string) => {
+        const removed: string[] = [];
+        for (const key of MEMORY_SEARCH_OBSOLETE_KEYS) {
+          if (Object.prototype.hasOwnProperty.call(ms, key)) {
+            delete ms[key];
+            removed.push(key);
+          }
+        }
+        if (removed.length > 0) {
+          changes.push(`Removed obsolete ${pathLabel} keys: ${removed.join(", ")}.`);
+        }
+      };
+
+      if (defaultMemorySearch) {
+        strip(defaultMemorySearch, "agents.defaults.memorySearch");
+      }
+
+      if (Array.isArray(agents?.list)) {
+        for (const [index, agent] of agents.list.entries()) {
+          const agentMemorySearch = getRecord(getRecord(agent)?.memorySearch);
+          if (agentMemorySearch) {
+            strip(agentMemorySearch, `agents.list.${index}.memorySearch`);
+          }
+        }
+      }
     },
   }),
   defineLegacyConfigMigration({

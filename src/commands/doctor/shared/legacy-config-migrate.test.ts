@@ -765,3 +765,109 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     ]);
   });
 });
+
+describe("legacy migrate memorySearch obsolete keys (#68664)", () => {
+  it("strips obsolete keys from agents.defaults.memorySearch", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            chunkSize: 800,
+            chunkOverlap: 100,
+            maxResults: 5,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed obsolete agents.defaults.memorySearch keys: chunkSize, chunkOverlap, maxResults.",
+    );
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({ enabled: true });
+  });
+
+  it("is a no-op when agents.defaults.memorySearch has no obsolete keys", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+  });
+
+  it("strips only obsolete keys, leaving valid keys intact", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: false,
+            chunkSize: 400,
+            limit: 10,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed obsolete agents.defaults.memorySearch keys: chunkSize.",
+    );
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({ enabled: false, limit: 10 });
+  });
+
+  it("moves top-level memorySearch and strips obsolete keys in the same pass", () => {
+    const res = migrateLegacyConfigForTest({
+      memorySearch: {
+        enabled: true,
+        chunkSize: 800,
+        chunkOverlap: 100,
+        maxResults: 5,
+      },
+    });
+
+    expect(res.changes).toContain("Moved memorySearch → agents.defaults.memorySearch.");
+    expect(res.changes).toContain(
+      "Removed obsolete agents.defaults.memorySearch keys: chunkSize, chunkOverlap, maxResults.",
+    );
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({ enabled: true });
+    expect((res.config as { memorySearch?: unknown } | null)?.memorySearch).toBeUndefined();
+  });
+
+  it("strips obsolete keys from agents.list[].memorySearch", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          {
+            id: "agent-1",
+            memorySearch: {
+              enabled: true,
+              chunkSize: 500,
+            },
+          },
+          {
+            id: "agent-2",
+            memorySearch: {
+              enabled: false,
+              maxResults: 10,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed obsolete agents.list.0.memorySearch keys: chunkSize.",
+    );
+    expect(res.changes).toContain(
+      "Removed obsolete agents.list.1.memorySearch keys: maxResults.",
+    );
+    expect(res.config?.agents?.list?.[0]?.memorySearch).toEqual({ enabled: true });
+    expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({ enabled: false });
+  });
+});
