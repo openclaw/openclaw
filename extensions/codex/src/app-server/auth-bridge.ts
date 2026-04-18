@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureAuthProfileStore, type OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { writePrivateSecretFileAtomic } from "openclaw/plugin-sdk/secret-file-runtime";
 import type { CodexAppServerStartOptions } from "./config.js";
 
 const DEFAULT_CODEX_AUTH_PROFILE_ID = "openai-codex:default";
@@ -60,8 +60,11 @@ export async function bridgeCodexAppServerStartOptions(params: {
   }
 
   const codexHome = resolveCodexBridgeHome(params.agentDir, profileId);
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(path.join(codexHome, "auth.json"), buildCodexAuthFile(credential));
+  await writePrivateSecretFileAtomic({
+    rootDir: params.agentDir,
+    filePath: path.join(codexHome, "auth.json"),
+    content: buildCodexAuthFile(credential),
+  });
 
   return {
     ...params.startOptions,

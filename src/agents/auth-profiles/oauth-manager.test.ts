@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { isSafeToOverwriteStoredOAuthIdentity, OAuthManagerRefreshError } from "./oauth-manager.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createOAuthManager,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToOverwriteStoredOAuthIdentity,
+  OAuthManagerRefreshError,
+} from "./oauth-manager.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -12,6 +21,12 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
     ...overrides,
   };
 }
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 describe("isSafeToOverwriteStoredOAuthIdentity", () => {
   it("accepts matching account identities", () => {
@@ -40,6 +55,22 @@ describe("isSafeToOverwriteStoredOAuthIdentity", () => {
       ),
     ).toBe(false);
   });
+
+  it("still allows identity-less external bootstrap adoption", () => {
+    const existing = createCredential({
+      access: "expired-local-access",
+      refresh: "expired-local-refresh",
+      expires: Date.now() - 60_000,
+    });
+    const incoming = createCredential({
+      access: "external-access",
+      refresh: "external-refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    expect(isSafeToOverwriteStoredOAuthIdentity(existing, incoming)).toBe(false);
+    expect(isSafeToAdoptBootstrapOAuthIdentity(existing, incoming)).toBe(true);
+  });
 });
 
 describe("OAuthManagerRefreshError", () => {
@@ -67,5 +98,65 @@ describe("OAuthManagerRefreshError", () => {
     expect(serialized).not.toContain("error-refresh");
     expect(serialized).not.toContain("store-access");
     expect(serialized).not.toContain("store-refresh");
+  });
+});
+
+describe("createOAuthManager", () => {
+  it("refreshes with the adopted external oauth credential", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-"));
+    tempDirs.push(agentDir);
+    const profileId = "minimax-portal:default";
+    const localCredential = createCredential({
+      provider: "minimax-portal",
+      access: "stale-local-access",
+      refresh: "stale-local-refresh",
+      expires: Date.now() - 60_000,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: localCredential,
+        },
+      },
+      agentDir,
+    );
+
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential: vi.fn(async (credential) => {
+        expect(credential.refresh).toBe("external-refresh");
+        return {
+          access: "rotated-access",
+          refresh: "rotated-refresh",
+          expires: Date.now() + 60_000,
+        };
+      }),
+      readBootstrapCredential: () =>
+        createCredential({
+          provider: "minimax-portal",
+          access: "expired-external-access",
+          refresh: "external-refresh",
+          expires: Date.now() - 30_000,
+        }),
+      isRefreshTokenReusedError: () => false,
+      isSafeToCopyOAuthIdentity: () => true,
+    });
+
+    const result = await manager.resolveOAuthAccess({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      credential: localCredential,
+      agentDir,
+    });
+
+    expect(result).toEqual({
+      apiKey: "rotated-access",
+      credential: expect.objectContaining({
+        provider: "minimax-portal",
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+      }),
+    });
   });
 });

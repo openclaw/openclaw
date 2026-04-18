@@ -1,8 +1,13 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { openVerifiedFileSync } from "./safe-open-sync.js";
 
 export const DEFAULT_SECRET_FILE_MAX_BYTES = 16 * 1024;
+export const PRIVATE_SECRET_DIR_MODE = 0o700;
+export const PRIVATE_SECRET_FILE_MODE = 0o600;
 
 export type SecretFileReadOptions = {
   maxBytes?: number;
@@ -137,4 +142,103 @@ export function tryReadSecretFileSync(
   }
   const result = loadSecretFileSync(filePath, label, options);
   return result.ok ? result.secret : undefined;
+}
+
+function assertPathWithinRoot(rootDir: string, targetPath: string): void {
+  const relative = path.relative(rootDir, targetPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Private secret path must stay under ${rootDir}.`);
+  }
+}
+
+async function ensurePrivateDirectory(rootDir: string, targetDir: string): Promise<void> {
+  const resolvedRoot = path.resolve(rootDir);
+  const resolvedTarget = path.resolve(targetDir);
+  if (resolvedTarget === resolvedRoot) {
+    await fsp.mkdir(resolvedRoot, { recursive: true, mode: PRIVATE_SECRET_DIR_MODE });
+    const rootStat = await fsp.lstat(resolvedRoot);
+    if (rootStat.isSymbolicLink()) {
+      throw new Error(`Private secret root ${resolvedRoot} must not be a symlink.`);
+    }
+    if (!rootStat.isDirectory()) {
+      throw new Error(`Private secret root ${resolvedRoot} must be a directory.`);
+    }
+    await fsp.chmod(resolvedRoot, PRIVATE_SECRET_DIR_MODE).catch(() => undefined);
+    return;
+  }
+
+  assertPathWithinRoot(resolvedRoot, resolvedTarget);
+  await ensurePrivateDirectory(resolvedRoot, resolvedRoot);
+
+  let current = resolvedRoot;
+  for (const segment of path
+    .relative(resolvedRoot, resolvedTarget)
+    .split(path.sep)
+    .filter(Boolean)) {
+    current = path.join(current, segment);
+    try {
+      const stat = await fsp.lstat(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Private secret directory component ${current} must not be a symlink.`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Private secret directory component ${current} must be a directory.`);
+      }
+    } catch (error) {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+      await fsp.mkdir(current, { mode: PRIVATE_SECRET_DIR_MODE });
+    }
+    await fsp.chmod(current, PRIVATE_SECRET_DIR_MODE).catch(() => undefined);
+  }
+}
+
+export async function writePrivateSecretFileAtomic(params: {
+  rootDir: string;
+  filePath: string;
+  content: string | Uint8Array;
+}): Promise<void> {
+  const resolvedRoot = path.resolve(params.rootDir);
+  const resolvedFile = path.resolve(params.filePath);
+  assertPathWithinRoot(resolvedRoot, resolvedFile);
+  const parentDir = path.dirname(resolvedFile);
+  await ensurePrivateDirectory(resolvedRoot, parentDir);
+
+  try {
+    const stat = await fsp.lstat(resolvedFile);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Private secret file ${resolvedFile} must not be a symlink.`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Private secret file ${resolvedFile} must be a regular file.`);
+    }
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const tempPath = path.join(
+    parentDir,
+    `.tmp-${process.pid}-${Date.now()}-${randomBytes(6).toString("hex")}`,
+  );
+  let createdTemp = false;
+  try {
+    const handle = await fsp.open(tempPath, "wx", PRIVATE_SECRET_FILE_MODE);
+    createdTemp = true;
+    try {
+      await handle.writeFile(params.content);
+    } finally {
+      await handle.close();
+    }
+    await fsp.chmod(tempPath, PRIVATE_SECRET_FILE_MODE).catch(() => undefined);
+    await fsp.rename(tempPath, resolvedFile);
+    createdTemp = false;
+    await fsp.chmod(resolvedFile, PRIVATE_SECRET_FILE_MODE).catch(() => undefined);
+  } finally {
+    if (createdTemp) {
+      await fsp.unlink(tempPath).catch(() => undefined);
+    }
+  }
 }

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,13 @@ let bridgeCodexAppServerStartOptions: typeof import("./auth-bridge.js").bridgeCo
 
 describe("bridgeCodexAppServerStartOptions", () => {
   const tempDirs: string[] = [];
+  const resolveHashedCodexHome = (agentDir: string, profileId: string) =>
+    path.join(
+      agentDir,
+      "harness-auth",
+      "codex",
+      crypto.createHash("sha256").update(profileId).digest("hex").slice(0, 16),
+    );
 
   beforeAll(async () => {
     ({ bridgeCodexAppServerStartOptions } = await import("./auth-bridge.js"));
@@ -74,6 +82,10 @@ describe("bridgeCodexAppServerStartOptions", () => {
         account_id: "acct-123",
       },
     });
+    if (process.platform !== "win32") {
+      const authStat = await fs.stat(path.join(result.env?.CODEX_HOME ?? "", "auth.json"));
+      expect(authStat.mode & 0o777).toBe(0o600);
+    }
   });
 
   it("leaves start options unchanged when canonical oauth is unavailable", async () => {
@@ -96,5 +108,36 @@ describe("bridgeCodexAppServerStartOptions", () => {
         authProfileId: "openai-codex:missing",
       }),
     ).resolves.toEqual(startOptions);
+  });
+
+  it("refuses to overwrite a symlinked auth bridge file", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    tempDirs.push(agentDir);
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+
+    const codexHome = resolveHashedCodexHome(agentDir, "openai-codex:default");
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.symlink(path.join(agentDir, "outside.txt"), path.join(codexHome, "auth.json"));
+
+    await expect(
+      bridgeCodexAppServerStartOptions({
+        startOptions: {
+          command: "codex",
+          args: ["app-server"],
+        },
+        agentDir,
+      }),
+    ).rejects.toThrow("must not be a symlink");
   });
 });

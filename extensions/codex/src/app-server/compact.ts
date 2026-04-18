@@ -38,8 +38,19 @@ export async function maybeCompactCodexAppServerSession(
   if (!binding?.threadId) {
     return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }
+  const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
+  if (
+    requestedAuthProfileId &&
+    binding.authProfileId &&
+    binding.authProfileId !== requestedAuthProfileId
+  ) {
+    return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
+  }
 
-  const client = await clientFactory(appServer.start, binding.authProfileId);
+  const client = await clientFactory(
+    appServer.start,
+    requestedAuthProfileId ?? binding.authProfileId,
+  );
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;
   try {

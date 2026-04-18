@@ -4,6 +4,7 @@ import { log } from "./constants.js";
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
+  isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToOverwriteStoredOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
@@ -13,6 +14,7 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 export {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
+  isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToOverwriteStoredOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
@@ -139,7 +141,7 @@ export function resolveExternalCliAuthProfiles(
     }
     if (
       existingOAuth &&
-      !isSafeToOverwriteStoredOAuthIdentity(existingOAuth, creds) &&
+      !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds) &&
       !areOAuthCredentialsEquivalent(existingOAuth, creds)
     ) {
       log.warn("refused external cli oauth bootstrap: identity mismatch or missing binding", {
