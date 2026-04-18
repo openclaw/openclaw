@@ -295,6 +295,45 @@ describe("google transport stream", () => {
     });
   });
 
+  it("omits disabled thinkingBudget=0 for Gemini 2.5 Pro direct payloads", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        maxTokens: 128,
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      maxOutputTokens: 128,
+    });
+    expect(params.generationConfig).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("strips explicit thinkingBudget=0 but preserves includeThoughts for Gemini 2.5 Pro", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        thinking: {
+          enabled: true,
+          budgetTokens: 0,
+        },
+      } as never,
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true },
+    });
+    expect(params.generationConfig).not.toMatchObject({
+      thinkingConfig: { thinkingBudget: 0 },
+    });
+  });
+
   it("includes cachedContent in direct Gemini payloads when requested", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),
