@@ -5,6 +5,10 @@ docker-compose.override.yml
 docker-compose.extra.yml
 dist
 dist-runtime/
+
+# PyInstaller build artifacts (scripts/build-autofix-exe.ps1)
+/build/
+/openclaw-autofix.spec
 pnpm-lock.yaml
 bun.lock
 bun.lockb
