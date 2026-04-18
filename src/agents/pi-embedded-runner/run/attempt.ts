@@ -615,9 +615,12 @@ export async function runEmbeddedAttempt(
 
     // Seed the agent's plan from any loaded skill's `planTemplate` (if
     // present) BEFORE the first LLM turn (#67541). The seed is a no-op
-    // when no skill carries a template, when more than one skill is
-    // tied (use alpha-first as a deterministic winner), or when an
-    // existing plan would be clobbered. Idempotency against
+    // ONLY when no skill carries a template OR when an existing plan
+    // would be clobbered. PR-E review fix (Copilot #3096524299): when
+    // more than one skill is tied, the implementation seeds from the
+    // alpha-first skill (deterministic winner) and emits a
+    // `skill_plan_template_collision` warning listing the rejected
+    // ones — it does NOT skip seeding. Idempotency against
     // `AgentRunContext.lastPlanSteps` lands in #67514's follow-up.
     //
     // We pass both `entries` and `skillsSnapshot`: in the snapshot-backed

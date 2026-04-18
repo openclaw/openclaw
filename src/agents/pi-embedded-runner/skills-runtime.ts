@@ -20,7 +20,21 @@ export function resolveEmbeddedRunSkillEntries(params: {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
 } {
-  const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+  // PR-E review fix (Codex P2 #3096508609): also reload entries when the
+  // snapshot is from a session that predates `resolvedPlanTemplates`.
+  // `resolvedPlanTemplates === undefined` (vs empty array) signals an
+  // older snapshot that was built before the field existed; without
+  // this fallback the seed silently no-ops for those sessions because
+  // entries would be empty AND the snapshot would have no templates to
+  // fall back on. Empty array is treated as "no templates, trust the
+  // snapshot" so no unnecessary reload fires for new snapshots that
+  // genuinely have no templates.
+  const snapshot = params.skillsSnapshot;
+  const snapshotIsOldVersion =
+    snapshot !== undefined &&
+    snapshot.resolvedSkills !== undefined &&
+    snapshot.resolvedPlanTemplates === undefined;
+  const shouldLoadSkillEntries = !snapshot || !snapshot.resolvedSkills || snapshotIsOldVersion;
   const config = resolveSkillRuntimeConfig(params.config);
   return {
     shouldLoadSkillEntries,
@@ -69,25 +83,35 @@ export function resolveSkillPlanTemplate(
   // explicit `skillFilter` is set; without this guard a disabled skill
   // could win the alpha-first collision and seed an unrelated plan that
   // never appears in the runtime prompt.
-  const eligibleEntries = entries.filter((entry) => shouldIncludeSkill({ entry, config }));
+  //
+  // PR-E review fix (Copilot #3105043886): use the resolved (runtime)
+  // config for the eligibility filter so it matches what
+  // `loadWorkspaceSkillEntries` used at load time. Otherwise a runtime
+  // snapshot's overrides could disagree with the static config and a
+  // skill that's runtime-disabled could still win seeding.
+  const resolvedConfig = resolveSkillRuntimeConfig(config);
+  const eligibleEntries = entries.filter((entry) =>
+    shouldIncludeSkill({ entry, config: resolvedConfig }),
+  );
+  // PR-E review fix (Copilot #3096799707): the `hasSkillPlanTemplate`
+  // guard already proves `e.metadata.planTemplate` is a non-empty array,
+  // so the prior follow-up null-check on `winnerTemplate` was dead
+  // code. Removed; the candidates filter alone is sufficient.
   const candidates = eligibleEntries
-    .filter((e) => hasSkillPlanTemplate(e.metadata) && e.metadata?.planTemplate)
+    .filter((e) => hasSkillPlanTemplate(e.metadata))
     .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name));
 
   if (candidates.length === 0) {
     return null;
   }
 
-  const winner = candidates[0];
-  const winnerTemplate = winner.metadata?.planTemplate;
-  if (!winnerTemplate) {
-    return null;
-  }
-
   return resolveSkillPlanTemplateFromCandidates(
     candidates.map((c) => ({
       skillName: c.skill.name,
-      planTemplate: c.metadata?.planTemplate ?? [],
+      // Safe non-null assertion: `hasSkillPlanTemplate` guarantees the
+      // array is present and non-empty, but TypeScript can't narrow
+      // through the function call.
+      planTemplate: c.metadata!.planTemplate!,
     })),
     config,
   );
@@ -99,8 +123,14 @@ export function resolveSkillPlanTemplate(
  * full SkillEntry. Used in the snapshot-backed run path where
  * `resolveEmbeddedRunSkillEntries` returns no entries.
  *
- * Candidates MUST be alpha-sorted by `skillName` if the caller wants
- * deterministic collision behavior; this function does not re-sort.
+ * PR-E review fix (Copilot #3096524276 / #3105170512): docstring
+ * previously said "this function does not re-sort", but the
+ * implementation DOES call `.toSorted(...)` on candidates as a
+ * defensive guarantee against caller-side ordering bugs. Updated to
+ * match: candidates are re-sorted alphabetically by `skillName` before
+ * collision resolution so deterministic behavior holds regardless of
+ * caller-side ordering. The cost (one extra sort over a typically
+ * small array) is negligible vs the safety win.
  */
 export function resolveSkillPlanTemplateFromCandidates(
   candidates: ReadonlyArray<{ skillName: string; planTemplate: SkillPlanTemplateStep[] }>,

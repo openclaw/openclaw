@@ -88,6 +88,43 @@ describe("resolveOpenClawMetadata planTemplate (Codex P1 r3096435164)", () => {
     expect(meta?.planTemplate).toEqual([{ step: "Old" }]);
   });
 
+  // PR-E review fix (Copilot #3105043876): when kebab-case key is
+  // PRESENT but parses to an empty array (invalid shape), fall back to
+  // the camelCase key. The prior `??` only triggered on null/undefined,
+  // so a malformed kebab-case value silently dropped a valid camelCase
+  // template.
+  it("falls back to camelCase when kebab-case is invalid (string instead of array)", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"plan-template":"not-an-array","planTemplate":[{"step":"Valid"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Valid" }]);
+  });
+
+  it("falls back to camelCase when kebab-case has only invalid step entries", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata:
+        '{"openclaw":{"plan-template":[{"step":42},{"step":null}],"planTemplate":[{"step":"Valid"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Valid" }]);
+  });
+
+  // PR-E review fix (Copilot #3096524315 / #3105043896): accept `content`
+  // as an alias for `step` so users following the PR description's
+  // example don't get silently-empty templates.
+  it("accepts `content` as alias for `step` in plan template entries", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"planTemplate":[{"content":"Build"},{"content":"Deploy"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Build" }, { step: "Deploy" }]);
+  });
+
+  it("`step` wins over `content` on conflict in the same entry", () => {
+    const meta = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"planTemplate":[{"step":"Real","content":"Ignored"}]}}',
+    });
+    expect(meta?.planTemplate).toEqual([{ step: "Real" }]);
+  });
+
   it("returns undefined planTemplate when neither key is present", () => {
     const meta = resolveOpenClawMetadata({
       metadata: '{"openclaw":{"primaryEnv":"node"}}',
