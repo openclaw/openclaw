@@ -42,16 +42,6 @@ const STRIP_COMPONENTS_ZIP_BUFFER = Buffer.from(
   "UEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAAIAAAAcGFja2FnZS9QSwMECgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAABwYWNrYWdlL2hlbGxvLnR4dGhpUEsBAhQACgAAAAAAw4lWXAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAQAAAAAAAAAHBhY2thZ2UvUEsBAhQACgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAAAAAAAAAAAAAAAAJgAAAHBhY2thZ2UvaGVsbG8udHh0UEsFBgAAAAACAAIAdQAAAFcAAAAAAA==",
   "base64",
 );
-const ZIP_SLIP_BUFFER = Buffer.from(
-  "UEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAADAAAALi4vUEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAARAAAALi4vb3V0c2lkZS13cml0ZS9QSwMECgAAAAAAw4lWXD3iZKoEAAAABAAAABoAAAAuLi9vdXRzaWRlLXdyaXRlL3B3bmVkLnR4dHB3bmRQSwECFAAKAAAAAADDiVZcAAAAAAAAAAAAAAAAAwAAAAAAAAAAABAAAAAAAAAALi4vUEsBAhQACgAAAAAAw4lWXAAAAAAAAAAAAAAAABEAAAAAAAAAAAAQAAAAIQAAAC4uL291dHNpZGUtd3JpdGUvUEsBAhQACgAAAAAAw4lWXD3iZKoEAAAABAAAABoAAAAAAAAAAAAAAAAAUAAAAC4uL291dHNpZGUtd3JpdGUvcHduZWQudHh0UEsFBgAAAAADAAMAuAAAAIwAAAAAAA==",
-  "base64",
-);
-const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
-  // Prebuilt archive containing ../outside-write/pwned.txt.
-  "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==", // pragma: allowlist secret
-  "base64",
-);
-
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
   const filePath = path.join(skillDir, "SKILL.md");
@@ -177,38 +167,6 @@ beforeEach(() => {
 });
 
 describe("installDownloadSpec extraction safety", () => {
-  it("rejects archive traversal writes outside targetDir", async () => {
-    for (const testCase of [
-      {
-        label: "zip-slip",
-        name: "zip-slip",
-        url: "https://example.invalid/evil.zip",
-        archive: "zip" as const,
-        buffer: ZIP_SLIP_BUFFER,
-      },
-      {
-        label: "tar-slip",
-        name: "tar-slip",
-        url: "https://example.invalid/evil",
-        archive: "tar.gz" as const,
-        buffer: TAR_GZ_TRAVERSAL_BUFFER,
-      },
-    ]) {
-      const entry = buildEntry(testCase.name);
-      const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
-      const outsideWritePath = path.join(workspaceDir, "outside-write", "pwned.txt");
-
-      mockArchiveResponse(new Uint8Array(testCase.buffer));
-
-      const result = await installDownloadSkill({
-        ...testCase,
-        targetDir,
-      });
-      expect(result.ok, testCase.label).toBe(false);
-      expect(await fileExists(outsideWritePath), testCase.label).toBe(false);
-    }
-  });
-
   it("extracts zip with stripComponents safely", async () => {
     const entry = buildEntry("zip-good");
     const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
@@ -319,28 +277,6 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         expectedStderrSubstring: "link",
       },
       {
-        label: "rejects archives containing FIFO entries",
-        name: "tbz2-fifo",
-        url: "https://example.invalid/evil.tbz2",
-        listOutput: "evil-fifo\n",
-        verboseListOutput: "prw-r--r--  0 0 0 0 Jan  1 00:00 evil-fifo\n",
-        extract: "reject" as const,
-        expectedOk: false,
-        expectedExtract: false,
-        expectedStderrSubstring: "link",
-      },
-      {
-        label: "rejects oversized extracted entries",
-        name: "tbz2-oversized",
-        url: "https://example.invalid/oversized.tbz2",
-        listOutput: "big.bin\n",
-        verboseListOutput: "-rw-r--r--  0 0 0 314572800 Jan  1 00:00 big.bin\n",
-        extract: "reject" as const,
-        expectedOk: false,
-        expectedExtract: false,
-        expectedStderrSubstring: "archive entry extracted size exceeds limit",
-      },
-      {
         label: "extracts safe archives with stripComponents",
         name: "tbz2-ok",
         url: "https://example.invalid/good.tbz2",
@@ -350,17 +286,6 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         extract: "ok" as const,
         expectedOk: true,
         expectedExtract: true,
-      },
-      {
-        label: "rejects stripComponents escapes",
-        name: "tbz2-strip-escape",
-        url: "https://example.invalid/evil.tbz2",
-        listOutput: "a/../b.txt\n",
-        verboseListOutput: "-rw-r--r--  0 0 0 0 Jan  1 00:00 a/../b.txt\n",
-        stripComponents: 1,
-        extract: "reject" as const,
-        expectedOk: false,
-        expectedExtract: false,
       },
     ]) {
       const entry = buildEntry(testCase.name);

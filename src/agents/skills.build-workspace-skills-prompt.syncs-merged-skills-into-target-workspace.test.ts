@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills.js";
+
+vi.mock("./skills/plugin-skills.js", () => ({
+  resolvePluginSkillDirs: () => [],
+}));
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
