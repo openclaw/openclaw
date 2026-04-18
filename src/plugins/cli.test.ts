@@ -265,7 +265,7 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
-  it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
+  it("uses metadata CLI loading for lazy registration when no plugin primary is selected", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: autoEnabledConfig,
@@ -291,7 +291,7 @@ describe("registerPluginCliCommands", () => {
       mode: "lazy",
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
         activationSourceConfig: rawConfig,
@@ -300,7 +300,7 @@ describe("registerPluginCliCommands", () => {
         },
       }),
     );
-    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
   it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {
@@ -322,7 +322,7 @@ describe("registerPluginCliCommands", () => {
   });
 
   it("falls back to eager registration when descriptors do not cover every command root", async () => {
-    mocks.loadOpenClawPlugins.mockReturnValue(
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(
       createCliRegistry({
         memoryCommands: ["memory", "memory-admin"],
         memoryDescriptors: [
@@ -344,6 +344,7 @@ describe("registerPluginCliCommands", () => {
     });
 
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
   it("registers a selected plugin primary eagerly during lazy startup", async () => {
@@ -369,7 +370,7 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps full CLI loading when primary command planning finds no plugin match", async () => {
+  it("keeps metadata-only CLI loading when primary command planning finds no plugin match", async () => {
     const program = createProgram();
     program.exitOverride();
 
@@ -378,11 +379,12 @@ describe("registerPluginCliCommands", () => {
       primary: "memory",
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
       expect.not.objectContaining({
         onlyPluginIds: expect.anything(),
       }),
     );
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
   it("returns null for validated plugin CLI config when the snapshot is invalid", async () => {
@@ -401,10 +403,26 @@ describe("registerPluginCliCommands", () => {
       valid: true,
       config: loadedConfig,
     });
-    mocks.loadConfig.mockReturnValueOnce(loadedConfig);
 
     await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(loadedConfig);
-    expect(mocks.loadConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses metadata-only plugin CLI loading for lazy builtin commands", async () => {
+    const program = createProgram();
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "gateway",
+    });
+
+    expect(mocks.resolveManifestActivationPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: { kind: "command", command: "gateway" },
+      }),
+    );
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
   it("skips plugin CLI registration from validated config when the snapshot is invalid", async () => {

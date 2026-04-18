@@ -1,10 +1,12 @@
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
   loadPluginCliDescriptors,
+  loadPluginCliMetadataEntries,
   loadPluginCliRegistrationEntriesWithDefaults,
+  resolvePrimaryCommandPluginIdsForCli,
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
@@ -25,7 +27,7 @@ export const loadValidatedConfigForPluginRegistration =
     if (!snapshot.valid) {
       return null;
     }
-    return loadConfig();
+    return snapshot.config;
   };
 
 export async function getPluginCliCommandDescriptors(
@@ -45,22 +47,35 @@ export async function registerPluginCliCommands(
 ) {
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
+  const primaryPluginIds = resolvePrimaryCommandPluginIdsForCli({
+    cfg,
+    env,
+    logger,
+    primaryCommand: primary,
+  });
+  const entries =
+    mode === "lazy" && primaryPluginIds.length === 0
+      ? await loadPluginCliMetadataEntries({
+          cfg,
+          env,
+          loaderOptions,
+          primaryCommand: primary,
+          logger,
+        })
+      : await loadPluginCliRegistrationEntriesWithDefaults({
+          cfg,
+          env,
+          loaderOptions,
+          primaryCommand: primary,
+          logger,
+        });
 
-  await registerPluginCliCommandGroups(
-    program,
-    await loadPluginCliRegistrationEntriesWithDefaults({
-      cfg,
-      env,
-      loaderOptions,
-      primaryCommand: primary,
-    }),
-    {
-      mode,
-      primary,
-      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-      logger,
-    },
-  );
+  await registerPluginCliCommandGroups(program, entries, {
+    mode,
+    primary,
+    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    logger,
+  });
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(
