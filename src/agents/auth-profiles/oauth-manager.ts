@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withFileLock } from "../../infra/file-lock.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
@@ -45,6 +45,8 @@ export type ResolvedOAuthAccess = {
 export class OAuthManagerRefreshError extends Error {
   readonly profileId: string;
   readonly provider: string;
+  readonly code?: string;
+  readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
   readonly #credential: OAuthCredential;
 
@@ -54,15 +56,36 @@ export class OAuthManagerRefreshError extends Error {
     refreshedStore: AuthProfileStore;
     cause: unknown;
   }) {
+    const structuredCause =
+      typeof params.cause === "object" && params.cause !== null
+        ? (params.cause as { code?: unknown; lockPath?: unknown; cause?: unknown })
+        : undefined;
+    const delegatedCause =
+      structuredCause?.code === "refresh_contention" && structuredCause.cause
+        ? structuredCause.cause
+        : params.cause;
     super(
       `OAuth token refresh failed for ${params.credential.provider}: ${formatErrorMessage(params.cause)}`,
-      { cause: params.cause },
+      { cause: delegatedCause },
     );
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;
     this.profileId = params.profileId;
     this.provider = params.credential.provider;
     this.#refreshedStore = params.refreshedStore;
+    if (structuredCause) {
+      this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
+      if (typeof structuredCause.lockPath === "string") {
+        this.lockPath = structuredCause.lockPath;
+      } else if (
+        typeof structuredCause.cause === "object" &&
+        structuredCause.cause !== null &&
+        "lockPath" in structuredCause.cause &&
+        typeof structuredCause.cause.lockPath === "string"
+      ) {
+        this.lockPath = structuredCause.cause.lockPath;
+      }
+    }
   }
 
   getRefreshedStore(): AuthProfileStore {
@@ -104,6 +127,33 @@ function hasOAuthCredentialChanged(
     previous.access !== current.access ||
     previous.refresh !== current.refresh ||
     previous.expires !== current.expires
+  );
+}
+
+function isGlobalRefreshLockTimeoutError(error: unknown, lockPath: string): boolean {
+  const candidate =
+    typeof error === "object" && error !== null
+      ? (error as { code?: unknown; lockPath?: unknown })
+      : undefined;
+  return (
+    candidate?.code === FILE_LOCK_TIMEOUT_ERROR_CODE && candidate.lockPath === `${lockPath}.lock`
+  );
+}
+
+function buildRefreshContentionError(params: {
+  provider: string;
+  profileId: string;
+  cause: unknown;
+}): Error & { code: "refresh_contention"; cause: unknown } {
+  return Object.assign(
+    new Error(
+      `OAuth refresh failed (refresh_contention): another process is already refreshing ${params.provider} for ${params.profileId}. Please wait for the in-flight refresh to finish and retry.`,
+      { cause: params.cause },
+    ),
+    {
+      code: "refresh_contention" as const,
+      cause: params.cause,
+    },
   );
 }
 
@@ -301,132 +351,143 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     ensureAuthStoreFile(authPath);
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
-    return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
-      withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-        const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
-        const cred = store.profiles[params.profileId];
-        if (!cred || cred.type !== "oauth") {
-          return null;
-        }
-        let credentialToRefresh = cred;
+    try {
+      return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
+        withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+          const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+          const cred = store.profiles[params.profileId];
+          if (!cred || cred.type !== "oauth") {
+            return null;
+          }
+          let credentialToRefresh = cred;
 
-        if (hasUsableOAuthCredential(cred)) {
-          return {
-            apiKey: await adapter.buildApiKey(cred.provider, cred),
-            credential: cred,
-          };
-        }
+          if (hasUsableOAuthCredential(cred)) {
+            return {
+              apiKey: await adapter.buildApiKey(cred.provider, cred),
+              credential: cred,
+            };
+          }
 
-        if (params.agentDir) {
-          try {
-            const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
-            const mainCred = mainStore.profiles[params.profileId];
-            if (
-              mainCred?.type === "oauth" &&
-              mainCred.provider === cred.provider &&
-              hasUsableOAuthCredential(mainCred) &&
-              isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
-            ) {
-              store.profiles[params.profileId] = { ...mainCred };
-              saveAuthProfileStore(store, params.agentDir);
-              log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
+          if (params.agentDir) {
+            try {
+              const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
+              const mainCred = mainStore.profiles[params.profileId];
+              if (
+                mainCred?.type === "oauth" &&
+                mainCred.provider === cred.provider &&
+                hasUsableOAuthCredential(mainCred) &&
+                isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
+              ) {
+                store.profiles[params.profileId] = { ...mainCred };
+                saveAuthProfileStore(store, params.agentDir);
+                log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
+                  profileId: params.profileId,
+                  agentDir: params.agentDir,
+                  expires: new Date(mainCred.expires).toISOString(),
+                });
+                return {
+                  apiKey: await adapter.buildApiKey(mainCred.provider, mainCred),
+                  credential: mainCred,
+                };
+              } else if (
+                mainCred?.type === "oauth" &&
+                mainCred.provider === cred.provider &&
+                hasUsableOAuthCredential(mainCred) &&
+                !isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
+              ) {
+                log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
+                  profileId: params.profileId,
+                  agentDir: params.agentDir,
+                });
+              }
+            } catch (err) {
+              log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
                 profileId: params.profileId,
-                agentDir: params.agentDir,
-                expires: new Date(mainCred.expires).toISOString(),
-              });
-              return {
-                apiKey: await adapter.buildApiKey(mainCred.provider, mainCred),
-                credential: mainCred,
-              };
-            } else if (
-              mainCred?.type === "oauth" &&
-              mainCred.provider === cred.provider &&
-              hasUsableOAuthCredential(mainCred) &&
-              !isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
-            ) {
-              log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
-                profileId: params.profileId,
-                agentDir: params.agentDir,
+                error: formatErrorMessage(err),
               });
             }
-          } catch (err) {
-            log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
-              profileId: params.profileId,
-              error: formatErrorMessage(err),
-            });
           }
-        }
 
-        const externallyManaged = adapter.readBootstrapCredential({
-          profileId: params.profileId,
-          credential: cred,
-        });
-        if (externallyManaged) {
-          if (externallyManaged.provider !== cred.provider) {
-            log.warn("refused external oauth bootstrap credential: provider mismatch", {
-              profileId: params.profileId,
-              provider: cred.provider,
-            });
-          } else if (!isSafeToAdoptBootstrapOAuthIdentity(cred, externallyManaged)) {
-            log.warn(
-              "refused external oauth bootstrap credential: identity mismatch or missing binding",
-              {
+          const externallyManaged = adapter.readBootstrapCredential({
+            profileId: params.profileId,
+            credential: cred,
+          });
+          if (externallyManaged) {
+            if (externallyManaged.provider !== cred.provider) {
+              log.warn("refused external oauth bootstrap credential: provider mismatch", {
                 profileId: params.profileId,
                 provider: cred.provider,
-              },
-            );
-          } else {
-            if (
-              shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
-              !areOAuthCredentialsEquivalent(cred, externallyManaged)
-            ) {
-              store.profiles[params.profileId] = { ...externallyManaged };
-              saveAuthProfileStore(store, params.agentDir);
-            }
-            credentialToRefresh = externallyManaged;
-            if (hasUsableOAuthCredential(externallyManaged)) {
-              return {
-                apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged),
-                credential: externallyManaged,
-              };
+              });
+            } else if (!isSafeToAdoptBootstrapOAuthIdentity(cred, externallyManaged)) {
+              log.warn(
+                "refused external oauth bootstrap credential: identity mismatch or missing binding",
+                {
+                  profileId: params.profileId,
+                  provider: cred.provider,
+                },
+              );
+            } else {
+              if (
+                shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
+                !areOAuthCredentialsEquivalent(cred, externallyManaged)
+              ) {
+                store.profiles[params.profileId] = { ...externallyManaged };
+                saveAuthProfileStore(store, params.agentDir);
+              }
+              credentialToRefresh = externallyManaged;
+              if (hasUsableOAuthCredential(externallyManaged)) {
+                return {
+                  apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged),
+                  credential: externallyManaged,
+                };
+              }
             }
           }
-        }
 
-        const refreshedCredentials = await withRefreshCallTimeout(
-          `refreshOAuthCredential(${cred.provider})`,
-          OAUTH_REFRESH_CALL_TIMEOUT_MS,
-          async () => {
-            const refreshed = await adapter.refreshCredential(credentialToRefresh);
-            return refreshed
-              ? ({
-                  ...credentialToRefresh,
-                  ...refreshed,
-                  type: "oauth",
-                } satisfies OAuthCredential)
-              : null;
-          },
-        );
-        if (!refreshedCredentials) {
-          return null;
-        }
-        store.profiles[params.profileId] = refreshedCredentials;
-        saveAuthProfileStore(store, params.agentDir);
-        if (params.agentDir) {
-          const mainPath = resolveAuthStorePath(undefined);
-          if (mainPath !== authPath) {
-            await mirrorRefreshedCredentialIntoMainStore({
-              profileId: params.profileId,
-              refreshed: refreshedCredentials,
-            });
+          const refreshedCredentials = await withRefreshCallTimeout(
+            `refreshOAuthCredential(${cred.provider})`,
+            OAUTH_REFRESH_CALL_TIMEOUT_MS,
+            async () => {
+              const refreshed = await adapter.refreshCredential(credentialToRefresh);
+              return refreshed
+                ? ({
+                    ...credentialToRefresh,
+                    ...refreshed,
+                    type: "oauth",
+                  } satisfies OAuthCredential)
+                : null;
+            },
+          );
+          if (!refreshedCredentials) {
+            return null;
           }
-        }
-        return {
-          apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials),
-          credential: refreshedCredentials,
-        };
-      }),
-    );
+          store.profiles[params.profileId] = refreshedCredentials;
+          saveAuthProfileStore(store, params.agentDir);
+          if (params.agentDir) {
+            const mainPath = resolveAuthStorePath(undefined);
+            if (mainPath !== authPath) {
+              await mirrorRefreshedCredentialIntoMainStore({
+                profileId: params.profileId,
+                refreshed: refreshedCredentials,
+              });
+            }
+          }
+          return {
+            apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials),
+            credential: refreshedCredentials,
+          };
+        }),
+      );
+    } catch (error) {
+      if (isGlobalRefreshLockTimeoutError(error, globalRefreshLockPath)) {
+        throw buildRefreshContentionError({
+          provider: params.provider,
+          profileId: params.profileId,
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
 
   async function refreshOAuthTokenWithLock(params: {
