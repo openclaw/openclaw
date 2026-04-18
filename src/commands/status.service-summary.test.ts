@@ -123,4 +123,35 @@ describe("readServiceStatusSummary", () => {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("skips env-style arguments before checking real path candidates", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-service-root-env-"));
+    const tempBinDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(tempBinDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+    );
+    fs.writeFileSync(path.join(tempBinDir, "entry.js"), "export {};\n");
+
+    try {
+      const summary = await readServiceStatusSummary(
+        createService({
+          readCommand: vi.fn(async () => ({
+            programArguments: [
+              "/usr/bin/env",
+              `NODE_OPTIONS=--require=${path.join(tempRoot, "hooks", "register.js")}`,
+              path.join(tempBinDir, "entry.js"),
+            ],
+            workingDirectory: process.cwd(),
+          })),
+        }),
+        "Daemon",
+      );
+
+      expect(summary.packageRoot).toBe(tempRoot);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ProgressReporter } from "../../cli/progress.js";
 import type { UpdateCheckResult } from "../../infra/update-check.js";
 
@@ -136,6 +139,38 @@ describe("status-all diagnosis install-state checks", () => {
     const output = params.lines.join("\n");
     expect(output).toContain("✓ Install state integrity");
     expect(output).not.toContain("service package root does not match active runtime root");
+  });
+
+  it("realpaths the service package root before mismatch comparison", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diagnosis-root-"));
+    const canonicalRoot = path.join(tempRoot, "canonical");
+    const symlinkRoot = path.join(tempRoot, "current");
+    fs.mkdirSync(canonicalRoot, { recursive: true });
+    fs.symlinkSync(canonicalRoot, symlinkRoot);
+
+    try {
+      const params = createBaseParams([]);
+      params.update = createBaseUpdate({
+        root: symlinkRoot,
+        installState: {
+          activeRoot: symlinkRoot,
+          resolvedRoot: canonicalRoot,
+          rootIsSymlink: true,
+          suspicious: false,
+          reasons: [],
+          recoveryHint: undefined,
+        },
+      });
+      params.gatewayService.packageRoot = symlinkRoot;
+
+      await appendStatusAllDiagnosis(params);
+
+      const output = params.lines.join("\n");
+      expect(output).toContain("✓ Install state integrity");
+      expect(output).not.toContain("service package root does not match active runtime root");
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 

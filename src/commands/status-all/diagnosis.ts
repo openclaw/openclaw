@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
@@ -88,6 +89,16 @@ export async function appendStatusAllDiagnosis(params: {
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
+  const resolveCanonicalPath = async (value: string | null | undefined): Promise<string | null> => {
+    if (!value) {
+      return null;
+    }
+    try {
+      return await fs.realpath(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
 
   const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
     const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
@@ -133,10 +144,10 @@ export async function appendStatusAllDiagnosis(params: {
   const servicePackageRoot = params.gatewayService.packageRoot ?? null;
   const activeRoot = installState?.activeRoot ?? params.update.root ?? null;
   const activeResolvedRoot = installState?.resolvedRoot ?? activeRoot;
-  const serviceResolvedRoot = servicePackageRoot ? path.resolve(servicePackageRoot) : null;
+  const serviceResolvedRoot = await resolveCanonicalPath(servicePackageRoot);
   const serviceMismatch =
     activeResolvedRoot && serviceResolvedRoot
-      ? path.resolve(activeResolvedRoot) !== serviceResolvedRoot
+      ? (await resolveCanonicalPath(activeResolvedRoot)) !== serviceResolvedRoot
       : false;
   const installStateWarn = installState?.suspicious || serviceMismatch;
   emitCheck("Install state integrity", installStateWarn ? "warn" : "ok");

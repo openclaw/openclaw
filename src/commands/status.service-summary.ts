@@ -14,13 +14,17 @@ export type ServiceStatusSummary = {
   sourcePath?: string | null;
 };
 
+function isCommandPathCandidate(value: string): boolean {
+  return /[/\\]/.test(value) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(value);
+}
+
 async function resolveServicePackageRoot(
   command: Awaited<ReturnType<typeof readGatewayServiceState>>["command"],
 ): Promise<string | null> {
   if (!command) {
     return null;
   }
-  const candidates = command.programArguments.filter((value) => /[/\\]/.test(value));
+  const candidates = command.programArguments.filter(isCommandPathCandidate);
   for (const candidate of candidates) {
     const root = await resolveOpenClawPackageRoot({ argv1: candidate }).catch(() => null);
     if (root) {
