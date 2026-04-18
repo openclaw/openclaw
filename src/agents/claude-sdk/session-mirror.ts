@@ -29,6 +29,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("agents/claude-sdk");
 
 /**
  * Canonical pi-ai transcript record envelope. Matches the shape that
@@ -149,6 +152,24 @@ export function openSessionMirror(params: OpenSessionMirrorParams): SessionMirro
   // open-and-rewrite happens earlier in the run lifecycle.
   const primaryStream = fs.createWriteStream(params.primaryPath, { flags: "a" });
   const sidecarStream = fs.createWriteStream(sidecarPath, { flags: "a" });
+
+  // Without explicit 'error' listeners, any async write failure (transient
+  // I/O, disk full, EPERM after startup) fires an 'unhandled error' event
+  // that terminates the Node process. The try/catch around
+  // writeSdkMessage in run.ts can't catch async stream events, so one
+  // mirror write failure would bring down an otherwise-recoverable run.
+  // Catching and logging keeps the run alive; we lose that one frame's
+  // evidence trail but the user-visible reply still arrives.
+  primaryStream.on("error", (err) => {
+    log.warn(
+      `[claude-sdk] primary session-mirror stream error path=${params.primaryPath} err=${err.message}`,
+    );
+  });
+  sidecarStream.on("error", (err) => {
+    log.warn(
+      `[claude-sdk] sidecar session-mirror stream error path=${sidecarPath} err=${err.message}`,
+    );
+  });
 
   const writeBoth = (line: string): void => {
     primaryStream.write(line);

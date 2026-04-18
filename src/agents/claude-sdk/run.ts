@@ -316,6 +316,24 @@ function warnIgnoredFields(params: RunEmbeddedPiAgentParams): void {
   if (params.internalEvents && params.internalEvents.length > 0) {
     ignored.push("internalEvents");
   }
+  // Feature gaps on the claude-sdk adapter that produce observable
+  // behavior differences vs the embedded runtime. Warned about here so
+  // users running vision/streaming-tool-result flows know their inputs/
+  // outputs don't fully make it through the SDK path yet.
+  //   * images / imageOrder -- need to restructure `prompt` as an
+  //     AsyncIterable<SDKUserMessage> with image content blocks rather
+  //     than a bare string.
+  //   * onToolResult -- need to map SDK `tool_use` / `tool_result`
+  //     messages into the embedded onToolResult event shape.
+  if (params.images && params.images.length > 0) {
+    ignored.push("images");
+  }
+  if (params.imageOrder && params.imageOrder.length > 0) {
+    ignored.push("imageOrder");
+  }
+  if (params.onToolResult) {
+    ignored.push("onToolResult");
+  }
   if (ignored.length > 0) {
     log.warn(
       `[claude-sdk] run with agentId=${params.agentId ?? "<none>"} runId=${params.runId} ` +
