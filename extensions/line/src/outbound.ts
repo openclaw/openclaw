@@ -122,6 +122,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       }
     };
 
+    // NOTE: When sticker is present, text is intentionally NOT sent to LINE.
+    // LINE API does not support text+sticker in a single message.
+    // Text in sticker payloads may serve as transcript context (mirror).
+    // If this behavior changes, verify route-reply.ts mirror construction.
     // Sticker-only payload: send sticker via LINE Messaging API and return early.
     if (payload.sticker) {
       const parsed = parseLineStickerRaw(payload.sticker.raw);

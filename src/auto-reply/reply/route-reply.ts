@@ -230,7 +230,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
           ? {
               sessionKey: params.sessionKey,
               agentId: resolvedAgentId,
-              text,
+              text: text || (hasSticker ? `[sticker:${externalPayload.sticker!.raw}]` : ""),
               mediaUrls,
               ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
               ...(params.groupId ? { groupId: params.groupId } : {}),
