@@ -1223,14 +1223,15 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
-  it("enables streaming usage compat for Ollama OpenAI-compat endpoints", () => {
+  it("honors explicit streaming usage compat for configured custom providers", () => {
     const params = buildOpenAICompletionsParams(
       {
-        id: "qwen2.5:7b",
-        name: "Qwen 2.5 7B",
+        id: "custom-model",
+        name: "Custom Model",
         api: "openai-completions",
-        provider: "ollama",
-        baseUrl: "http://127.0.0.1:11434/v1",
+        provider: "custom-cpa",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
