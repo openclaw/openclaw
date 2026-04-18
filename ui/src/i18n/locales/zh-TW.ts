@@ -856,7 +856,7 @@ export const zh_TW: TranslationMap = {
       skillsFilter: "技能篩選",
       allSkills: "全部技能",
       selected: "已選 {count} 個",
-      unsavedChanges: "您有未儲存の設定變更",
+      unsavedChanges: "您有未儲存的設定變更",
       modelSelection: "模型選擇",
       notSet: "未設定",
       inheritDefault: "繼承預設值",
