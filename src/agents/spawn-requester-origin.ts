@@ -44,11 +44,10 @@ export function extractRequesterPeer(
   if (!raw) {
     return {};
   }
-  let inferredKind: ChatType | undefined;
-  if (channelId) {
-    const plugin = getChannelPlugin(channelId);
-    inferredKind = plugin?.messaging?.inferTargetChatType?.({ to: raw }) ?? undefined;
-  }
+  const pluginInferredKind = channelId
+    ? (getChannelPlugin(channelId)?.messaging?.inferTargetChatType?.({ to: raw }) ?? undefined)
+    : undefined;
+  let inferredKind: ChatType | undefined = pluginInferredKind;
   let value = raw;
   while (true) {
     const match = GENERIC_PREFIX_PATTERN.exec(value);
@@ -64,9 +63,9 @@ export function extractRequesterPeer(
     }
     value = value.slice(prefix.length).trim();
   }
-  if (value) {
-    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) are authoritative
-    // because channel wrappers can wrap either room or user ids.
+  if (value && !pluginInferredKind) {
+    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) are a fallback when
+    // the channel plugin cannot identify its own target grammar.
     if (value.startsWith("@")) {
       inferredKind = "direct";
     } else if (value.startsWith("!") || value.startsWith("#")) {

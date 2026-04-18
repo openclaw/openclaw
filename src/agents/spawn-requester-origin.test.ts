@@ -79,6 +79,41 @@ describe("resolveRequesterOriginForChild", () => {
     });
   });
 
+  it("keeps plugin-inferred channel kind for ids that start with direct marker characters", () => {
+    const to = "channel:@ops";
+    const cfg = {
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "qa-channel",
+            peer: {
+              kind: "channel",
+              id: to,
+            },
+            accountId: "bot-alpha-qa",
+          },
+        },
+      ],
+    } as OpenClawConfig;
+
+    expect(
+      resolveRequesterOriginForChild({
+        cfg,
+        targetAgentId: "bot-alpha",
+        requesterAgentId: "main",
+        requesterChannel: "qa-channel",
+        requesterAccountId: "bot-beta",
+        requesterTo: to,
+      }),
+    ).toMatchObject({
+      channel: "qa-channel",
+      accountId: "bot-alpha-qa",
+      to,
+    });
+  });
+
   it("still peels channel id plus kind wrappers before peer lookup", () => {
     const to = "line:group:U123example";
     const cfg = {
