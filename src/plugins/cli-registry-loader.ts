@@ -78,6 +78,21 @@ function resolvePrimaryCommandPluginIds(
   });
 }
 
+export function resolvePrimaryCommandPluginIdsForCli(params: {
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  logger?: PluginLogger;
+  primaryCommand?: string;
+}): string[] {
+  const logger = resolvePluginCliLogger(params.logger);
+  const context = resolvePluginCliLoadContext({
+    cfg: params.cfg,
+    env: params.env,
+    logger,
+  });
+  return resolvePrimaryCommandPluginIds(context, params.primaryCommand);
+}
+
 export function resolvePluginCliLoadContext(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -182,6 +197,28 @@ export async function loadPluginCliRegistrationEntries(params: {
     primaryCommand: params.primaryCommand,
     loaderOptions: params.loaderOptions,
   });
+  return buildPluginCliCommandGroupEntries({
+    registry,
+    config,
+    workspaceDir,
+    logger,
+  });
+}
+
+export async function loadPluginCliMetadataEntries(
+  params: PluginCliPublicLoadParams,
+): Promise<PluginCliCommandGroupEntry[]> {
+  const logger = resolvePluginCliLogger(params.logger);
+  const context = resolvePluginCliLoadContext({
+    cfg: params.cfg,
+    env: params.env,
+    logger,
+  });
+  const { config, workspaceDir, registry } = await loadPluginCliMetadataRegistryWithContext(
+    context,
+    { primaryCommand: params.primaryCommand },
+    params.loaderOptions,
+  );
   return buildPluginCliCommandGroupEntries({
     registry,
     config,
