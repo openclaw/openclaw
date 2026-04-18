@@ -887,11 +887,6 @@ const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "flac", "aac", "op
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "m4v", "mpg", "mpeg"]);
 const WEBM_EXTENSION = "webm";
 
-// Type guard for content blocks
-function isTextOrImageContent(block: ContentBlock): boolean {
-  return block.type === "text" || block.type === "image";
-}
-
 // Transform function for transports
 export function transformToolResultForTransport(result: AgentToolResult): AgentToolResult {
   if (!result.content || !Array.isArray(result.content)) {

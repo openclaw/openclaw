@@ -1520,7 +1520,7 @@ function renderGroupedMessage(
   const hasMediaStoredState = (() => {
     try {
       const storage = getSafeLocalStorage();
-      if (!storage) return false;
+      if (!storage) { return false; }
       const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
       return state[mediaDetailsId] !== undefined;
     } catch {
@@ -1541,7 +1541,7 @@ function renderGroupedMessage(
   const hasTextStoredState = (() => {
     try {
       const storage = getSafeLocalStorage();
-      if (!storage) return false;
+      if (!storage) { return false; }
       const state = JSON.parse(storage.getItem(DETAILS_STATE_KEY) || "{}");
       return state[textDetailsId] !== undefined;
     } catch {
