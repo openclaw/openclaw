@@ -4,7 +4,9 @@ import {
   isSameOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
-} from "./oauth.js";
+  shouldMirrorRefreshedOAuthCredential,
+} from "./oauth-identity.js";
+import type { AuthProfileCredential } from "./types.js";
 
 // Direct unit + fuzz tests for the cross-agent credential-mirroring identity
 // gate introduced for #26322 (CWE-284). These helpers are on the hot-path of
@@ -328,6 +330,154 @@ describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adop
     });
   });
 });
+
+describe("shouldMirrorRefreshedOAuthCredential", () => {
+  type MirrorCase = {
+    name: string;
+    existing: AuthProfileCredential | undefined;
+    shouldMirror: boolean;
+    reason: string;
+  };
+  const refreshed = {
+    type: "oauth",
+    provider: "openai-codex",
+    access: "fresh-access",
+    refresh: "fresh-refresh",
+    expires: 2_000,
+    accountId: "acct-1",
+  } as const;
+
+  const cases: MirrorCase[] = [
+    {
+      name: "empty main store",
+      existing: undefined,
+      shouldMirror: true,
+      reason: "no-existing-credential",
+    },
+    {
+      name: "matching older oauth credential",
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "old",
+        refresh: "old-refresh",
+        expires: 1_000,
+        accountId: "acct-1",
+      },
+      shouldMirror: true,
+      reason: "incoming-fresher",
+    },
+    {
+      name: "non-finite existing expiry",
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "old",
+        refresh: "old-refresh",
+        expires: Number.NaN,
+        accountId: "acct-1",
+      },
+      shouldMirror: true,
+      reason: "incoming-fresher",
+    },
+    {
+      name: "identity upgrade",
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "old",
+        refresh: "old-refresh",
+        expires: 1_000,
+      },
+      shouldMirror: true,
+      reason: "incoming-fresher",
+    },
+    {
+      name: "api key override",
+      existing: {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "operator-key",
+      },
+      shouldMirror: false,
+      reason: "non-oauth-existing-credential",
+    },
+    {
+      name: "provider mismatch",
+      existing: {
+        type: "oauth",
+        provider: "anthropic",
+        access: "old",
+        refresh: "old-refresh",
+        expires: 1_000,
+        accountId: "acct-1",
+      },
+      shouldMirror: false,
+      reason: "provider-mismatch",
+    },
+    {
+      name: "identity mismatch",
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "old",
+        refresh: "old-refresh",
+        expires: 1_000,
+        accountId: "acct-2",
+      },
+      shouldMirror: false,
+      reason: "identity-mismatch-or-regression",
+    },
+    {
+      name: "strictly fresher existing credential",
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-fresh",
+        refresh: "main-fresh-refresh",
+        expires: 3_000,
+        accountId: "acct-1",
+      },
+      shouldMirror: false,
+      reason: "incoming-not-fresher",
+    },
+  ];
+
+  it.each(cases)("returns $reason for $name", ({ existing, shouldMirror, reason }) => {
+    expect(
+      shouldMirrorRefreshedOAuthCredential({
+        existing,
+        refreshed,
+      }),
+    ).toEqual({ shouldMirror, reason });
+  });
+
+  it("refuses identity regression from a known-account main credential", () => {
+    expect(
+      shouldMirrorRefreshedOAuthCredential({
+        existing: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "main-identity-access",
+          refresh: "main-identity-refresh",
+          expires: 1_000,
+          accountId: "acct-main",
+        },
+        refreshed: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "fresh-access",
+          refresh: "fresh-refresh",
+          expires: 2_000,
+        },
+      }),
+    ).toEqual({
+      shouldMirror: false,
+      reason: "identity-mismatch-or-regression",
+    });
+  });
+});
+
 describe("isSafeToCopyOAuthIdentity fuzz", () => {
   function makeSeededRandom(seed: number): () => number {
     let t = seed >>> 0;

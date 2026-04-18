@@ -25,6 +25,15 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
+export {
+  isSafeToCopyOAuthIdentity,
+  isSameOAuthIdentity,
+  normalizeAuthEmailToken,
+  normalizeAuthIdentityToken,
+  shouldMirrorRefreshedOAuthCredential,
+} from "./oauth-identity.js";
+export type { OAuthMirrorDecision, OAuthMirrorDecisionReason } from "./oauth-identity.js";
+
 function listOAuthProviderIds(): string[] {
   if (typeof getOAuthProviders !== "function") {
     return [];

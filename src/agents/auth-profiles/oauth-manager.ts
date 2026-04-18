@@ -18,6 +18,7 @@ import {
   shouldReplaceStoredOAuthCredential,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
+import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import {
   ensureAuthProfileStore,
@@ -304,24 +305,22 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         agentDir: undefined,
         updater: (store) => {
           const existing = store.profiles[params.profileId];
-          if (existing && existing.type !== "oauth") {
-            return false;
-          }
-          if (existing && existing.provider !== params.refreshed.provider) {
+          const decision = shouldMirrorRefreshedOAuthCredential({
+            existing,
+            refreshed: params.refreshed,
+          });
+          if (!decision.shouldMirror) {
+            if (decision.reason === "identity-mismatch-or-regression") {
+              log.warn("refused to mirror OAuth credential: identity mismatch or regression", {
+                profileId: params.profileId,
+              });
+            }
             return false;
           }
           if (existing && !isSafeToAdoptMainStoreOAuthIdentity(existing, params.refreshed)) {
             log.warn("refused to mirror OAuth credential: identity mismatch or regression", {
               profileId: params.profileId,
             });
-            return false;
-          }
-          if (
-            existing &&
-            Number.isFinite(existing.expires) &&
-            Number.isFinite(params.refreshed.expires) &&
-            existing.expires >= params.refreshed.expires
-          ) {
             return false;
           }
           store.profiles[params.profileId] = { ...params.refreshed };
