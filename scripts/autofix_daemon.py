@@ -29,6 +29,19 @@ Environment:
     AUTOFIX_GATEWAY_RESTART_SEC default: 15 (delay before restarting a crashed gateway)
     OPENCLAW_REPO_ROOT          default: exe's dir when frozen, else script's repo root
 
+    --- ComfyUI supervision (optional; off by default) ---
+    AUTOFIX_COMFYUI             "1" to supervise ComfyUI alongside the gateway.
+                                "0" (default) = do not touch ComfyUI; Designer
+                                cron is responsible for starting it itself.
+    AUTOFIX_COMFYUI_DIR         default: C:\\ComfyUI (must contain main.py)
+    AUTOFIX_COMFYUI_PORT        default: 8188
+    AUTOFIX_COMFYUI_WINDOW      e.g. "02:30-05:00" (local time). When set,
+                                ComfyUI is only kept alive inside this daily
+                                window — started at the beginning, gracefully
+                                stopped at the end. Empty/unset = keep it
+                                always-on whenever AUTOFIX_COMFYUI=1.
+    AUTOFIX_COMFYUI_RESTART_SEC default: 30 (delay before restarting a crash)
+
 Logs:
     %USERPROFILE%\\.openclaw\\autofix\\autofix-<date>.log (autofix daemon + pipeline output)
     Gateway's own logs go to the usual OpenClaw gateway log location.
@@ -171,6 +184,199 @@ def log_line(level: str, msg: str) -> None:
 _GATEWAY_PORT = int(os.environ.get("AUTOFIX_GATEWAY_PORT", "18789"))
 _GATEWAY_RECLAIM = os.environ.get("AUTOFIX_RECLAIM_GATEWAY_PORT", "1") != "0"
 
+# ---- ComfyUI supervision (optional) --------------------------------------
+START_COMFYUI = os.environ.get("AUTOFIX_COMFYUI", "0") == "1"
+COMFYUI_DIR = Path(os.environ.get("AUTOFIX_COMFYUI_DIR", r"C:\ComfyUI"))
+COMFYUI_PORT = int(os.environ.get("AUTOFIX_COMFYUI_PORT", "8188"))
+COMFYUI_WINDOW = os.environ.get("AUTOFIX_COMFYUI_WINDOW", "").strip()
+COMFYUI_RESTART_SEC = int(os.environ.get("AUTOFIX_COMFYUI_RESTART_SEC", "30"))
+COMFYUI_LOG_FILE = LOG_DIR / "comfyui.log"
+
+
+def _parse_window(spec: str) -> Optional[tuple[tuple[int, int], tuple[int, int]]]:
+    """Parse "HH:MM-HH:MM" into ((start_h, start_m), (end_h, end_m)).
+
+    Returns None for empty / malformed inputs so callers can fall back
+    to "always on" behavior. Windows that cross midnight (e.g.
+    "22:00-03:00") are supported by the in-window check below.
+    """
+    if not spec:
+        return None
+    try:
+        a, b = spec.split("-", 1)
+        ah, am = (int(x) for x in a.split(":", 1))
+        bh, bm = (int(x) for x in b.split(":", 1))
+    except Exception:
+        log_line("WARN", f"comfyui: could not parse window '{spec}'; treating as always-on")
+        return None
+    if not (0 <= ah < 24 and 0 <= am < 60 and 0 <= bh < 24 and 0 <= bm < 60):
+        log_line("WARN", f"comfyui: window '{spec}' out of range; treating as always-on")
+        return None
+    return (ah, am), (bh, bm)
+
+
+def _in_window(now: datetime, window: tuple[tuple[int, int], tuple[int, int]]) -> bool:
+    (ah, am), (bh, bm) = window
+    start = now.replace(hour=ah, minute=am, second=0, microsecond=0)
+    end = now.replace(hour=bh, minute=bm, second=0, microsecond=0)
+    if end > start:
+        return start <= now < end
+    # Window crosses midnight (e.g. 22:00-03:00). Active if we're past
+    # start OR before end.
+    return now >= start or now < end
+
+
+def _comfyui_is_up() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", COMFYUI_PORT), timeout=1):
+            return True
+    except (OSError, socket.timeout):
+        return False
+
+
+class ComfyUISupervisor:
+    """Keep ComfyUI's HTTP server alive, optionally only within a daily
+    window. Mirrors GatewaySupervisor's lifecycle (spawn + restart on
+    crash) but adds a time-of-day gate so the server isn't holding
+    SDXL in VRAM 24/7 on a workstation box."""
+
+    def __init__(self, comfyui_dir: Path, port: int,
+                 window: Optional[tuple[tuple[int, int], tuple[int, int]]]):
+        self.comfyui_dir = comfyui_dir
+        self.port = port
+        self.window = window
+        self.proc: Optional[subprocess.Popen[bytes]] = None
+        self._stop_requested = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._run_forever, name="comfyui-supervisor", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_requested = True
+        self._kill_child()
+
+    def _kill_child(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                try:
+                    self.proc.kill()
+                except OSError:
+                    pass
+        self.proc = None
+
+    def _spawn(self) -> None:
+        main_py = self.comfyui_dir / "main.py"
+        if not main_py.is_file():
+            log_line(
+                "ERROR",
+                f"comfyui: main.py not found at {main_py}; "
+                "set AUTOFIX_COMFYUI_DIR or AUTOFIX_COMFYUI=0 to disable supervision",
+            )
+            return
+        python_bin = sys.executable or "python"
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        log_file = COMFYUI_LOG_FILE.open("ab")
+        log_line(
+            "INFO",
+            f"comfyui spawning: {python_bin} main.py --listen 127.0.0.1 --port {self.port}",
+        )
+        try:
+            self.proc = subprocess.Popen(
+                [python_bin, "main.py", "--listen", "127.0.0.1", "--port", str(self.port)],
+                cwd=str(self.comfyui_dir),
+                stdout=log_file,
+                stderr=log_file,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            log_line("INFO", f"comfyui started pid={self.proc.pid}")
+        except OSError as exc:
+            log_line("ERROR", f"comfyui spawn failed: {exc}")
+            try:
+                log_file.close()
+            except OSError:
+                pass
+            self.proc = None
+
+    def _run_forever(self) -> None:
+        while not self._stop_requested:
+            now = datetime.now()
+            in_window = self.window is None or _in_window(now, self.window)
+
+            if not in_window:
+                # Out of window: ensure the child is stopped and sleep.
+                if self.proc and self.proc.poll() is None:
+                    log_line(
+                        "INFO",
+                        f"comfyui: outside window {COMFYUI_WINDOW}; stopping",
+                    )
+                    self._kill_child()
+                # Check again in a minute — cheap, and lets the window
+                # boundary fire within 60s of wall-clock.
+                for _ in range(60):
+                    if self._stop_requested:
+                        return
+                    time.sleep(1)
+                continue
+
+            # In window (or always-on): ensure ComfyUI is up.
+            if self.proc is None or self.proc.poll() is not None:
+                if _comfyui_is_up():
+                    # Something else is already on the port. Don't kill
+                    # it — unlike the gateway, ComfyUI is often started
+                    # manually by the user and we should not fight
+                    # their shell. Just wait until it's free.
+                    log_line(
+                        "INFO",
+                        f"comfyui: port {self.port} already in use by another process; "
+                        "not spawning. Re-checking in 60s.",
+                    )
+                    for _ in range(60):
+                        if self._stop_requested:
+                            return
+                        time.sleep(1)
+                    continue
+                try:
+                    self._spawn()
+                except Exception as exc:
+                    log_line(
+                        "ERROR",
+                        f"comfyui supervisor crashed mid-spawn: {exc}\n"
+                        f"{traceback.format_exc()}",
+                    )
+
+            # Watch the child for 10s then re-evaluate the window + liveness.
+            if self.proc is not None:
+                try:
+                    rc = self.proc.wait(timeout=10)
+                    # Child exited — if still in window, back off then
+                    # re-spawn on the next loop iteration.
+                    log_line("INFO", f"comfyui exited rc={rc}; will re-evaluate")
+                    self.proc = None
+                    if not self._stop_requested:
+                        slept = 0
+                        while slept < COMFYUI_RESTART_SEC and not self._stop_requested:
+                            time.sleep(1)
+                            slept += 1
+                except subprocess.TimeoutExpired:
+                    # Still running — loop back to the window check.
+                    pass
+            else:
+                # Nothing to watch; avoid a hot loop.
+                time.sleep(5)
+
 
 def _gateway_already_listening() -> bool:
     """Return True if a TCP listener is already bound to the gateway
@@ -239,6 +445,80 @@ def _reclaim_gateway_port(port: int) -> bool:
             "deferring instead of killing",
         )
     return False
+
+
+def _log_health_summary() -> None:
+    """Log one-line health findings for every dependency the 3 autonomous
+    agents need. This is a preflight observability tool, not an
+    auto-fixer: we surface what's missing so the next cron run's
+    failures are not a surprise.
+
+    Checks:
+      - OpenClaw gateway port (this daemon about to spawn or reclaim)
+      - ComfyUI port (Designer)
+      - SDXL checkpoint on disk (Designer)
+      - Gumroad API token file presence (Shopkeeper / Ops)
+      - Etsy API token file presence (Shopkeeper / Ops)
+      - Google Workspace `gog` CLI (Scout / briefings / Pinterest)
+      - Workspace dir for the agents (reads SKILL/SOUL/plan files)
+      - Discord channel target env (delivery sanity)
+
+    Nothing here blocks startup. A failing check is logged as WARN so
+    it ends up in the daemon log alongside cron runs.
+    """
+    workspace = Path(os.path.expanduser("~")) / ".openclaw" / "workspace"
+    comfyui_dir = COMFYUI_DIR
+    sdxl_ckpt = comfyui_dir / "models" / "checkpoints" / "sd_xl_base_1.0.safetensors"
+    gumroad_cfg = workspace / "openclaw-gumroad" / "config" / "gumroad-api.json"
+    gumroad_legacy = workspace / "gumroad-publish-all.ps1"
+    etsy_cfg = workspace / "openclaw-etsy" / "config" / "etsy-api.json"
+    gog_candidates = [
+        shutil.which("gog"),
+        str(workspace / "gog-bin" / "gog.exe"),
+        str(Path.home() / ".local" / "bin" / "gog"),
+    ]
+    gog_bin = next((c for c in gog_candidates if c and Path(c).exists()), None)
+    discord_channel = os.environ.get("OPENCLAW_DISCORD_CHANNEL") or "1492808345927553075"
+
+    def report(name: str, ok: bool, detail: str) -> None:
+        level = "INFO" if ok else "WARN"
+        mark = "ok" if ok else "missing"
+        log_line(level, f"health[{name}] {mark}: {detail}")
+
+    # Designer dependencies
+    report("designer.comfyui",
+           _comfyui_is_up() or comfyui_dir.is_dir(),
+           f"dir={comfyui_dir} listening={_comfyui_is_up()}")
+    report("designer.sdxl",
+           sdxl_ckpt.is_file(),
+           f"checkpoint={sdxl_ckpt}")
+
+    # Scout / briefing dependencies
+    report("scout.gog_cli",
+           gog_bin is not None,
+           f"resolved={gog_bin}" if gog_bin else
+           "Google Workspace gog CLI not on PATH; Scout web_search still works, "
+           "but briefings will skip Gmail/Calendar context.")
+
+    # Shopkeeper / Ops dependencies
+    gum_ok = gumroad_cfg.is_file() or gumroad_legacy.is_file()
+    report("ops.gumroad_token",
+           gum_ok,
+           f"config={gumroad_cfg}" if gumroad_cfg.is_file() else
+           f"fallback={gumroad_legacy}" if gumroad_legacy.is_file() else
+           "no gumroad-api.json AND no publish-all.ps1 with embedded token")
+    report("ops.etsy_token",
+           etsy_cfg.is_file(),
+           f"config={etsy_cfg}" if etsy_cfg.is_file() else
+           "Etsy API pending approval; Etsy Performance Monitor will no-op.")
+
+    # Gateway / delivery dependencies
+    report("gateway.workspace",
+           workspace.is_dir(),
+           f"dir={workspace}")
+    report("delivery.discord_channel",
+           bool(discord_channel),
+           f"channel={discord_channel}")
 
 
 def _resolve_node_bin() -> Optional[str]:
@@ -412,18 +692,35 @@ def main() -> int:
     log_line(
         "INFO",
         f"daemon start pid={os.getpid()} root={REPO_ROOT} "
-        f"gateway={START_GATEWAY} autofix={START_LOOP}",
+        f"gateway={START_GATEWAY} autofix={START_LOOP} comfyui={START_COMFYUI}",
     )
     if _HYDRATION_NOTES:
         for note in _HYDRATION_NOTES:
             log_line("INFO", f"env-hydration: {note}")
+    _log_health_summary()
 
-    if not START_GATEWAY and not START_LOOP:
+    if not START_GATEWAY and not START_LOOP and not START_COMFYUI:
         log_line(
             "FATAL",
-            "both AUTOFIX_START_GATEWAY and AUTOFIX_START_LOOP are disabled; nothing to do.",
+            "AUTOFIX_START_GATEWAY, AUTOFIX_START_LOOP, and AUTOFIX_COMFYUI "
+            "are all disabled; nothing to do.",
         )
         return 2
+
+    comfyui_sup: Optional[ComfyUISupervisor] = None
+    if START_COMFYUI:
+        window = _parse_window(COMFYUI_WINDOW)
+        if COMFYUI_WINDOW and window is None:
+            # Warning already logged; continue in always-on mode.
+            pass
+        comfyui_sup = ComfyUISupervisor(COMFYUI_DIR, COMFYUI_PORT, window)
+        comfyui_sup.start()
+        atexit.register(comfyui_sup.stop)
+        log_line(
+            "INFO",
+            f"comfyui supervisor armed: dir={COMFYUI_DIR} port={COMFYUI_PORT} "
+            f"window={'always-on' if window is None else COMFYUI_WINDOW}",
+        )
 
     supervisor: Optional[GatewaySupervisor] = None
     if START_GATEWAY:
@@ -447,7 +744,7 @@ def main() -> int:
             try:
                 signal.signal(
                     signal.SIGTERM,
-                    lambda _sig, _frame: (_on_term(supervisor), sys.exit(0))[1],
+                    lambda _sig, _frame: (_on_term(supervisor, comfyui_sup), sys.exit(0))[1],
                 )
             except (ValueError, AttributeError):
                 pass
@@ -470,13 +767,20 @@ def main() -> int:
 
     if supervisor:
         supervisor.stop()
+    if comfyui_sup:
+        comfyui_sup.stop()
     return 0
 
 
-def _on_term(supervisor: Optional[GatewaySupervisor]) -> None:
+def _on_term(
+    supervisor: Optional[GatewaySupervisor],
+    comfyui_sup: Optional["ComfyUISupervisor"] = None,
+) -> None:
     log_line("INFO", "daemon received SIGTERM; shutting down")
     if supervisor:
         supervisor.stop()
+    if comfyui_sup:
+        comfyui_sup.stop()
 
 
 if __name__ == "__main__":
