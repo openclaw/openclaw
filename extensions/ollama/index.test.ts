@@ -129,6 +129,19 @@ describe("ollama plugin", () => {
     });
   });
 
+  it("accepts plugin-level baseUrl for remote hosts", async () => {
+    const manifest = JSON.parse(
+      await import("node:fs/promises").then((fs) =>
+        fs.readFile(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+      ),
+    );
+
+    expect(manifest.configSchema.properties.baseUrl).toMatchObject({
+      type: "string",
+      minLength: 1,
+    });
+  });
+
   it("skips ambient discovery when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 

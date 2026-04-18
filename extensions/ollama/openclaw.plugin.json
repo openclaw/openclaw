@@ -26,6 +26,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Native Ollama API base URL, for example http://127.0.0.1:11434 or a remote host over LAN/Tailscale. Do not include /v1."
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
