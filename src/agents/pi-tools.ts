@@ -16,6 +16,8 @@ import { createApplyPatchTool } from "./apply-patch.js";
 import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { EXEC_TOOL_DISPLAY_SUMMARY, PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
@@ -98,6 +100,8 @@ function applyMessageProviderToolPolicy(
   }
   const deniedSet = new Set(deniedTools);
   return tools.filter((tool) => !deniedSet.has(tool.name));
+}
+
 type BashToolsModule = typeof import("./bash-tools.js");
 
 let bashToolsModulePromise: Promise<BashToolsModule> | undefined;
