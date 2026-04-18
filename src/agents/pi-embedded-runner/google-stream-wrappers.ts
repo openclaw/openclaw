@@ -13,6 +13,12 @@ function isGemma4Model(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
 }
 
+// Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
+// "Budget 0 is invalid. This model only works in thinking mode."
+function isThinkingRequiredModel(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
+}
+
 function mapThinkLevelToGoogleThinkingLevel(
   thinkingLevel: ThinkLevel,
 ): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
@@ -116,6 +122,20 @@ export function sanitizeGoogleThinkingPayload(params: {
   }
 
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
+
+  // Gemini 2.5 Pro rejects thinkingBudget=0; remove it so the API uses its default.
+  if (
+    thinkingBudget === 0 &&
+    typeof params.modelId === "string" &&
+    isThinkingRequiredModel(params.modelId)
+  ) {
+    delete thinkingConfigObj.thinkingBudget;
+    if (Object.keys(thinkingConfigObj).length === 0) {
+      delete configObj.thinkingConfig;
+    }
+    return;
+  }
+
   if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
     return;
   }
