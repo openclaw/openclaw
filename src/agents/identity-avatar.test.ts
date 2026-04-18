@@ -36,9 +36,7 @@ async function createTempAvatarRoot() {
 
 afterEach(async () => {
   await Promise.all(
-    tempRoots
-      .splice(0, tempRoots.length)
-      .map((root) => fs.rm(root, { recursive: true, force: true })),
+    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 

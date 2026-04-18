@@ -219,7 +219,7 @@ export function scheduleFollowupDrain(
               enqueuedAt: Date.now(),
               ...routing,
             });
-            queue.items.splice(0, groupItems.length);
+            queue.items.splice(0);
             if (pendingSummary) {
               clearQueueSummaryState(queue);
               pendingSummary = undefined;
