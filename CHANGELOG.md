@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+- fix(cron): clean up deleteAfterRun direct deliveries (#67807). Thanks @MonkeyLeeT
 
 ### Fixes
 
