@@ -57,12 +57,14 @@ describe("cli-session helpers", () => {
     };
     const binding = getCliSessionBinding(entry, "claude-cli");
 
+    // Auth changes preserve sessionId so the runner can resume
     expect(
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:work",
       }),
-    ).toEqual({ invalidatedReason: "auth-profile" });
+    ).toEqual({ sessionId: "legacy-session", invalidatedReason: "auth-profile" });
+    // Config changes require a fresh session
     expect(
       resolveCliSessionReuse({
         binding,
@@ -86,6 +88,7 @@ describe("cli-session helpers", () => {
       mcpConfigHash: "mcp-a",
     };
 
+    // Auth changes preserve sessionId — conversation context is still valid
     expect(
       resolveCliSessionReuse({
         binding,
@@ -94,7 +97,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ invalidatedReason: "auth-profile" });
+    ).toEqual({ sessionId: "cli-session-1", invalidatedReason: "auth-profile" });
     expect(
       resolveCliSessionReuse({
         binding,
@@ -103,7 +106,7 @@ describe("cli-session helpers", () => {
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
-    ).toEqual({ invalidatedReason: "auth-epoch" });
+    ).toEqual({ sessionId: "cli-session-1", invalidatedReason: "auth-epoch" });
     expect(
       resolveCliSessionReuse({
         binding,

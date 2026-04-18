@@ -161,8 +161,9 @@ export async function prepareCliRunContext(
       ? { sessionId: params.cliSessionId }
       : {};
   if (reusableCliSession.invalidatedReason) {
+    const action = reusableCliSession.sessionId ? "reauth" : "reset";
     cliBackendLog.info(
-      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+      `cli session ${action}: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
   const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({

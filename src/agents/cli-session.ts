@@ -135,18 +135,28 @@ export function resolveCliSessionReuse(params: {
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
   if (storedAuthProfileId !== currentAuthProfileId) {
-    return { invalidatedReason: "auth-profile" };
+    // Auth profile changed (e.g. account switch or token refresh that
+    // rotates the profile id).  The CLI session's conversation context is
+    // still valid — only the credentials need updating — so we keep the
+    // sessionId so the runner can resume instead of starting fresh.
+    return { sessionId, invalidatedReason: "auth-profile" };
   }
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
   if (storedAuthEpoch !== currentAuthEpoch) {
-    return { invalidatedReason: "auth-epoch" };
+    // Credential content changed within the same profile (token refresh).
+    // Same reasoning: conversation context is unaffected.
+    return { sessionId, invalidatedReason: "auth-epoch" };
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
+    // System prompt changed — the model would see stale instructions if
+    // we resumed, so a fresh session is required.
     return { invalidatedReason: "system-prompt" };
   }
   const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
   if (storedMcpConfigHash !== currentMcpConfigHash) {
+    // MCP tool configuration changed — available tools differ, so a
+    // fresh session is required.
     return { invalidatedReason: "mcp" };
   }
   return { sessionId };
