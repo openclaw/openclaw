@@ -38,8 +38,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -475,6 +477,44 @@ def git(*args, cwd=None, check=False):
     return result
 
 
+def _force_rmtree(path: Path) -> None:
+    """Remove a directory tree, handling the Windows read-only-file case.
+
+    Git's object store marks `.git/objects/pack/*.pack` (and some others)
+    read-only. `shutil.rmtree` then fails on Windows with PermissionError
+    when trying to unlink them. `ignore_errors=True` silently leaves a
+    partial tree, which is worse -- the next `git clone` into the same
+    path fails with "destination path already exists and is not empty."
+    The onerror callback below unsets read-only and retries the unlink
+    so the tree actually goes away."""
+
+    def _on_error(func, target, _exc_info):
+        try:
+            os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
+        except OSError:
+            pass
+        try:
+            func(target)
+        except OSError:
+            pass
+
+    try:
+        shutil.rmtree(path, onerror=_on_error)
+    except FileNotFoundError:
+        return
+
+
+def _sweep_stale_autofix_work_dirs(tmp_base: Path) -> None:
+    """Best-effort cleanup of leftover autofix-work-* directories from
+    crashed previous runs. Safe no-op if nothing matches."""
+    try:
+        for child in tmp_base.iterdir():
+            if child.is_dir() and child.name.startswith("autofix-work"):
+                _force_rmtree(child)
+    except OSError:
+        pass
+
+
 def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: bool) -> bool:
     if dry_run:
         for p in patches:
@@ -486,76 +526,93 @@ def apply_patches(repo: str, branch: str, patches: list[FilePatch], dry_run: boo
     # Use RUNNER_TEMP (GitHub Actions) or the standard platform temp dir.
     # /tmp doesn't exist on Windows, so prefer TEMP/TMPDIR first before
     # falling back.
-    tmp_base = (
+    tmp_base_str = (
         os.environ.get("RUNNER_TEMP")
         or os.environ.get("TEMP")
         or os.environ.get("TMPDIR")
         or "/tmp"
     )
-    work_dir = Path(tmp_base) / "autofix-work"
-    if work_dir.exists():
-        shutil.rmtree(work_dir, ignore_errors=True)
+    tmp_base = Path(tmp_base_str)
+    tmp_base.mkdir(parents=True, exist_ok=True)
 
-    token = os.environ["GITHUB_TOKEN"]
-    clone_result = git(
-        "clone",
-        "--depth=1",
-        "--branch",
-        branch,
-        f"https://x-access-token:{token}@github.com/{repo}.git",
-        str(work_dir),
-    )
-    if clone_result.returncode != 0:
-        print(f"git clone failed: {clone_result.stderr}", file=sys.stderr)
-        return False
+    # Sweep any leftover autofix-work-* dirs from crashed previous runs
+    # so they don't pile up in %TEMP% over time.
+    _sweep_stale_autofix_work_dirs(tmp_base)
 
-    # Set the commit identity locally in case the caller's global git
-    # config isn't set (common on fresh CI runners; no-op otherwise since
-    # local config overrides global only when set).
-    git("config", "user.name", "PR Autofix Bot", cwd=str(work_dir))
-    git("config", "user.email", "autofix-bot@users.noreply.github.com", cwd=str(work_dir))
+    # Use a unique mkdtemp-assigned directory per run. Previously we used
+    # a fixed `autofix-work` dir that we tried to clear with
+    # `shutil.rmtree(ignore_errors=True)`; on Windows the git pack files
+    # are read-only and rmtree silently left partial content behind,
+    # causing the next `git clone` to fail with "destination path
+    # already exists and is not an empty directory." mkdtemp sidesteps
+    # the race entirely -- a fresh unique name every run.
+    work_dir = Path(tempfile.mkdtemp(prefix="autofix-work-", dir=str(tmp_base)))
 
-    for patch in patches:
-        fp = work_dir / patch.path
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(patch.patched, encoding="utf-8")
-        git("add", patch.path, cwd=str(work_dir), check=True)
-
-    diff_check = git("diff", "--cached", "--quiet", cwd=str(work_dir))
-    if diff_check.returncode == 0:
-        print("autofix: no effective diff after applying patches", file=sys.stderr)
-        return False
-
-    if VERIFY_CMD:
-        print(f"autofix: running verification command `{VERIFY_CMD}` before push...")
-        verify = subprocess.run(
-            VERIFY_CMD, shell=True, cwd=str(work_dir), capture_output=True, text=True
+    # Wrap the rest in try/finally so we always attempt cleanup on exit,
+    # even on push failure or unexpected exception.
+    try:
+        token = os.environ["GITHUB_TOKEN"]
+        clone_result = git(
+            "clone",
+            "--depth=1",
+            "--branch",
+            branch,
+            f"https://x-access-token:{token}@github.com/{repo}.git",
+            str(work_dir),
         )
-        if verify.returncode != 0:
-            print(
-                f"autofix: verification failed (exit {verify.returncode}); "
-                "NOT pushing the fix.",
-                file=sys.stderr,
-            )
-            print(verify.stdout[-2000:], file=sys.stderr)
-            print(verify.stderr[-2000:], file=sys.stderr)
+        if clone_result.returncode != 0:
+            print(f"git clone failed: {clone_result.stderr}", file=sys.stderr)
             return False
 
-    msg = (
-        f"autofix: address {sum(len(p.comments_addressed) for p in patches)} "
-        f"review comments\n\nGenerated by PR Autofix Pipeline\n"
-        "Co-Authored-By: Claude <noreply@anthropic.com>"
-    )
-    commit = git("commit", "-m", msg, cwd=str(work_dir))
-    if commit.returncode != 0:
-        print(f"autofix: nothing to commit: {commit.stderr}", file=sys.stderr)
-        return False
+        # Set the commit identity locally in case the caller's global git
+        # config isn't set (common on fresh CI runners; no-op otherwise
+        # since local config overrides global only when set).
+        git("config", "user.name", "PR Autofix Bot", cwd=str(work_dir))
+        git("config", "user.email", "autofix-bot@users.noreply.github.com", cwd=str(work_dir))
 
-    push = git("push", "origin", branch, cwd=str(work_dir))
-    if push.returncode != 0:
-        print(f"autofix: push failed: {push.stderr}", file=sys.stderr)
-        return False
-    return True
+        for patch in patches:
+            fp = work_dir / patch.path
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(patch.patched, encoding="utf-8")
+            git("add", patch.path, cwd=str(work_dir), check=True)
+
+        diff_check = git("diff", "--cached", "--quiet", cwd=str(work_dir))
+        if diff_check.returncode == 0:
+            print("autofix: no effective diff after applying patches", file=sys.stderr)
+            return False
+
+        if VERIFY_CMD:
+            print(f"autofix: running verification command `{VERIFY_CMD}` before push...")
+            verify = subprocess.run(
+                VERIFY_CMD, shell=True, cwd=str(work_dir), capture_output=True, text=True
+            )
+            if verify.returncode != 0:
+                print(
+                    f"autofix: verification failed (exit {verify.returncode}); "
+                    "NOT pushing the fix.",
+                    file=sys.stderr,
+                )
+                print(verify.stdout[-2000:], file=sys.stderr)
+                print(verify.stderr[-2000:], file=sys.stderr)
+                return False
+
+        msg = (
+            f"autofix: address {sum(len(p.comments_addressed) for p in patches)} "
+            f"review comments\n\nGenerated by PR Autofix Pipeline\n"
+            "Co-Authored-By: Claude <noreply@anthropic.com>"
+        )
+        commit = git("commit", "-m", msg, cwd=str(work_dir))
+        if commit.returncode != 0:
+            print(f"autofix: nothing to commit: {commit.stderr}", file=sys.stderr)
+            return False
+
+        push = git("push", "origin", branch, cwd=str(work_dir))
+        if push.returncode != 0:
+            print(f"autofix: push failed: {push.stderr}", file=sys.stderr)
+            return False
+        return True
+    finally:
+        _force_rmtree(work_dir)
 
 
 # ---------------------------------------------------------------------------
