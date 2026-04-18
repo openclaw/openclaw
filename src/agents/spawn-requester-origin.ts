@@ -1,5 +1,4 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -41,6 +40,16 @@ function shouldPeelRequesterPrefix(prefix: string, channelPrefix: string | undef
   return Boolean(getKindForRequesterPrefix(prefix) || prefix === channelPrefix);
 }
 
+function inferPeerKindFromBareId(value: string): ChatType | undefined {
+  if (value.startsWith("@")) {
+    return "direct";
+  }
+  if (value.startsWith("!") || value.startsWith("#")) {
+    return "channel";
+  }
+  return undefined;
+}
+
 export function extractRequesterPeer(
   channelId: string | undefined,
   requesterTo: string | undefined,
@@ -52,11 +61,9 @@ export function extractRequesterPeer(
   if (!raw) {
     return {};
   }
-  const pluginInferredKind = channelId
-    ? (getChannelPlugin(channelId)?.messaging?.inferTargetChatType?.({ to: raw }) ?? undefined)
-    : undefined;
   const channelPrefix = normalizeChannelPrefix(channelId);
-  let inferredKind: ChatType | undefined = pluginInferredKind;
+  let inferredKind: ChatType | undefined;
+  let allowBareIdKindOverride = false;
   let value = raw;
   while (true) {
     const match = GENERIC_PREFIX_PATTERN.exec(value);
@@ -71,16 +78,15 @@ export function extractRequesterPeer(
     if (kindFromPrefix) {
       inferredKind ??= kindFromPrefix;
     }
+    allowBareIdKindOverride ||= prefix === channelPrefix || prefix === "room:";
     value = value.slice(prefix.length).trim();
   }
-  if (value && !pluginInferredKind) {
-    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) are a fallback when
-    // the channel plugin cannot identify its own target grammar.
-    if (value.startsWith("@")) {
-      inferredKind = "direct";
-    } else if (value.startsWith("!") || value.startsWith("#")) {
-      inferredKind = "channel";
-    }
+  const bareIdKind = value ? inferPeerKindFromBareId(value) : undefined;
+  if (bareIdKind && (!inferredKind || allowBareIdKindOverride)) {
+    // Id-embedded kind markers (Matrix `!`/`@`, IRC `#`) are more specific
+    // than transport wrapper text such as Matrix `room:@user`, which is a
+    // direct peer. Explicit kind prefixes like `channel:` still win.
+    inferredKind = bareIdKind;
   }
   return { peerId: value || undefined, peerKind: inferredKind };
 }
