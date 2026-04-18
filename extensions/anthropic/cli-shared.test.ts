@@ -8,23 +8,16 @@ import {
 } from "./cli-shared.js";
 
 describe("normalizeClaudePermissionArgs", () => {
-  it("injects bypassPermissions when args omit permission flags", () => {
+  it("leaves args unchanged when permission flags are omitted", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--output-format", "stream-json", "--verbose"]),
-    ).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--permission-mode",
-      "bypassPermissions",
-    ]);
+    ).toEqual(["-p", "--output-format", "stream-json", "--verbose"]);
   });
 
-  it("removes legacy skip-permissions and injects bypassPermissions", () => {
+  it("removes legacy skip-permissions without forcing bypassPermissions", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--dangerously-skip-permissions", "--verbose"]),
-    ).toEqual(["-p", "--verbose", "--permission-mode", "bypassPermissions"]);
+    ).toEqual(["-p", "--verbose"]);
   });
 
   it("keeps explicit permission-mode overrides", () => {
@@ -39,10 +32,10 @@ describe("normalizeClaudePermissionArgs", () => {
     ]);
   });
 
-  it("treats a bare permission-mode flag as malformed and falls back to bypassPermissions", () => {
+  it("drops malformed bare permission-mode flags", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions"]);
+    ).toEqual(["-p", "--output-format", "stream-json"]);
   });
 });
 
@@ -92,8 +85,6 @@ describe("normalizeClaudeBackendConfig", () => {
       "--verbose",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(normalized.resumeArgs).toEqual([
       "-p",
@@ -104,8 +95,6 @@ describe("normalizeClaudeBackendConfig", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
   });
 
@@ -121,14 +110,25 @@ describe("normalizeClaudeBackendConfig", () => {
       resumeArgs: ["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"],
     });
 
-    expect(normalized?.args).toContain("--permission-mode");
-    expect(normalized?.args).toContain("bypassPermissions");
-    expect(normalized?.args).toContain("--setting-sources");
-    expect(normalized?.args).toContain("user");
-    expect(normalized?.resumeArgs).toContain("--permission-mode");
-    expect(normalized?.resumeArgs).toContain("bypassPermissions");
-    expect(normalized?.resumeArgs).toContain("--setting-sources");
-    expect(normalized?.resumeArgs).toContain("user");
+    expect(normalized).toBeDefined();
+    expect(normalized?.args).toBeDefined();
+    expect(normalized?.resumeArgs).toBeDefined();
+
+    const normalizedArgs = normalized!.args!;
+    const normalizedResumeArgs = normalized!.resumeArgs!;
+
+    const argsSettingSourcesIndex = normalizedArgs.indexOf("--setting-sources");
+    expect(argsSettingSourcesIndex).toBeGreaterThanOrEqual(0);
+    expect(normalizedArgs.slice(argsSettingSourcesIndex, argsSettingSourcesIndex + 2)).toEqual([
+      "--setting-sources",
+      "user",
+    ]);
+
+    const resumeArgsSettingSourcesIndex = normalizedResumeArgs.indexOf("--setting-sources");
+    expect(resumeArgsSettingSourcesIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      normalizedResumeArgs.slice(resumeArgsSettingSourcesIndex, resumeArgsSettingSourcesIndex + 2),
+    ).toEqual(["--setting-sources", "user"]);
   });
 
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
@@ -137,8 +137,10 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.env).toBeUndefined();
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
+    expect(backend.config.args).not.toContain("--permission-mode");
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
+    expect(backend.config.resumeArgs).not.toContain("--permission-mode");
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
     expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
