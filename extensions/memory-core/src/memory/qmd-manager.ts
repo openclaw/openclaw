@@ -1216,6 +1216,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (partial.missing) {
         return { text: "", path: relPath };
       }
+      // TODO(#68367): partial reads of daily memory files still expose dreaming
+      // blocks.  Stripping here would shift line numbers relative to the raw
+      // file, which breaks callers that paginate with from/lines offsets.
+      // A future fix could read-then-strip the full file and re-slice, or
+      // introduce virtual line mapping.
       return buildMemoryReadResultFromSlice({
         selectedLines: partial.selectedLines,
         relPath,
