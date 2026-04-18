@@ -12,7 +12,7 @@ import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 export type RestartAttempt = {
   ok: boolean;
-  method: "launchctl" | "systemd" | "schtasks" | "supervisor";
+  method: "launchctl" | "systemd" | "schtasks" | "supervisor" | "sigusr1";
   detail?: string;
   tried?: string[];
 };
@@ -295,6 +295,13 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
 export function triggerOpenClawRestart(): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
+  }
+
+  // Try SIGUSR1 first (in-process restart) — works reliably from inside the gateway
+  // without the structural problem of spawning external processes that die with parent.
+  if (process.listenerCount("SIGUSR1") > 0) {
+    scheduleGatewaySigusr1Restart({ reason: "cli" });
+    return { ok: true, method: "sigusr1", tried: [] };
   }
 
   cleanStaleGatewayProcessesSync();
