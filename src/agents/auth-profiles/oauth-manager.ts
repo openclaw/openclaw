@@ -6,7 +6,7 @@ import {
   OAUTH_REFRESH_LOCK_OPTIONS,
   log,
 } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
+import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import {
   ensureAuthProfileStore,
@@ -130,13 +130,7 @@ export function hasUsableOAuthCredential(
   credential: OAuthCredential | undefined,
   now = Date.now(),
 ): boolean {
-  if (!credential || credential.type !== "oauth") {
-    return false;
-  }
-  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
-    return false;
-  }
-  return resolveTokenExpiryState(credential.expires, now) === "valid";
+  return hasUsableStoredOAuthCredential(credential, { now });
 }
 
 function normalizeAuthIdentityToken(value: string | undefined): string | undefined {

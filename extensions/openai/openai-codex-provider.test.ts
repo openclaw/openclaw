@@ -87,6 +87,17 @@ describe("openai codex provider", () => {
     );
   });
 
+  it("offers explicit browser and one-time Codex CLI import auth methods", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "import-codex-cli"]);
+    expect(provider.auth?.find((method) => method.id === "import-codex-cli")).toMatchObject({
+      label: "Import Codex CLI login",
+      hint: "Use existing .codex auth once",
+      kind: "oauth",
+    });
+  });
+
   it("owns native reasoning output mode for Codex responses", () => {
     const provider = buildOpenAICodexProviderPlugin();
 

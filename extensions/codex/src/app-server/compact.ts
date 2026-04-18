@@ -11,6 +11,7 @@ import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 type CodexAppServerClientFactory = (
   startOptions?: CodexAppServerStartOptions,
+  authProfileId?: string,
 ) => Promise<CodexAppServerClient>;
 type CodexNativeCompactionCompletion = {
   signal: "thread/compacted" | "item/completed";
@@ -25,8 +26,8 @@ type CodexNativeCompactionWaiter = {
 
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 
-let clientFactory: CodexAppServerClientFactory = (startOptions) =>
-  getSharedCodexAppServerClient({ startOptions });
+let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =>
+  getSharedCodexAppServerClient({ startOptions, authProfileId });
 
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
@@ -38,7 +39,7 @@ export async function maybeCompactCodexAppServerSession(
     return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }
 
-  const client = await clientFactory(appServer.start);
+  const client = await clientFactory(appServer.start, binding.authProfileId);
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;
   try {
@@ -212,6 +213,7 @@ export const __testing = {
     clientFactory = factory;
   },
   resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = (startOptions) => getSharedCodexAppServerClient({ startOptions });
+    clientFactory = (startOptions, authProfileId) =>
+      getSharedCodexAppServerClient({ startOptions, authProfileId });
   },
 } as const;

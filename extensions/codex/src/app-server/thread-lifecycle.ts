@@ -53,6 +53,7 @@ export async function startOrResumeThread(params: {
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
+          authProfileId: params.params.authProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
           dynamicToolsFingerprint,
@@ -62,6 +63,7 @@ export async function startOrResumeThread(params: {
           ...binding,
           threadId: response.thread.id,
           cwd: params.cwd,
+          authProfileId: params.params.authProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
           dynamicToolsFingerprint,
@@ -93,6 +95,7 @@ export async function startOrResumeThread(params: {
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
     cwd: params.cwd,
+    authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
     dynamicToolsFingerprint,
@@ -103,6 +106,7 @@ export async function startOrResumeThread(params: {
     threadId: response.thread.id,
     sessionFile: params.params.sessionFile,
     cwd: params.cwd,
+    authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
     dynamicToolsFingerprint,
