@@ -279,6 +279,22 @@ export type AgentRunContext = {
    * root level).
    */
   recentlyApprovedAt?: number;
+  /**
+   * PR-15: synthetic user-message text mirrored from
+   * `SessionEntry.pendingAgentInjection`. The runtime prepends this to
+   * the user's next-turn input AND clears the field via
+   * `sessions.patch` so the injection only fires once.
+   *
+   * Single source of truth for inject-on-next-turn signals — written
+   * by gateway-side handlers like `sessions.patch { planApproval:
+   * action: "answer" }` (`[QUESTION_ANSWER]: <text>`),
+   * `action: "approve"/"edit"/"reject"` (`[PLAN_DECISION]: ...`).
+   * Replaces the prior pattern where each caller (webchat /
+   * Telegram / Discord / Slack `/plan answer` paths) had to inject
+   * via the channel's message-send infrastructure (which leaked the
+   * synthetic marker into user-visible chat history).
+   */
+  pendingAgentInjection?: string;
 };
 
 type AgentEventState = {

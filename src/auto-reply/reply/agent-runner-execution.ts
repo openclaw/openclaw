@@ -27,6 +27,15 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
+// PR-15: pendingAgentInjection consumer — read+clear the SessionEntry
+// field set by gateway-side `sessions.patch` handlers so the synthetic
+// `[QUESTION_ANSWER]:` / `[PLAN_DECISION]:` injection fires once into
+// the agent's next turn (single-source-of-truth pattern across all
+// channels — see `pending-injection.ts`).
+import {
+  composePromptWithPendingInjection,
+  consumePendingAgentInjection,
+} from "../../agents/pi-embedded-runner/pending-injection.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
@@ -695,6 +704,15 @@ export async function runAgentTurnWithFallback(params: {
       ...(activeSessionEntry?.recentlyApprovedAt !== undefined
         ? { recentlyApprovedAt: activeSessionEntry.recentlyApprovedAt }
         : {}),
+      // PR-15: mirror `SessionEntry.pendingAgentInjection` so the
+      // runtime can prepend it to the user message at turn-start AND
+      // clear it (via sessions.patch) so the injection only fires
+      // once. Written by gateway-side handlers in `sessions-patch.ts`
+      // for action="answer"/"approve"/"edit"/"reject" (single source
+      // of truth — replaces per-channel direct-injection patterns).
+      ...(activeSessionEntry?.pendingAgentInjection !== undefined
+        ? { pendingAgentInjection: activeSessionEntry.pendingAgentInjection }
+        : {}),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -1116,6 +1134,27 @@ export async function runAgentTurnWithFallback(params: {
               // an `exit_plan_mode` approval — defeating the entire
               // purpose of plan mode.
               const sessionPlanModeMode = params.getActiveSessionEntry()?.planMode?.mode;
+              // PR-15: consume any pending agent injection
+              // (`[QUESTION_ANSWER]: ...` / `[PLAN_DECISION]: ...`)
+              // BEFORE calling the runner. The consumer atomically
+              // reads + clears the SessionEntry field so the
+              // injection only fires once. This is the gateway-side
+              // single-source-of-truth pattern: every channel's
+              // `/plan answer` / `/plan accept` writes the same
+              // pendingAgentInjection field via sessions.patch, and
+              // this consumer turns it into a synthetic prepended
+              // user message. Webchat's legacy direct-injection path
+              // (`ui/src/ui/app.ts:1118`) continues to work for
+              // backwards-compat — when the gateway-side field is
+              // populated AND the direct injection also fires, the
+              // gateway path wins (it ran first).
+              const pendingInjection = params.sessionKey
+                ? (await consumePendingAgentInjection(params.sessionKey)).text
+                : undefined;
+              const composedPrompt = composePromptWithPendingInjection(
+                pendingInjection,
+                params.commandBody,
+              );
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
@@ -1134,7 +1173,7 @@ export async function runAgentTurnWithFallback(params: {
                   ? { agentHarnessId: agentRuntimeOverride }
                   : {}),
                 sandboxSessionKey: params.runtimePolicySessionKey,
-                prompt: params.commandBody,
+                prompt: composedPrompt,
                 transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {

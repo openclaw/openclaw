@@ -176,16 +176,20 @@ const PLAN_MODE_ACK_ONLY_MAX_VISIBLE_TEXT = 1500;
 // listed but treated specially below — they do NOT satisfy the
 // "submit a plan" requirement.
 //
-// PR-8 review fix (Codex P2 #3099338114): `lcm_grep` removed — it's
-// not a registered tool in the runtime catalog, so a positive match
-// against this name was structurally impossible. The agent-facing
-// retry instruction text at PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION
-// (~30 lines below) is intentionally left untouched per the project
-// constraint of not modifying agent-facing prompts in this pass — see
-// thread #3099338114 (pinned for maintainer review of that prompt
-// text in a follow-up pass).
+// `lcm_grep` is a real tool from the `@martian-engineering/lossless-claw`
+// context-engine plugin (LCM = Lossless Claw Memory). When the user has
+// installed lossless-claw via `openclaw plugins install @martian-engineering/lossless-claw`
+// (per `docs/concepts/context-engine.md`), the agent uses `lcm_grep`
+// to search persistent context-engine memory at planning time —
+// surfacing prior conversations, decisions, and code references not
+// in the current turn's context. Keeping it in this set ensures
+// `lcm_grep` calls correctly count as planning investigation when the
+// plugin is enabled; when not installed, the agent never calls it so
+// the entry is harmless. Maintainer-confirmed: agents must be able to
+// use `lcm_grep` (revert of an earlier overly-aggressive removal).
 const PLAN_MODE_INVESTIGATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read",
+  "lcm_grep",
   "grep",
   "glob",
   "ls",

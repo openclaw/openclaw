@@ -334,17 +334,37 @@ export type AgentDefaultsConfig = {
     /** Master switch. Default: false. */
     enabled?: boolean;
     /**
+     * **SCHEMA-RESERVED — runtime wiring not yet implemented (deferred
+     * to a focused follow-up PR after the plan-mode rollout lands).**
+     *
      * Optional list of model-id regex patterns. When a session's model
      * matches any pattern AND the user has not explicitly toggled plan
      * mode, the runtime auto-enters plan mode at session start. Default
      * empty — no auto-enable. Common use: `["^openai/gpt-5\\."]` to
      * route GPT-5.x family into plan-first by default.
+     *
+     * Implementation requires cron-time scanning of session activity to
+     * detect auto-enable conditions and emit a `sessions.patch
+     * { planMode: "plan" }` for matching sessions. Setting this field
+     * today is silently ignored at runtime (no error, no effect) — once
+     * the runtime PR lands, configurations using this field will
+     * activate automatically.
      */
     autoEnableFor?: string[];
     /**
+     * **SCHEMA-RESERVED — runtime wiring not yet implemented (deferred
+     * to a focused follow-up PR after the plan-mode rollout lands).**
+     *
      * Seconds an unanswered approval request stays pending before
      * timing out. The agent receives a `[PLAN_DECISION] decision: expired`
      * injection on timeout and stays in plan mode. Default: 600 (10 min).
+     *
+     * Implementation requires a cron-time watchdog that fires
+     * `resolvePlanApproval(action="timeout")` after the configured
+     * seconds elapse since the approval was requested. Setting this
+     * field today is silently ignored at runtime (no error, no
+     * effect) — once the runtime PR lands, configurations using this
+     * field will activate automatically.
      */
     approvalTimeoutSeconds?: number;
   };
