@@ -187,6 +187,25 @@ export function isSafeToOverwriteStoredOAuthIdentity(
   return hasMatchingOAuthIdentity(existing, incoming);
 }
 
+export function isSafeToAdoptBootstrapOAuthIdentity(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  if (!existing || existing.type !== "oauth") {
+    return true;
+  }
+  if (existing.provider !== incoming.provider) {
+    return false;
+  }
+  if (areOAuthCredentialsEquivalent(existing, incoming)) {
+    return true;
+  }
+  if (!hasOAuthIdentity(existing)) {
+    return true;
+  }
+  return hasMatchingOAuthIdentity(existing, incoming);
+}
+
 export function shouldBootstrapFromExternalCliCredential(params: {
   existing: OAuthCredential | undefined;
   imported: OAuthCredential;
@@ -289,7 +308,7 @@ export function resolveEffectiveOAuthCredential(params: {
     });
     return params.credential;
   }
-  if (!isSafeToOverwriteStoredOAuthIdentity(params.credential, imported)) {
+  if (!isSafeToAdoptBootstrapOAuthIdentity(params.credential, imported)) {
     log.warn("refused external oauth bootstrap credential: identity mismatch or missing binding", {
       profileId: params.profileId,
       provider: params.credential.provider,
@@ -443,6 +462,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!cred || cred.type !== "oauth") {
           return null;
         }
+        let credentialToRefresh = cred;
 
         if (hasUsableOAuthCredential(cred)) {
           return {
@@ -501,7 +521,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               profileId: params.profileId,
               provider: cred.provider,
             });
-          } else if (!isSafeToOverwriteStoredOAuthIdentity(cred, externallyManaged)) {
+          } else if (!isSafeToAdoptBootstrapOAuthIdentity(cred, externallyManaged)) {
             log.warn(
               "refused external oauth bootstrap credential: identity mismatch or missing binding",
               {
@@ -517,6 +537,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               store.profiles[params.profileId] = { ...externallyManaged };
               saveAuthProfileStore(store, params.agentDir);
             }
+            credentialToRefresh = externallyManaged;
             if (hasUsableOAuthCredential(externallyManaged)) {
               return {
                 apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged),
@@ -530,10 +551,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           `refreshOAuthCredential(${cred.provider})`,
           OAUTH_REFRESH_CALL_TIMEOUT_MS,
           async () => {
-            const refreshed = await adapter.refreshCredential(cred);
+            const refreshed = await adapter.refreshCredential(credentialToRefresh);
             return refreshed
               ? ({
-                  ...cred,
+                  ...credentialToRefresh,
                   ...refreshed,
                   type: "oauth",
                 } satisfies OAuthCredential)

@@ -137,6 +137,33 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     expect(seenAuthProfileId).toBe("openai-codex:work");
   });
+
+  it("fails closed when the persisted binding auth profile disagrees with the runtime request", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn(async () => fake.client);
+    __testing.setCodexAppServerClientFactoryForTests(factory);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      authProfileId: "openai-codex:binding",
+    });
+
+    const result = await maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile,
+      workspaceDir: tempDir,
+      authProfileId: "openai-codex:runtime",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      compacted: false,
+      reason: "auth profile mismatch for session binding",
+    });
+    expect(factory).not.toHaveBeenCalled();
+  });
 });
 
 function createFakeCodexClient(): {

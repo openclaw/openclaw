@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { writePrivateSecretFileAtomic } from "openclaw/plugin-sdk/secret-file-runtime";
 
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_AUTH_ENV_CLEAR_KEYS = ["OPENAI_API_KEY"] as const;
@@ -60,8 +60,11 @@ export async function prepareOpenAICodexCliExecution(
   }
 
   const codexHome = resolveCodexBridgeHome(ctx.agentDir, ctx.authProfileId);
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(path.join(codexHome, "auth.json"), buildCodexAuthFile(ctx.authCredential));
+  await writePrivateSecretFileAtomic({
+    rootDir: ctx.agentDir,
+    filePath: path.join(codexHome, "auth.json"),
+    content: buildCodexAuthFile(ctx.authCredential),
+  });
 
   return {
     env: {

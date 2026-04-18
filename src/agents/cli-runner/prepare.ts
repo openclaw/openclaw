@@ -3,6 +3,10 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+} from "../../plugins/cli-backend.types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -51,6 +55,20 @@ export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDep
   Object.assign(prepareDeps, overrides);
 }
 
+export function shouldSkipLocalCliCredentialEpoch(params: {
+  authEpochMode?: CliBackendAuthEpochMode;
+  authProfileId?: string;
+  authCredential?: AuthProfileCredential;
+  preparedExecution?: CliBackendPreparedExecution | null;
+}): boolean {
+  return Boolean(
+    params.authEpochMode === "profile-only" &&
+    params.authProfileId &&
+    params.authCredential &&
+    params.preparedExecution,
+  );
+}
+
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -88,12 +106,6 @@ export async function prepareCliRunContext(
     });
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
-  const authEpoch = await resolveCliAuthEpoch({
-    provider: params.provider,
-    authProfileId: effectiveAuthProfileId,
-    skipLocalCredential:
-      backendResolved.authEpochMode === "profile-only" && Boolean(effectiveAuthProfileId),
-  });
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
   const modelId = (params.model ?? "default").trim() || "default";
@@ -174,6 +186,16 @@ export async function prepareCliRunContext(
     modelId,
     authProfileId: effectiveAuthProfileId,
     authCredential,
+  });
+  const authEpoch = await resolveCliAuthEpoch({
+    provider: params.provider,
+    authProfileId: effectiveAuthProfileId,
+    skipLocalCredential: shouldSkipLocalCliCredentialEpoch({
+      authEpochMode: backendResolved.authEpochMode,
+      authProfileId: effectiveAuthProfileId,
+      authCredential,
+      preparedExecution,
+    }),
   });
   const preparedBackendEnv =
     preparedExecution?.env && Object.keys(preparedExecution.env).length > 0

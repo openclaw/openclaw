@@ -1,12 +1,15 @@
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   loadSecretFileSync,
+  PRIVATE_SECRET_DIR_MODE,
+  PRIVATE_SECRET_FILE_MODE,
   readSecretFileSync,
   tryReadSecretFileSync,
+  writePrivateSecretFileAtomic,
 } from "./secret-file.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -185,5 +188,62 @@ describe("readSecretFileSync", () => {
       return;
     }
     expect(tryReadSecretFileSync(file, label, options)).toBe((expected as () => undefined)());
+  });
+});
+
+describe("writePrivateSecretFileAtomic", () => {
+  it("writes a private file with owner-only permissions", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "nested", "auth.json");
+
+    await writePrivateSecretFileAtomic({
+      rootDir: dir,
+      filePath: file,
+      content: '{"ok":true}\n',
+    });
+
+    expect(loadSecretFileSync(file, "Gateway password")).toMatchObject({
+      ok: true,
+      secret: '{"ok":true}',
+    });
+    if (process.platform !== "win32") {
+      const dirStat = await stat(path.dirname(file));
+      const fileStat = await stat(file);
+      expect(dirStat.mode & 0o777).toBe(PRIVATE_SECRET_DIR_MODE);
+      expect(fileStat.mode & 0o777).toBe(PRIVATE_SECRET_FILE_MODE);
+    }
+  });
+
+  it("rejects symlinked target files", async () => {
+    const dir = await createTempDir();
+    const nestedDir = path.join(dir, "nested");
+    const target = path.join(dir, "outside.txt");
+    const link = path.join(nestedDir, "auth.json");
+    await mkdir(nestedDir);
+    await writeFile(target, "outside", "utf8");
+    await symlink(target, link);
+
+    await expect(
+      writePrivateSecretFileAtomic({
+        rootDir: dir,
+        filePath: link,
+        content: '{"ok":true}\n',
+      }),
+    ).rejects.toThrow("must not be a symlink");
+  });
+
+  it("rejects symlinked path components", async () => {
+    const dir = await createTempDir();
+    const targetDir = path.join(dir, "outside-dir");
+    await mkdir(targetDir);
+    await symlink(targetDir, path.join(dir, "linked"));
+
+    await expect(
+      writePrivateSecretFileAtomic({
+        rootDir: dir,
+        filePath: path.join(dir, "linked", "auth.json"),
+        content: '{"ok":true}\n',
+      }),
+    ).rejects.toThrow("must not be a symlink");
   });
 });
