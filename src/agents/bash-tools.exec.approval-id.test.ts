@@ -25,6 +25,16 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
+  return {
+    ...mod,
+    getShellPathFromLoginShell: vi.fn(() => null),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+  };
+});
+
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
     params?: {

@@ -123,29 +123,6 @@ describe("subagent registry steer restarts", () => {
     await vi.waitFor(assertion, { interval: 1, timeout: 1_000 });
   };
 
-  const withPendingAgentWait = async <T>(run: () => Promise<T>): Promise<T> => {
-    const callGateway = vi.mocked((await import("../gateway/call.js")).callGateway);
-    const originalCallGateway = callGateway.getMockImplementation();
-    callGateway.mockImplementation(async (request: unknown) => {
-      const typed = request as { method?: string };
-      if (typed.method === "agent.wait") {
-        return new Promise<unknown>(() => undefined);
-      }
-      if (originalCallGateway) {
-        return originalCallGateway(request as Parameters<typeof callGateway>[0]);
-      }
-      return {};
-    });
-
-    try {
-      return await run();
-    } finally {
-      if (originalCallGateway) {
-        callGateway.mockImplementation(originalCallGateway);
-      }
-    }
-  };
-
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
     let resolveAnnounce!: (value: boolean) => void;
     announceSpy.mockImplementationOnce(
@@ -254,7 +231,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {
-    await withPendingAgentWait(async () => {
+    {
       registerRun({
         runId: "run-old",
         childSessionKey: "agent:main:subagent:steer",
@@ -303,11 +280,11 @@ describe("subagent registry steer restarts", () => {
 
       const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
       expect(announce.childRunId).toBe("run-new");
-    });
+    }
   });
 
   it("defers subagent_ended hook for completion-mode runs until announce delivery resolves", async () => {
-    await withPendingAgentWait(async () => {
+    {
       const resolveAnnounce = createDeferredAnnounceResolver();
       registerCompletionModeRun(
         "run-completion-delayed",
@@ -337,11 +314,11 @@ describe("subagent registry steer restarts", () => {
           requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         }),
       );
-    });
+    }
   });
 
   it("does not emit subagent_ended on completion for persistent session-mode runs", async () => {
-    await withPendingAgentWait(async () => {
+    {
       const resolveAnnounce = createDeferredAnnounceResolver();
       registerCompletionModeRun(
         "run-persistent-session",
@@ -363,11 +340,11 @@ describe("subagent registry steer restarts", () => {
       expect(run?.runId).toBe("run-persistent-session");
       expect(run?.cleanupCompletedAt).toBeTypeOf("number");
       expect(run?.endedHookEmittedAt).toBeUndefined();
-    });
+    }
   });
 
   it("clears announce retry state when replacing after steer restart", async () => {
-    await withPendingAgentWait(async () => {
+    {
       registerRun({
         runId: "run-retry-reset-old",
         childSessionKey: "agent:main:subagent:retry-reset",
@@ -388,11 +365,11 @@ describe("subagent registry steer restarts", () => {
       });
       expect(run.announceRetryCount).toBeUndefined();
       expect(run.lastAnnounceRetryAt).toBeUndefined();
-    });
+    }
   });
 
   it("clears terminal lifecycle state when replacing after steer restart", async () => {
-    await withPendingAgentWait(async () => {
+    {
       registerRun({
         runId: "run-terminal-state-old",
         childSessionKey: "agent:main:subagent:terminal-state",
@@ -434,7 +411,7 @@ describe("subagent registry steer restarts", () => {
           reason: "subagent-status",
         }),
       );
-    });
+    }
   });
 
   it("clears frozen completion fields when replacing after steer restart", () => {
@@ -707,7 +684,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {
-    await withPendingAgentWait(async () => {
+    {
       vi.useFakeTimers();
       try {
         announceSpy.mockResolvedValue(false);
@@ -742,7 +719,7 @@ describe("subagent registry steer restarts", () => {
       } finally {
         vi.useRealTimers();
       }
-    });
+    }
   });
 
   it("keeps completion cleanup pending while descendants are still active", async () => {

@@ -19,6 +19,8 @@ const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
+let knownEnvApiKeyMarkersCache: Set<string> | undefined;
+let knownNonSecretApiKeyMarkersCache: string[] | undefined;
 
 // Legacy marker names kept for backward compatibility with existing models.json files.
 const LEGACY_ENV_API_KEY_MARKERS = [
@@ -33,18 +35,24 @@ const LEGACY_ENV_API_KEY_MARKERS = [
 ];
 
 function listKnownEnvApiKeyMarkers(): Set<string> {
-  return new Set([
+  knownEnvApiKeyMarkersCache ??= new Set([
     ...listKnownProviderEnvApiKeyNames(),
     ...LEGACY_ENV_API_KEY_MARKERS,
     ...AWS_SDK_ENV_MARKERS,
   ]);
+  return knownEnvApiKeyMarkersCache;
 }
 
 export function listKnownNonSecretApiKeyMarkers(): string[] {
-  const bundledMarkers = loadPluginManifestRegistry({ cache: true }).plugins.flatMap((plugin) =>
-    plugin.origin === "bundled" ? (plugin.nonSecretAuthMarkers ?? []) : [],
-  );
-  return [...new Set([...CORE_NON_SECRET_API_KEY_MARKERS, ...bundledMarkers])];
+  knownNonSecretApiKeyMarkersCache ??= [
+    ...new Set([
+      ...CORE_NON_SECRET_API_KEY_MARKERS,
+      ...loadPluginManifestRegistry({ cache: true }).plugins.flatMap((plugin) =>
+        plugin.origin === "bundled" ? (plugin.nonSecretAuthMarkers ?? []) : [],
+      ),
+    ]),
+  ];
+  return [...knownNonSecretApiKeyMarkersCache];
 }
 
 export function isAwsSdkAuthMarker(value: string): boolean {
