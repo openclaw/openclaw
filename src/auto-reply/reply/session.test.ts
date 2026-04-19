@@ -2475,6 +2475,43 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].modelProvider).toBe("anthropic");
     expect(stored[sessionKey].contextTokens).toBe(200_000);
   });
+
+  it(
+    "persists the selected model when only persisted* params are provided " +
+      "(no modelUsed/contextTokensUsed/usage)",
+    async () => {
+      // Guards against a future caller that wants to push a persisted-only
+      // selection update through persistSessionUsageUpdate without reporting
+      // any runtime usage for the turn. The no-usage branch must still
+      // update the session entry rather than silently drop the update.
+      const storePath = await createStorePath("openclaw-sticky-fallback-persist-only-");
+      const sessionKey = "main";
+      await seedSessionStore({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "s1",
+          updatedAt: Date.now(),
+          modelProvider: "anthropic",
+          model: "claude-3-5-sonnet-20240620",
+          contextTokens: 180_000,
+        },
+      });
+
+      await persistSessionUsageUpdate({
+        storePath,
+        sessionKey,
+        persistedModel: "claude-opus-4-7",
+        persistedProvider: "anthropic",
+        persistedContextTokens: 200_000,
+      });
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].model).toBe("claude-opus-4-7");
+      expect(stored[sessionKey].modelProvider).toBe("anthropic");
+      expect(stored[sessionKey].contextTokens).toBe(200_000);
+    },
+  );
 });
 
 describe("initSessionState stale threadId fallback", () => {

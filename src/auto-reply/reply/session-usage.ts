@@ -178,7 +178,13 @@ export async function persistSessionUsageUpdate(params: {
     return;
   }
 
-  if (params.modelUsed || params.contextTokensUsed) {
+  if (
+    params.modelUsed ||
+    params.contextTokensUsed !== undefined ||
+    params.persistedModel ||
+    params.persistedProvider ||
+    params.persistedContextTokens !== undefined
+  ) {
     try {
       await updateSessionStoreEntry({
         storePath,
