@@ -340,7 +340,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts?.mode).toBeUndefined();
   });
 
-  it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {
+  it("keeps profile=user off the sandbox browser when no node is selected", async () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
@@ -360,7 +360,7 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it("defaults to host for custom existing-session profiles too", async () => {
+  it("keeps custom existing-session profiles off the sandbox browser too", async () => {
     setResolvedBrowserProfiles({
       "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
@@ -470,13 +470,62 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("keeps user profile on host when node proxy is available", async () => {
+  it("routes profile=user through the node proxy when one is available", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", profile: "user" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          profile: "user",
+          path: "/",
+          method: "GET",
+          timeoutMs: 20000,
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it('allows profile="user" with target="node"', async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          profile: "user",
+          path: "/",
+          method: "GET",
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps profile="user" on the host when target="host" is explicit', async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", target: "host" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
       undefined,
