@@ -176,20 +176,33 @@ const PLAN_MODE_ACK_ONLY_MAX_VISIBLE_TEXT = 1500;
 // listed but treated specially below — they do NOT satisfy the
 // "submit a plan" requirement.
 //
-// `lcm_grep` is a real tool from the `@martian-engineering/lossless-claw`
-// context-engine plugin (LCM = Lossless Claw Memory). When the user has
-// installed lossless-claw via `openclaw plugins install @martian-engineering/lossless-claw`
-// (per `docs/concepts/context-engine.md`), the agent uses `lcm_grep`
-// to search persistent context-engine memory at planning time —
-// surfacing prior conversations, decisions, and code references not
-// in the current turn's context. Keeping it in this set ensures
-// `lcm_grep` calls correctly count as planning investigation when the
-// plugin is enabled; when not installed, the agent never calls it so
-// the entry is harmless. Maintainer-confirmed: agents must be able to
-// use `lcm_grep` (revert of an earlier overly-aggressive removal).
+// The `lcm_*` family is the read-only investigative surface from the
+// `@martian-engineering/lossless-claw` context-engine plugin (LCM =
+// Lossless Claw Memory). When the user has installed lossless-claw
+// (`openclaw plugins install @martian-engineering/lossless-claw`, see
+// `docs/concepts/context-engine.md`), these tools let the agent
+// search/recall/expand persistent context-engine memory at planning
+// time — surfacing prior conversations, decisions, and code
+// references not in the current turn's context. Keeping the LCM
+// family in this set ensures those calls correctly count as planning
+// investigation when the plugin is enabled; when not installed, the
+// agent never calls them so the entries are harmless.
+//
+// Catalog (verified against the plugin's published tool surface):
+//   • lcm_grep         — search compacted history (read-only)
+//   • lcm_describe     — recall details from compacted history (read-only)
+//   • lcm_expand_query — drill into summaries via sub-agent expansion (read-only)
+//   • lcm_expand       — internal sub-agent expansion tool (read-only)
+//
+// Maintainer-confirmed: agents must be able to use the full LCM family
+// (initial revert added only `lcm_grep`; `lcm_describe`/`lcm_expand*`
+// were missed and triggered premature retry pressure on those calls).
 const PLAN_MODE_INVESTIGATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read",
   "lcm_grep",
+  "lcm_describe",
+  "lcm_expand_query",
+  "lcm_expand",
   "grep",
   "glob",
   "ls",
@@ -206,11 +219,12 @@ export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION =
   "exit_plan_mode OR a read-only investigative tool. Brief progress " +
   "updates are fine, but they must NOT end the turn — keep calling tools " +
   "after them. The next response MUST either: (a) continue planning " +
-  "investigation with a read-only tool (read, lcm_grep, grep, glob, ls, " +
-  "find, web_search, web_fetch, update_plan), or (b) call " +
-  "exit_plan_mode(title=..., plan=[...]) with the proposed plan. A " +
-  "status line followed by another tool call is the right pattern; a " +
-  "status line alone is treated as yielding without acting.";
+  "investigation with a read-only tool (read, lcm_grep, lcm_describe, " +
+  "lcm_expand_query, grep, glob, ls, find, web_search, web_fetch, " +
+  "update_plan), or (b) call exit_plan_mode(title=..., plan=[...]) " +
+  "with the proposed plan. A status line followed by another tool call " +
+  "is the right pattern; a status line alone is treated as yielding " +
+  "without acting.";
 
 export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM =
   "CRITICAL: plan mode is active and you have acknowledged twice without calling " +

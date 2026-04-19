@@ -691,7 +691,7 @@ export async function runEmbeddedAttempt(
             "If you skip step 2 — if you respond with chat-only acknowledgement — you have failed the plan-mode contract and the user has to re-prompt you, which they should not have to do. Treat acknowledgement-without-tool-call as a defect, not as 'staying conversational'.",
             "",
             "Investigation phase (when needed):",
-            "- Use read-only tools first (read, web_search, web_fetch, lcm_grep). Track investigation in update_plan.",
+            "- Use read-only tools first (read, web_search, web_fetch, lcm_grep, lcm_describe, lcm_expand_query). Track investigation in update_plan.",
             "- Use `ask_user_question` ONLY for tradeoffs you can't resolve via local investigation.",
             "- Then call exit_plan_mode with the proposed plan.",
             "",

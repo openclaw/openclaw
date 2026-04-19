@@ -40,6 +40,7 @@ import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
+  loadSessionStore,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -687,7 +688,32 @@ export async function runAgentTurnWithFallback(params: {
     // (cleanup override, subagent tracking) and incomplete-turn
     // detectors (yield-after-approval) can read them without a
     // session-store round-trip.
-    const activeSessionEntry = params.getActiveSessionEntry();
+    //
+    // Bug 3+4 v3 fix: TRUE fresh disk read at registration time. The
+    // `params.getActiveSessionEntry()` callback in `agent-runner.ts:1207`
+    // is a CLOSURE over a `let activeSessionEntry` captured at run-start
+    // (line 921) that only refreshes at compaction / memory flush /
+    // error-recovery — NOT mid-turn. A `sessions.patch` write (UI
+    // approval) that fires between turn-start and this point would
+    // otherwise leave all 4 mirrors below (inPlanMode, planApproval,
+    // recentlyApprovedAt, pendingAgentInjection) stale.
+    //
+    // Use `loadSessionStore(storePath, { skipCache: true })` to bypass
+    // the cache and read the latest persisted state. Disk I/O is
+    // negligible: small file, OS page cache, runs once per
+    // registerAgentRunContext call (turn-start, not mid-turn).
+    let activeSessionEntry = params.getActiveSessionEntry();
+    if (params.storePath && params.sessionKey) {
+      try {
+        const liveStore = loadSessionStore(params.storePath, { skipCache: true });
+        const liveEntry = liveStore?.[params.sessionKey];
+        if (liveEntry) {
+          activeSessionEntry = liveEntry;
+        }
+      } catch {
+        // Fall back to closure value — no worse than pre-fix behavior.
+      }
+    }
     const planModeEntry = activeSessionEntry?.planMode;
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
@@ -713,19 +739,40 @@ export async function runAgentTurnWithFallback(params: {
       ...(activeSessionEntry?.pendingAgentInjection !== undefined
         ? { pendingAgentInjection: activeSessionEntry.pendingAgentInjection }
         : {}),
-      // Bug 3+4 fix: live-read accessor so the mutation gate can read
-      // the LATEST planMode on every tool call (the cached
-      // inPlanMode/planApproval are snapshots from run-start and go
-      // stale when sessions.patch flips mode → "normal" mid-turn after
-      // user approval). `getActiveSessionEntry` is an in-memory
-      // O(1) map lookup so calling it per tool call is cheap.
+      // Bug 3+4 fix v2: TRUE fresh read from disk on every call.
+      //
+      // Adversarial review caught: `params.getActiveSessionEntry()` is
+      // a CLOSURE over a captured `activeSessionEntry` variable in
+      // `agent-runner.ts:1207` — that variable is only reassigned at
+      // specific lifecycle points (preflight compaction / memory
+      // flush / explicit refresh), NOT mid-turn. So a `sessions.patch`
+      // approval that flips `planMode` between two tool calls in the
+      // SAME run leaves the captured ref stale and the cached
+      // `inPlanMode/planApproval` mirrors stale.
+      //
+      // Use `loadSessionStore(storePath, { skipCache: true })` to
+      // bypass the cache and read the latest persisted state on every
+      // call. Disk I/O is acceptable here because (a) the file is
+      // small (<10 KB typical), (b) the OS page cache makes repeated
+      // reads ~microseconds, and (c) tool calls are spaced by LLM
+      // turns (1-5 seconds) so per-call overhead is negligible.
+      // Fail-safe: returns undefined on any error so the caller falls
+      // back to the cached `args.ctx.planMode` snapshot.
       getLatestPlanMode: () => {
-        const entry = params.getActiveSessionEntry();
-        const mode = entry?.planMode?.mode;
-        if (mode === "plan" || mode === "normal") {
-          return mode;
+        if (!params.storePath || !params.sessionKey) {
+          return undefined;
         }
-        return undefined;
+        try {
+          const liveStore = loadSessionStore(params.storePath, { skipCache: true });
+          const liveEntry = liveStore?.[params.sessionKey];
+          const mode = liveEntry?.planMode?.mode;
+          if (mode === "plan" || mode === "normal") {
+            return mode;
+          }
+          return undefined;
+        } catch {
+          return undefined;
+        }
       },
     });
   }
@@ -1147,7 +1194,33 @@ export async function runAgentTurnWithFallback(params: {
               // mutating tools (apply_patch/exec/edit/write) before
               // an `exit_plan_mode` approval — defeating the entire
               // purpose of plan mode.
-              const sessionPlanModeMode = params.getActiveSessionEntry()?.planMode?.mode;
+              //
+              // Bug 3+4 v3 fix: TRUE fresh disk read for the INITIAL
+              // planMode flag passed to the runner. Mid-turn drift is
+              // covered by the `getLatestPlanMode` callback below, but
+              // this initial flag still matters for the first tool
+              // call's gate check before the callback fires. The
+              // closure `params.getActiveSessionEntry()` is stale
+              // between turn-start and this point if a sessions.patch
+              // (UI approval) raced — see the matching fix in
+              // `registerAgentRunContext` (~430 LoC up).
+              const sessionPlanModeMode: "plan" | "normal" | undefined = (() => {
+                if (!params.storePath || !params.sessionKey) {
+                  const fallback = params.getActiveSessionEntry()?.planMode?.mode;
+                  return fallback === "plan" || fallback === "normal" ? fallback : undefined;
+                }
+                try {
+                  const liveStore = loadSessionStore(params.storePath, { skipCache: true });
+                  const liveMode = liveStore?.[params.sessionKey]?.planMode?.mode;
+                  if (liveMode === "plan" || liveMode === "normal") {
+                    return liveMode;
+                  }
+                } catch {
+                  // Fall through to closure fallback.
+                }
+                const fallback = params.getActiveSessionEntry()?.planMode?.mode;
+                return fallback === "plan" || fallback === "normal" ? fallback : undefined;
+              })();
               // PR-15: consume any pending agent injection
               // (`[QUESTION_ANSWER]: ...` / `[PLAN_DECISION]: ...`)
               // BEFORE calling the runner. The consumer atomically
@@ -1174,16 +1247,28 @@ export async function runAgentTurnWithFallback(params: {
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 ...(sessionPlanModeMode === "plan" ? { planMode: "plan" as const } : {}),
-                // Bug 3+4 fix: live-read accessor so the mutation gate
-                // can re-check planMode after mid-turn approval
-                // transitions. O(1) in-memory lookup, safe per tool call.
+                // Bug 3+4 fix v2: TRUE fresh disk read so the mutation
+                // gate can re-check planMode after mid-turn approval.
+                // See the matching callback in `registerAgentRunContext`
+                // above (~50 LoC up) for the full rationale —
+                // `params.getActiveSessionEntry()` is a closure over a
+                // captured ref that doesn't refresh mid-turn, so we
+                // bypass it with `loadSessionStore(skipCache: true)`.
                 getLatestPlanMode: () => {
-                  const entry = params.getActiveSessionEntry();
-                  const mode = entry?.planMode?.mode;
-                  if (mode === "plan" || mode === "normal") {
-                    return mode;
+                  if (!params.storePath || !params.sessionKey) {
+                    return undefined;
                   }
-                  return undefined;
+                  try {
+                    const liveStore = loadSessionStore(params.storePath, { skipCache: true });
+                    const liveEntry = liveStore?.[params.sessionKey];
+                    const mode = liveEntry?.planMode?.mode;
+                    if (mode === "plan" || mode === "normal") {
+                      return mode;
+                    }
+                    return undefined;
+                  } catch {
+                    return undefined;
+                  }
                 },
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
