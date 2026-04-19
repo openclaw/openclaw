@@ -227,6 +227,14 @@ function emitSessionsChanged(
             execAsk: sessionRow.execAsk,
             execHost: sessionRow.execHost,
             planMode: sessionRow.planMode,
+            // Codex P2 review #68939 (2026-04-19): mirror the
+            // `pendingQuestionApprovalId` carry-forward so the
+            // webchat /plan answer path sees fresh question
+            // approvalId after the persister writes it. Without
+            // this, the UI's cached `sessionsResult.sessions[..]`
+            // wouldn't refresh and `/plan answer` would submit
+            // without (or with stale) approvalId.
+            pendingQuestionApprovalId: sessionRow.pendingQuestionApprovalId,
           }
         : {}),
     },

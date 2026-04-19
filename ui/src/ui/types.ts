@@ -481,6 +481,16 @@ export type GatewaySessionRow = {
      */
     autoApprove?: boolean;
   };
+  /**
+   * Codex P2 review #68939 (2026-04-19): mirror of the
+   * `pendingQuestionApprovalId` server-side field so the webchat
+   * `/plan answer` path can thread the question approvalId into the
+   * `sessions.patch { planApproval }` payload. The server-side
+   * answer-guard requires it; pre-fix, the webchat path used the
+   * plan-approval id (which is a different namespace) and answers
+   * were rejected.
+   */
+  pendingQuestionApprovalId?: string;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

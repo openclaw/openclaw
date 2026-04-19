@@ -63,7 +63,7 @@ NORMAL MODE → /plan on → INVESTIGATION → exit_plan_mode → PENDING APPROV
 | `/plan revise <feedback>`          | Reject with revision feedback                                                  |
 | `/plan answer <text>`              | Answer a clarifying question the agent asked                                   |
 | `/plan auto on` / `/plan auto off` | Toggle auto-approve mode (future plans auto-approved without showing the card) |
-| `/plan self-test`                  | Run a synthetic flow to verify plan mode works on this install                 |
+| `/plan self-test`                  | _(deferred — runtime not yet wired; tracked in PLAN-MODE-ARCHITECTURE.md)_     |
 
 ## What you see in webchat
 
@@ -81,12 +81,14 @@ You can also click "Plan view" in the chat controls to see the same plan in the 
 Plan mode is multi-channel by design:
 
 - **Webchat** — inline card with buttons + side-panel view
-- **Telegram** — inline-button card (Approve / Reject) + plan delivered as a markdown attachment
+- **Telegram** — `/plan ...` text commands today; inline-button card + markdown document attachment delivery is _deferred to a follow-up PR_ (the bridge persists the markdown to disk under `~/.openclaw/agents/<id>/plans/` even on Telegram sessions, but document attachment + inline-keyboard wiring await re-rebasing onto the new plugin-sdk surface)
 - **Slack** — inline-button card in the originating thread
 - **Discord** — inline-button card with `/plan` slash commands as fallback
 - **CLI** — `/plan accept` / `/plan revise` / `/plan answer` text commands
 
 Approvals from any channel are deduplicated server-side by `approvalId`, so clicking Approve on Telegram while the webchat card is also open won't double-fire.
+
+> **Doc accuracy note (2026-04-19, Copilot review #68939):** Telegram inline-button cards and markdown attachment delivery were both flagged as documented-but-deferred. The `/plan ...` text-command path is shipped and works on Telegram today; the richer UI surfaces land in a follow-up PR once the upstream plugin-sdk restructure is mapped. See "Long-term follow-ups (deferred)" in `docs/plans/PLAN-MODE-ARCHITECTURE.md`.
 
 ## Persisted plans
 

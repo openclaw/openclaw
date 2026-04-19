@@ -90,6 +90,14 @@ export type GatewaySessionRow = {
   execSecurity?: SessionEntry["execSecurity"];
   execAsk?: SessionEntry["execAsk"];
   planMode?: SessionEntry["planMode"];
+  /**
+   * Codex P2 review #68939 (2026-04-19): mirror of
+   * `SessionEntry.pendingQuestionApprovalId` for the UI's /plan
+   * answer flow. Read-only on the wire — the persister writes it
+   * when an `ask_user_question` approval event fires; the patch
+   * handler clears it after a successful answer.
+   */
+  pendingQuestionApprovalId?: SessionEntry["pendingQuestionApprovalId"];
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

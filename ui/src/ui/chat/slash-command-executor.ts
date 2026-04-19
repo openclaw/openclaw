@@ -209,6 +209,41 @@ function resolvePendingApprovalIdFromContext(
   return undefined;
 }
 
+/**
+ * Codex P2 review #68939 (2026-04-19): the question approval is a
+ * separate id namespace from the plan approval. Pre-fix, the webchat
+ * `/plan answer` path called `resolvePendingApprovalIdFromContext`
+ * which only returns `planMode.approvalId` (the PLAN id) — the
+ * gateway-side answer-guard validates against
+ * `pendingQuestionApprovalId` (the QUESTION id) and would reject
+ * the patch as a stale token. New helper reads the question-specific
+ * id from the cached session row (now exposed via
+ * `GatewaySessionRow.pendingQuestionApprovalId` per the third-wave
+ * companion change in `session-utils.ts`).
+ *
+ * Returns `undefined` when no question is pending; caller surfaces
+ * a friendly "no pending question" message in that case.
+ */
+function resolvePendingQuestionApprovalIdFromContext(
+  sessionKey: string,
+  context: SlashCommandContext,
+): string | undefined {
+  const rows = context.sessionsResult?.sessions;
+  if (!Array.isArray(rows)) {
+    return undefined;
+  }
+  for (const row of rows) {
+    if (row?.key === sessionKey) {
+      const id = row.pendingQuestionApprovalId;
+      if (typeof id === "string" && id) {
+        return id;
+      }
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 async function executePlan(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -318,11 +353,24 @@ async function executePlan(
         content: "Usage: `/plan answer <text>` — answer the agent's `ask_user_question` prompt.",
       };
     }
-    const approvalId = resolvePendingApprovalIdFromContext(sessionKey, context);
+    // Codex P2 review #68939 (2026-04-19): use the
+    // QUESTION-specific approvalId, not the plan approvalId. The
+    // gateway-side answer-guard validates against
+    // `pendingQuestionApprovalId` (a separate token namespace from
+    // `planMode.approvalId`); pre-fix, the webchat `/plan answer`
+    // path threaded the plan id and the patch was rejected as a
+    // stale token.
+    const questionApprovalId = resolvePendingQuestionApprovalIdFromContext(sessionKey, context);
+    if (!questionApprovalId) {
+      return {
+        content:
+          "No pending `ask_user_question` for this session — `/plan answer` requires an active question.",
+      };
+    }
     try {
       await client.request("sessions.patch", {
         key: sessionKey,
-        planApproval: { action: "answer", answer, ...(approvalId ? { approvalId } : {}) },
+        planApproval: { action: "answer", answer, approvalId: questionApprovalId },
       });
       return { content: `Question answered: "${answer}"`, action: "refresh" };
     } catch (err) {

@@ -81,11 +81,22 @@ export async function persistPlanArchetypeMarkdown(
   }
 
   const baseDir = input.baseDir ?? path.join(os.homedir(), ".openclaw", "agents");
-  const dir = path.join(baseDir, agentId, "plans");
+  const agentDir = path.join(baseDir, agentId);
+  const dir = path.join(agentDir, "plans");
   // PR-11 review M3: belt-and-suspenders confine — resolve the target
   // and verify it stays within baseDir. Catches any edge case the
   // syntactic check missed (e.g. agentId smuggling some Unicode
   // separator we didn't enumerate).
+  //
+  // Copilot review #68939 (2026-04-19): also reject symlinks at the
+  // agent-dir and plans-dir levels, then validate containment using
+  // realpath() (not just lexical resolve()). Pre-fix, a pre-existing
+  // symlink like `~/.openclaw/agents/<agentId> -> /etc` would let
+  // writes escape baseDir despite the syntactic agentId check (the
+  // path component `<agentId>` is fine; the symlink target is the
+  // escape vector). The new check stat()s each component, refuses
+  // the operation if the component is a symlink, then realpath()s
+  // both base and target before the prefix-match.
   const resolvedBase = path.resolve(baseDir);
   const resolvedDir = path.resolve(dir);
   if (!resolvedDir.startsWith(resolvedBase + path.sep) && resolvedDir !== resolvedBase) {
@@ -93,7 +104,39 @@ export async function persistPlanArchetypeMarkdown(
       `persistPlanArchetypeMarkdown: resolved path escapes baseDir: ${JSON.stringify(resolvedDir)}`,
     );
   }
+  const rejectSymlinkIfPresent = async (targetPath: string, label: string): Promise<void> => {
+    try {
+      const stat = await fsp.lstat(targetPath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `persistPlanArchetypeMarkdown: ${label} must not be a symlink: ${JSON.stringify(targetPath)}`,
+        );
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw err;
+      }
+    }
+  };
+  await fsp.mkdir(baseDir, { recursive: true });
+  const realBase = await fsp.realpath(baseDir);
+  await rejectSymlinkIfPresent(agentDir, "agent directory");
+  await fsp.mkdir(agentDir, { recursive: true });
+  const realAgentDir = await fsp.realpath(agentDir);
+  if (!realAgentDir.startsWith(realBase + path.sep) && realAgentDir !== realBase) {
+    throw new Error(
+      `persistPlanArchetypeMarkdown: resolved agent directory escapes baseDir: ${JSON.stringify(realAgentDir)}`,
+    );
+  }
+  await rejectSymlinkIfPresent(dir, "plans directory");
   await fsp.mkdir(dir, { recursive: true });
+  const realDir = await fsp.realpath(dir);
+  if (!realDir.startsWith(realBase + path.sep) && realDir !== realBase) {
+    throw new Error(
+      `persistPlanArchetypeMarkdown: resolved plans directory escapes baseDir: ${JSON.stringify(realDir)}`,
+    );
+  }
 
   const baseName = buildPlanFilename(input.title, input.now);
   // baseName ends with `.md`. For a 2nd-write of the same date+slug,

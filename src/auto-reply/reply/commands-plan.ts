@@ -233,6 +233,15 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
 
   const sessionKey = params.sessionKey;
   const planMode = params.sessionEntry?.planMode;
+  // Codex P1 review #68939 (2026-04-19): the question-answer
+  // approvalId lives on `SessionEntry.pendingQuestionApprovalId`
+  // (separate from `planMode.approvalId` which carries the plan
+  // approval). Read it here so the `/plan answer` text-channel path
+  // can thread the right token into the patch — without it, the
+  // gateway-side answer-guard rejects with "no pending question"
+  // and the user can't complete `ask_user_question` flows on
+  // non-web channels.
+  const pendingQuestionApprovalId = params.sessionEntry?.pendingQuestionApprovalId;
   const resolvedBy = buildResolvedByLabel(params);
 
   if (sub.kind === "status") {
@@ -392,23 +401,42 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
     if (sub.kind === "answer") {
       // PR-11 review fix (Codex P1 #3105075577): /plan answer routes
       // through the same sessions.patch action="answer" path as the
-      // webchat question card. Server-side is a no-op (state stays
-      // in plan mode) — the actual injection happens via the runtime
-      // synthesizing the [QUESTION_ANSWER] user message.
+      // webchat question card. The runtime injects the synthetic
+      // [QUESTION_ANSWER]: user message at next-turn start (via
+      // pendingAgentInjection — see plan-snapshot-persister.ts +
+      // pi-embedded-runner pendingInjection consumer).
+      //
+      // Codex P1 review #68939 (2026-04-19): thread the
+      // `pendingQuestionApprovalId` from the session entry into the
+      // patch payload. The gateway-side answer-guard requires it;
+      // without it, the patch fails with "no pending question".
+      // The schema also now requires `approvalId` on the answer
+      // variant (third-wave discriminated-union refactor).
+      if (!pendingQuestionApprovalId) {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: "No pending ask_user_question for this session — `/plan answer` requires a question to be active.",
+          },
+        };
+      }
       await callPatch({
-        planApproval: { action: "answer", answer: sub.answer },
-      });
-      // Also inject the answer as a synthetic user message so the
-      // agent's next turn picks it up (mirrors the webchat flow).
-      const safeEcho = sub.answer
-        .replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1")
-        .replace(/<@/g, "<\u200B@");
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `Question answered: "${safeEcho}"`,
+        planApproval: {
+          action: "answer",
+          answer: sub.answer,
+          approvalId: pendingQuestionApprovalId,
         },
-      };
+      });
+      // Codex P1 review #68939 (2026-04-19): set `shouldContinue:
+      // true` so the agent-runner pipeline runs the agent after the
+      // patch lands. Pre-fix, the handler returned `shouldContinue:
+      // false` with a confirmation reply — but the
+      // [QUESTION_ANSWER] synthetic injection only fires at next
+      // turn-start, so the agent stayed idle until an unrelated
+      // later message or heartbeat. Now the agent resumes
+      // immediately and the user sees the agent's first response
+      // as the implicit "answer received" confirmation.
+      return { shouldContinue: true };
     }
     if (sub.kind === "accept" || sub.kind === "revise") {
       // PR-11 review M1: pre-check that there's actually a pending
@@ -430,14 +458,17 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
         await callPatch({
           planApproval: { action, approvalId: planMode.approvalId },
         });
-        return {
-          shouldContinue: false,
-          reply: {
-            text: sub.allowEdits
-              ? "Plan **accepted with edits** — agent may adjust steps as it executes."
-              : "Plan **accepted** — agent will execute as proposed.",
-          },
-        };
+        // Codex P1 review #68939 (2026-04-19): set
+        // `shouldContinue: true` so the agent-runner pipeline
+        // resumes the agent immediately after the approval lands.
+        // Pre-fix, the handler returned `shouldContinue: false` —
+        // the plan decision was stored in `pendingAgentInjection`
+        // but only consumed at next turn-start, so non-web channels
+        // reported "agent will execute" while the agent stayed
+        // idle until an unrelated later message or heartbeat. Now
+        // the agent resumes immediately and the user sees its
+        // first action as the implicit "approval received" signal.
+        return { shouldContinue: true };
       }
       // revise (feedback already validated non-empty at parse time).
       await callPatch({
@@ -447,19 +478,14 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
           approvalId: planMode.approvalId,
         },
       });
-      // PR-11 deep-dive review M8: neutralize @-mentions when echoing
-      // the user-typed feedback back into the channel. A low-privilege
-      // operator could otherwise cause the bot to ping @everyone /
-      // @here / @channel via the feedback echo (the bot's reply may
-      // have different rendering / role permissions than the user's
-      // original message).
-      const safeEcho = sub.feedback
-        .replace(/@(channel|here|everyone)\b/gi, "@\uFE6B$1")
-        .replace(/<@/g, "<\u200B@");
-      return {
-        shouldContinue: false,
-        reply: { text: `Plan returned for revision with feedback: "${safeEcho}"` },
-      };
+      // Codex P1 review #68939 (2026-04-19): same `shouldContinue:
+      // true` as accept — the rejection injection ([PLAN_DECISION]:
+      // rejected with feedback) is in `pendingAgentInjection` and
+      // the agent needs to run to consume it and revise the plan.
+      // Pre-fix, the agent stayed idle after the user's feedback
+      // landed, defeating the revise-and-resubmit loop on text
+      // channels.
+      return { shouldContinue: true };
     }
   } catch (error) {
     const errMsg = formatErrorMessage(error);

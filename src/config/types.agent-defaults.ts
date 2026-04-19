@@ -313,9 +313,16 @@ export type AgentDefaultsConfig = {
      * When set, fully replaces the default (which scales with auth-profile
      * count and is now floored at 500). Use this to give long research /
      * build runs more headroom — the previous 32-turn floor cut many
-     * legitimate sessions short. Range [1, 100_000]; values outside are
-     * clamped. Subagents (`lightContext: true` spawns) keep a separate
-     * lower cap and ignore this setting.
+     * legitimate sessions short.
+     *
+     * Copilot review #68939 (2026-04-19): the doc previously said
+     * "out-of-range values are clamped" but config validation (Zod)
+     * actually rejects out-of-range values. Updated to match the
+     * validated/rejected behavior so operators don't silently
+     * trust a value that was actually rejected at load time.
+     * Valid range: [1, 100_000]; out-of-range values are rejected
+     * during config validation. Subagents (`lightContext: true`
+     * spawns) keep a separate lower cap and ignore this setting.
      */
     maxIterations?: number;
   };
@@ -334,8 +341,14 @@ export type AgentDefaultsConfig = {
     /** Master switch. Default: false. */
     enabled?: boolean;
     /**
-     * **SCHEMA-RESERVED — runtime wiring not yet implemented (deferred
-     * to a focused follow-up PR after the plan-mode rollout lands).**
+     * **SCHEMA-RESERVED — runtime wiring not yet implemented.**
+     *
+     * Copilot review #68939 (2026-04-19): this field is the
+     * authoritative source of truth on the deferral status — if
+     * the umbrella PR description claims auto-enable is shipped,
+     * the PR description is wrong. The deferral is also tracked
+     * in `docs/plans/PLAN-MODE-ARCHITECTURE.md` under the
+     * "Long-term follow-ups (deferred)" section.
      *
      * Optional list of model-id regex patterns. When a session's model
      * matches any pattern AND the user has not explicitly toggled plan
@@ -352,8 +365,11 @@ export type AgentDefaultsConfig = {
      */
     autoEnableFor?: string[];
     /**
-     * **SCHEMA-RESERVED — runtime wiring not yet implemented (deferred
-     * to a focused follow-up PR after the plan-mode rollout lands).**
+     * **SCHEMA-RESERVED — runtime wiring not yet implemented.**
+     *
+     * Copilot review #68939 (2026-04-19): same deferral status as
+     * `autoEnableFor` above; this comment is the authoritative
+     * source of truth.
      *
      * Seconds an unanswered approval request stays pending before
      * timing out. The agent receives a `[PLAN_DECISION] decision: expired`

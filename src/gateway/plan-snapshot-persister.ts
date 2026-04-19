@@ -466,9 +466,31 @@ async function persistSnapshot(params: {
       storeKey: params.sessionKey,
       patch: {
         key: params.sessionKey,
+        // Copilot review #68939 (2026-04-19): the wire schema for
+        // `lastPlanSteps[].status` was tightened from
+        // NonEmptyString to a closed enum (pending/in_progress/
+        // completed/cancelled). The persister's snapshot can in
+        // principle carry an unrecognized status (e.g., legacy
+        // serialized data) — narrow with a type guard at the
+        // boundary so a corrupted snapshot doesn't propagate
+        // schema-violating writes downstream.
         lastPlanSteps: params.snapshot.map((s) => ({
           step: s.step,
-          status: s.status,
+          status: ((): "pending" | "in_progress" | "completed" | "cancelled" => {
+            switch (s.status) {
+              case "pending":
+              case "in_progress":
+              case "completed":
+              case "cancelled":
+                return s.status;
+              default:
+                // Map unrecognized/legacy status values to
+                // "cancelled" so the close-on-complete logic
+                // doesn't false-positive on them, but still
+                // surfaces them in the rendered plan.
+                return "cancelled";
+            }
+          })(),
           ...(s.activeForm !== undefined ? { activeForm: s.activeForm } : {}),
           // PR-9 Wave B1 — forward closure-gate fields through.
           ...(s.acceptanceCriteria !== undefined
