@@ -238,7 +238,7 @@ function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex):
   }
   // Check if the value is a known alias; if so, resolve to provider/model.
   // Unknown bare strings are returned as-is (don't guess the provider).
-  const aliasKey = normalizeAliasKey(value);
+  const aliasKey = value.toLowerCase().trim();
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
     return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
@@ -265,7 +265,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     `${runtimeDefault.provider}/${runtimeDefault.model}`;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: runtimeDefault.provider,
   });
   return resolveModelThroughAliases(raw, aliasIndex);
 }
