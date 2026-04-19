@@ -125,7 +125,16 @@ export function sortAndCapQueue(
     if (pa !== pb) {
       return pb - pa;
     }
-    return a.createdAt - b.createdAt;
+    if (a.createdAt !== b.createdAt) {
+      return a.createdAt - b.createdAt;
+    }
+    // Deterministic tiebreaker on id. Without this, two entries sharing
+    // priority AND createdAt can swap positions between turns (engine-
+    // dependent stable-sort behavior), causing the composed injection
+    // text to diverge byte-for-byte across runs and breaking prompt
+    // cache stability. localeCompare gives a stable total order over
+    // the string ids.
+    return a.id.localeCompare(b.id);
   });
   if (sorted.length <= MAX_QUEUE_SIZE) {
     return sorted;
@@ -260,8 +269,16 @@ export interface ConsumePendingAgentInjectionsResult {
  * Atomically drains the queue for a session: reads all entries,
  * migrates any legacy scalar, filters expired, sorts, clears the
  * persisted queue, and returns the ordered entries plus a composed
- * text. Best-effort: on store-write failure the captured entries are
- * still returned so the caller can inject them into the next turn.
+ * text.
+ *
+ * Write-failure semantics: if the clear-write fails, captured entries
+ * are DROPPED (not returned) so the next turn re-reads the same queue
+ * from disk rather than double-delivering. An inconsistent disk state
+ * is the lesser evil compared to the same injection firing twice —
+ * users would see `[PLAN_DECISION]: approved` render once, then
+ * render again on the next turn and confuse the agent about whether
+ * it's executing or still being approved. A warn log surfaces the
+ * failure for operators to investigate.
  */
 export async function consumePendingAgentInjections(
   sessionKey: string,
@@ -271,6 +288,7 @@ export async function consumePendingAgentInjections(
     return { injections: [], composedText: undefined };
   }
   let captured: PendingAgentInjectionEntry[] = [];
+  let writeSucceeded = false;
   try {
     const cfg = loadConfig();
     const parsed = parseAgentSessionKey(sessionKey);
@@ -278,7 +296,7 @@ export async function consumePendingAgentInjections(
       cfg.session?.store,
       parsed?.agentId ? { agentId: parsed.agentId } : {},
     );
-    await updateSessionStoreEntry({
+    const writeResult = await updateSessionStoreEntry({
       storePath,
       sessionKey,
       update: async (existing) => {
@@ -295,12 +313,25 @@ export async function consumePendingAgentInjections(
         return patch;
       },
     });
+    // updateSessionStoreEntry returns null when the session isn't in
+    // the store (nothing to clear — empty capture is correct) and the
+    // merged entry on success. Either way the clear landed if we got
+    // here without throwing.
+    writeSucceeded = true;
+    // Empty-session case: no entry existed, capture stays empty.
+    if (writeResult === null) {
+      captured = [];
+    }
   } catch (err) {
     log?.warn?.(
       `consumePendingAgentInjections failed: ${err instanceof Error ? err.message : String(err)}`,
     );
-    // captured may still hold entries if the update callback ran before
-    // the persist step threw. Deliver what we have rather than dropping.
+  }
+  if (!writeSucceeded) {
+    // Drop captured entries: the disk clear failed so the queue still
+    // has them. Returning the captured value would double-deliver on
+    // the next turn when the consumer re-reads the queue.
+    return { injections: [], composedText: undefined };
   }
   const composedText = captured.length === 0 ? undefined : captured.map((e) => e.text).join("\n\n");
   return { injections: captured, composedText };

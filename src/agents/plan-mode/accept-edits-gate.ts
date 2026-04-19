@@ -130,6 +130,14 @@ const SELF_RESTART_PATTERNS: readonly RegExp[] = [
   // conservatively flag `kill` when combined with openclaw/gateway
   // words on the same line.
   /\bkill\s+-?\d*\s+.*\b(openclaw|gateway)\b/i,
+  // Pipe-chained termination: `pgrep openclaw | xargs kill` — the
+  // `kill` side has no openclaw word, so the kill pattern above
+  // misses it. Match the source side (pgrep + openclaw/gateway).
+  /\bpgrep\b.*\b(openclaw|gateway)\b/i,
+  // `kill $(pgrep openclaw)` or `kill $(cat /tmp/openclaw-gateway.pid)`
+  // — subshell invocation where the target is resolved at runtime.
+  /\bkill\b.*\$\([^)]*\b(openclaw|gateway)\b[^)]*\)/i,
+  /\bkill\b.*`[^`]*\b(openclaw|gateway)\b[^`]*`/i,
   // `scripts/restart-mac.sh` is a bundled operator helper
   /\bscripts\/restart-mac\.sh\b/,
 ];
@@ -150,7 +158,11 @@ const CONFIG_CHANGE_PATTERNS: readonly RegExp[] = [
  *
  * We check both literal home-tilde and expanded $HOME variants because
  * path normalization varies across callers (some normalize, some
- * don't). The check is prefix-based so sub-paths are also covered.
+ * don't). Paths are normalized via `normalizeCandidatePath` before
+ * prefix-matching so `~` is expanded, `..` segments are collapsed,
+ * and redundant separators are removed — a write to
+ * `~/.openclaw/../.openclaw/config.toml` resolves to the same
+ * target as `~/.openclaw/config.toml` and is blocked.
  */
 const PROTECTED_CONFIG_PATH_PREFIXES: readonly string[] = [
   "~/.openclaw/",
@@ -250,23 +262,97 @@ function checkConfigChange(execCommand: string): AcceptEditsGateResult | null {
   return null;
 }
 
+/**
+ * Normalizes a file path for prefix matching against the protected
+ * list. Expands tildes, collapses `..` / `.` segments, removes double
+ * slashes. Returns BOTH the tilde form and the absolute $HOME form so
+ * callers can check prefixes expressed in either form.
+ *
+ * Best-effort — if normalization fails (invalid path characters etc.)
+ * the raw trimmed input is returned so the caller can still prefix-
+ * check it directly.
+ */
+function normalizeCandidatePath(filePath: string): { tildeForm: string; absoluteForm: string } {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return { tildeForm: "", absoluteForm: "" };
+  }
+  const home = typeof process !== "undefined" ? process.env.HOME : undefined;
+  // Collapse `..` / `.` / double-slash. Simple split-join; do not
+  // require `node:path` because that adds platform-specific behavior
+  // and we care about unix-style paths here (the gate is Linux/macOS
+  // oriented — Windows paths are exceedingly rare in this codebase).
+  function collapse(p: string): string {
+    const segments = p.split("/");
+    const stack: string[] = [];
+    for (const seg of segments) {
+      if (seg === "" || seg === ".") {
+        // preserve leading slash via empty first segment if present
+        if (stack.length === 0 && seg === "") {
+          stack.push("");
+        }
+        continue;
+      }
+      if (seg === "..") {
+        if (stack.length > 1 || (stack.length === 1 && stack[0] !== "")) {
+          stack.pop();
+        }
+        continue;
+      }
+      stack.push(seg);
+    }
+    const joined = stack.join("/");
+    return joined.length === 0 ? "/" : joined;
+  }
+  let tildeForm = trimmed;
+  let absoluteForm = trimmed;
+  if (trimmed === "~" || trimmed.startsWith("~/")) {
+    tildeForm = trimmed;
+    absoluteForm = home ? trimmed.replace(/^~/, home) : trimmed;
+  } else if (home && trimmed.startsWith(`${home}/`)) {
+    absoluteForm = trimmed;
+    tildeForm = `~${trimmed.slice(home.length)}`;
+  }
+  return {
+    tildeForm: collapse(tildeForm),
+    absoluteForm: collapse(absoluteForm),
+  };
+}
+
 function checkProtectedPath(filePath: string): AcceptEditsGateResult | null {
-  const normalized = filePath.trim();
-  if (!normalized) {
+  const { tildeForm, absoluteForm } = normalizeCandidatePath(filePath);
+  if (!tildeForm && !absoluteForm) {
     return null;
   }
+  const home = typeof process !== "undefined" ? process.env.HOME : undefined;
   for (const prefix of PROTECTED_CONFIG_PATH_PREFIXES) {
-    if (normalized.startsWith(prefix)) {
-      return {
-        blocked: true,
-        constraint: "config_change",
-        reason:
-          `Write to protected config path "${normalized}" is blocked under acceptEdits. ` +
-          "Ask the user for explicit confirmation before editing OpenClaw / Claude config files.",
-      };
+    // Check the tilde form against tilde-prefixed protected paths.
+    if (prefix.startsWith("~/") && tildeForm.startsWith(prefix)) {
+      return matchedProtectedPath(filePath, prefix);
+    }
+    // Check the absolute form against $HOME-expanded tilde prefixes.
+    if (prefix.startsWith("~/") && home) {
+      const absPrefix = prefix.replace(/^~/, home);
+      if (absoluteForm.startsWith(absPrefix)) {
+        return matchedProtectedPath(filePath, prefix);
+      }
+    }
+    // Absolute-form prefixes (no tilde): check against absolute form.
+    if (!prefix.startsWith("~/") && absoluteForm.startsWith(prefix)) {
+      return matchedProtectedPath(filePath, prefix);
     }
   }
   return null;
+}
+
+function matchedProtectedPath(original: string, prefix: string): AcceptEditsGateResult {
+  return {
+    blocked: true,
+    constraint: "config_change",
+    reason:
+      `Write to protected config path "${original}" (matches ${prefix}) is blocked under acceptEdits. ` +
+      "Ask the user for explicit confirmation before editing OpenClaw / Claude config files.",
+  };
 }
 
 // ---------------------------------------------------------------

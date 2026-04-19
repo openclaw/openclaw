@@ -235,6 +235,35 @@ describe("checkAcceptEditsConstraint — self-restart (blocked)", () => {
     ).toBe(false);
   });
 
+  it("blocks pipe-chained `pgrep openclaw | xargs kill` (wave-1 fix)", () => {
+    // The `kill` side has no openclaw word; without the pgrep
+    // pattern the kill-combined-with-openclaw regex misses it.
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: "pgrep openclaw | xargs kill -9",
+    });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("self_restart");
+  });
+
+  it("blocks `kill $(pgrep openclaw)` subshell form (wave-1 fix)", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "kill $(pgrep openclaw)",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks backtick form `kill `pgrep gateway`` (wave-1 fix)", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "kill `pgrep gateway`",
+      }).blocked,
+    ).toBe(true);
+  });
+
   it("blocks `scripts/restart-mac.sh`", () => {
     expect(
       checkAcceptEditsConstraint({
@@ -335,6 +364,36 @@ describe("checkAcceptEditsConstraint — config change (blocked)", () => {
         filePath: "~/.openclaw-personal-notes/todo.md",
       }).blocked,
     ).toBe(false);
+  });
+
+  it("blocks absolute $HOME form that expands to `~/.openclaw/` (wave-1 fix)", () => {
+    const home = process.env.HOME;
+    if (!home) {
+      // Skip on hosts without HOME (CI edge case)
+      return;
+    }
+    const r = checkAcceptEditsConstraint({
+      toolName: "write",
+      filePath: `${home}/.openclaw/config.toml`,
+    });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("config_change");
+  });
+
+  it("blocks `..` traversal that resolves into `~/.openclaw/` (wave-1 fix)", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "write",
+      filePath: "~/.openclaw/subdir/../config.toml",
+    });
+    expect(r.blocked).toBe(true);
+  });
+
+  it("blocks multi-segment traversal back into `~/.openclaw/` (wave-1 fix)", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "edit",
+      filePath: "~/unrelated/../.openclaw/config.toml",
+    });
+    expect(r.blocked).toBe(true);
   });
 });
 
