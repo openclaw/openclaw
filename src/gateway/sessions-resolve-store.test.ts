@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { saveSessionStore } from "../config/sessions.js";
+import { resolveStorePath, saveSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { ErrorCodes } from "./protocol/index.js";
@@ -57,6 +57,48 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         resolveSessionKeyFromResolveParams({
           cfg,
           p: { sessionId: "sess-stale-main" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'Agent "main" no longer exists in configuration',
+        },
+      });
+    });
+  });
+
+  it("does not adopt legacy main aliases from discovered deleted-agent stores", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-discovered-main-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "ops", default: true }] },
+      };
+      const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      await saveSessionStore(staleMainStorePath, {
+        "agent:main:main": {
+          sessionId: "sess-discovered-main",
+          label: "discovered-main",
+          updatedAt: 1,
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-discovered-main" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'Agent "main" no longer exists in configuration',
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "discovered-main" },
         }),
       ).resolves.toEqual({
         ok: false,

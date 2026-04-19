@@ -34,9 +34,14 @@ function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
 function shouldRemapLegacyDefaultMainAlias(
   cfg: OpenClawConfig,
   parsed: ParsedAgentSessionKey,
+  options?: { storeAgentId?: string },
 ): boolean {
   const agentId = normalizeAgentId(parsed.agentId);
   if (agentId !== DEFAULT_AGENT_ID || listAgentIds(cfg).includes(DEFAULT_AGENT_ID)) {
+    return false;
+  }
+  const defaultAgentId = resolveDefaultStoreAgentId(cfg);
+  if (options?.storeAgentId && normalizeAgentId(options.storeAgentId) !== defaultAgentId) {
     return false;
   }
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
@@ -48,8 +53,9 @@ function resolveParsedSessionStoreKey(
   cfg: OpenClawConfig,
   raw: string,
   parsed: ParsedAgentSessionKey,
+  options?: { storeAgentId?: string },
 ): { agentId: string; sessionKey: string } {
-  if (!shouldRemapLegacyDefaultMainAlias(cfg, parsed)) {
+  if (!shouldRemapLegacyDefaultMainAlias(cfg, parsed, options)) {
     return {
       agentId: normalizeAgentId(parsed.agentId),
       sessionKey: normalizeLowercaseStringOrEmpty(raw),
@@ -63,6 +69,7 @@ function resolveParsedSessionStoreKey(
 export function resolveSessionStoreKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  storeAgentId?: string;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   if (!raw) {
@@ -75,7 +82,9 @@ export function resolveSessionStoreKey(params: {
 
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
-    const resolved = resolveParsedSessionStoreKey(params.cfg, raw, parsed);
+    const resolved = resolveParsedSessionStoreKey(params.cfg, raw, parsed, {
+      storeAgentId: params.storeAgentId,
+    });
     const canonical = canonicalizeMainSessionAlias({
       cfg: params.cfg,
       agentId: resolved.agentId,
@@ -121,7 +130,11 @@ export function resolveStoredSessionKeyForAgentStore(params: {
     return lowered;
   }
   const key = parseAgentSessionKey(raw) ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
-  return resolveSessionStoreKey({ cfg: params.cfg, sessionKey: key });
+  return resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: key,
+    storeAgentId: params.agentId,
+  });
 }
 
 export function resolveStoredSessionOwnerAgentId(params: {
