@@ -62,4 +62,4 @@ Extensions can schedule durable work via the Plugin SDK:
 import { MinionQueue, MinionStore } from "openclaw/plugin-sdk/minions-runtime";
 ```
 
-See [Plugin SDK: Minions](/plugins/sdk-minions) for the full contract.
+See the `openclaw/plugin-sdk/minions-runtime` export for the full contract.
