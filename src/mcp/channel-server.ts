@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
@@ -63,6 +64,11 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
 }
 
 export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}): Promise<void> {
+  // MCP stdio requires stdout to stay protocol-only.
+  // Route all log output (including config warnings from loadConfig()) to stderr
+  // so that non-JSON text never pollutes the JSON-RPC message stream.
+  routeLogsToStderr();
+
   const { server, start, close } = await createOpenClawChannelMcpServer(opts);
   const transport = new StdioServerTransport();
 
