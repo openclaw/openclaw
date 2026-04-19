@@ -1243,6 +1243,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `embeddedHarness`: default low-level embedded agent runtime policy. Use `runtime: "auto"` to let registered plugin harnesses claim supported models, `runtime: "pi"` to force the built-in PI harness, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
+- `contextTokens`: runtime context budget cap applied to the default model. Overrides the provider's built-in default without changing native model metadata. For example, `openai-codex/gpt-5.4` defaults to a `272000` runtime cap against its native `1050000` window; set `contextTokens: 1050000` to use the full window.
 
 ### `agents.defaults.embeddedHarness`
 

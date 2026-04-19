@@ -131,19 +131,19 @@ Choose your preferred auth method and follow the setup steps.
     - Native `contextWindow`: `1050000`
     - Default runtime `contextTokens` cap: `272000`
 
-    The smaller default cap has better latency and quality characteristics in practice. Override it with `contextTokens`:
+    The smaller default cap has better latency and quality characteristics in practice. Override it globally with `agents.defaults.contextTokens`:
 
     ```json5
     {
-      models: {
-        providers: {
-          "openai-codex": {
-            models: [{ id: "gpt-5.4", contextTokens: 160000 }],
-          },
+      agents: {
+        defaults: {
+          contextTokens: 1050000,
         },
       },
     }
     ```
+
+    For a per-model override on a custom (non-OAuth) provider, use `models.providers.*.models[].contextTokens` instead. OAuth-backed providers like `openai-codex` are auto-configured and do not accept partial entries in `models.providers`.
 
     <Note>
     Use `contextWindow` to declare native model metadata. Use `contextTokens` to limit the runtime context budget.
