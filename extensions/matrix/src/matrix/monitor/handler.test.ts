@@ -1841,6 +1841,41 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks a DM sender after live wildcard removal", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["*"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["*"],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-wildcard-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dm.allowFrom = [];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-wildcard-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("uses account-scoped live dm.allowFrom overrides", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {

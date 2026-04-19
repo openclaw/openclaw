@@ -216,14 +216,8 @@ function isMatrixHotReloadAllowlistEntry(entry: string): boolean {
 function resolveEffectiveMatrixLiveAllowlist(params: {
   liveEntries?: ReadonlyArray<string | number>;
   startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
-  fallbackEntries?: readonly string[];
 }): string[] {
   const liveEntries = normalizeConfiguredMatrixAllowlistEntries(params.liveEntries);
-  const startupResolvedEntries = params.startupResolvedEntries ?? [];
-  if (liveEntries.length === 0 && startupResolvedEntries.length === 0) {
-    return [...(params.fallbackEntries ?? [])];
-  }
-
   const liveInputs = new Set(liveEntries);
   const effective: string[] = [];
   const seen = new Set<string>();
@@ -245,7 +239,7 @@ function resolveEffectiveMatrixLiveAllowlist(params: {
       add(entry);
     }
   }
-  for (const entry of startupResolvedEntries) {
+  for (const entry of params.startupResolvedEntries ?? []) {
     if (liveInputs.has(entry.input)) {
       add(entry.id);
     }
@@ -420,9 +414,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     runtime,
     logger,
     logVerboseMessage,
-    allowFrom,
     allowFromResolvedEntries = [],
-    groupAllowFrom = [],
     groupAllowFromResolvedEntries = [],
     roomsConfig,
     accountAllowBots,
@@ -713,12 +705,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const liveDmAllowFrom = resolveEffectiveMatrixLiveAllowlist({
           liveEntries: liveAccountAllowlists.dmAllowFrom,
           startupResolvedEntries: allowFromResolvedEntries,
-          fallbackEntries: allowFrom,
         });
         const liveGroupAllowFrom = resolveEffectiveMatrixLiveAllowlist({
           liveEntries: liveAccountAllowlists.groupAllowFrom,
           startupResolvedEntries: groupAllowFromResolvedEntries,
-          fallbackEntries: groupAllowFrom,
         });
         const accessState = resolveMatrixMonitorAccessState({
           allowFrom: liveDmAllowFrom,
