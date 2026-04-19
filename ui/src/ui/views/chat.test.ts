@@ -1324,6 +1324,47 @@ describe("chat view", () => {
     expect(labels).not.toContain("Subagent:");
   });
 
+  it("hides synthetic transport display names in selector fallbacks", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:control-tower:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:control-tower:main",
+          kind: "direct",
+          updatedAt: null,
+          displayName: "webchat:g-agent-control-tower-main",
+        },
+        {
+          key: "agent:control-tower:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          kind: "direct",
+          updatedAt: null,
+          displayName:
+            "webchat:g-agent-control-tower-subagent-4f2146de-887b-4176-9abe-91140082959b",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
+    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
+      option.textContent?.trim(),
+    );
+
+    expect(labels).toContain("main");
+    expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+    expect(labels).not.toContain("webchat:g-agent-control-tower-main");
+    expect(labels).not.toContain(
+      "webchat:g-agent-control-tower-subagent-4f2146de-887b-4176-9abe-91140082959b",
+    );
+  });
+
   it("keeps a unique scoped fallback when a grouped session row has no label or displayName", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";

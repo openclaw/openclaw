@@ -818,15 +818,24 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function isSyntheticTransportSessionName(value: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized) {
+    return false;
+  }
+  return /^[a-z0-9_-]+:g-agent-[a-z0-9_-]+-(main|subagent-.+)$/.test(normalized);
+}
+
 /**
  * Parse a session key to extract type information and a human-readable
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
+  const parsedAgentKey = parseAgentSessionKey(key);
 
   // ── Main session ─────────────────────────────────
-  if (key === "main" || key === "agent:main:main") {
+  if (key === "main" || key === "agent:main:main" || parsedAgentKey?.rest === "main") {
     return { prefix: "", fallbackName: "Main Session" };
   }
 
@@ -874,6 +883,8 @@ export function resolveSessionDisplayName(
 ): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const visibleLabel = isSyntheticTransportSessionName(label) ? "" : label;
+  const visibleDisplayName = isSyntheticTransportSessionName(displayName) ? "" : displayName;
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -884,11 +895,11 @@ export function resolveSessionDisplayName(
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
-  if (label && label !== key) {
-    return applyTypedPrefix(label);
+  if (visibleLabel && visibleLabel !== key) {
+    return applyTypedPrefix(visibleLabel);
   }
-  if (displayName && displayName !== key) {
-    return applyTypedPrefix(displayName);
+  if (visibleDisplayName && visibleDisplayName !== key) {
+    return applyTypedPrefix(visibleDisplayName);
   }
   return fallbackName;
 }
@@ -1097,7 +1108,12 @@ function resolveSessionScopedOptionLabel(
 
   const label = normalizeOptionalString(row.label) ?? "";
   const displayName = normalizeOptionalString(row.displayName) ?? "";
-  if ((label && label !== key) || (displayName && displayName !== key)) {
+  const visibleLabel = isSyntheticTransportSessionName(label) ? "" : label;
+  const visibleDisplayName = isSyntheticTransportSessionName(displayName) ? "" : displayName;
+  if (
+    (visibleLabel && visibleLabel !== key) ||
+    (visibleDisplayName && visibleDisplayName !== key)
+  ) {
     return resolveSessionDisplayName(key, row);
   }
 

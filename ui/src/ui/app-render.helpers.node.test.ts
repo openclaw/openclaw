@@ -220,6 +220,30 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("Discord Session");
   });
 
+  it("ignores synthetic transport display names for main agent sessions", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:control-tower:main",
+        row({
+          key: "agent:control-tower:main",
+          displayName: "webchat:g-agent-control-tower-main",
+        }),
+      ),
+    ).toBe("Main Session");
+  });
+
+  it("ignores synthetic transport display names for subagent sessions", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:control-tower:subagent:abc-123",
+        row({
+          key: "agent:control-tower:subagent:abc-123",
+          displayName: "webchat:g-agent-control-tower-subagent-abc-123",
+        }),
+      ),
+    ).toBe("Subagent:");
+  });
+
   it("trims label and displayName", () => {
     expect(resolveSessionDisplayName("k", row({ key: "k", label: "  General  " }))).toBe("General");
     expect(resolveSessionDisplayName("k", row({ key: "k", displayName: "  My Chat  " }))).toBe(
