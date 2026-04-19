@@ -597,12 +597,21 @@ export function buildCronPayload(form: CronFormState) {
   return payload;
 }
 
-function normalizePersistedDeliveryChannel(value: string) {
+function normalizePersistedDeliveryChannel(
+  value: string,
+  options: { preserveLastOnUpdate?: boolean } = {},
+) {
   const channel = value.trim();
-  return channel && channel !== CRON_CHANNEL_LAST ? channel : undefined;
+  if (!channel) {
+    return undefined;
+  }
+  if (channel === CRON_CHANNEL_LAST) {
+    return options.preserveLastOnUpdate ? CRON_CHANNEL_LAST : undefined;
+  }
+  return channel;
 }
 
-function buildFailureAlert(form: CronFormState) {
+function buildFailureAlert(form: CronFormState, existingChannel?: string | undefined) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
@@ -620,7 +629,9 @@ function buildFailureAlert(form: CronFormState) {
   const accountId = form.failureAlertAccountId.trim();
   const patch: Record<string, unknown> = {
     after: after > 0 ? Math.floor(after) : undefined,
-    channel: normalizePersistedDeliveryChannel(form.failureAlertChannel),
+    channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
+      preserveLastOnUpdate: Boolean(existingChannel),
+    }),
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
   };
@@ -666,7 +677,9 @@ export async function addCronJob(state: CronState) {
             mode: selectedDeliveryMode,
             channel:
               selectedDeliveryMode === "announce"
-                ? normalizePersistedDeliveryChannel(form.deliveryChannel)
+                ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
+                    preserveLastOnUpdate: Boolean(editingJob?.delivery?.channel),
+                  })
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
             accountId:
@@ -676,7 +689,12 @@ export async function addCronJob(state: CronState) {
         : selectedDeliveryMode === "none"
           ? ({ mode: "none" } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(form);
+    const failureAlert = buildFailureAlert(
+      form,
+      editingJob?.failureAlert && typeof editingJob.failureAlert === "object"
+        ? editingJob.failureAlert.channel
+        : undefined,
+    );
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
