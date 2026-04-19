@@ -33,4 +33,16 @@ describe("TtsConfigSchema openai speed and instructions", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts xAI bridge config", () => {
+    const parsed = TtsConfigSchema.parse({
+      xai: {
+        apiKey: "key",
+        baseUrl: "https://api.x.ai/v1",
+        model: "gpt-4o-mini-tts",
+        voiceId: "alloy",
+      },
+    });
+    expect(parsed.xai?.voiceId).toBe("alloy");
+  });
 });

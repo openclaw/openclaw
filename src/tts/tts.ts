@@ -116,6 +116,17 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
+  xai: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voiceId: string;
+    voice?: string;
+    language?: string;
+    sampleRate?: number;
+    bitRate?: number;
+    outputFormat: "mp3" | "wav" | "pcm" | "mulaw" | "ulaw" | "alaw";
+  };
   edge: {
     enabled: boolean;
     voice: string;
@@ -161,6 +172,15 @@ export type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+  };
+  xai?: {
+    model?: string;
+    voiceId?: string;
+    voice?: string;
+    language?: string;
+    sampleRate?: number;
+    bitRate?: number;
+    outputFormat?: "mp3" | "wav" | "pcm" | "mulaw" | "ulaw" | "alaw";
   };
   elevenlabs?: {
     voiceId?: string;
@@ -305,6 +325,24 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    xai: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.xai?.apiKey,
+        path: "messages.tts.xai.apiKey",
+      }),
+      baseUrl: (
+        raw.xai?.baseUrl?.trim() ||
+        process.env.XAI_TTS_BASE_URL?.trim() ||
+        "https://api.x.ai/v1"
+      ).replace(/\/+$/, ""),
+      model: raw.xai?.model?.trim() || "grok-3-mini-tts",
+      voiceId: raw.xai?.voiceId?.trim() || raw.xai?.voice?.trim() || "Asteria",
+      voice: raw.xai?.voice?.trim() || undefined,
+      language: raw.xai?.language?.trim() || undefined,
+      sampleRate: raw.xai?.sampleRate,
+      bitRate: raw.xai?.bitRate,
+      outputFormat: raw.xai?.outputFormat ?? "mp3",
     },
     edge: {
       enabled: rawMicrosoft.enabled ?? true,
@@ -458,6 +496,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "xai")) {
+    return "xai";
+  }
   return "microsoft";
 }
 
@@ -526,10 +567,13 @@ export function resolveTtsApiKey(
   if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (normalizedProvider === "xai") {
+    return config.xai.apiKey || process.env.XAI_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "xai", "microsoft"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;

@@ -66,6 +66,18 @@ export type TtsConfig = {
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
   };
+  /** xAI configuration. */
+  xai?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voiceId?: string;
+    voice?: string;
+    language?: string;
+    sampleRate?: number;
+    bitRate?: number;
+    outputFormat?: "mp3" | "wav" | "pcm" | "mulaw" | "ulaw" | "alaw";
+  };
   /** Legacy alias for Microsoft speech configuration. */
   edge?: {
     /** Explicitly allow Microsoft speech usage (no API key required). */

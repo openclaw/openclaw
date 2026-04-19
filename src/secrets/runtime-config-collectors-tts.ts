@@ -43,4 +43,19 @@ export function collectTtsApiKeyAssignments(params: {
       },
     });
   }
+  const xai = params.tts.xai;
+  if (isRecord(xai)) {
+    collectSecretInputAssignment({
+      value: xai.apiKey,
+      path: `${params.pathPrefix}.xai.apiKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        xai.apiKey = value;
+      },
+    });
+  }
 }

@@ -39,6 +39,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         prefsPath,
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
+        hasXaiKey: Boolean(resolveTtsApiKey(config, "xai")),
         microsoftEnabled: isTtsProviderConfigured(config, "microsoft", cfg),
       });
     } catch (err) {
@@ -111,7 +112,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use a registered TTS provider id such as openai, elevenlabs, or microsoft.",
+          "Invalid provider. Use a registered TTS provider id such as openai, elevenlabs, xai, or microsoft.",
         ),
       );
       return;
