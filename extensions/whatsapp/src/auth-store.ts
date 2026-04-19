@@ -12,6 +12,8 @@ import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity
 import { resolveUserPath, type WebChannel } from "./text-runtime.js";
 export { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath };
 
+const ACTIVE_CREDS_WRITE_GRACE_MS = 10_000;
+
 export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
@@ -33,6 +35,15 @@ export function readCredsJsonRaw(filePath: string): string | null {
   }
 }
 
+function wasRecentlyModified(filePath: string, nowMs = Date.now()): boolean {
+  try {
+    const stats = fsSync.statSync(filePath);
+    return nowMs - stats.mtimeMs < ACTIVE_CREDS_WRITE_GRACE_MS;
+  } catch {
+    return false;
+  }
+}
+
 export function maybeRestoreCredsFromBackup(authDir: string): void {
   const logger = getChildLogger({ module: "web-session" });
   try {
@@ -42,6 +53,11 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     if (raw) {
       // Validate that creds.json is parseable.
       JSON.parse(raw);
+      return;
+    }
+
+    if (wasRecentlyModified(credsPath) || wasRecentlyModified(authDir)) {
+      logger.debug({ credsPath }, "skipped WhatsApp creds backup restore during active write");
       return;
     }
 

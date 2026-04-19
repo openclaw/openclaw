@@ -33,6 +33,7 @@ import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
+const RECENT_UPSERT_GRACE_MS = 60_000;
 
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
@@ -48,6 +49,16 @@ function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
 
 function isNonEmptyString(value: string | undefined): value is string {
   return Boolean(value);
+}
+
+function getMessageTimestampMs(msg: WAMessage): number {
+  const msgTsRaw = msg.messageTimestamp;
+  const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
+  return Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+}
+
+function isRecentUpsertMessage(msg: WAMessage, connectedAtMs: number): boolean {
+  return getMessageTimestampMs(msg) >= connectedAtMs - RECENT_UPSERT_GRACE_MS;
 }
 
 export type MonitorWebInboxOptions = {
@@ -567,10 +578,35 @@ export async function attachWebInboxToSocket(
   };
 
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
-    if (upsert.type !== "notify" && upsert.type !== "append") {
-      return;
+    const messages = upsert.messages ?? [];
+    const upsertType = upsert.type ?? "unknown";
+    if (messages.length > 0) {
+      inboundLogger.info(
+        {
+          type: upsertType,
+          messageCount: messages.length,
+          recentMessageCount: messages.filter((msg) => isRecentUpsertMessage(msg, connectedAtMs))
+            .length,
+        },
+        "received WhatsApp messages.upsert",
+      );
     }
-    for (const msg of upsert.messages ?? []) {
+    if (upsert.type !== "notify" && upsert.type !== "append") {
+      if (!messages.some((msg) => isRecentUpsertMessage(msg, connectedAtMs))) {
+        if (messages.length > 0) {
+          inboundLogger.info(
+            { type: upsertType, messageCount: messages.length },
+            "skipped stale WhatsApp messages.upsert with unexpected type",
+          );
+        }
+        return;
+      }
+      inboundLogger.warn(
+        { type: upsertType, messageCount: messages.length },
+        "processing recent WhatsApp messages.upsert with unexpected type",
+      );
+    }
+    for (const msg of messages) {
       recordChannelActivity({
         channel: "whatsapp",
         accountId: options.accountId,
@@ -584,12 +620,8 @@ export async function attachWebInboxToSocket(
       await maybeMarkInboundAsRead(inbound);
 
       // If this is history/offline catch-up, mark read above but skip auto-reply.
-      if (upsert.type === "append") {
-        const APPEND_RECENT_GRACE_MS = 60_000;
-        const msgTsRaw = msg.messageTimestamp;
-        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
-        const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
+      if (upsert.type !== "notify") {
+        if (!isRecentUpsertMessage(msg, connectedAtMs)) {
           continue;
         }
       }

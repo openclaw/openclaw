@@ -3,7 +3,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { withEnvAsync } from "openclaw/plugin-sdk/testing";
+import {
+  peekSystemEvents,
+  resetSystemEventsForTest,
+  withEnvAsync,
+} from "openclaw/plugin-sdk/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import {
@@ -386,6 +390,44 @@ describe("web auto-reply connection", () => {
     const content = await fs.readFile(logPath, "utf-8");
     expect(content).toMatch(/web-auto-reply/);
     expect(content).toMatch(/auto/);
+  });
+
+  it("keeps WhatsApp connection status out of prompts and logs raw inbound text", async () => {
+    const logPath = `/tmp/openclaw-log-test-${crypto.randomUUID()}.log`;
+    setLoggerOverride({ level: "trace", file: logPath });
+    resetSystemEventsForTest();
+
+    const capture = createWebListenerFactoryCapture();
+    const resolver = vi.fn().mockResolvedValue({ text: "auto" });
+    await monitorWebChannel(false, capture.listenerFactory as never, false, resolver as never);
+
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+
+    const capturedOnMessage = capture.getOnMessage();
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hello-clean",
+      from: "+1",
+      conversationId: "+1",
+      to: "+2",
+      accountId: "default",
+      chatType: "direct",
+      chatId: "+1",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply: vi.fn(),
+      sendMedia: vi.fn(),
+    });
+
+    const firstArgs = resolver.mock.calls[0][0];
+    expect(firstArgs.BodyForAgent).toBe("hello-clean");
+    expect(firstArgs.Body).toMatch(/\[WhatsApp \+1/);
+
+    const content = await fs.readFile(logPath, "utf-8");
+    expect(content).toMatch(/"body":"hello-clean"/);
+    expect(content).not.toMatch(/"body":"\[WhatsApp/);
+    expect(content).not.toMatch(/WhatsApp gateway connected/);
   });
 
   it("marks dispatch idle after replies flush", async () => {

@@ -239,7 +239,7 @@ export async function processMessage(params: {
       correlationId,
       from: params.msg.chatType === "group" ? conversationId : params.msg.from,
       to: params.msg.to,
-      body: elide(combinedBody, 240),
+      body: elide(params.msg.body, 240),
       mediaType: params.msg.mediaType ?? null,
       mediaPath: params.msg.mediaPath ?? null,
     },
@@ -249,10 +249,10 @@ export async function processMessage(params: {
   const fromDisplay = params.msg.chatType === "group" ? conversationId : params.msg.from;
   const kindLabel = params.msg.mediaType ? `, ${params.msg.mediaType}` : "";
   whatsappInboundLog.info(
-    `Inbound message ${fromDisplay} -> ${params.msg.to} (${params.msg.chatType}${kindLabel}, ${combinedBody.length} chars)`,
+    `Inbound message ${fromDisplay} -> ${params.msg.to} (${params.msg.chatType}${kindLabel}, ${params.msg.body.length} chars)`,
   );
   if (shouldLogVerbose()) {
-    whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
+    whatsappInboundLog.debug(`Inbound body: ${elide(params.msg.body, 400)}`);
   }
 
   const sender = getSenderIdentity(params.msg);

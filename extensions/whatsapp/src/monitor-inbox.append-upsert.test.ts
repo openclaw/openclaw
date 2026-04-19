@@ -130,4 +130,50 @@ describe("append upsert handling (#20952)", () => {
 
     await listener.close();
   });
+
+  it("processes recent messages for unexpected upsert types", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    const recentTs = Math.floor(Date.now() / 1000) - 5;
+    sock.ev.emit("messages.upsert", {
+      type: "prepend",
+      messages: [
+        {
+          key: { id: "prepend-1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "recent unexpected type" },
+          messageTimestamp: recentTs,
+          pushName: "User",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("skips stale messages for unexpected upsert types", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    const staleTs = Math.floor(Date.now() / 1000) - 300;
+    sock.ev.emit("messages.upsert", {
+      type: "prepend",
+      messages: [
+        {
+          key: { id: "prepend-stale-1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "stale unexpected type" },
+          messageTimestamp: staleTs,
+          pushName: "User",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
 });
