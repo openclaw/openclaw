@@ -9,7 +9,10 @@ let builtinsRegisteredPromise: Promise<void> | null = null;
 let acpDriverModulePromise: Promise<AcpStatefulTargetDriverModule> | undefined;
 
 function loadAcpStatefulTargetDriverModule(): Promise<AcpStatefulTargetDriverModule> {
-  acpDriverModulePromise ??= import("./acp-stateful-target-driver.js");
+  acpDriverModulePromise ??= import("./acp-stateful-target-driver.js").catch((err) => {
+    acpDriverModulePromise = undefined;
+    throw err;
+  });
   return acpDriverModulePromise;
 }
 
