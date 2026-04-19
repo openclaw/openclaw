@@ -1,4 +1,3 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,6 +28,12 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
+  return listPotentialConfiguredChannelIds(cfg, process.env, {
+    includePersistedAuthState: false,
+  }).filter((channelId) => cfg.channels?.[channelId]?.enabled !== false);
+}
+
 function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -38,9 +43,7 @@ function assertConfiguredAnnounceChannel(params: {
     return;
   }
 
-  const configuredChannels = listPotentialConfiguredChannelIds(params.cfg, process.env, {
-    includePersistedAuthState: false,
-  }).toSorted();
+  const configuredChannels = listConfiguredAnnounceChannelIds(params.cfg).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
@@ -90,6 +93,7 @@ function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCr
 
 function assertValidCronUpdateDelivery(params: {
   cfg: OpenClawConfig;
+  defaultAgentId?: string;
   currentJob: CronJob | undefined;
   patch: CronJobPatch;
 }) {
@@ -99,7 +103,7 @@ function assertValidCronUpdateDelivery(params: {
 
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
-    defaultAgentId: resolveDefaultAgentId(params.cfg),
+    defaultAgentId: params.defaultAgentId,
   });
   assertValidCronAnnounceDelivery({
     cfg: params.cfg,
@@ -295,6 +299,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     try {
       assertValidCronUpdateDelivery({
         cfg,
+        defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob: context.cron.getJob(jobId),
         patch,
       });
