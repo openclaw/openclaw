@@ -125,7 +125,7 @@ export async function executeSlashCommand(
     case "redirect":
       return await executeRedirect(client, sessionKey, args, context);
     case "plan":
-      return await executePlan(client, sessionKey, args);
+      return await executePlan(client, sessionKey, args, context);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -172,10 +172,48 @@ function mapPlanCommandError(err: unknown, verb: string): SlashCommandResult {
   return { content: `Failed to ${verb}: ${msg}` };
 }
 
+/**
+ * Codex P1 review #68939 (2026-04-19): look up the live `approvalId`
+ * for a session from the cached `sessionsResult` snapshot so the
+ * webchat /plan accept|revise|answer paths can include it in the
+ * `sessions.patch` call. Pre-fix, the webchat patches omitted
+ * `approvalId` entirely — letting a stale `/plan accept` typed AFTER
+ * the previous plan was resolved silently approve a freshly-submitted
+ * one (race window between approval landing and the next plan
+ * submission). Mirrors the backend `commands-plan.ts` handler which
+ * always threads `planMode.approvalId` (see line 431/447 in that file).
+ *
+ * Returns `undefined` when no live planMode is cached or when no
+ * pending approval exists. The gateway-side handler still validates
+ * `approvalId` server-side; passing `undefined` preserves the prior
+ * looser behavior so this fix is non-breaking when the snapshot is
+ * stale or absent.
+ */
+function resolvePendingApprovalIdFromContext(
+  sessionKey: string,
+  context: SlashCommandContext,
+): string | undefined {
+  const rows = context.sessionsResult?.sessions;
+  if (!Array.isArray(rows)) {
+    return undefined;
+  }
+  for (const row of rows) {
+    if (row?.key === sessionKey) {
+      const pm = row.planMode;
+      if (pm && pm.approval === "pending" && typeof pm.approvalId === "string" && pm.approvalId) {
+        return pm.approvalId;
+      }
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 async function executePlan(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const raw = normalizeLowercaseStringOrEmpty(args);
   // PR-8 follow-up: `/plan view` is a UI-only toggle that opens the
@@ -232,10 +270,14 @@ async function executePlan(
   // every other channel (Telegram/Discord/Slack/etc).
   if (raw === "accept" || raw.startsWith("accept ")) {
     const allowEdits = raw === "accept edits" || raw === "accept edit";
+    const approvalId = resolvePendingApprovalIdFromContext(sessionKey, context);
     try {
       await client.request("sessions.patch", {
         key: sessionKey,
-        planApproval: { action: allowEdits ? "edit" : "approve" },
+        planApproval: {
+          action: allowEdits ? "edit" : "approve",
+          ...(approvalId ? { approvalId } : {}),
+        },
       });
       return {
         content: allowEdits
@@ -255,10 +297,11 @@ async function executePlan(
           "Usage: `/plan revise <feedback>` — give the agent something to revise toward, e.g. `/plan revise add error handling for the websocket reconnect`.",
       };
     }
+    const approvalId = resolvePendingApprovalIdFromContext(sessionKey, context);
     try {
       await client.request("sessions.patch", {
         key: sessionKey,
-        planApproval: { action: "reject", feedback },
+        planApproval: { action: "reject", feedback, ...(approvalId ? { approvalId } : {}) },
       });
       return {
         content: `Plan returned for revision with feedback: "${feedback}"`,
@@ -275,10 +318,11 @@ async function executePlan(
         content: "Usage: `/plan answer <text>` — answer the agent's `ask_user_question` prompt.",
       };
     }
+    const approvalId = resolvePendingApprovalIdFromContext(sessionKey, context);
     try {
       await client.request("sessions.patch", {
         key: sessionKey,
-        planApproval: { action: "answer", answer },
+        planApproval: { action: "answer", answer, ...(approvalId ? { approvalId } : {}) },
       });
       return { content: `Question answered: "${answer}"`, action: "refresh" };
     } catch (err) {

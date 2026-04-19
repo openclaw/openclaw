@@ -172,11 +172,17 @@ function readPlanSteps(params: Record<string, unknown>): ExitPlanModeStep[] {
       );
     }
     const activeForm = readStringParam(stepParams, "activeForm");
-    return {
+    // oxc no-map-spread: build the step record with conditional
+    // assignment instead of conditional spread to avoid per-iteration
+    // object allocations from `...(cond ? { … } : {})`.
+    const stepRecord: { step: string; status: PlanStepStatus; activeForm?: string } = {
       step,
       status: status as PlanStepStatus,
-      ...(activeForm ? { activeForm } : {}),
     };
+    if (activeForm) {
+      stepRecord.activeForm = activeForm;
+    }
+    return stepRecord;
   });
   const inProgressCount = steps.filter((entry) => entry.status === "in_progress").length;
   if (inProgressCount > 1) {

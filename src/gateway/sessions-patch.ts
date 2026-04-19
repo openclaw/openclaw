@@ -783,14 +783,30 @@ export async function applySessionsPatchToStore(params: {
         // PR-10 auto-mode: preserve `autoApprove` flag across the close
         // so the next enter_plan_mode keeps the toggle. Without this
         // the user would have to re-toggle every plan cycle.
+        //
+        // Codex P2 review #68939 (2026-04-19): also preserve
+        // `lastPlanSteps` and `title` across the autoApprove close.
+        // Pre-fix, approving with autoApprove ON dropped the stored
+        // plan snapshot, so the live-plan sidebar would empty out the
+        // moment the auto-approval landed even though the agent was
+        // still mid-execution against those steps. Mirror the manual
+        // `/plan off` path's "do not clear lastPlanSteps" semantics
+        // (per the comment block 30 lines below); only an explicit
+        // /new (sessions.reset) drops the snapshot.
         const preservedAutoApprove = next.planMode.autoApprove;
         if (preservedAutoApprove) {
+          const preservedLastPlanSteps = next.planMode.lastPlanSteps;
+          const preservedTitle = next.planMode.title;
           next.planMode = {
             mode: "normal",
             approval: "none",
             rejectionCount: 0,
             updatedAt: now,
             autoApprove: true,
+            ...(preservedLastPlanSteps !== undefined
+              ? { lastPlanSteps: preservedLastPlanSteps }
+              : {}),
+            ...(preservedTitle !== undefined ? { title: preservedTitle } : {}),
             // Note: `nudgeJobIds` is NOT carried forward — they were
             // just cancelled above. The next enter_plan_mode will
             // schedule a fresh batch.

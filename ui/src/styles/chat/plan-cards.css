@@ -36,6 +36,19 @@
   background: var(--bg-hover, rgba(255, 255, 255, 0.04));
 }
 
+/* Copilot review #68939 (2026-04-19): a11y — `<summary>` is keyboard-
+ * focusable as the disclosure control, but the prior CSS only had a
+ * hover affordance, leaving keyboard navigation untracked. Add a
+ * `:focus-visible` outline using existing accent/border tokens so
+ * keyboard users can see the focused card. `:focus-visible` (vs
+ * `:focus`) avoids the outline showing on mouse click, matching the
+ * focus-ring conventions used elsewhere in the UI. */
+.chat-plan-card summary:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: -2px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+}
+
 .chat-plan-card__icon {
   flex-shrink: 0;
   width: 16px;

@@ -1568,7 +1568,19 @@ export type TelegramDocumentOpts = {
   gatewayClientScopes?: readonly string[];
   /** Caption shown beneath the file in the chat. Truncated to 1024 chars. */
   caption?: string;
-  /** Defaults to "HTML". Pass "MarkdownV2" or omit/empty to disable. */
+  /**
+   * Caption parse mode. Defaults to "HTML" when a non-empty caption is
+   * present (so the universal /plan resolution hint can use `<code>`
+   * markup). Pass `"MarkdownV2"` to switch formats. There is no
+   * "disable parse_mode" path while a caption is present — Telegram
+   * will receive `parse_mode: <this value>` whenever a caption is
+   * attached. When no caption is present, no `parse_mode` is sent.
+   *
+   * Copilot review #68939 (2026-04-19): docstring previously claimed
+   * "omit/empty to disable" which contradicted both the type union
+   * (no falsy value accepted) and the implementation (`?? (caption ?
+   * "HTML" : undefined)` always produces a value when caption is set).
+   */
   parseMode?: "HTML" | "MarkdownV2";
   /** Disable the upload + caption notification (silent attachment). */
   silent?: boolean;

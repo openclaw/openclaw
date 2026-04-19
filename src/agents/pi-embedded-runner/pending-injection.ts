@@ -38,10 +38,17 @@ export interface ConsumePendingAgentInjectionResult {
  * Atomically reads and clears `SessionEntry.pendingAgentInjection`.
  *
  * Returns the cleared value (or `undefined` if nothing was pending).
- * Best-effort — if the store write fails, returns the value that was
- * read so the caller can still inject; the field will be cleared on
- * the next successful write or remain set until then. The
- * once-and-only-once guarantee is honored on the happy path.
+ *
+ * Copilot review #68939 (2026-04-19): docstring rewritten to match
+ * the implementation's actual behavior. On the happy path
+ * (`updateSessionStoreEntry` succeeds), returns the value that was
+ * captured before the in-place delete. On ANY error inside the
+ * try-block (read OR write failure), returns `{ text: undefined }`
+ * — the caller does not get a stale value to inject. This favors the
+ * once-and-only-once guarantee: if we cannot prove the field was
+ * cleared on disk, we drop the value entirely so a subsequent
+ * agent-run retry won't double-inject. Operators see the warn-log
+ * line for any disk failure path.
  */
 export async function consumePendingAgentInjection(
   sessionKey: string,
