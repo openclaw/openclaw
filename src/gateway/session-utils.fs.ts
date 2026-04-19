@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -90,57 +91,234 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+const GENERATED_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function looksLikeGeneratedSessionId(value: string): boolean {
+  return GENERATED_SESSION_ID_RE.test(value);
+}
+
+type SessionMessagesStoreContext = {
+  sessionsDir: string;
+  key?: string;
+  entry?: unknown;
+};
+
+function resolveSessionMessagesStoreContext(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): SessionMessagesStoreContext | null {
+  if (!storePath) {
+    return null;
+  }
+  const sessionsDir = path.dirname(storePath);
+  try {
+    const store = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    if (!store || typeof store !== "object" || Array.isArray(store)) {
+      return { sessionsDir };
+    }
+    const targetSessionFile =
+      typeof sessionFile === "string" && sessionFile.trim()
+        ? path.resolve(sessionFile.trim())
+        : null;
+    for (const [key, value] of Object.entries(store)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const record = value as Record<string, unknown>;
+      if (record.sessionId !== sessionId) {
+        continue;
+      }
+      const entrySessionFile =
+        typeof record.sessionFile === "string" && record.sessionFile.trim()
+          ? path.resolve(record.sessionFile.trim())
+          : null;
+      if (targetSessionFile && entrySessionFile && entrySessionFile !== targetSessionFile) {
+        continue;
+      }
+      return {
+        key,
+        entry: value,
+        sessionsDir,
+      };
+    }
+  } catch {
+    // ignore malformed or unreadable sessions store
+  }
+  return { sessionsDir };
+}
+
+function listExistingTranscriptVariantsForSessionId(
+  sessionId: string,
+  sessionsDir: string,
+): string[] {
+  if (!sessionsDir || !looksLikeGeneratedSessionId(sessionId)) {
+    return [];
+  }
+  try {
+    return fs
+      .readdirSync(sessionsDir)
+      .filter((name) => name === `${sessionId}.jsonl` || name.startsWith(`${sessionId}.jsonl.`))
+      .filter((name) => !name.endsWith(".lock"))
+      .map((name) => path.join(sessionsDir, name))
+      .filter((filePath) => fs.existsSync(filePath))
+      .toSorted((a, b) => {
+        try {
+          return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
+        } catch {
+          return a.localeCompare(b);
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+function resolveMainSessionTranscriptFiles(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): string[] | null {
+  const context = resolveSessionMessagesStoreContext(sessionId, storePath, sessionFile);
+  if (!context?.sessionsDir || context.key !== "agent:main:main") {
+    return null;
+  }
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const pushFile = (filePath: string): void => {
+    const normalized = path.resolve(filePath);
+    if (seen.has(normalized) || !fs.existsSync(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    files.push(normalized);
+  };
+  const resetFiles: string[] = (() => {
+    try {
+      return fs
+        .readdirSync(context.sessionsDir)
+        .filter((name) => name.includes(".jsonl.reset."))
+        .map((name) => path.join(context.sessionsDir, name))
+        .filter((filePath) => fs.existsSync(filePath))
+        .toSorted((a, b) => {
+          try {
+            return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
+          } catch {
+            return a.localeCompare(b);
+          }
+        });
+    } catch {
+      return [];
+    }
+  })();
+  const latestReset = resetFiles[resetFiles.length - 1];
+  if (latestReset) {
+    pushFile(latestReset);
+  }
+  const entry = context.entry as Record<string, unknown> | undefined;
+  const rawCheckpoints = entry?.compactionCheckpoints;
+  const checkpointSessionIds = Array.isArray(rawCheckpoints)
+    ? rawCheckpoints
+        .map((checkpoint) => {
+          if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+            return null;
+          }
+          const checkpointRecord = checkpoint as Record<string, unknown>;
+          return typeof checkpointRecord.sessionId === "string" ? checkpointRecord.sessionId : null;
+        })
+        .filter((value): value is string => typeof value === "string")
+    : [];
+  const orderedSessionIds = Array.from(
+    new Set(
+      [...checkpointSessionIds, sessionId].filter((value) => looksLikeGeneratedSessionId(value)),
+    ),
+  );
+  for (const chainedSessionId of orderedSessionIds) {
+    for (const filePath of listExistingTranscriptVariantsForSessionId(
+      chainedSessionId,
+      context.sessionsDir,
+    )) {
+      pushFile(filePath);
+    }
+  }
+  if (files.length === 0) {
+    return null;
+  }
+  return files.toSorted((a, b) => {
+    try {
+      return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
+    } catch {
+      return a.localeCompare(b);
+    }
+  });
+}
+
+function resolveTranscriptReadFiles(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): string[] {
+  const chained = resolveMainSessionTranscriptFiles(sessionId, storePath, sessionFile);
+  if (chained && chained.length > 0) {
+    return chained;
+  }
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  return filePath ? [filePath] : [];
+}
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
 ): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
-
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
+  const filePaths = resolveTranscriptReadFiles(sessionId, storePath, sessionFile);
+  if (filePaths.length === 0) {
     return [];
   }
-
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
   const messages: unknown[] = [];
   let messageSeq = 0;
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
-        );
+  for (const filePath of filePaths) {
+    const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) {
         continue;
       }
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.message) {
+          messageSeq += 1;
+          messages.push(
+            attachOpenClawTranscriptMeta(parsed.message, {
+              ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+              seq: messageSeq,
+            }),
+          );
+          continue;
+        }
 
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-            seq: messageSeq,
-          },
-        });
+        // Compaction entries are not "message" records, but they're useful context for debugging.
+        // Emit a lightweight synthetic message that the Web UI can render as a divider.
+        if (parsed?.type === "compaction") {
+          const ts =
+            typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+          const timestamp = Number.isFinite(ts) ? ts : Date.now();
+          messageSeq += 1;
+          messages.push({
+            role: "system",
+            content: [{ type: "text", text: "Compaction" }],
+            timestamp,
+            __openclaw: {
+              kind: "compaction",
+              id: typeof parsed.id === "string" ? parsed.id : undefined,
+              seq: messageSeq,
+            },
+          });
+        }
+      } catch {
+        // ignore bad lines
       }
-    } catch {
-      // ignore bad lines
     }
   }
   return messages;
