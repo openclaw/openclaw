@@ -149,6 +149,43 @@ describe("sessionFileHasContent", () => {
     expect(await sessionFileHasContent(file)).toBe(true);
   });
 
+  it("returns false when a fresh user turn follows a prior answered turn (#69086)", async () => {
+    // Prior round-trip (answered), then a new user message with no assistant
+    // response yet. The guard must NOT mis-classify this as "already
+    // answered" — the reporter's setup had the fallback-retry path injecting
+    // a continuation prompt over a fresh unanswered user question.
+    const file = path.join(tmpDir, "newest-user-unanswered.jsonl");
+    await fs.writeFile(
+      file,
+      [
+        '{"type":"session","id":"s1"}',
+        '{"type":"message","message":{"role":"user","content":"first question"}}',
+        '{"type":"message","message":{"role":"assistant","content":"first answer"}}',
+        '{"type":"message","message":{"role":"user","content":"second question"}}',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(false);
+  });
+
+  it("returns true when an assistant message follows the latest user turn", async () => {
+    const file = path.join(tmpDir, "latest-user-answered.jsonl");
+    await fs.writeFile(
+      file,
+      [
+        '{"type":"session","id":"s1"}',
+        '{"type":"message","message":{"role":"user","content":"q1"}}',
+        '{"type":"message","message":{"role":"assistant","content":"a1"}}',
+        '{"type":"message","message":{"role":"user","content":"q2"}}',
+        '{"type":"message","message":{"role":"assistant","content":"a2"}}',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    expect(await sessionFileHasContent(file)).toBe(true);
+  });
+
   it("returns false when session file is a symbolic link", async () => {
     const realFile = path.join(tmpDir, "real.jsonl");
     await fs.writeFile(

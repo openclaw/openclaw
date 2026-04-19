@@ -12,9 +12,16 @@ import {
 const SESSION_FILE_MAX_RECORDS = 500;
 
 /**
- * Check whether a session transcript file exists and contains at least one
- * assistant message, indicating that the SessionManager has flushed the
- * initial user+assistant exchange to disk.
+ * Check whether a session transcript shows that the latest user message has
+ * already been answered — that is, there exists an assistant message **after**
+ * the most recent user message in the flushed session file.
+ *
+ * This is narrower than "has any assistant message anywhere in the transcript":
+ * the fallback-retry path in attempt-execution needs to decide whether to treat
+ * the current turn as a "continue where you left off" follow-up. A transcript
+ * with only prior-turn assistant messages (and a fresh unanswered user turn on
+ * top) must NOT count as "already answered" — otherwise the retry context gets
+ * injected and the fallback model re-answers a stale turn (#69086).
  */
 export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
   if (!sessionFile) {
@@ -31,6 +38,7 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
     try {
       const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
       let recordCount = 0;
+      let hasAssistantAfterLatestUser = false;
       for await (const line of rl) {
         if (!line.trim()) {
           continue;
@@ -46,14 +54,21 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
           continue;
         }
         const rec = obj as Record<string, unknown> | null;
-        if (
-          rec?.type === "message" &&
-          (rec.message as Record<string, unknown> | undefined)?.role === "assistant"
-        ) {
-          return true;
+        if (rec?.type !== "message") {
+          continue;
+        }
+        const role = (rec.message as Record<string, unknown> | undefined)?.role;
+        if (role === "user") {
+          // A newer user turn has not been answered yet. Reset the guard so
+          // only an assistant message AFTER this line flips it back to true.
+          hasAssistantAfterLatestUser = false;
+          continue;
+        }
+        if (role === "assistant") {
+          hasAssistantAfterLatestUser = true;
         }
       }
-      return false;
+      return hasAssistantAfterLatestUser;
     } finally {
       await fh.close();
     }
