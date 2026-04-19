@@ -161,11 +161,11 @@ export async function processGatewayAllowlist(
   const hasUnquotedHeredocSegment = allowlistEval.segments.some((segment) =>
     segment.argv.some((token) => {
       if (!token.startsWith("<<")) return false;
-      // Quoted heredocs (<<'EOF', <<"EOF", <<-'EOF', <<-"EOF") are safe:
+      // Quoted heredocs (<<'EOF', <<"EOF", <<-'EOF', <<-"EOF", <<\EOF) are safe:
       // no variable/command expansion, just literal stdin content.
       // Only unquoted heredocs need extra approval since $() and `cmd`
       // inside the body get evaluated by the shell.
-      return !/^-?\s*['"]/.test(token.slice(2));
+      return !/^-?\s*['"\\]/.test(token.slice(2));
     }),
   );
   const requiresHeredocApproval =
