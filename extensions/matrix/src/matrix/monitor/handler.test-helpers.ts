@@ -22,7 +22,9 @@ type MatrixHandlerTestHarnessOptions = {
   logger?: RuntimeLogger;
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
+  allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
   groupAllowFrom?: string[];
+  groupAllowFromResolvedEntries?: MatrixMonitorHandlerParams["groupAllowFromResolvedEntries"];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: Set<string>;
@@ -213,7 +215,9 @@ export function createMatrixHandlerTestHarness(
       } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
     allowFrom: options.allowFrom ?? [],
+    allowFromResolvedEntries: options.allowFromResolvedEntries,
     groupAllowFrom: options.groupAllowFrom ?? [],
+    groupAllowFromResolvedEntries: options.groupAllowFromResolvedEntries,
     roomsConfig: options.roomsConfig,
     accountAllowBots: options.accountAllowBots,
     configuredBotUserIds: options.configuredBotUserIds,

@@ -34,9 +34,11 @@ import {
 import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
+import { isMatrixQualifiedUserId } from "../target-ids.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixAllowListMatch } from "./allowlist.js";
+import type { MatrixResolvedAllowlistEntry } from "./config.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
@@ -152,7 +154,9 @@ export type MatrixMonitorHandlerParams = {
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
+  allowFromResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
   groupAllowFrom?: string[];
+  groupAllowFromResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: ReadonlySet<string>;
@@ -188,6 +192,67 @@ export type MatrixMonitorHandlerParams = {
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
 };
+
+function normalizeConfiguredMatrixAllowlistEntries(
+  entries?: ReadonlyArray<string | number>,
+): string[] {
+  const normalized: string[] = [];
+  for (const entry of entries ?? []) {
+    const trimmed = String(entry).trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
+}
+
+function isMatrixHotReloadAllowlistEntry(entry: string): boolean {
+  if (entry === "*") {
+    return true;
+  }
+  return isMatrixQualifiedUserId(normalizeMatrixUserId(entry));
+}
+
+function resolveEffectiveMatrixLiveAllowlist(params: {
+  liveEntries?: ReadonlyArray<string | number>;
+  startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
+  fallbackEntries?: readonly string[];
+}): string[] {
+  const liveEntries = normalizeConfiguredMatrixAllowlistEntries(params.liveEntries);
+  const startupResolvedEntries = params.startupResolvedEntries ?? [];
+  if (liveEntries.length === 0 && startupResolvedEntries.length === 0) {
+    return [...(params.fallbackEntries ?? [])];
+  }
+
+  const liveInputs = new Set(liveEntries);
+  const effective: string[] = [];
+  const seen = new Set<string>();
+  const add = (entry: string) => {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    effective.push(trimmed);
+  };
+
+  for (const entry of liveEntries) {
+    if (isMatrixHotReloadAllowlistEntry(entry)) {
+      add(entry);
+    }
+  }
+  for (const entry of startupResolvedEntries) {
+    if (liveInputs.has(entry.input)) {
+      add(entry.id);
+    }
+  }
+
+  return effective;
+}
 
 function resolveMatrixMentionPrecheckText(params: {
   eventType: string;
@@ -356,7 +421,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logger,
     logVerboseMessage,
     allowFrom,
+    allowFromResolvedEntries = [],
     groupAllowFrom = [],
+    groupAllowFromResolvedEntries = [],
     roomsConfig,
     accountAllowBots,
     configuredBotUserIds = new Set<string>(),
@@ -639,22 +706,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
         const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
-        // Hot-reload: re-read raw allowlist entries from live config on each
-        // inbound message so additions to dm.allowFrom / groupAllowFrom take
-        // effect without restarting the gateway. Display-name resolution still
-        // only runs at startup, so new entries must be full Matrix IDs
-        // (@user:server). Merging with the closure values preserves any
-        // startup-time resolution work.
         const liveAccountCfg = resolveMatrixAccountConfig({
           cfg: core.config.loadConfig() as CoreConfig,
           accountId,
         });
-        const liveDmAllowFrom = (liveAccountCfg.dm?.allowFrom ?? []).map(String);
-        const liveGroupAllowFrom = (liveAccountCfg.groupAllowFrom ?? []).map(String);
+        const liveDmAllowFrom = resolveEffectiveMatrixLiveAllowlist({
+          liveEntries: liveAccountCfg.dm?.allowFrom,
+          startupResolvedEntries: allowFromResolvedEntries,
+          fallbackEntries: allowFrom,
+        });
+        const liveGroupAllowFrom = resolveEffectiveMatrixLiveAllowlist({
+          liveEntries: liveAccountCfg.groupAllowFrom,
+          startupResolvedEntries: groupAllowFromResolvedEntries,
+          fallbackEntries: groupAllowFrom,
+        });
         const accessState = resolveMatrixMonitorAccessState({
-          allowFrom: [...allowFrom, ...liveDmAllowFrom],
+          allowFrom: liveDmAllowFrom,
           storeAllowFrom,
-          groupAllowFrom: [...groupAllowFrom, ...liveGroupAllowFrom],
+          groupAllowFrom: liveGroupAllowFrom,
           roomUsers,
           senderId,
           isRoom,

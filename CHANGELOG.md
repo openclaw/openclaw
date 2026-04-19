@@ -116,6 +116,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
 - Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
 - Matrix/plugins: keep remaining Matrix event helpers on the canonical `matrix-js-sdk` subpath so build and plugin-load entrypoint checks stay consistent. (#68498) Thanks @masatohoshino.
+- Matrix/allowlists: hot-reload `dm.allowFrom` and `groupAllowFrom` entries on inbound messages while keeping config removals authoritative, so Matrix allowlist changes no longer require a channel restart to add or revoke a sender. (#68546) Thanks @johnlanni.
 
 ## 2026.4.15
 

@@ -1741,6 +1741,190 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 });
 
+describe("matrix monitor handler live allowlist reload", () => {
+  it("accepts a DM sender added to live dm.allowFrom", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: [] as string[] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: [],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-add-before",
+        sender: "@alice:example.org",
+        body: "hello",
+      }),
+    );
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    cfg.channels.matrix.dm.allowFrom = ["@alice:example.org"];
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-add-after",
+        sender: "@alice:example.org",
+        body: "hello again",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a DM sender removed from live dm.allowFrom", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["@alice:example.org"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["@alice:example.org"],
+      allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-remove-before",
+        sender: "@alice:example.org",
+        body: "hello",
+      }),
+    );
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dm.allowFrom = [];
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-remove-after",
+        sender: "@alice:example.org",
+        body: "hello again",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps startup-resolved display names only while the raw input remains configured", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["Alice"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["@alice:example.org"],
+      allowFromResolvedEntries: [{ input: "Alice", id: "@alice:example.org" }],
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-name-before",
+        sender: "@alice:example.org",
+        body: "hello",
+      }),
+    );
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dm.allowFrom = [];
+    await handler(
+      "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-name-after",
+        sender: "@alice:example.org",
+        body: "hello again",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a room sender removed from live groupAllowFrom while the group list remains configured", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const cfg = {
+      channels: {
+        matrix: {
+          groupAllowFrom: ["@alice:example.org", "@bob:example.org"],
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      isDirectMessage: false,
+      groupPolicy: "allowlist",
+      roomsConfig: { "*": {} },
+      groupAllowFrom: ["@alice:example.org", "@bob:example.org"],
+      groupAllowFromResolvedEntries: [
+        { input: "@alice:example.org", id: "@alice:example.org" },
+        { input: "@bob:example.org", id: "@bob:example.org" },
+      ],
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$group-remove-before",
+        sender: "@alice:example.org",
+        body: "@room hello",
+        mentions: { room: true },
+      }),
+    );
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.groupAllowFrom = ["@bob:example.org"];
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$group-remove-after",
+        sender: "@alice:example.org",
+        body: "@room hello again",
+        mentions: { room: true },
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
