@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
   return {
     runtime,
     serveOpenClawChannelMcp: vi.fn(),
+    servePluginToolsMcp: vi.fn(),
   };
 });
 
@@ -27,6 +28,7 @@ const defaultRuntime = mocks.runtime;
 const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;
 const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
+const servePluginToolsMcp = mocks.servePluginToolsMcp;
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
@@ -34,6 +36,10 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../mcp/channel-server.js", () => ({
   serveOpenClawChannelMcp: mocks.serveOpenClawChannelMcp,
+}));
+
+vi.mock("../mcp/plugin-tools-serve.js", () => ({
+  servePluginToolsMcp: mocks.servePluginToolsMcp,
 }));
 
 const tempDirs: string[] = [];
@@ -120,6 +126,19 @@ describe("mcp cli", () => {
         claudeChannelMode: "on",
         verbose: true,
       });
+      expect(servePluginToolsMcp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("starts the plugin tools bridge when --bridge tools is selected", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "serve", "--bridge", "tools"]);
+
+      expect(servePluginToolsMcp).toHaveBeenCalledWith();
+      expect(serveOpenClawChannelMcp).not.toHaveBeenCalled();
     });
   });
 });

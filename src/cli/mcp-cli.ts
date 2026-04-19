@@ -6,6 +6,7 @@ import {
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
+import { servePluginToolsMcp } from "../mcp/plugin-tools-serve.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -39,9 +40,26 @@ export function registerMcpCli(program: Command) {
       "Claude channel notification mode: auto, on, or off",
       "auto",
     )
+    .option(
+      "--bridge <kind>",
+      "MCP bridge kind: channels (default) or tools",
+      "channels",
+    )
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .action(async (opts) => {
       try {
+        const bridgeKind = normalizeLowercaseStringOrEmpty(
+          normalizeStringifiedOptionalString(opts.bridge) ?? "channels",
+        );
+        if (bridgeKind !== "channels" && bridgeKind !== "tools") {
+          throw new Error("Invalid --bridge value. Use channels or tools.");
+        }
+
+        if (bridgeKind === "tools") {
+          await servePluginToolsMcp();
+          return;
+        }
+
         const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
         const claudeChannelMode = normalizeLowercaseStringOrEmpty(
           normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
