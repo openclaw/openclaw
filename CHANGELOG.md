@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Providers/DeepInfra: add DeepInfra as an official provider with interactive onboarding, `DEEPINFRA_API_KEY` auto-detection, and dynamic model discovery from the DeepInfra API. (#53805) Thanks @ats3v
+
 ### Fixes
 
 - Plugins/startup: load the default `memory-core` slot during Gateway startup when permitted so active-memory recall can call `memory_search` and `memory_get` without requiring an explicit `plugins.slots.memory` entry, while preserving `plugins.slots.memory: "none"`. Thanks @codex.

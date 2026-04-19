@@ -363,4 +363,54 @@ describe("loadProviderCatalogModelsForList", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  describe("preserveDiscoveryOrder", () => {
+    const curatedProvider = {
+      id: "curated",
+      pluginId: "curated",
+      label: "Curated",
+      auth: [],
+      staticCatalog: {
+        run: async () => ({
+          provider: {
+            baseUrl: "https://curated.example/v1",
+            models: [
+              { id: "z-top-curated", name: "Z Top" },
+              { id: "a-second", name: "A Second" },
+              { id: "m-third", name: "M Third" },
+            ],
+          },
+        }),
+      },
+    };
+
+    beforeEach(() => {
+      providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["curated"]);
+      providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockReturnValue(["curated"]);
+    });
+
+    it("preserves the static-catalog order for preserve-order providers", async () => {
+      providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValue([
+        { ...curatedProvider, catalog: { preserveDiscoveryOrder: true } },
+      ]);
+
+      const rows = await loadProviderCatalogModelsForList({
+        ...baseParams,
+        providerFilter: "curated",
+      });
+
+      expect(rows.map((row) => row.id)).toEqual(["z-top-curated", "a-second", "m-third"]);
+    });
+
+    it("falls back to alphabetical sort when the provider has no preserve-order flag", async () => {
+      providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValue([curatedProvider]);
+
+      const rows = await loadProviderCatalogModelsForList({
+        ...baseParams,
+        providerFilter: "curated",
+      });
+
+      expect(rows.map((row) => row.id)).toEqual(["a-second", "m-third", "z-top-curated"]);
+    });
+  });
 });

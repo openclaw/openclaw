@@ -2,6 +2,10 @@ import { join } from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  resetPreserveDiscoveryOrderLookupLogForTest,
+  resolvePreserveDiscoveryOrderProviders,
+} from "../plugins/preserve-discovery-order.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -54,6 +58,7 @@ function loadModelSuppression() {
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
+  resetPreserveDiscoveryOrderLookupLogForTest();
   importPiSdk = defaultImportPiSdk;
 }
 
@@ -102,14 +107,27 @@ export async function loadModelCatalog(params?: {
       const suffix = extra ? ` ${extra}` : "";
       log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
     };
-    const sortModels = (entries: ModelCatalogEntry[]) =>
-      entries.sort((a, b) => {
+    const sortModels = (entries: ModelCatalogEntry[], cfg: OpenClawConfig | undefined) => {
+      // Relies on Array.prototype.toSorted being stable (ES2023): providers
+      // flagged as preserveDiscoveryOrder return 0 from the comparator on
+      // same-provider pairs, which keeps their insertion order inside the
+      // provider block. Resolve the preserve-order set once up front to avoid
+      // per-provider plugin-lookup latency inside the sort.
+      const preserveOrderProviders = resolvePreserveDiscoveryOrderProviders({
+        ...(cfg ? { config: cfg } : {}),
+        env: process.env,
+      });
+      return entries.toSorted((a, b) => {
         const p = a.provider.localeCompare(b.provider);
         if (p !== 0) {
           return p;
         }
+        if (preserveOrderProviders.has(normalizeProviderId(a.provider))) {
+          return 0;
+        }
         return a.name.localeCompare(b.name);
       });
+    };
     try {
       const cfg = params?.config ?? loadConfig();
       if (!readOnly) {
@@ -194,7 +212,7 @@ export async function loadModelCatalog(params?: {
         }
       }
 
-      const sorted = sortModels(models);
+      const sorted = sortModels(models, cfg);
       logStage("complete", `entries=${sorted.length}`);
       return sorted;
     } catch (error) {
@@ -207,7 +225,7 @@ export async function loadModelCatalog(params?: {
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
-        return sortModels(models);
+        return sortModels(models, params?.config);
       }
       return [];
     }

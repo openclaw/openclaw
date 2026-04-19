@@ -406,6 +406,12 @@ export type ProviderCatalogResult =
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
+  /**
+   * When true, list/browse surfaces preserve the plugin catalog's discovery
+   * order instead of sorting by provider/id. Use for providers whose upstream
+   * catalog returns a curated order (e.g. ranks models by capability).
+   */
+  preserveDiscoveryOrder?: boolean;
 };
 
 export type ProviderRuntimeProviderConfig = {

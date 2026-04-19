@@ -259,20 +259,33 @@ export async function appendDiscoveredRows(params: {
   models: Model<Api>[];
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
+  sortByName?: boolean;
+  preserveDiscoveryOrderProviders?: Set<string>;
 }): Promise<Set<string>> {
   const seenKeys = new Set<string>();
   const modelResolver = params.modelRegistry
     ? (await loadModelResolverModule()).resolveModelWithRegistry
     : undefined;
-  const sorted = [...params.models].toSorted((a, b) => {
-    const providerCompare = a.provider.localeCompare(b.provider);
-    if (providerCompare !== 0) {
-      return providerCompare;
-    }
-    return a.id.localeCompare(b.id);
-  });
+  const preserveOrderProviders = params.preserveDiscoveryOrderProviders;
+  // Relies on Array.prototype.toSorted being stable (ES2023): providers flagged
+  // as preserveDiscoveryOrder return 0 from the comparator on same-provider
+  // pairs, which keeps their insertion order inside the provider block while
+  // non-flagged providers still sort by id.
+  const models =
+    (params.sortByName ?? true)
+      ? [...params.models].toSorted((a, b) => {
+          const providerCompare = a.provider.localeCompare(b.provider);
+          if (providerCompare !== 0) {
+            return providerCompare;
+          }
+          if (preserveOrderProviders?.has(normalizeProviderId(a.provider))) {
+            return 0;
+          }
+          return a.id.localeCompare(b.id);
+        })
+      : params.models;
 
-  for (const model of sorted) {
+  for (const model of models) {
     const key = modelKey(model.provider, model.id);
     const resolvedModel =
       params.modelRegistry && modelResolver

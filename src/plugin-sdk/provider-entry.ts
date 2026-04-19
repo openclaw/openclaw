@@ -32,11 +32,13 @@ export type SingleProviderPluginCatalogOptions =
       run?: never;
       order?: never;
       staticRun?: never;
+      preserveDiscoveryOrder?: never;
     }
   | {
       run: ProviderPluginCatalog["run"];
       staticRun?: ProviderPluginCatalog["run"];
       order?: ProviderPluginCatalog["order"];
+      preserveDiscoveryOrder?: ProviderPluginCatalog["preserveDiscoveryOrder"];
       buildProvider?: never;
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
@@ -136,6 +138,9 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           catalog = {
             order: provider.catalog.order ?? "simple",
             run: catalogRun!,
+            ...(provider.catalog.preserveDiscoveryOrder !== undefined
+              ? { preserveDiscoveryOrder: provider.catalog.preserveDiscoveryOrder }
+              : {}),
           };
         } else {
           const buildProvider = provider.catalog.buildProvider;

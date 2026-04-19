@@ -289,6 +289,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: deepinfra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepinfra/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:

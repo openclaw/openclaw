@@ -16,6 +16,7 @@ import {
   resolvePluginDiscoveryProviders,
   runProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
+import { collectPreserveDiscoveryOrderProviders } from "../../plugins/preserve-discovery-order.js";
 import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider,
@@ -287,10 +288,18 @@ export async function loadProviderCatalogModelsForList(params: {
     }
   }
 
+  // Stable Array.prototype.toSorted (ES2023): returning 0 for same-provider
+  // pairs of a preserve-order provider keeps the plugin's curated static-catalog
+  // order inside that provider block, matching the
+  // ProviderPluginCatalog.preserveDiscoveryOrder contract.
+  const preserveOrderProviders = collectPreserveDiscoveryOrderProviders(providers);
   return rows.toSorted((left, right) => {
     const provider = left.provider.localeCompare(right.provider);
     if (provider !== 0) {
       return provider;
+    }
+    if (preserveOrderProviders.has(normalizeProviderId(left.provider))) {
+      return 0;
     }
     return left.id.localeCompare(right.id);
   });

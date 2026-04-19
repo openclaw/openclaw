@@ -1,6 +1,7 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import { resolvePreserveDiscoveryOrderProviders } from "../../plugins/preserve-discovery-order.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
@@ -173,6 +174,13 @@ export async function modelsListCommand(
     let rowContext = buildRowContext(
       useManifestCatalogFastPath || useProviderCatalogFastPath || useProviderIndexCatalogFastPath,
     );
+    let preserveDiscoveryOrderProviders =
+      useManifestCatalogFastPath || useProviderCatalogFastPath || useProviderIndexCatalogFastPath
+        ? undefined
+        : resolvePreserveDiscoveryOrderProviders({
+            config: cfg,
+            env: process.env,
+          });
     const initialAppend = await appendAllModelRowSources({
       rows,
       context: rowContext,
@@ -182,6 +190,7 @@ export async function modelsListCommand(
       useManifestCatalogFastPath,
       useProviderCatalogFastPath,
       useProviderIndexCatalogFastPath,
+      preserveDiscoveryOrderProviders,
     });
     if (initialAppend.requiresRegistryFallback) {
       try {
@@ -193,6 +202,10 @@ export async function modelsListCommand(
       }
       rows.length = 0;
       rowContext = buildRowContext(false);
+      preserveDiscoveryOrderProviders ??= resolvePreserveDiscoveryOrderProviders({
+        config: cfg,
+        env: process.env,
+      });
       await appendAllModelRowSources({
         rows,
         context: rowContext,
@@ -202,6 +215,7 @@ export async function modelsListCommand(
         useManifestCatalogFastPath: false,
         useProviderCatalogFastPath: false,
         useProviderIndexCatalogFastPath: false,
+        preserveDiscoveryOrderProviders,
       });
     }
   } else {

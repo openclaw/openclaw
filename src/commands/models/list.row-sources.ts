@@ -21,6 +21,7 @@ type AllModelRowSources = {
   useManifestCatalogFastPath: boolean;
   useProviderCatalogFastPath: boolean;
   useProviderIndexCatalogFastPath: boolean;
+  preserveDiscoveryOrderProviders?: Set<string>;
 };
 
 type AppendAllModelRowSourcesResult = {
@@ -102,6 +103,7 @@ export async function appendAllModelRowSources(
     models: params.modelRegistry?.getAll() ?? [],
     modelRegistry: params.modelRegistry,
     context: params.context,
+    preserveDiscoveryOrderProviders: params.preserveDiscoveryOrderProviders,
   });
 
   await appendConfiguredProviderRows({

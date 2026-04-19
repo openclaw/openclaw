@@ -742,6 +742,28 @@ providers:
 | `paired`  | After profile | Synthesize multiple related entries             |
 | `late`    | Last pass     | Override existing providers (wins on collision) |
 
+## Preserving catalog discovery order
+
+By default OpenClaw sorts models alphabetically within each provider block. If
+your provider's upstream `/models` endpoint returns a curated ranking (for
+example relevance-ordered or capability-ordered) and you want that order
+surfaced in `openclaw models list`, set `preserveDiscoveryOrder: true` on your
+`catalog` registration:
+
+```ts
+catalog: {
+  order: "simple",
+  run: runCatalog,
+  preserveDiscoveryOrder: true,
+},
+```
+
+When the flag is set, models from your provider are sorted with a stable
+comparator that preserves insertion order within the provider block instead of
+applying alphabetical sorting. Models from other providers are still sorted
+normally. Use this only when the upstream catalog has a meaningful, stable
+ordering — do not set it just to avoid sorting.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) — if your plugin also provides a channel
