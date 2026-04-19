@@ -78,6 +78,7 @@ describe("plan-mode integration (PR-8)", () => {
     it("returns 'approval_requested' with the proposed plan", async () => {
       const tool = createExitPlanModeTool();
       const result = await tool.execute("call-1", {
+        title: "Refactor checklist",
         summary: "Refactor checklist",
         plan: [
           { step: "Run tests", status: "pending" },
@@ -96,13 +97,16 @@ describe("plan-mode integration (PR-8)", () => {
 
     it("rejects an empty plan (cannot exit without a proposal)", async () => {
       const tool = createExitPlanModeTool();
-      await expect(tool.execute("c1", { plan: [] })).rejects.toThrow(/plan required/);
+      await expect(tool.execute("c1", { title: "Empty plan", plan: [] })).rejects.toThrow(
+        /plan required/,
+      );
     });
 
     it("rejects a plan with multiple in_progress steps", async () => {
       const tool = createExitPlanModeTool();
       await expect(
         tool.execute("c1", {
+          title: "Multiple active steps",
           plan: [
             { step: "A", status: "in_progress" },
             { step: "B", status: "in_progress" },
@@ -113,9 +117,12 @@ describe("plan-mode integration (PR-8)", () => {
 
     it("rejects a plan with an unknown status value", async () => {
       const tool = createExitPlanModeTool();
-      await expect(tool.execute("c1", { plan: [{ step: "A", status: "weirdo" }] })).rejects.toThrow(
-        /must be one of/,
-      );
+      await expect(
+        tool.execute("c1", {
+          title: "Unknown status",
+          plan: [{ step: "A", status: "weirdo" }],
+        }),
+      ).rejects.toThrow(/must be one of/);
     });
   });
 

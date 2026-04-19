@@ -26,12 +26,18 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 
-vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn((handler: typeof lifecycleHandler) => {
-    lifecycleHandler = handler;
-    return noop;
-  }),
-}));
+vi.mock("../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/agent-events.js")>(
+    "../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    onAgentEvent: vi.fn((handler: typeof lifecycleHandler) => {
+      lifecycleHandler = handler;
+      return noop;
+    }),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({
