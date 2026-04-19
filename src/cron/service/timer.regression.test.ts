@@ -214,6 +214,44 @@ describe("cron service timer regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
   });
 
+  it("#63770: deleteAfterRun keeps one-shot jobs when run is skipped", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-delete-after-run-skipped",
+      name: "oneshot skip keeps record",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "skip me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.deleteAfterRun = true;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "skipped",
+      summary: "precondition not met",
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const keptJob = state.store?.jobs.find((j) => j.id === "oneshot-delete-after-run-skipped");
+    expect(keptJob).toBeDefined();
+    expect(keptJob!.enabled).toBe(false);
+    expect(keptJob!.state.lastStatus).toBe("skipped");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
   it("#63770: deleteAfterRun removes recurring jobs after first successful run", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
