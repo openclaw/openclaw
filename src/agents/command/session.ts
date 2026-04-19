@@ -137,31 +137,29 @@ export function resolveSessionKeyForRequest(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const explicitSessionKey =
-    opts.sessionKey?.trim() ||
-    resolveExplicitAgentSessionKey({
-      cfg: opts.cfg,
-      agentId: opts.agentId,
-    });
-  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
+  const userSessionKey = opts.sessionKey?.trim() || undefined;
+  const agentMainSessionKey = userSessionKey
+    ? undefined
+    : resolveExplicitAgentSessionKey({
+        cfg: opts.cfg,
+        agentId: opts.agentId,
+      });
+  const storeAgentId = resolveAgentIdFromSessionKey(userSessionKey ?? agentMainSessionKey);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
-  let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
+  // A user-supplied --session-key is authoritative and always wins.
+  if (userSessionKey) {
+    return { sessionKey: userSessionKey, sessionStore, storePath };
+  }
 
-  // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
-  // derived. When duplicates exist across agent stores, pick the same deterministic best match used
-  // by the shared gateway/session resolver helpers instead of whichever store happens to be scanned
-  // first.
-  if (
-    opts.sessionId &&
-    !explicitSessionKey &&
-    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
-  ) {
+  // A caller-supplied --session-id takes priority over the agent's main-key fallback so parallel
+  // callers can keep isolated sessions per UUID. First try to match an existing store entry by
+  // sessionId (preserving cross-agent deterministic selection), otherwise synthesize an explicit
+  // key `agent:<id>:explicit:<sessionId>` via buildExplicitSessionIdSessionKey.
+  if (opts.sessionId) {
     const { matches, primaryStoreMatches, storeByKey } = collectSessionIdMatchesForRequest({
       cfg: opts.cfg,
       sessionStore,
@@ -179,17 +177,26 @@ export function resolveSessionKeyForRequest(opts: {
       if (preferred) {
         return preferred;
       }
-      sessionKey = currentStoreSelection.sessionKey;
+      return {
+        sessionKey: currentStoreSelection.sessionKey,
+        sessionStore,
+        storePath,
+      };
     }
+    return {
+      sessionKey: buildExplicitSessionIdSessionKey({
+        sessionId: opts.sessionId,
+        agentId: opts.agentId,
+      }),
+      sessionStore,
+      storePath,
+    };
   }
 
-  if (opts.sessionId && !sessionKey) {
-    sessionKey = buildExplicitSessionIdSessionKey({
-      sessionId: opts.sessionId,
-      agentId: opts.agentId,
-    });
-  }
-
+  // Fallback: no session-id — keep legacy behavior (agent main-key, or per-sender scope on --to).
+  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
+  const sessionKey =
+    agentMainSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
   return { sessionKey, sessionStore, storePath };
 }
 
