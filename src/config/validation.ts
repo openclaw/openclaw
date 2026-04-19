@@ -597,10 +597,15 @@ function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
     }
     try {
       const parsed = new URL(origin);
-      if (parsed.pathname !== "/" || origin.endsWith("/")) {
+      if (
+        parsed.pathname !== "/" ||
+        origin.endsWith("/") ||
+        parsed.search !== "" ||
+        parsed.hash !== ""
+      ) {
         issues.push({
           path: "gateway.http.cors.allowedOrigins",
-          message: `gateway.http.cors.allowedOrigins: "${origin}" must be scheme://host[:port] with no trailing slash or path.`,
+          message: `gateway.http.cors.allowedOrigins: "${origin}" must be scheme://host[:port] with no trailing slash, path, query, or fragment.`,
         });
       }
     } catch {
