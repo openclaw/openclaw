@@ -633,7 +633,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
       250,
-      60_000,
+      120_000,
     ),
     queryMode:
       raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"
@@ -1527,7 +1527,9 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
     }
     const rawText = extractTextContent(typed.content);
     const text =
-      role === "assistant" ? stripRecalledContextNoise(rawText) : stripInjectedActiveMemoryPrefixOnly(rawText);
+      role === "assistant"
+        ? stripRecalledContextNoise(rawText)
+        : stripInjectedActiveMemoryPrefixOnly(rawText);
     if (!text) {
       continue;
     }

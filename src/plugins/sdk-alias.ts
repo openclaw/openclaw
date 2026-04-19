@@ -252,6 +252,53 @@ export function resolvePluginSdkAliasFile(params: {
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
+const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
+
+function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  try {
+    const raw = fs.readFileSync(
+      path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      "utf-8",
+    );
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
+  } catch {
+    return [];
+  }
+}
+
+function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
+  return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
+}
+
+function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
+  const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+  if (fs.existsSync(distPath)) {
+    return true;
+  }
+  return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
+    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+  );
+}
+
+function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
+    return [];
+  }
+  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
+    hasPluginSdkSubpathArtifact(packageRoot, subpath),
+  );
+}
 
 export function listPluginSdkExportedSubpaths(
   params: {
@@ -270,12 +317,18 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const cached = cachedPluginSdkExportedSubpaths.get(packageRoot);
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const subpaths = readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? [];
-  cachedPluginSdkExportedSubpaths.set(packageRoot, subpaths);
+  const subpaths = [
+    ...new Set([
+      ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
+      ...listPrivateLocalOnlyPluginSdkSubpaths(packageRoot),
+    ]),
+  ].toSorted();
+  cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
   return subpaths;
 }
 
@@ -301,7 +354,7 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -313,16 +366,28 @@ export function resolvePluginSdkScopedAliasMap(
     moduleUrl: params.moduleUrl,
     pluginSdkResolution: params.pluginSdkResolution,
   })) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
-    } as const;
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+        if (fs.existsSync(candidate)) {
+          for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+            aliasMap[`${packageName}/${subpath}`] = candidate;
+          }
+          break;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
+        if (!fs.existsSync(candidate)) {
+          continue;
+        }
         for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
           aliasMap[`${packageName}/${subpath}`] = candidate;
         }
+        break;
+      }
+      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
       }
     }
@@ -344,14 +409,19 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
       isProduction: process.env.NODE_ENV === "production",
       pluginSdkResolution: params.pluginSdkResolution,
     });
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "extensionAPI.ts"),
-      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
-    } as const;
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
-        return candidate;
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
     }
   } catch {
@@ -447,6 +517,10 @@ function supportsNativeJitiRuntime(): boolean {
   return typeof versions.bun !== "string" && process.platform !== "win32";
 }
 
+function isBundledPluginDistModulePath(modulePath: string): boolean {
+  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+}
+
 export function shouldPreferNativeJiti(modulePath: string): boolean {
   if (!supportsNativeJitiRuntime()) {
     return false;
@@ -468,6 +542,9 @@ export function resolvePluginLoaderJitiTryNative(
     preferBuiltDist?: boolean;
   },
 ): boolean {
+  if (isBundledPluginDistModulePath(modulePath)) {
+    return false;
+  }
   return (
     shouldPreferNativeJiti(modulePath) ||
     (supportsNativeJitiRuntime() &&

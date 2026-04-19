@@ -1,4 +1,4 @@
-import { postTrustedWebToolsJson } from "@openclaw/plugin-sdk/provider-web-search";
+import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiResponsesToolBody,
   resolveXaiResponseTextAndCitations,
@@ -36,7 +36,7 @@ export type XaiCodeExecutionResult = {
 export function resolveXaiCodeExecutionConfig(
   config?: Record<string, unknown>,
 ): XaiCodeExecutionConfig {
-  return coerceXaiToolConfig<XaiCodeExecutionConfig>(config);
+  return coerceXaiToolConfig(config) as XaiCodeExecutionConfig;
 }
 
 export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {

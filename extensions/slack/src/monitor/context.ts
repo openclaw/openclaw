@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -274,30 +275,17 @@ export function createSlackMonitorContext(params: {
     if (!p.threadTs) {
       return;
     }
-    const payload = {
-      token: params.botToken,
-      channel_id: p.channelId,
-      thread_ts: p.threadTs,
-      status: p.status,
-    };
-    const client = params.app.client as unknown as {
-      assistant?: {
-        threads?: {
-          setStatus?: (args: typeof payload) => Promise<unknown>;
-        };
-      };
-      apiCall?: (method: string, args: typeof payload) => Promise<unknown>;
-    };
     try {
-      if (client.assistant?.threads?.setStatus) {
-        await client.assistant.threads.setStatus(payload);
-        return;
-      }
-      if (typeof client.apiCall === "function") {
-        await client.apiCall("assistant.threads.setStatus", payload);
-      }
+      await params.app.client.assistant.threads.setStatus({
+        token: params.botToken,
+        channel_id: p.channelId,
+        thread_ts: p.threadTs,
+        status: p.status,
+      });
     } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${String(err)}`);
+      logVerbose(
+        `slack status update failed for channel ${p.channelId}: ${formatErrorMessage(err)}`,
+      );
     }
   };
 
