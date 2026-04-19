@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS minion_jobs (
   backoff_jitter      REAL    NOT NULL DEFAULT 0.25,
 
   stalled_counter     INTEGER NOT NULL DEFAULT 0,
-  max_stalled         INTEGER NOT NULL DEFAULT 1,
+  max_stalled         INTEGER NOT NULL DEFAULT 2,
   lock_token          TEXT,
   lock_until          INTEGER,
 

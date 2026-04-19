@@ -584,21 +584,30 @@ export class MinionQueue {
 
   handleTimeouts(): MinionJob[] {
     const now = Date.now();
-    const rows = this.store.db
-      .prepare(
-        `UPDATE minion_jobs SET
-          status = 'dead',
-          error_text = 'timeout exceeded',
-          lock_token = NULL, lock_until = NULL,
-          finished_at = ?, updated_at = ?
-         WHERE status = 'active'
-           AND timeout_at IS NOT NULL
-           AND timeout_at < ?
-           AND lock_until > ?
-         RETURNING *`,
-      )
-      .all(now, now, now, now) as MinionJobRow[];
-    return rows.map(rowToMinionJob);
+    return this.store.transaction((db) => {
+      const rows = db
+        .prepare(
+          `UPDATE minion_jobs SET
+            status = 'dead',
+            error_text = 'timeout exceeded',
+            lock_token = NULL, lock_until = NULL,
+            finished_at = ?, updated_at = ?
+           WHERE status = 'active'
+             AND timeout_at IS NOT NULL
+             AND timeout_at < ?
+             AND lock_until > ?
+           RETURNING *`,
+        )
+        .all(now, now, now, now) as MinionJobRow[];
+
+      const jobs = rows.map(rowToMinionJob);
+      for (const job of jobs) {
+        if (job.parentJobId) {
+          applyChildFailPolicy(db, job, "timeout exceeded", now);
+        }
+      }
+      return jobs;
+    });
   }
 
   // ---------------------------------------------------------------------------

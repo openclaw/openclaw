@@ -1,5 +1,4 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { setMinionsOwnLostDetection } from "../tasks/task-registry.maintenance.js";
 import { resolveDurabilityMode } from "./durability-config.js";
 import { BUILTIN_HANDLERS } from "./handlers/index.js";
 import { MinionStore } from "./store.js";
@@ -38,7 +37,6 @@ export function maybeStartMinionWorker(): void {
       worker.register(h.name, h.handler);
     }
 
-    setMinionsOwnLostDetection(true);
     activeWorker = worker;
 
     workerPromise = worker.start().catch((err) => {
