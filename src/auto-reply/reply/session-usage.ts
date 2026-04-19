@@ -83,6 +83,17 @@ export async function persistSessionUsageUpdate(params: {
   modelUsed?: string;
   providerUsed?: string;
   contextTokensUsed?: number;
+  /**
+   * Next-turn persistence override. When the current turn ran on a transient
+   * automatic fallback (e.g. provider timed out), callers pass the originally
+   * selected model/provider here so the session store keeps the user's
+   * selection for the next turn instead of sticking on the fallback runtime.
+   * `modelUsed`/`providerUsed`/`contextTokensUsed` remain the runtime values
+   * used for this turn's cost and context accounting.
+   */
+  persistedModel?: string;
+  persistedProvider?: string;
+  persistedContextTokens?: number;
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
@@ -134,9 +145,9 @@ export async function persistSessionUsageUpdate(params: {
           });
           const existingEstimatedCostUsd = resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0;
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
-            contextTokens: resolvedContextTokens,
+            modelProvider: params.persistedProvider ?? params.providerUsed ?? entry.modelProvider,
+            model: params.persistedModel ?? params.modelUsed ?? entry.model,
+            contextTokens: params.persistedContextTokens ?? resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
@@ -174,9 +185,10 @@ export async function persistSessionUsageUpdate(params: {
         sessionKey,
         update: async (entry) => {
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+            modelProvider: params.persistedProvider ?? params.providerUsed ?? entry.modelProvider,
+            model: params.persistedModel ?? params.modelUsed ?? entry.model,
+            contextTokens:
+              params.persistedContextTokens ?? params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };

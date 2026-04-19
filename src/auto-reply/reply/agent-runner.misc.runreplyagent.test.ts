@@ -1885,6 +1885,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
     sessionEntry?: SessionEntry;
     sessionKey?: string;
     agentCfgContextTokens?: number;
+    sessionStore?: Record<string, SessionEntry>;
+    storePath?: string;
   }) {
     const typing = createMockTypingController();
     const sessionCtx = {
@@ -1936,6 +1938,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       typing,
       sessionCtx,
       sessionEntry: params?.sessionEntry,
+      sessionStore: params?.sessionStore,
+      storePath: params?.storePath,
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: params?.agentCfgContextTokens,
@@ -1965,6 +1969,54 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
     expect(call?.enforceFinalTag).toBe(true);
+  });
+
+  it("does not persist automatic fallback as the next-turn selected model", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sticky-fallback-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { main: sessionEntry };
+      await saveSessionStore(storePath, sessionStore);
+
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "final" }],
+        meta: {},
+      });
+      runWithModelFallbackMock.mockImplementationOnce(
+        async ({ run }: RunWithModelFallbackParams) => ({
+          result: await run("openai", "gpt-4o-mini"),
+          provider: "openai",
+          model: "gpt-4o-mini",
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "Provider anthropic timed out",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+      await createRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+
+      const stored = loadSessionStore(storePath);
+      expect(stored.main?.modelProvider).toBe("anthropic");
+      expect(stored.main?.model).toBe("claude");
+      expect(stored.main?.fallbackNoticeReason).toBe("timeout");
+      expect(stored.main?.fallbackNoticeActiveModel).toBe("openai/gpt-4o-mini");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {

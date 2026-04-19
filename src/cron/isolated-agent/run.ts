@@ -540,6 +540,7 @@ async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.provider ??
     execution.fallbackProvider ??
     execution.liveSelection.provider;
+  // Runtime context window for this turn's accounting (may be the fallback).
   const contextTokens =
     resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
     (await loadCronContextRuntime()).lookupContextTokens(modelUsed, {
@@ -547,12 +548,23 @@ async function finalizeCronRun(params: {
     }) ??
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
+  // Context window persisted for the NEXT turn — must follow the originally
+  // selected model (liveSelection), not a transient automatic fallback.
+  const persistedContextTokens =
+    resolvePositiveContextTokens(prepared.agentCfg?.contextTokens) ??
+    (await loadCronContextRuntime()).lookupContextTokens(execution.liveSelection.model, {
+      allowAsyncLoad: false,
+    }) ??
+    resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
+    DEFAULT_CONTEXT_TOKENS;
 
+  // Persist the originally selected provider/model so a transient automatic
+  // fallback (e.g. provider timeout) does not stick as the next-turn runtime.
   setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
-    provider: providerUsed,
-    model: modelUsed,
+    provider: execution.liveSelection.provider,
+    model: execution.liveSelection.model,
   });
-  prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+  prepared.cronSession.sessionEntry.contextTokens = persistedContextTokens;
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
     const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
     if (cliSessionId) {

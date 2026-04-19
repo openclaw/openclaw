@@ -317,4 +317,85 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
     });
   });
+
+  it("persists the originally selected model when a transient fallback ran this turn", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      // Minimal cfg with both selected and fallback models registered so
+      // resolveContextTokensForModel can find their context windows.
+      const cfg = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-opus-4-7",
+                  name: "Claude Opus 4.7",
+                  input: ["text"] as Array<"text" | "image">,
+                  reasoning: false,
+                  cost: { input: 0, output: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
+                },
+                {
+                  id: "claude-3-5-sonnet-20240620",
+                  name: "Claude 3.5 Sonnet",
+                  input: ["text"] as Array<"text" | "image">,
+                  reasoning: false,
+                  cost: { input: 0, output: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-sticky-fallback";
+      const sessionId = "test-openclaw-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Turn actually ran on the fallback (sonnet) — e.g. opus timed out once
+      // and the runtime fell back. The selected model is still opus.
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "anthropic",
+            model: "claude-3-5-sonnet-20240620",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-7",
+        fallbackProvider: "anthropic",
+        fallbackModel: "claude-3-5-sonnet-20240620",
+        result,
+      });
+
+      // Next-turn selection must still be the originally selected model.
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-7");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-7");
+      expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
+    });
+  });
 });

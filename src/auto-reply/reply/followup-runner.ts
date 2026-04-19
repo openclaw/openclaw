@@ -309,6 +309,18 @@ export function createFollowupRunner(params: {
           fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
+      // Persist the originally selected provider/model for the next turn so a
+      // transient fallback (e.g. provider timeout) does not stick. Runtime
+      // values above still drive this turn's cost/context accounting.
+      const persistedContextTokens =
+        resolveContextTokensForModel({
+          cfg: queued.run.config,
+          provider: queued.run.provider,
+          model: queued.run.model,
+          contextTokensOverride: agentCfgContextTokens,
+          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS;
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({
@@ -321,6 +333,9 @@ export function createFollowupRunner(params: {
           modelUsed,
           providerUsed,
           contextTokensUsed,
+          persistedModel: queued.run.model,
+          persistedProvider: queued.run.provider,
+          persistedContextTokens,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
           usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),

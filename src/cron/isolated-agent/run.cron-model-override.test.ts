@@ -234,6 +234,42 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     );
   });
 
+  it("does not persist an automatic fallback runtime as the next-turn cron selection", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "task complete" }],
+        meta: {
+          agentMeta: {
+            model: "gpt-4o-mini",
+            provider: "openai",
+            usage: { input: 100, output: 50 },
+          },
+        },
+      },
+      provider: "openai",
+      model: "gpt-4o-mini",
+      attempts: [
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          error: "Provider anthropic timed out",
+          reason: "timeout",
+        },
+      ],
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    // Persisted next-turn selection must remain the requested cron model,
+    // not the transient fallback runtime that executed this turn.
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    // Fallback runtime still executed for this turn.
+    expect(result.model).toBe("gpt-4o-mini");
+    expect(result.provider).toBe("openai");
+  });
+
   it("persists default model pre-run when no payload override is present", async () => {
     // No cron payload model override
     const jobWithoutModel = makeJob({

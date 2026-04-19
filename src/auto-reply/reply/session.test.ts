@@ -2407,6 +2407,74 @@ describe("persistSessionUsageUpdate", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].estimatedCostUsd).toBe(0);
   });
+
+  it("persists the selected model separately from the active fallback runtime (usage branch)", async () => {
+    const storePath = await createStorePath("openclaw-sticky-fallback-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        contextTokens: 200_000,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_000, output: 500, total: 1_500 },
+      lastCallUsage: { input: 1_000, output: 500, total: 1_500 },
+      // Active fallback runtime (this turn) — a transient substitute.
+      modelUsed: "claude-3-5-sonnet-20240620",
+      providerUsed: "anthropic",
+      contextTokensUsed: 180_000,
+      // Originally selected model — must be what survives to the next turn.
+      persistedModel: "claude-opus-4-7",
+      persistedProvider: "anthropic",
+      persistedContextTokens: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].model).toBe("claude-opus-4-7");
+    expect(stored[sessionKey].modelProvider).toBe("anthropic");
+    expect(stored[sessionKey].contextTokens).toBe(200_000);
+  });
+
+  it("persists the selected model separately from the active fallback runtime (model/context-only branch)", async () => {
+    const storePath = await createStorePath("openclaw-sticky-fallback-nousage-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        contextTokens: 200_000,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      modelUsed: "claude-3-5-sonnet-20240620",
+      providerUsed: "anthropic",
+      contextTokensUsed: 180_000,
+      persistedModel: "claude-opus-4-7",
+      persistedProvider: "anthropic",
+      persistedContextTokens: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].model).toBe("claude-opus-4-7");
+    expect(stored[sessionKey].modelProvider).toBe("anthropic");
+    expect(stored[sessionKey].contextTokens).toBe(200_000);
+  });
 });
 
 describe("initSessionState stale threadId fallback", () => {

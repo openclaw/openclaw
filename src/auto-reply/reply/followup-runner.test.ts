@@ -214,9 +214,9 @@ async function persistRunSessionUsageForFollowupTest(
   const nextEntry: SessionEntry = {
     ...entry,
     updatedAt: Date.now(),
-    modelProvider: params.providerUsed ?? entry.modelProvider,
-    model: params.modelUsed ?? entry.model,
-    contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+    modelProvider: params.persistedProvider ?? params.providerUsed ?? entry.modelProvider,
+    model: params.persistedModel ?? params.modelUsed ?? entry.model,
+    contextTokens: params.persistedContextTokens ?? params.contextTokensUsed ?? entry.contextTokens,
     systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
   };
   if (params.usage) {
@@ -1240,6 +1240,57 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       expect.objectContaining({
         providerUsed: "anthropic",
         usageIsContextSnapshot: true,
+      }),
+    );
+    persistSpy.mockRestore();
+  });
+
+  it("persists the queued selection separately from a transient fallback runtime", async () => {
+    const storePath = "/tmp/openclaw-followup-sticky-fallback.json";
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          lastCallUsage: { input: 6, output: 3 },
+          model: "gpt-4o-mini",
+          provider: "openai",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerUsed: "openai",
+        modelUsed: "gpt-4o-mini",
+        persistedProvider: "anthropic",
+        persistedModel: "claude-opus-4-6",
       }),
     );
     persistSpy.mockRestore();

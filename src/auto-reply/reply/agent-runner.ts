@@ -1320,6 +1320,20 @@ export async function runReplyAgent(params: {
         fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS;
+    // When the turn ran on an automatic fallback runtime (e.g. provider
+    // timeout), persist the originally selected model/provider so the next
+    // turn resumes with the user's selection rather than stickily staying on
+    // the fallback. Runtime values (providerUsed/modelUsed/contextTokensUsed)
+    // continue to drive this turn's cost/context accounting and usage logs.
+    const persistedContextTokens =
+      resolveContextTokensForModel({
+        cfg,
+        provider: selectedProvider,
+        model: selectedModel,
+        contextTokensOverride: agentCfgContextTokens,
+        fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
+      }) ?? DEFAULT_CONTEXT_TOKENS;
 
     await persistRunSessionUsage({
       storePath,
@@ -1331,6 +1345,9 @@ export async function runReplyAgent(params: {
       modelUsed,
       providerUsed,
       contextTokensUsed,
+      persistedModel: selectedModel,
+      persistedProvider: selectedProvider,
+      persistedContextTokens,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,

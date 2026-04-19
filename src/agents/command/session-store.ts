@@ -60,16 +60,30 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const { resolveContextTokensForModel } = await getContextModule();
+  // `contextTokens` drives cost/context accounting for this turn and must
+  // match the runtime that actually executed (may be the fallback model).
   const contextTokens =
-    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-      ? params.contextTokensOverride
-      : ((await getContextModule()).resolveContextTokensForModel({
-          cfg,
-          provider: providerUsed,
-          model: modelUsed,
-          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-          allowAsyncLoad: false,
-        }) ?? DEFAULT_CONTEXT_TOKENS);
+    resolveContextTokensForModel({
+      cfg,
+      provider: providerUsed,
+      model: modelUsed,
+      contextTokensOverride: params.contextTokensOverride,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
+  // `persistedContextTokens` is what the session remembers for the NEXT turn,
+  // so it must reflect the originally selected model (defaultProvider/Model),
+  // not a transient automatic fallback runtime.
+  const persistedContextTokens =
+    resolveContextTokensForModel({
+      cfg,
+      provider: defaultProvider,
+      model: defaultModel,
+      contextTokensOverride: params.contextTokensOverride,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
@@ -79,11 +93,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
     ...entry,
     sessionId,
     updatedAt: Date.now(),
-    contextTokens,
+    // Persist the SELECTED context window for the next turn; the runtime
+    // `contextTokens` computed above is only used for this turn's accounting.
+    contextTokens: persistedContextTokens,
   };
+  // Persist the originally selected provider/model so a transient automatic
+  // fallback (e.g. provider timeout) does not stick as the next-turn runtime.
   setSessionRuntimeModel(next, {
-    provider: providerUsed,
-    model: modelUsed,
+    provider: defaultProvider,
+    model: defaultModel,
   });
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
