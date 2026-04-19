@@ -79,7 +79,7 @@ export function resolveOpenAICompletionsCompatDefaults(
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
       isOllamaCompatProvider ||
-      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
+      (!isNonStandard && (supportsNativeStreamingUsageCompat ?? true)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,

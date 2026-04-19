@@ -232,11 +232,15 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
+  it("defaults supportsUsageInStreaming on for generic custom openai-completions provider", () => {
+    const model = {
+      ...baseModel(),
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
-    });
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
   });
 
   it("forces supportsStrictMode off for z.ai models", () => {

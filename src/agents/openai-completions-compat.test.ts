@@ -22,13 +22,13 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     ).toBe(true);
   });
 
-  it("does not broaden streaming usage for generic custom providers", () => {
+  it("defaults streaming usage on for generic custom providers (most OpenAI-compat APIs support it)", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({
         provider: "custom-cpa",
         endpointClass: "custom",
         knownProviderFamily: "custom-cpa",
       }).supportsUsageInStreaming,
-    ).toBe(false);
+    ).toBe(true);
   });
 });

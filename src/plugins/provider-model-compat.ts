@@ -124,13 +124,13 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
           ...(hasStreamingUsageOverride
             ? {}
             : {
-                supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
+                supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? true,
               }),
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
-          supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
+          supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? true,
           supportsStrictMode: detectedCompatDefaults?.supportsStrictMode ?? false,
         },
   } as typeof model;
