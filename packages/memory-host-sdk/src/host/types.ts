@@ -8,6 +8,8 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  vectorScore?: number;
+  textScore?: number;
 };
 
 export type MemoryEmbeddingProbeResult = {

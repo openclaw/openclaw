@@ -74,6 +74,8 @@ export async function mergeHybridResults(params: {
     score: number;
     snippet: string;
     source: HybridSource;
+    vectorScore: number;
+    textScore: number;
   }>
 > {
   const byId = new Map<
@@ -133,6 +135,8 @@ export async function mergeHybridResults(params: {
       score,
       snippet: entry.snippet,
       source: entry.source,
+      vectorScore: entry.vectorScore,
+      textScore: entry.textScore,
     };
   });
 
