@@ -136,6 +136,39 @@ describe("AcpxRuntime.ensureSession timeout", () => {
     await expectP;
   });
 
+  it("closes the orphaned delegate session when it resolves after timeout", { timeout: 20_000 }, async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+
+    let resolveDelegate!: (handle: unknown) => void;
+    const delegateEnsureSession = vi.fn(
+      () => new Promise<unknown>((resolve) => { resolveDelegate = resolve; }),
+    );
+    (runtime as unknown as { delegate: { ensureSession: typeof delegateEnsureSession } }).delegate.ensureSession =
+      delegateEnsureSession;
+
+    const closeSpy = vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    const resultP = runtime.ensureSession({ sessionKey: "agent:codex:acp:binding:test" } as never);
+    const expectP = expect(resultP).rejects.toThrow("ACP ensureSession timed out after 15s");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expectP;
+
+    // Simulate the delegate resolving after the timeout
+    const lateHandle = { sessionKey: "agent:codex:acp:binding:test", backend: "acpx", runtimeSessionName: "late" };
+    resolveDelegate(lateHandle);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(closeSpy).toHaveBeenCalledWith({
+      handle: lateHandle,
+      reason: "timeout",
+      discardPersistentState: false,
+    });
+  });
+
   it("clears the timer and returns the result when the delegate resolves in time", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

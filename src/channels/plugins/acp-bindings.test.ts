@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.types.js";
 import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import * as bindingRegistry from "./configured-binding-registry.js";
-import { ensureConfiguredBindingRouteReady } from "./binding-routing.js";
 
 const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());

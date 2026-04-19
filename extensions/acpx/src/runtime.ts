@@ -108,6 +108,12 @@ export class AcpxRuntime implements AcpxRuntimeLike {
       (result) => {
         clearTimeout(timer);
         if (result === token) {
+          // Clean up the orphaned delegate session if it eventually resolves
+          op.then(
+            (handle) =>
+              this.delegate.close({ handle, reason: "timeout", discardPersistentState: false }),
+            () => {}, // delegate rejected — nothing to clean up
+          );
           throw new Error(
             `ACP ensureSession timed out after ${AcpxRuntime.SESSION_ENSURE_TIMEOUT_MS / 1_000}s`,
           );
