@@ -310,8 +310,11 @@ jobs:
         run: |
           set -euo pipefail
           trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+          if git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"; then
+            echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+          else
+            echo "::warning title=trusted pre-commit config unavailable::Base commit ${BASE_SHA} does not contain .pre-commit-config.yaml, falling back to repository config"
+          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
