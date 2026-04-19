@@ -263,18 +263,18 @@ export class BlueBubblesClient {
    * JSON request helper. Returns both the response (for status/headers) and
    * parsed body (null on non-ok or parse failure — callers check both).
    */
-  async requestJson<T>(params: {
+  async requestJson(params: {
     method: string;
     path: string;
     body?: unknown;
     timeoutMs?: number;
-  }): Promise<{ response: Response; data: T | null }> {
+  }): Promise<{ response: Response; data: unknown }> {
     const response = await this.request(params);
     if (!response.ok) {
       return { response, data: null };
     }
-    const raw = await response.json().catch(() => null);
-    return { response, data: (raw as T | null) ?? null };
+    const raw: unknown = await response.json().catch(() => null);
+    return { response, data: raw };
   }
 
   /**
@@ -365,17 +365,19 @@ export class BlueBubblesClient {
     messageGuid: string;
     timeoutMs?: number;
   }): Promise<BlueBubblesAttachment[]> {
-    const { response, data } = await this.requestJson<{
-      data?: Record<string, unknown>;
-    }>({
+    const { response, data } = await this.requestJson({
       method: "GET",
       path: `/api/v1/message/${encodeURIComponent(params.messageGuid)}`,
       timeoutMs: params.timeoutMs,
     });
-    if (!response.ok || !data?.data) {
+    if (!response.ok || typeof data !== "object" || data === null) {
       return [];
     }
-    return extractAttachments(data.data);
+    const inner = (data as { data?: unknown }).data;
+    if (typeof inner !== "object" || inner === null) {
+      return [];
+    }
+    return extractAttachments(inner as Record<string, unknown>);
   }
 
   /**
