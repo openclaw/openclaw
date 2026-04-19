@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,7 +29,7 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-async function assertConfiguredAnnounceChannel(params: {
+function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel";
@@ -61,12 +62,9 @@ async function assertConfiguredAnnounceChannel(params: {
   throw new Error(`${params.field} must be one of: ${configuredChannels.join(", ")}`);
 }
 
-async function assertValidCronAnnounceDelivery(params: {
-  cfg: OpenClawConfig;
-  delivery?: CronDelivery;
-}) {
+function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
   if (params.delivery?.mode === "announce") {
-    await assertConfiguredAnnounceChannel({
+    assertConfiguredAnnounceChannel({
       cfg: params.cfg,
       channel: params.delivery.channel,
       field: "delivery.channel",
@@ -75,7 +73,7 @@ async function assertValidCronAnnounceDelivery(params: {
 
   const failureDestination = params.delivery?.failureDestination;
   if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
-    await assertConfiguredAnnounceChannel({
+    assertConfiguredAnnounceChannel({
       cfg: params.cfg,
       channel: failureDestination.channel,
       field: "delivery.failureDestination.channel",
@@ -83,14 +81,15 @@ async function assertValidCronAnnounceDelivery(params: {
   }
 }
 
-async function assertValidCronCreateDelivery(jobCreate: CronJobCreate) {
-  await assertValidCronAnnounceDelivery({
-    cfg: loadConfig(),
+function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
+  assertValidCronAnnounceDelivery({
+    cfg,
     delivery: jobCreate.delivery,
   });
 }
 
-async function assertValidCronUpdateDelivery(params: {
+function assertValidCronUpdateDelivery(params: {
+  cfg: OpenClawConfig;
   currentJob: CronJob | undefined;
   patch: CronJobPatch;
 }) {
@@ -99,9 +98,11 @@ async function assertValidCronUpdateDelivery(params: {
   }
 
   const nextJob = structuredClone(params.currentJob);
-  applyJobPatch(nextJob, params.patch);
-  await assertValidCronAnnounceDelivery({
-    cfg: loadConfig(),
+  applyJobPatch(nextJob, params.patch, {
+    defaultAgentId: resolveDefaultAgentId(params.cfg),
+  });
+  assertValidCronAnnounceDelivery({
+    cfg: params.cfg,
     delivery: nextJob.delivery,
   });
 }
@@ -207,6 +208,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
+    const cfg = loadConfig();
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -217,7 +219,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      await assertValidCronCreateDelivery(jobCreate);
+      assertValidCronCreateDelivery(cfg, jobCreate);
     } catch (err) {
       respond(
         false,
@@ -278,6 +280,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch = p.patch as unknown as CronJobPatch;
+    const cfg = loadConfig();
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -290,7 +293,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     try {
-      await assertValidCronUpdateDelivery({
+      assertValidCronUpdateDelivery({
+        cfg,
         currentJob: context.cron.getJob(jobId),
         patch,
       });
