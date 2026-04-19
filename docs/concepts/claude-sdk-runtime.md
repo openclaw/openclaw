@@ -68,7 +68,7 @@ If the inventory build fails (policy resolution error, plugin registry issue, et
 
 ## Hook translation
 
-Workspace hook entries (see [Hooks](/hooks)) are loaded via `loadWorkspaceHookEntries()` and translated into SDK `HookCallbackMatcher` records. The following OpenClaw event strings map to SDK `HookEvent` values:
+Workspace hook entries (see [Hooks](/automation/hooks)) are loaded via `loadWorkspaceHookEntries()` and translated into SDK `HookCallbackMatcher` records. The following OpenClaw event strings map to SDK `HookEvent` values:
 
 | OpenClaw event       | SDK event            |
 | -------------------- | -------------------- |
@@ -130,4 +130,4 @@ Fields that are intentionally ignored (with a run-start warning so misconfigurat
 
 - [Agent Loop](/concepts/agent-loop) — shared loop semantics above the runtime driver.
 - [OAuth](/concepts/oauth) — how `claude login` credentials are stored.
-- [Hooks](/hooks) — authoring workspace hooks.
+- [Hooks](/automation/hooks) — authoring workspace hooks.
