@@ -412,7 +412,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     channelType === ChannelType.PublicThread ||
     channelType === ChannelType.PrivateThread ||
     channelType === ChannelType.AnnouncementThread;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelName = (() => { try { return channel && "name" in channel ? (channel.name as string) : undefined; } catch { return undefined; } })();
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const rawChannelId = channel?.id ?? "";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
@@ -801,7 +801,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channelType === ChannelType.PublicThread ||
     channelType === ChannelType.PrivateThread ||
     channelType === ChannelType.AnnouncementThread;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelName = (() => { try { return channel && "name" in channel ? (channel.name as string) : undefined; } catch { return undefined; } })();
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const rawChannelId = channel?.id ?? "";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
