@@ -5,6 +5,7 @@ import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   type ProcessSession,
+  type ProcessStatus,
   deleteSession,
   drainSession,
   getFinishedSession,
@@ -50,6 +51,26 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
+
+function isKillSignal(signal: NodeJS.Signals | number | null | undefined): boolean {
+  return signal === "SIGTERM" || signal === "SIGKILL";
+}
+
+function resolveTerminalProcessStatus(session: ProcessSession): Exclude<ProcessStatus, "running"> {
+  const exitCode = session.exitCode ?? 0;
+  const exitSignal = session.exitSignal ?? null;
+  if (exitCode === 0 && exitSignal == null) {
+    return "completed";
+  }
+  if (isKillSignal(exitSignal)) {
+    return "killed";
+  }
+  return "failed";
+}
+
+function processStatusToToolStatus(status: ProcessStatus): "completed" | "failed" {
+  return status === "failed" ? "failed" : "completed";
+}
 
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -327,7 +348,7 @@ export function createProcessTool(
                   },
                 ],
                 details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
+                  status: processStatusToToolStatus(scopedFinished.status),
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
                   aggregated: scopedFinished.aggregated,
@@ -352,19 +373,17 @@ export function createProcessTool(
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
+          const terminalStatus = exited ? resolveTerminalProcessStatus(scopedSession) : undefined;
           if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
               scopedSession,
               scopedSession.exitCode ?? null,
               scopedSession.exitSignal ?? null,
-              status,
+              terminalStatus ?? "completed",
             );
           }
           const status = exited
-            ? exitCode === 0 && exitSignal == null
-              ? "completed"
-              : "failed"
+            ? processStatusToToolStatus(terminalStatus ?? "completed")
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
           const hasNewOutput = output.length > 0;
@@ -438,7 +457,7 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
+            const status = processStatusToToolStatus(scopedFinished.status);
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
@@ -551,7 +570,7 @@ export function createProcessTool(
                 `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
               );
             }
-            markExited(scopedSession, null, "SIGKILL", "failed");
+            markExited(scopedSession, null, "SIGKILL", "killed");
           }
           resetPollRetrySuggestion(params.sessionId);
           return {
@@ -564,7 +583,7 @@ export function createProcessTool(
               },
             ],
             details: {
-              status: "failed",
+              status: "completed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
@@ -604,7 +623,7 @@ export function createProcessTool(
                   `Unable to remove session ${params.sessionId}: no active supervisor run or process id.`,
                 );
               }
-              markExited(scopedSession, null, "SIGKILL", "failed");
+              markExited(scopedSession, null, "SIGKILL", "killed");
               deleteSession(params.sessionId);
             }
             resetPollRetrySuggestion(params.sessionId);
@@ -618,7 +637,7 @@ export function createProcessTool(
                 },
               ],
               details: {
-                status: "failed",
+                status: "completed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };

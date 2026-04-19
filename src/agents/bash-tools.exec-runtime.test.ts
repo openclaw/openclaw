@@ -390,7 +390,7 @@ describe("exec notifyOnExit suppression", () => {
   it("keeps manual-cancelled no-output background execs silent", async () => {
     const outcome = await runBackgroundedExit({ reason: "manual-cancel" });
 
-    expect(outcome.status).toBe("failed");
+    expect(outcome.status).toBe("killed");
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
@@ -563,6 +563,31 @@ describe("buildExecExitOutcome", () => {
       failureKind: "overall-timeout",
       timedOut: true,
       reason: expect.stringContaining("30 seconds"),
+    });
+  });
+
+  it("classifies manual cancels as killed instead of failed", () => {
+    expect(
+      buildExecExitOutcome({
+        exit: {
+          reason: "manual-cancel",
+          exitCode: null,
+          exitSignal: "SIGKILL",
+          durationMs: 123,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        },
+        aggregated: "partial output",
+        durationMs: 123,
+        timeoutSec: 30,
+      }),
+    ).toMatchObject({
+      status: "killed",
+      exitSignal: "SIGKILL",
+      timedOut: false,
+      reason: expect.stringContaining("Command canceled by request"),
     });
   });
 

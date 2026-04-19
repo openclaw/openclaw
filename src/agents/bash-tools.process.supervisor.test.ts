@@ -25,6 +25,7 @@ vi.mock("../process/kill-tree.js", () => ({
 let addSession: typeof import("./bash-process-registry.js").addSession;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
+let markExited: typeof import("./bash-process-registry.js").markExited;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
@@ -40,7 +41,7 @@ function createBackgroundSession(id: string, pid?: number) {
 
 describe("process tool supervisor cancellation", () => {
   beforeAll(async () => {
-    ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
+    ({ addSession, getFinishedSession, getSession, markExited, resetProcessRegistryForTests } =
       await import("./bash-process-registry.js"));
     ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
     ({ createProcessTool } = await import("./bash-tools.process.js"));
@@ -115,7 +116,8 @@ describe("process tool supervisor cancellation", () => {
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
     expect(getSession("sess-fallback")).toBeUndefined();
-    expect(getFinishedSession("sess-fallback")).toBeDefined();
+    expect(getFinishedSession("sess-fallback")).toMatchObject({ status: "killed" });
+    expect(result.details).toMatchObject({ status: "completed" });
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: "Killed session sess-fallback.",
@@ -139,5 +141,40 @@ describe("process tool supervisor cancellation", () => {
       type: "text",
       text: "Unable to remove session sess-no-pid: no active supervisor run or process id.",
     });
+  });
+
+  it("poll reports killed finished sessions without failed tool status", async () => {
+    supervisorMock.getRecord.mockReturnValue(undefined);
+    const session = createBackgroundSession("sess-killed", 4242);
+    addSession(session);
+    markExited(session, null, "SIGKILL", "killed");
+    const processTool = createProcessTool();
+
+    const result = await processTool.execute("toolcall", {
+      action: "poll",
+      sessionId: "sess-killed",
+    });
+
+    expect(getFinishedSession("sess-killed")).toMatchObject({ status: "killed" });
+    expect(result.details).toMatchObject({ status: "completed" });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Process exited with signal SIGKILL."),
+    });
+  });
+
+  it("log reports killed finished sessions without failed tool status", async () => {
+    supervisorMock.getRecord.mockReturnValue(undefined);
+    const session = createBackgroundSession("sess-killed", 4242);
+    addSession(session);
+    markExited(session, null, "SIGKILL", "killed");
+    const processTool = createProcessTool();
+
+    const result = await processTool.execute("toolcall", {
+      action: "log",
+      sessionId: "sess-killed",
+    });
+
+    expect(result.details).toMatchObject({ status: "completed" });
   });
 });
