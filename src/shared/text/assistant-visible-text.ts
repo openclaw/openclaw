@@ -580,15 +580,30 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
   },
 };
 
-// Strip absolute filesystem paths that reveal user-home layouts. Both POSIX
-// (`/home/user/...`, `/Users/user/...`) and Windows (`C:\Users\user\...`)
-// paths are normalized to `~/...`. `/root` is treated as a home directory
-// itself since it is the root account's home; its suffix is preserved. Kept
-// conservative so paths inside quoted code blocks are still recognizable.
+// Strip absolute filesystem paths that reveal user-home layouts or internal
+// server layouts. Both POSIX (`/home/user/...`, `/Users/user/...`,
+// `/tmp/...`, `/var/...`, `/opt/...`, `/etc/...`, `/mnt/...`, `/srv/...`)
+// and Windows (`C:\Users\user\...`, generic `C:\path\...`) paths are
+// normalized to `~/...`. `/root` is treated as a home directory itself since
+// it is the root account's home; its suffix is preserved. Kept conservative
+// so paths inside quoted code blocks are still recognizable.
+// Phase 3.6: the POSIX_SYS prefix list extends past home-dir paths to cover
+// common server-layout leaks (`/tmp/secret.txt`, `/etc/passwd`, etc.)
+// discovered by the Phase 7 P3 red-team.
 const ABS_PATH_POSIX_USER_RE = /\/(?:home|Users)\/[^/\s"'`<>]+(\/[^\s"'`<>]*)?/g;
 const ABS_PATH_POSIX_ROOT_RE = /\/root(\/[^\s"'`<>]*)?/g;
+// POSIX_SYS uses a negative lookbehind to avoid matching path segments that
+// already sit inside a normalized `~/…` path (e.g. the trailing `/tmp/…` of
+// an earlier-scrubbed `/home/user/tmp/…`). Anchoring to non-path boundary
+// characters keeps the rule specific to top-level absolute paths.
+const ABS_PATH_POSIX_SYS_RE = /(?<![~\w.-])\/(?:tmp|var|opt|etc|mnt|srv)(\/[^\s"'`<>]*)?/g;
 const ABS_PATH_WIN_RE =
   /[a-zA-Z]:\\(?:Users|Documents and Settings)\\[^\\/\s"'`<>]+(\\[^\s"'`<>]*)?/g;
+// Generic Windows drive-letter path (not matched by the user-profile regex).
+// Require at least one path segment after the drive so plain drive-letter
+// references (e.g. the literal text "C:\") don't get scrubbed; match until
+// whitespace/quote terminators.
+const ABS_PATH_WIN_GENERIC_RE = /[a-zA-Z]:\\[^\s"'`<>\\]+(?:\\[^\s"'`<>]*)?/g;
 
 function stripAbsolutePathsFromText(text: string): string {
   let cleaned = text.replace(ABS_PATH_POSIX_USER_RE, (_match, tail: string | undefined) => {
@@ -597,8 +612,17 @@ function stripAbsolutePathsFromText(text: string): string {
   cleaned = cleaned.replace(ABS_PATH_POSIX_ROOT_RE, (_match, tail: string | undefined) => {
     return tail ? `~${tail}` : "~";
   });
+  cleaned = cleaned.replace(ABS_PATH_POSIX_SYS_RE, (_match, tail: string | undefined) => {
+    return tail ? `~${tail}` : "~";
+  });
   cleaned = cleaned.replace(ABS_PATH_WIN_RE, (_match, tail: string | undefined) => {
     return tail ? `~${tail.replace(/\\/g, "/")}` : "~";
+  });
+  cleaned = cleaned.replace(ABS_PATH_WIN_GENERIC_RE, (match) => {
+    // Skip if we already normalized this to `~/...`; the previous passes may
+    // have consumed the user-profile form already.
+    const tail = match.slice(2); // drop "C:" / drive letter + colon
+    return `~${tail.replace(/\\/g, "/")}`;
   });
   return cleaned;
 }
@@ -607,17 +631,65 @@ function stripAbsolutePathsFromText(text: string): string {
 // to avoid false positives eating real prose (e.g., "bearer" appears in legal
 // text). Each pattern requires a plausible secret-shaped suffix.
 const SK_API_KEY_RE = /\bsk-(?:live|test|proj|ant-api\w+-)?[A-Za-z0-9_-]{16,}\b/g;
-const BEARER_TOKEN_RE = /\b(Bearer)\s+[A-Za-z0-9_.\-~+/=]{12,}\b/g;
+// Phase 3.6: bearer regex is now case-insensitive so `bearer`, `Bearer`,
+// `BEARER` all scrub. The preserved keyword reuses the original casing via
+// the captured group so the redacted header looks natural.
+const BEARER_TOKEN_RE = /\b(Bearer)\s+[A-Za-z0-9_.\-~+/=]{12,}\b/gi;
 const OPENAI_TOKEN_RE = /\bOPENAI_API_KEY\s*=\s*\S+/g;
 const ANTHROPIC_TOKEN_RE = /\bANTHROPIC_API_KEY\s*=\s*\S+/g;
 const GITHUB_PAT_RE = /\bghp_[A-Za-z0-9]{20,}\b/g;
+// Phase 3.6 Gap 2: AWS credentials. Two complementary regexes — one matches
+// the explicit env-var assignment form (any `AWS_*KEY|SECRET|TOKEN=value`),
+// the other catches bare AKIA-prefixed access-key ids even when they appear
+// without a surrounding assignment (e.g. in log lines). Kept narrow to the
+// "AWS_"-prefixed names so unrelated `KEY=` assignments are not captured here.
+const AWS_ENV_ASSIGN_RE =
+  /\b(?:AWS|aws)_[A-Za-z0-9_]*(?:KEY|SECRET|TOKEN|key|secret|token)\s*[:=]\s*["']?[^\s"']+["']?/g;
+const AWS_ACCESS_KEY_ID_RE = /\bAKIA[0-9A-Z]{16}\b/g;
+// Phase 3.6 Gap 3: Slack tokens. Covers xoxa/xoxb/xoxo/xoxp/xoxr/xoxs.
+const SLACK_TOKEN_RE = /\bxox[aboprs]-[A-Za-z0-9-]{10,}\b/g;
+// Phase 3.6 Gap 4: generic env assignments whose NAMES contain sensitive
+// keywords. Scoped tightly to upper-case identifiers ending in a sensitive
+// suffix so that legitimate prose ("my secret recipe") is not caught. The
+// negative-lookahead guards against re-redacting values that earlier passes
+// (AWS, GitHub PAT, OPENAI, ANTHROPIC) already replaced with a `[redacted…]`
+// marker, so specific markers are preserved when both rules would match.
+const GENERIC_SECRET_ENV_RE =
+  /\b[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY|AUTH|API_KEY)\s*[:=]\s*(?!\[redacted)["']?[^\s"']+["']?/g;
+// Phase 3.6 Gap 5: JWTs. Three base64url-encoded segments separated by dots,
+// starting with `eyJ` (the base64url encoding of `{"`). The minimum segment
+// lengths avoid matching benign strings that happen to start with `eyJ`.
+const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
 
 function redactSecretsFromText(text: string): string {
   let cleaned = text.replace(SK_API_KEY_RE, "[redacted-api-key]");
-  cleaned = cleaned.replace(BEARER_TOKEN_RE, "$1 [redacted]");
+  // Phase 3.6 Gap 6: case-insensitive bearer. Preserve the original keyword
+  // casing so redacted text still reads naturally.
+  cleaned = cleaned.replace(BEARER_TOKEN_RE, (_match, keyword: string) => `${keyword} [redacted]`);
   cleaned = cleaned.replace(OPENAI_TOKEN_RE, "OPENAI_API_KEY=[redacted]");
   cleaned = cleaned.replace(ANTHROPIC_TOKEN_RE, "ANTHROPIC_API_KEY=[redacted]");
   cleaned = cleaned.replace(GITHUB_PAT_RE, "[redacted-github-pat]");
+  // AWS-specific redactions run BEFORE the generic env assignment pass so the
+  // "[redacted-aws-*]" tag is preserved instead of being rewritten by the
+  // generic pass (which would produce `=[redacted]`).
+  cleaned = cleaned.replace(AWS_ENV_ASSIGN_RE, (match) => {
+    const eqIdx = match.search(/[:=]/);
+    const name = match.slice(0, eqIdx).trim();
+    const sep = match[eqIdx];
+    return `${name}${sep}[redacted-aws-secret]`;
+  });
+  cleaned = cleaned.replace(AWS_ACCESS_KEY_ID_RE, "[redacted-aws-access-key-id]");
+  cleaned = cleaned.replace(SLACK_TOKEN_RE, "[redacted-slack-token]");
+  cleaned = cleaned.replace(JWT_RE, "[redacted-jwt]");
+  // Generic sensitive-name env assignment. Runs LAST so earlier-specific
+  // rules (OPENAI/ANTHROPIC/AWS) win their named slots; anything still
+  // matching is scrubbed with a generic marker while preserving the key name.
+  cleaned = cleaned.replace(GENERIC_SECRET_ENV_RE, (match) => {
+    const eqIdx = match.search(/[:=]/);
+    const name = match.slice(0, eqIdx).trim();
+    const sep = match[eqIdx];
+    return `${name}${sep}[redacted]`;
+  });
   return cleaned;
 }
 
@@ -625,9 +697,22 @@ function redactSecretsFromText(text: string): string {
 // parenthesized path). Only target the common Node.js format; preserve user
 // prose mentioning "at the top" or similar.
 const STACK_FRAME_RE = /^\s{2,}at\s+[^\n]*?(?:\([^\n)]*\)|:\d+(?::\d+)?)\s*$/gm;
+// Phase 3.6 Gap 7: bare stack frames that a model echoes without the usual
+// parenthesised path/line suffix. Requires a clearly-stack-shaped line:
+// at least 2 leading spaces of indentation (typical V8 stack output begins
+// with 4), literal `at ` token, then a JS identifier — optionally dotted,
+// optionally with one `<…>` synthetic frame name (e.g. `Object.<anonymous>`),
+// and optionally a trailing argument list `(…)`. The regex refuses to match
+// lines where the `at` appears mid-sentence ("walking at a pace") because it
+// anchors to leading whitespace + the exact `at ` token followed by an
+// identifier-start, not free text.
+const BARE_STACK_FRAME_RE =
+  /^\s{2,}at\s+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\.<[A-Za-z_$][\w$]*>)*(?:\s*\([^\n)]*\))?\s*$/gm;
 
 function stripStackTracesFromText(text: string): string {
-  return text.replace(STACK_FRAME_RE, "");
+  let cleaned = text.replace(STACK_FRAME_RE, "");
+  cleaned = cleaned.replace(BARE_STACK_FRAME_RE, "");
+  return cleaned;
 }
 
 function applyAssistantVisibleTextStagePipeline(
