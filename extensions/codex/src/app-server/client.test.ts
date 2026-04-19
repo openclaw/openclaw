@@ -242,4 +242,26 @@ describe("CodexAppServerClient", () => {
       result: { decision: "decline" },
     });
   });
+
+  it("fails closed for unhandled request_user_input prompts", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    harness.send({
+      id: "input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        questions: [],
+      },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "input-1",
+      result: { answers: {} },
+    });
+  });
 });

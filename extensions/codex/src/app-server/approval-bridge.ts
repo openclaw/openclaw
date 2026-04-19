@@ -1,30 +1,14 @@
 import {
-  callGatewayTool,
   type AgentApprovalEventData,
   type EmbeddedRunAttemptParams,
-  type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness";
+import {
+  mapExecDecisionToOutcome,
+  requestPluginApproval,
+  type AppServerApprovalOutcome,
+  waitForPluginApprovalDecision,
+} from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
-
-const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
-
-export type AppServerApprovalOutcome =
-  | "approved-once"
-  | "approved-session"
-  | "denied"
-  | "unavailable"
-  | "cancelled";
-
-type ApprovalRequestResult = {
-  id?: string;
-  status?: string;
-  decision?: ExecApprovalDecision | null;
-};
-
-type ApprovalWaitResult = {
-  id?: string;
-  decision?: ExecApprovalDecision | null;
-};
 
 export async function handleCodexAppServerApprovalRequest(params: {
   method: string;
@@ -46,29 +30,14 @@ export async function handleCodexAppServerApprovalRequest(params: {
   });
 
   try {
-    const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
-    const requestResult: ApprovalRequestResult | undefined = await callGatewayTool(
-      "plugin.approval.request",
-      { timeoutMs: timeoutMs + 10_000 },
-      {
-        pluginId: "openclaw-codex-app-server",
-        title: context.title,
-        description: context.description,
-        severity: context.severity,
-        toolName: context.kind === "exec" ? "codex_command_approval" : "codex_file_approval",
-        toolCallId: context.itemId,
-        agentId: params.paramsForRun.agentId,
-        sessionKey: params.paramsForRun.sessionKey,
-        turnSourceChannel:
-          params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider,
-        turnSourceTo: params.paramsForRun.currentChannelId,
-        turnSourceAccountId: params.paramsForRun.agentAccountId,
-        turnSourceThreadId: params.paramsForRun.currentThreadTs,
-        timeoutMs,
-        twoPhase: true,
-      },
-      { expectFinal: false },
-    );
+    const requestResult = await requestPluginApproval({
+      paramsForRun: params.paramsForRun,
+      title: context.title,
+      description: context.description,
+      severity: context.severity,
+      toolName: context.kind === "exec" ? "codex_command_approval" : "codex_file_approval",
+      toolCallId: context.itemId,
+    });
 
     const approvalId = requestResult?.id;
     if (!approvalId) {
@@ -96,11 +65,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
 
     const decision = Object.prototype.hasOwnProperty.call(requestResult, "decision")
       ? requestResult.decision
-      : await waitForApprovalDecision({
-          approvalId,
-          timeoutMs,
-          signal: params.signal,
-        });
+      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
     const outcome = mapExecDecisionToOutcome(decision);
 
     emitApprovalEvent(params.paramsForRun, {
@@ -230,37 +195,6 @@ function buildApprovalContext(params: {
   };
 }
 
-async function waitForApprovalDecision(params: {
-  approvalId: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): Promise<ExecApprovalDecision | null | undefined> {
-  const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
-    "plugin.approval.waitDecision",
-    { timeoutMs: params.timeoutMs + 10_000 },
-    { id: params.approvalId },
-  );
-  if (!params.signal) {
-    return (await waitPromise)?.decision;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (params.signal!.aborted) {
-      reject(params.signal!.reason);
-      return;
-    }
-    onAbort = () => reject(params.signal!.reason);
-    params.signal!.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return (await Promise.race([waitPromise, abortPromise]))?.decision;
-  } finally {
-    if (onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
 function commandApprovalDecision(
   requestParams: JsonObject | undefined,
   outcome: AppServerApprovalOutcome,
@@ -305,21 +239,6 @@ function hasAvailableDecision(requestParams: JsonObject | undefined, decision: s
     return true;
   }
   return available.includes(decision);
-}
-
-function mapExecDecisionToOutcome(
-  decision: ExecApprovalDecision | null | undefined,
-): AppServerApprovalOutcome {
-  if (decision === "allow-once") {
-    return "approved-once";
-  }
-  if (decision === "allow-always") {
-    return "approved-session";
-  }
-  if (decision === null || decision === undefined) {
-    return "unavailable";
-  }
-  return "denied";
 }
 
 function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {
