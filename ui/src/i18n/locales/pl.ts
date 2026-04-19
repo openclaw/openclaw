@@ -630,6 +630,7 @@ export const pl: TranslationMap = {
   chat: {
     disconnected: "Rozłączono z Gateway.",
     refreshTitle: "Odśwież dane czatu",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Przełącz wyświetlanie myślenia/pracy asystenta",
     toolCallsToggle: "Przełącz wyświetlanie wywołań narzędzi i wyników narzędzi",
     focusToggle: "Przełącz tryb skupienia (ukryj pasek boczny i nagłówek strony)",

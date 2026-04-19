@@ -243,15 +243,13 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
 
   const sessionKey = params.sessionKey;
   const planMode = params.sessionEntry?.planMode;
-  // Codex P1 review #68939 (2026-04-19): the question-answer
-  // approvalId lives on `SessionEntry.pendingQuestionApprovalId`
-  // (separate from `planMode.approvalId` which carries the plan
-  // approval). Read it here so the `/plan answer` text-channel path
-  // can thread the right token into the patch — without it, the
-  // gateway-side answer-guard rejects with "no pending question"
-  // and the user can't complete `ask_user_question` flows on
-  // non-web channels.
-  const pendingQuestionApprovalId = params.sessionEntry?.pendingQuestionApprovalId;
+  const pendingInteraction = params.sessionEntry?.pendingInteraction;
+  const pendingQuestionApprovalId =
+    pendingInteraction?.kind === "question"
+      ? pendingInteraction.approvalId
+      : params.sessionEntry?.pendingQuestionApprovalId;
+  const pendingQuestionId =
+    pendingInteraction?.kind === "question" ? pendingInteraction.questionId : undefined;
   const resolvedBy = buildResolvedByLabel(params);
 
   if (sub.kind === "status") {
@@ -435,6 +433,7 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
           action: "answer",
           answer: sub.answer,
           approvalId: pendingQuestionApprovalId,
+          ...(pendingQuestionId ? { questionId: pendingQuestionId } : {}),
         },
       });
       // Codex P1 review #68939 (2026-04-19): set `shouldContinue:
@@ -516,6 +515,14 @@ export const handlePlanCommand: CommandHandler = async (params, allowTextCommand
         shouldContinue: false,
         reply: {
           text: "Plan was already resolved (likely a duplicate command). Use /plan status to see the current state.",
+        },
+      };
+    }
+    if (errMsg.includes("PLAN_APPROVAL_GATE_STATE_UNAVAILABLE")) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "Refresh the session or ask the agent to resubmit the plan before approving again. The runtime could not safely reconstruct the subagent gate state for this plan cycle.",
         },
       };
     }

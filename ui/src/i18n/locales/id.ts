@@ -625,6 +625,7 @@ export const id: TranslationMap = {
   chat: {
     disconnected: "Terputus dari gateway.",
     refreshTitle: "Refresh data chat",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",

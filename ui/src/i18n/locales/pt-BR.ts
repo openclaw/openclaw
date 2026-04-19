@@ -627,6 +627,7 @@ export const pt_BR: TranslationMap = {
   chat: {
     disconnected: "Desconectado do gateway.",
     refreshTitle: "Atualizar dados do chat",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     toolCallsToggle: "Alternar chamadas de ferramenta e resultados de ferramenta",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",

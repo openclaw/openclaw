@@ -628,6 +628,7 @@ export const ja_JP: TranslationMap = {
   chat: {
     disconnected: "Gateway から切断されました。",
     refreshTitle: "チャットデータを更新",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
     focusToggle: "フォーカスモードを切り替え（サイドバー + ページヘッダーを非表示）",

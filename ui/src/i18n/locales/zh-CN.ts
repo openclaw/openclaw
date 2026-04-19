@@ -615,6 +615,7 @@ export const zh_CN: TranslationMap = {
   chat: {
     disconnected: "已断开与网关的连接。",
     refreshTitle: "刷新聊天数据",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "切换助手思考/工作输出",
     toolCallsToggle: "切换工具调用和工具结果",
     focusToggle: "切换专注模式 (隐藏侧边栏 + 页面页眉)",

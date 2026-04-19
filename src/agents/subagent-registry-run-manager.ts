@@ -1,7 +1,10 @@
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
-import { drainCompletedSubagentFromParents } from "../infra/agent-events.js";
+import {
+  drainCompletedSubagentFromParents,
+  replaceOpenSubagentRunIdInParents,
+} from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
@@ -223,6 +226,7 @@ export function createSubagentRunManager(params: {
       if (shouldDeleteAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
       }
+      replaceOpenSubagentRunIdInParents(previousRunId, nextRunId);
       params.runs.delete(previousRunId);
       params.resumedRuns.delete(previousRunId);
     }

@@ -343,16 +343,109 @@ type AgentEventState = {
   seqByRun: Map<string, number>;
   listeners: Set<(evt: AgentEventPayload) => void>;
   runContextById: Map<string, AgentRunContext>;
+  persistPlanModeSubagentGateState?: (
+    params: PersistPlanModeSubagentGateStateParams,
+  ) => Promise<void> | void;
 };
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
+
+type PersistPlanModeSubagentGateStateParams = {
+  sessionKey?: string;
+  mutate: (planMode: {
+    blockingSubagentRunIds?: string[];
+    lastSubagentSettledAt?: number;
+    updatedAt?: number;
+    mode?: string;
+  }) => void;
+};
 
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
     listeners: new Set<(evt: AgentEventPayload) => void>(),
     runContextById: new Map<string, AgentRunContext>(),
+    persistPlanModeSubagentGateState: undefined,
   }));
+}
+
+function persistPlanModeSubagentGateState(params: PersistPlanModeSubagentGateStateParams): void {
+  if (!params.sessionKey) {
+    return;
+  }
+  const handler = getAgentEventState().persistPlanModeSubagentGateState;
+  if (!handler) {
+    return;
+  }
+  void Promise.resolve(handler(params)).catch(() => {
+    // best-effort only; approval gate still has the in-memory fallback
+  });
+}
+
+export function setPlanModeSubagentGatePersistenceHandler(
+  handler: AgentEventState["persistPlanModeSubagentGateState"],
+): () => void {
+  const state = getAgentEventState();
+  state.persistPlanModeSubagentGateState = handler;
+  return () => {
+    if (state.persistPlanModeSubagentGateState === handler) {
+      state.persistPlanModeSubagentGateState = undefined;
+    }
+  };
+}
+
+export function trackOpenSubagentForParent(parentRunId: string, childRunId: string): void {
+  if (!parentRunId || !childRunId) {
+    return;
+  }
+  const ctx = getAgentEventState().runContextById.get(parentRunId);
+  if (!ctx) {
+    return;
+  }
+  if (!ctx.openSubagentRunIds) {
+    ctx.openSubagentRunIds = new Set();
+  }
+  ctx.openSubagentRunIds.add(childRunId);
+  delete ctx.lastSubagentSettledAt;
+  if (ctx.inPlanMode === true && ctx.sessionKey) {
+    persistPlanModeSubagentGateState({
+      sessionKey: ctx.sessionKey,
+      mutate: (planMode) => {
+        const nextIds = new Set(planMode.blockingSubagentRunIds ?? []);
+        nextIds.add(childRunId);
+        planMode.blockingSubagentRunIds = [...nextIds];
+        delete planMode.lastSubagentSettledAt;
+      },
+    });
+  }
+}
+
+export function replaceOpenSubagentRunIdInParents(previousRunId: string, nextRunId: string): void {
+  if (!previousRunId || !nextRunId || previousRunId === nextRunId) {
+    return;
+  }
+  const state = getAgentEventState();
+  for (const ctx of state.runContextById.values()) {
+    const set = ctx.openSubagentRunIds;
+    if (!set || !set.has(previousRunId)) {
+      continue;
+    }
+    set.delete(previousRunId);
+    set.add(nextRunId);
+    if (ctx.inPlanMode === true && ctx.sessionKey) {
+      persistPlanModeSubagentGateState({
+        sessionKey: ctx.sessionKey,
+        mutate: (planMode) => {
+          const nextIds = new Set(planMode.blockingSubagentRunIds ?? []);
+          if (!nextIds.delete(previousRunId)) {
+            return;
+          }
+          nextIds.add(nextRunId);
+          planMode.blockingSubagentRunIds = [...nextIds];
+        },
+      });
+    }
+  }
 }
 
 /**
@@ -382,6 +475,19 @@ export function drainCompletedSubagentFromParents(childRunId: string): void {
     // approval-resume-turn failure mode.
     if (hadChild && set.size === 0) {
       ctx.lastSubagentSettledAt = now;
+    }
+    if (hadChild && ctx.inPlanMode === true && ctx.sessionKey) {
+      persistPlanModeSubagentGateState({
+        sessionKey: ctx.sessionKey,
+        mutate: (planMode) => {
+          const nextIds = new Set(planMode.blockingSubagentRunIds ?? []);
+          nextIds.delete(childRunId);
+          planMode.blockingSubagentRunIds = [...nextIds];
+          if (nextIds.size === 0) {
+            planMode.lastSubagentSettledAt = now;
+          }
+        },
+      });
     }
   }
 }

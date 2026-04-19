@@ -24,7 +24,7 @@ export function describePlanModeStatusTool(): string {
     // self-diagnose plan-mode state without inferring from tool errors.
     "Read-only inspection of the current plan-mode state for the active session.",
     "Returns: inPlanMode, approval phase, title, openSubagentCount + IDs, plan step count, recentlyApprovedAt, pendingAgentInjection preview, planModeIntroDeliveredAt, autoApprove, debugLogEnabled.",
-    "Use this when: you want to verify your current plan-mode state before submitting / approving / continuing; the user asks 'what's my plan-mode state?'; debugging why a tool was blocked; verifying state transitions during /plan self-test.",
+    "Use this when: you want to verify your current plan-mode state before submitting / approving / continuing; the user asks 'what's my plan-mode state?'; debugging why a tool was blocked; verifying approval, restart, or nudge behavior during troubleshooting.",
     "ALWAYS read-only — never mutates plan-mode state, never consumes pendingAgentInjection, safe to call mid-pending-approval.",
   ].join(" ");
 }
@@ -32,7 +32,7 @@ export function describePlanModeStatusTool(): string {
 export function describeAskUserQuestionTool(): string {
   return [
     "Ask the user a clarifying question with 2-6 selectable options.",
-    "The runtime emits an approval card (Control UI / Telegram inline buttons / channel fallback) and pauses your run until the user picks an option (or types free text when allowed).",
+    "The runtime emits a pending question interaction and pauses your run until the user answers. Control UI shows an inline card; non-web channels answer through `/plan answer` text commands (or free text when allowed).",
     "The chosen answer arrives in your next turn as a synthetic user message tagged `[QUESTION_ANSWER]: <answer text>`.",
     "USE FOR: tradeoffs you cannot resolve via local investigation (product/scope choices, design preferences, organizational priorities, ambiguous user intent).",
     "DO NOT USE FOR: things you could grep / read / web_search yourself, trivial defaults already covered by AGENTS.md, or confirmation requests (that's what exit_plan_mode does).",
@@ -90,7 +90,7 @@ export function describeUpdatePlanTool(): string {
     // Iter-3 D3: pointer to the bootstrap-injected reference card +
     // self-test command so agents have a single source of truth for
     // plan-mode lifecycle/tag-taxonomy/debugging.
-    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. To inspect live plan-mode state at runtime, call `plan_mode_status` (read-only diagnostic). (`/plan self-test` is deferred — runtime not yet wired in this PR.)",
+    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. To inspect live plan-mode state at runtime, call `plan_mode_status` (read-only diagnostic).",
   ].join(" ");
 }
 
@@ -111,7 +111,7 @@ export function describeEnterPlanModeTool(): string {
       "(3) exit_plan_mode = ONCE when ready to propose. Submits the plan for user approval. " +
       "After approval, mutations unlock — continue executing without re-entering plan mode unless the user requests a NEW planning cycle.",
     // Iter-3 D3: pointer to reference card + self-test for full context.
-    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. To inspect live plan-mode state at runtime, call `plan_mode_status` (read-only diagnostic). (`/plan self-test` is deferred — runtime not yet wired in this PR.)",
+    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. To inspect live plan-mode state at runtime, call `plan_mode_status` (read-only diagnostic).",
   ].join(" ");
 }
 
@@ -139,6 +139,6 @@ export function describeExitPlanModeTool(): string {
     "The runtime emits an approval card; the user can Approve (mutations unlock and you proceed), Approve with edits (same), Reject with feedback (you stay in plan mode and revise; feedback arrives in your next turn as [PLAN_DECISION]: rejected), or let it Time Out.",
     "Calling this without an active plan-mode session is a no-op; calling it without `plan` content is rejected.",
     // Iter-3 D3: pointer to reference card + self-test for full context.
-    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. To inspect live plan-mode state at runtime, call `plan_mode_status` (read-only diagnostic). (`/plan self-test` is deferred — runtime not yet wired in this PR.)",
+    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. To inspect live plan-mode state at runtime, call `plan_mode_status` (read-only diagnostic).",
   ].join(" ");
 }

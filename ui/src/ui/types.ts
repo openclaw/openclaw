@@ -439,6 +439,7 @@ export type GatewaySessionRow = {
     mode: "plan" | "normal";
     approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
     approvalId?: string;
+    cycleId?: string;
     enteredAt?: number;
     confirmedAt?: number;
     updatedAt?: number;
@@ -460,6 +461,8 @@ export type GatewaySessionRow = {
       verifiedCriteria?: string[];
     }>;
     lastPlanUpdatedAt?: number;
+    blockingSubagentRunIds?: string[];
+    lastSubagentSettledAt?: number;
     /**
      * PR-10 auto-mode: when true, future plan submissions auto-resolve
      * as "approve" without waiting for the user. Toggle via the chip
@@ -467,6 +470,27 @@ export type GatewaySessionRow = {
      */
     autoApprove?: boolean;
   };
+  pendingInteraction?:
+    | {
+        kind: "plan";
+        approvalId: string;
+        title: string;
+        createdAt: number;
+        status: "pending" | "resolved";
+        cycleId?: string;
+      }
+    | {
+        kind: "question";
+        approvalId: string;
+        questionId?: string;
+        title: string;
+        prompt: string;
+        options: string[];
+        allowFreetext: boolean;
+        createdAt: number;
+        status: "pending" | "resolved";
+        cycleId?: string;
+      };
   /**
    * Codex P2 review #68939 (2026-04-19): mirror of the
    * `pendingQuestionApprovalId` server-side field so the webchat

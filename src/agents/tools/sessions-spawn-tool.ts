@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import { getAgentRunContext } from "../../infra/agent-events.js";
+import { getAgentRunContext, trackOpenSubagentForParent } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE } from "../plan-mode/index.js";
@@ -353,11 +353,8 @@ export function createSessionsSpawnTool(
             // plan submission while research children are in flight.
             // The completion hook in `subagent-registry-run-manager.ts`
             // drains the set when the child ends.
-            if (parentCtx) {
-              if (!parentCtx.openSubagentRunIds) {
-                parentCtx.openSubagentRunIds = new Set();
-              }
-              parentCtx.openSubagentRunIds.add(childRunId);
+            if (opts?.runId && parentCtx) {
+              trackOpenSubagentForParent(opts.runId, childRunId);
             }
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
@@ -425,14 +422,12 @@ export function createSessionsSpawnTool(
       // submission while research is in flight.
       if (
         directParentCtx &&
+        opts?.runId &&
         result.status === "accepted" &&
         typeof result.runId === "string" &&
         result.runId
       ) {
-        if (!directParentCtx.openSubagentRunIds) {
-          directParentCtx.openSubagentRunIds = new Set();
-        }
-        directParentCtx.openSubagentRunIds.add(result.runId);
+        trackOpenSubagentForParent(opts.runId, result.runId);
       }
 
       return jsonResult(result);

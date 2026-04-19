@@ -141,6 +141,34 @@ function clearDeleteConfirmSkip() {
 }
 
 describe("chat view", () => {
+  it("renders the inline approval card only for the active session", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ...createSessions(),
+            sessions: [
+              { key: "main", kind: "direct", sessionId: "s1", updatedAt: 0, systemSent: false },
+            ],
+          },
+          planApprovalRequest: {
+            approvalId: "approval-1",
+            sessionKey: "other-session",
+            title: "Plan title",
+            plan: [{ step: "Check routes", status: "pending" }],
+            receivedAt: 0,
+          },
+          onPlanApprovalDecision: () => undefined,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".plan-inline-card")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+  });
+
   it("uses the assistant avatar URL or bundled logo fallbacks", () => {
     const container = document.createElement("div");
     render(

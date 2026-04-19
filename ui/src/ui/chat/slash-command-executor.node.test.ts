@@ -1119,3 +1119,73 @@ describe("executeSlashCommand /plan auto (PR-10)", () => {
     expect(result.content).toContain("auto");
   });
 });
+
+describe("executeSlashCommand /plan approvals (stacked follow-up)", () => {
+  it("/plan accept returns the hidden resume directive", async () => {
+    const request = vi.fn(async () => ({}));
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "accept",
+      {
+        sessionsResult: {
+          sessions: [
+            row("agent:main:main", {
+              planMode: {
+                mode: "plan",
+                approval: "pending",
+                approvalId: "plan-1",
+                rejectionCount: 0,
+              },
+            }),
+          ],
+        } as SessionsListResult,
+      },
+    );
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      planApproval: { action: "approve", approvalId: "plan-1" },
+    });
+    expect(result.resumePlanInteraction).toBe(true);
+  });
+
+  it("/plan answer uses pendingInteraction questionId and returns the hidden resume directive", async () => {
+    const request = vi.fn(async () => ({}));
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "plan",
+      "answer Option A",
+      {
+        sessionsResult: {
+          sessions: [
+            row("agent:main:main", {
+              pendingInteraction: {
+                kind: "question",
+                approvalId: "question-1",
+                questionId: "q-1",
+                title: "Agent has a question",
+                prompt: "Pick one",
+                options: ["Option A", "Option B"],
+                allowFreetext: false,
+                createdAt: 1,
+                status: "pending",
+              },
+            }),
+          ],
+        } as SessionsListResult,
+      },
+    );
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      planApproval: {
+        action: "answer",
+        answer: "Option A",
+        approvalId: "question-1",
+        questionId: "q-1",
+      },
+    });
+    expect(result.resumePlanInteraction).toBe(true);
+  });
+});

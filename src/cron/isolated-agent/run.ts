@@ -400,6 +400,36 @@ async function prepareCronRunContext(params: {
     agentId,
     deliveryContract: input.deliveryContract ?? "cron-owned",
   });
+  if (agentPayload?.planCycleId) {
+    const livePlanMode = cronSession.sessionEntry.planMode;
+    if (!livePlanMode || livePlanMode.mode !== "plan") {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary: "Plan nudge skipped: plan mode is no longer active for this session.",
+        }),
+      };
+    }
+    if (livePlanMode.cycleId !== agentPayload.planCycleId) {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary: "Plan nudge skipped: this cron belongs to an older plan cycle.",
+        }),
+      };
+    }
+    if (livePlanMode.approval === "pending") {
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          summary: "Plan nudge skipped: plan approval is still pending.",
+        }),
+      };
+    }
+  }
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();

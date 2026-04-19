@@ -6,6 +6,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSch
     {
       kind: Type.Literal("agentTurn"),
       message: params.message,
+      planCycleId: Type.Optional(Type.String()),
       model: Type.Optional(Type.String()),
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),

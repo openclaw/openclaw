@@ -75,6 +75,7 @@ export type GatewaySessionRow = {
   execSecurity?: SessionEntry["execSecurity"];
   execAsk?: SessionEntry["execAsk"];
   planMode?: SessionEntry["planMode"];
+  pendingInteraction?: SessionEntry["pendingInteraction"];
   /**
    * Codex P2 review #68939 (2026-04-19): mirror of
    * `SessionEntry.pendingQuestionApprovalId` for the UI's /plan

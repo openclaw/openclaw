@@ -57,22 +57,13 @@ export type SlashCommandResult = {
   /** When set, the caller should surface a visible pending item tied to the current run. */
   pendingCurrentRun?: boolean;
   /**
-   * Codex P1 review #68939 (2026-04-19): when set, the caller should
-   * trigger a follow-up agent run by sending the carried synthetic
-   * message via the same path the user types into. Mirrors the
-   * inline-card path in `app.ts:handlePlanApprovalDecision()` /
-   * `handlePlanApprovalAnswer()` which calls `handleSendChatInternal`
-   * with a `[PLAN_DECISION]` / `[QUESTION_ANSWER]` synthetic message
-   * after the patch lands. Pre-fix, the webchat /plan accept|revise|
-   * answer paths only sent `sessions.patch` and returned
-   * `action: "refresh"` — the agent stayed idle until an unrelated
-   * later message or heartbeat consumed `pendingAgentInjection`.
-   *
-   * The slash-command-executor builds the synthetic message text;
-   * the caller (app-chat.ts) sends it via `handleSendChatInternal`
-   * so the agent runs immediately to consume the persisted decision.
+   * When true, the caller should trigger the hidden plan-resume path
+   * after the patch lands. The authoritative decision/answer context
+   * already lives in the gateway-owned pending injection queue; the
+   * resume call only wakes the next turn without echoing synthetic
+   * control text into visible chat history.
    */
-  triggerPlanRunResumeMessage?: string;
+  resumePlanInteraction?: boolean;
 };
 
 export type SlashCommandContext = {
@@ -185,6 +176,12 @@ function mapPlanCommandError(err: unknown, verb: string): SlashCommandResult {
       content: `No pending plan to ${verb} — the agent hasn't submitted a plan via exit_plan_mode yet, or the previous one was already resolved.`,
     };
   }
+  if (msg.includes("PLAN_APPROVAL_GATE_STATE_UNAVAILABLE")) {
+    return {
+      content:
+        "Plan approval could not be resumed safely because the subagent gate state was lost. Refresh the session or ask the agent to resubmit the plan.",
+    };
+  }
   return { content: `Failed to ${verb}: ${msg}` };
 }
 
@@ -240,24 +237,30 @@ function resolvePendingApprovalIdFromContext(
  * Returns `undefined` when no question is pending; caller surfaces
  * a friendly "no pending question" message in that case.
  */
-function resolvePendingQuestionApprovalIdFromContext(
+function resolvePendingQuestionFromContext(
   sessionKey: string,
   context: SlashCommandContext,
-): string | undefined {
+): { approvalId?: string; questionId?: string } {
   const rows = context.sessionsResult?.sessions;
   if (!Array.isArray(rows)) {
-    return undefined;
+    return {};
   }
   for (const row of rows) {
     if (row?.key === sessionKey) {
+      if (row.pendingInteraction?.kind === "question") {
+        return {
+          approvalId: row.pendingInteraction.approvalId,
+          questionId: row.pendingInteraction.questionId,
+        };
+      }
       const id = row.pendingQuestionApprovalId;
       if (typeof id === "string" && id) {
-        return id;
+        return { approvalId: id };
       }
-      return undefined;
+      return {};
     }
   }
-  return undefined;
+  return {};
 }
 
 async function executePlan(
@@ -330,31 +333,12 @@ async function executePlan(
           ...(approvalId ? { approvalId } : {}),
         },
       });
-      // Codex P1 review #68939 (2026-04-19): trigger an agent run
-      // by emitting a synthetic [PLAN_DECISION] user message
-      // (mirrors the inline-card path in app.ts:
-      // `handlePlanApprovalDecision` → `handleSendChatInternal`).
-      // Pre-fix, the slash-command path only sent the patch and
-      // returned `action: "refresh"` — the agent stayed idle until
-      // an unrelated later message or heartbeat. The
-      // pendingAgentInjection set by sessions-patch.ts:606 carries
-      // the `[PLAN_DECISION]: approved/edited` tag for the agent's
-      // next-turn context; this synthetic message just triggers
-      // the run.
-      const decisionLabel = allowEdits ? "approved-with-edits" : "approved";
-      const triggerPlanRunResumeMessage = [
-        `[PLAN_DECISION] decision: ${decisionLabel}`,
-        "",
-        "The plan you proposed via exit_plan_mode is approved. Plan mode is OFF and mutating tools are unlocked.",
-        "Begin executing now and continue through every step in the plan without stopping for status updates between steps.",
-        "Use update_plan to mark each step in_progress / completed as you go — that's the user-visible progress signal.",
-      ].join("\n");
       return {
         content: allowEdits
           ? "Plan **accepted with edits** — agent may adjust steps as it executes."
           : "Plan **accepted** — agent will execute as proposed.",
         action: "refresh",
-        triggerPlanRunResumeMessage,
+        resumePlanInteraction: true,
       };
     } catch (err) {
       return mapPlanCommandError(err, "accept");
@@ -374,23 +358,10 @@ async function executePlan(
         key: sessionKey,
         planApproval: { action: "reject", feedback, ...(approvalId ? { approvalId } : {}) },
       });
-      // Codex P1 review #68939 (2026-04-19): trigger an agent run
-      // by emitting a synthetic [PLAN_DECISION] user message so
-      // the agent runs immediately to consume the rejection
-      // injection (set in sessions-patch.ts via resolvePlanApproval)
-      // and start the revise-and-resubmit loop. See accept branch
-      // above for the full rationale.
-      const triggerPlanRunResumeMessage = [
-        "[PLAN_DECISION] decision: rejected",
-        `feedback: ${JSON.stringify(feedback)}`,
-        "",
-        "The plan you submitted was rejected with the feedback above.",
-        "Stay in plan mode, address the feedback, and resubmit a revised plan via exit_plan_mode.",
-      ].join("\n");
       return {
         content: `Plan returned for revision with feedback: "${feedback}"`,
         action: "refresh",
-        triggerPlanRunResumeMessage,
+        resumePlanInteraction: true,
       };
     } catch (err) {
       return mapPlanCommandError(err, "revise");
@@ -410,7 +381,8 @@ async function executePlan(
     // `planMode.approvalId`); pre-fix, the webchat `/plan answer`
     // path threaded the plan id and the patch was rejected as a
     // stale token.
-    const questionApprovalId = resolvePendingQuestionApprovalIdFromContext(sessionKey, context);
+    const pendingQuestion = resolvePendingQuestionFromContext(sessionKey, context);
+    const questionApprovalId = pendingQuestion.approvalId;
     if (!questionApprovalId) {
       return {
         content:
@@ -420,20 +392,17 @@ async function executePlan(
     try {
       await client.request("sessions.patch", {
         key: sessionKey,
-        planApproval: { action: "answer", answer, approvalId: questionApprovalId },
+        planApproval: {
+          action: "answer",
+          answer,
+          approvalId: questionApprovalId,
+          ...(pendingQuestion.questionId ? { questionId: pendingQuestion.questionId } : {}),
+        },
       });
-      // Codex P1 review #68939 (2026-04-19): trigger an agent run
-      // by emitting a synthetic [QUESTION_ANSWER] user message so
-      // the agent runs immediately to consume the answer (mirrors
-      // the inline-card path in app.ts:handlePlanApprovalAnswer).
-      // The pendingAgentInjection from sessions-patch.ts also carries
-      // the [QUESTION_ANSWER] tag for next-turn context; this
-      // synthetic message just triggers the run.
-      const triggerPlanRunResumeMessage = `[QUESTION_ANSWER]: ${answer}`;
       return {
         content: `Question answered: "${answer}"`,
         action: "refresh",
-        triggerPlanRunResumeMessage,
+        resumePlanInteraction: true,
       };
     } catch (err) {
       return mapPlanCommandError(err, "answer");

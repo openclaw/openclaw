@@ -1314,13 +1314,17 @@ export function buildGatewaySessionRow(params: {
     execAsk: entry?.execAsk,
     execHost: entry?.execHost,
     planMode: entry?.planMode,
+    pendingInteraction: entry?.pendingInteraction,
     // Codex P2 review #68939 (2026-04-19): expose the question
     // approvalId on the session row so the webchat /plan answer
     // path can thread it into the planApproval patch (the
     // gateway-side answer-guard requires the matching token).
     // Read-only — clients can't set this; the persister manages
     // its lifecycle.
-    pendingQuestionApprovalId: entry?.pendingQuestionApprovalId,
+    pendingQuestionApprovalId:
+      entry?.pendingInteraction?.kind === "question"
+        ? entry.pendingInteraction.approvalId
+        : entry?.pendingQuestionApprovalId,
   };
 }
 

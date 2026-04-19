@@ -1,11 +1,11 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-15T05:45:07.081Z",
+  "fallbackKeys": ["chat.planViewToggle"],
+  "generatedAt": "2026-04-19T20:03:28.377Z",
   "locale": "tr",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "34089e99b81e81139add4dca8eb47a80da365bd90534ac5e5e042474f3816ad6",
-  "totalKeys": 706,
+  "sourceHash": "c8114cc4c2ce845ccef267f6570ff473b6352827e300bc873c3eb65c66c8c1c6",
+  "totalKeys": 707,
   "translatedKeys": 706,
   "workflow": 1
 }

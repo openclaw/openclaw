@@ -63,7 +63,6 @@ NORMAL MODE → /plan on → INVESTIGATION → exit_plan_mode → PENDING APPROV
 | `/plan revise <feedback>`          | Reject with revision feedback                                                  |
 | `/plan answer <text>`              | Answer a clarifying question the agent asked                                   |
 | `/plan auto on` / `/plan auto off` | Toggle auto-approve mode (future plans auto-approved without showing the card) |
-| `/plan self-test`                  | _(deferred — runtime not yet wired; tracked in PLAN-MODE-ARCHITECTURE.md)_     |
 
 ## What you see in webchat
 
@@ -124,11 +123,14 @@ This prevents the agent from acting on partial subagent results.
 **Click Approve but nothing happens / agent doesn't continue:**
 
 - Likely the agent posted chat after `exit_plan_mode` in the same turn (a known anti-pattern). Re-prompt with "continue executing the approved plan."
-- `/plan self-test` end-to-end verifier is deferred (runtime not yet wired; tracked in `PLAN-MODE-ARCHITECTURE.md` follow-ups). Use the debug log + gate log above instead.
+- Check whether the session is disconnected. The Control UI disables approval actions while offline; reconnect first.
+- If the card still looks live after reconnect, refresh the page to force a fresh session snapshot.
+- Inspect live state with `plan_mode_status` and confirm the session is still on the same active cycle and not blocked by `blockingSubagentRunIds`.
 
 **Approval card stays after you click Approve:**
 
 - The card may have gone stale (session timed out, another channel resolved it, etc.). Refresh the page; the stale card auto-dismisses on the next session-state update.
+- If the runtime rejected approval because subagents are still running, wait for those child runs to settle, then approve again.
 
 **`Plan approval failed: planApproval requires an active plan-mode session`:**
 
@@ -146,6 +148,16 @@ openclaw config set agents.defaults.planMode.debug true
 # Restart gateway
 tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'
 ```
+
+## Operations and Evidence
+
+Use these checks when you want proof that a plan-mode session is healthy end-to-end:
+
+- Runtime state snapshot: call `plan_mode_status` from the agent to inspect `cycleId`, approval state, pending interaction metadata, queued injections, and subagent gate state.
+- Structured lifecycle log: `tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'`
+- Approval gate decisions: `tail -F ~/.openclaw/logs/gateway.err.log | grep 'plan-approval-gate'`
+- If you ship gateway logs into Loki/Grafana, a useful starting filter is `{app="gateway"} |= "[plan-mode/"` and a focused approval filter is `{app="gateway"} |= "plan-approval-gate"`.
+- To verify that nudges are not firing during pending approval, look for `nudge_event` lines paired with `approval_event` lines for the same `sessionKey`. Pending approvals should only show suppression or cleanup, not a live resumed turn.
 
 ## See also
 

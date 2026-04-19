@@ -629,6 +629,7 @@ export const uk: TranslationMap = {
   chat: {
     disconnected: "Відключено від шлюзу.",
     refreshTitle: "Оновити дані чату",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Перемкнути показ мислення/роботи асистента",
     toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
     focusToggle: "Перемкнути режим фокусу (сховати бічну панель і заголовок сторінки)",

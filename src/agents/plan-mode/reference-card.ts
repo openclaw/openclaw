@@ -119,7 +119,6 @@ export const PLAN_MODE_REFERENCE_CARD = [
   "- `/plan revise <feedback>` — reject with revision feedback",
   "- `/plan answer <text>` — answer a pending ask_user_question",
   "- `/plan auto on|off` — toggle auto-approve mode",
-  "- `/plan self-test` — _(deferred — runtime not yet wired; tracked in PLAN-MODE-ARCHITECTURE.md follow-ups)_",
   "",
   "## Common pitfalls",
   "",
@@ -134,7 +133,7 @@ export const PLAN_MODE_REFERENCE_CARD = [
   "- Turn on plan-mode debug logging: `openclaw config set agents.defaults.planMode.debug true` then restart gateway.",
   "- Tail the structured event log: `tail -F ~/.openclaw/logs/gateway.err.log | grep '\\[plan-mode/'`",
   "- Always-on gate-decision log: `tail -F ~/.openclaw/logs/gateway.err.log | grep 'plan-approval-gate'`",
-  "- `/plan self-test` end-to-end verifier is deferred (see the slash-command line above) — runtime not yet wired in this PR.",
+  "- Call `plan_mode_status` to inspect the active cycle, pending interaction, and subagent gate state.",
   "",
   "═════════════════════════════════════",
 ].join("\n");

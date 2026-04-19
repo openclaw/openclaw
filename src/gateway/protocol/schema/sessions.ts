@@ -297,6 +297,7 @@ export const SessionsPatchParamsSchema = Type.Object(
             action: Type.Literal("answer"),
             answer: Type.String({ minLength: 1, maxLength: 8192 }),
             approvalId: NonEmptyString,
+            questionId: Type.Optional(NonEmptyString),
           },
           { additionalProperties: false },
         ),

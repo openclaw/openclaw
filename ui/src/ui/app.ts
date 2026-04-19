@@ -56,6 +56,7 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import { resumePendingPlanInteraction } from "./chat/plan-resume.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -132,75 +133,6 @@ function resolveOnboardingMode(): boolean {
 
 /**
  * Build the synthetic user-turn message sent to the agent after the
- * user resolves a plan-approval card. The agent sees this as a normal
- * user message with a structured tag at the top so it knows the plan
- * lifecycle outcome.
- *
- * - approve: agent should execute the plan as-proposed.
- * - edit: agent has license to make minor edits during execution.
- * - reject: agent stays in plan mode and revises (the runtime keeps
- *   planMode armed; rejection feedback is in the message body).
- */
-function buildPlanDecisionUserMessage(
-  decision: "approve" | "reject" | "edit",
-  summary: string | null,
-  feedback: string | null,
-): string {
-  const trimmedSummary = summary?.trim();
-  const summaryClause = trimmedSummary ? ` (${trimmedSummary})` : "";
-  switch (decision) {
-    case "approve":
-      return [
-        `[PLAN_DECISION] decision: approved${summaryClause}`,
-        "",
-        "The plan you proposed via exit_plan_mode is approved. Plan mode is OFF and mutating tools (write, edit, exec, bash, apply_patch) are unlocked.",
-        "",
-        "Begin executing now and continue through EVERY step in the plan without stopping for status updates between steps. Use update_plan to mark each step in_progress / completed as you go — that's the user-visible progress signal, not chat-text checkpoints.",
-        "",
-        "Only stop when ONE of these is true:",
-        "- the plan is complete (all steps marked completed or cancelled)",
-        "- you hit a real blocker that genuinely requires user input to proceed",
-        "- you would take a destructive/irreversible action (rm -rf, force-push, irreversible API call, money movement) — those still require explicit user confirmation",
-        "",
-        "Do NOT pause to summarize after step 1, 2, or any individual step. Do NOT respond with a 'progress so far' message between tool calls. The user can see your tool calls live.",
-      ].join("\n");
-    case "edit":
-      return [
-        `[PLAN_DECISION] decision: approved-with-edits${summaryClause}`,
-        "",
-        "The plan is approved with this gate for in-flight deviation:",
-        "- you MAY make minor edits during execution if you are >95% confident in the change",
-        "- if a deviation requires <95% confidence, use read-only tools / spawn a focused subagent to research and validate the new path until you reach 95% confidence",
-        "- when you do deviate, call update_plan to record the new step before executing it",
-        "",
-        "Plan mode is OFF and mutating tools are unlocked. Begin executing now and continue through EVERY step without stopping for status updates between steps. Use update_plan to mark progress — that's the user-visible signal.",
-        "",
-        "Only stop when ONE of these is true:",
-        "- the plan is complete",
-        "- a real blocker requires user input",
-        "- you would take a destructive/irreversible action (rm -rf, force-push, irreversible API call, money movement)",
-        "",
-        "Do NOT pause to summarize after step 1, 2, or any individual step. Do NOT respond with a 'progress so far' message between tool calls.",
-      ].join("\n");
-    case "reject":
-      return [
-        `[PLAN_DECISION] decision: rejected${summaryClause}`,
-        "",
-        feedback?.trim()
-          ? `The user wants you to revise. Their feedback:\n\n${feedback.trim()}`
-          : "The user rejected the plan without specific feedback — revise based on the most likely gap (more detail, different approach, smaller scope, etc.) or ask one targeted clarifying question if you genuinely can't infer.",
-        "",
-        "You are STILL in plan mode. Your next response MUST include an `exit_plan_mode` tool call with the revised plan steps. Do NOT just acknowledge with chat text — call the tool. Do NOT stop after a one-line 'Revising' message — that wastes a turn. The user is waiting on the revised approval card.",
-      ].join("\n");
-    default: {
-      const _exhaustive: never = decision;
-      // _exhaustive is `never` — TS catches new variants at compile
-      // time. Fallback string only fires if someone bypasses typing.
-      return `[PLAN_DECISION] decision: ${String(_exhaustive)}`;
-    }
-  }
-}
-
 /**
  * PR-8 follow-up Round 2: shared placeholder content for the plan-view
  * sidebar when no `update_plan` event has fired yet on this session.
@@ -817,6 +749,7 @@ export class OpenClawApp extends LitElement {
     // placeholder until a fresh `update_plan` event fires.
     if (changed.has("sessionsResult") || changed.has("sessionKey")) {
       this.hydratePlanViewFromSession();
+      this.hydratePlanApprovalFromSession();
     }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
@@ -1063,22 +996,7 @@ export class OpenClawApp extends LitElement {
           : {}),
       };
       await this.client.request("sessions.patch", params);
-      // Send a synthetic "decision" message so the agent gets a user
-      // turn to react to. Without this the agent sits idle waiting
-      // for input even though the runtime has flipped mode → normal.
-      // We use handleSendChat (the same path the user types into) so
-      // the message appears in chat history and triggers a normal
-      // agent run with the same session key.
-      const decisionMessage = buildPlanDecisionUserMessage(
-        decision,
-        active.summary ?? null,
-        feedback ?? null,
-      );
-      // Fire-and-forget; the agent run is its own lifecycle and
-      // shouldn't block the approval flow's success state.
-      void handleSendChatInternal(this, decisionMessage).catch((err: unknown) => {
-        this.lastError = `Plan accepted but failed to notify agent: ${String(err)}`;
-      });
+      await resumePendingPlanInteraction(this.client, active.sessionKey);
     } catch (err) {
       // Bug 5 fix: gracefully dismiss the dialog when the server
       // reports the approval is no longer pending (e.g., another
@@ -1108,6 +1026,9 @@ export class OpenClawApp extends LitElement {
         errCode === "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS" ||
         errMsg.includes("PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS") ||
         errMsg.includes("subagent(s) you spawned");
+      const gateStateUnavailableError =
+        errCode === "PLAN_APPROVAL_GATE_STATE_UNAVAILABLE" ||
+        errMsg.includes("PLAN_APPROVAL_GATE_STATE_UNAVAILABLE");
       if (subagentBlockedError) {
         // Restore the card so the user can re-click Approve once the
         // subagents return (the agent's plan-mode session keeps
@@ -1139,6 +1060,11 @@ export class OpenClawApp extends LitElement {
           this.subagentBlockingStatus = null;
           this.subagentBlockingClearTimer = null;
         }, 8000);
+      } else if (gateStateUnavailableError) {
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalReviseDraft = snapshotReviseDraft;
+        this.planApprovalError =
+          "Approval could not resume safely because subagent gate state was lost. Refresh the session or ask the agent to resubmit the plan.";
       } else if (staleStateError) {
         // Clear the dialog + show a transient toast-style message.
         // The plan was already resolved on another surface (or was
@@ -1175,8 +1101,8 @@ export class OpenClawApp extends LitElement {
    * PR-10 AskUserQuestion: route the user's answer back to the agent.
    * Same approval-card surface as plan approve/reject/edit, but the
    * action verb is "answer" — no plan-mode state transition, the
-   * answer arrives as a synthetic user message tagged
-   * `[QUESTION_ANSWER]` so the agent's next turn can act on it.
+   * answer is persisted onto the session's pending-injection queue so
+   * the agent's next turn can act on it.
    */
   async handlePlanApprovalAnswer(answer: string): Promise<void> {
     const active = this.planApprovalRequest;
@@ -1215,25 +1141,10 @@ export class OpenClawApp extends LitElement {
           action: "answer",
           answer: sanitized,
           ...(active.approvalId ? { approvalId: active.approvalId } : {}),
+          ...(active.question.questionId ? { questionId: active.question.questionId } : {}),
         },
       });
-      // Inject `[QUESTION_ANSWER]: <answer>` as a synthetic user
-      // message so the agent's next turn can act on the answer. Format
-      // matches the canonical pattern documented in
-      // tool-description-presets.ts (with COLON, mirroring
-      // [PLAN_DECISION]: ...). Plan-mode state is unchanged — the
-      // agent continues its planning cycle.
-      const message = `[QUESTION_ANSWER]: ${sanitized}`;
-      void handleSendChatInternal(this, message).catch((err: unknown) => {
-        // PR-10 review fix (Greptile P2 #3105220364): if the synthetic
-        // message send fails after the sessions.patch already cleared
-        // the question state on the server, the agent is left waiting
-        // for an answer it never received. Restore the request snapshot
-        // so the user can retry from the same UI affordance instead of
-        // discovering the silent stall later.
-        this.planApprovalRequest = snapshotRequest;
-        this.planApprovalError = `Question answered but failed to notify agent: ${String(err)} — please retry`;
-      });
+      await resumePendingPlanInteraction(this.client, active.sessionKey);
     } catch (err) {
       this.planApprovalRequest = snapshotRequest;
       this.planApprovalError = `Question answer failed: ${String(err)}`;
@@ -1424,6 +1335,82 @@ export class OpenClawApp extends LitElement {
       this.sidebarContent.content === PLAN_VIEW_PLACEHOLDER_MARKDOWN
     ) {
       this.sidebarContent = { kind: "markdown", content: md };
+    }
+  }
+
+  private resetPlanApprovalLocalState(): void {
+    this.planApprovalReviseOpen = false;
+    this.planApprovalReviseDraft = "";
+    this.planApprovalQuestionOtherOpen = false;
+    this.planApprovalQuestionOtherDraft = "";
+    this.planApprovalError = null;
+  }
+
+  private buildHydratedPlanApprovalRequest(
+    row: NonNullable<NonNullable<typeof this.sessionsResult>["sessions"][number]>,
+  ): import("./app-tool-stream.ts").PlanApprovalRequest | null {
+    const pending = row.pendingInteraction;
+    if (!pending || pending.status !== "pending") {
+      return null;
+    }
+    const plan = (row.planMode?.lastPlanSteps ?? []).map((step) =>
+      Object.assign(
+        { step: step.step, status: step.status },
+        step.activeForm ? { activeForm: step.activeForm } : {},
+      ),
+    );
+    if (pending.kind === "plan") {
+      if (row.planMode?.approval !== "pending") {
+        return null;
+      }
+      return {
+        approvalId: pending.approvalId,
+        sessionKey: row.key,
+        title: pending.title,
+        plan,
+        receivedAt: pending.createdAt,
+      };
+    }
+    return {
+      approvalId: pending.approvalId,
+      sessionKey: row.key,
+      title: pending.title,
+      plan,
+      receivedAt: pending.createdAt,
+      question: {
+        prompt: pending.prompt,
+        options: pending.options,
+        allowFreetext: pending.allowFreetext,
+        ...(pending.questionId ? { questionId: pending.questionId } : {}),
+      },
+    };
+  }
+
+  hydratePlanApprovalFromSession(): void {
+    if (this.planApprovalBusy) {
+      return;
+    }
+    const activeSessionKey = this.sessionKey;
+    const row = this.sessionsResult?.sessions.find((session) => session.key === activeSessionKey);
+    const nextRequest = row ? this.buildHydratedPlanApprovalRequest(row) : null;
+    const previous = this.planApprovalRequest;
+    const previousQuestionId = previous?.question?.questionId;
+    const nextQuestionId = nextRequest?.question?.questionId;
+    const changedInteraction =
+      previous?.sessionKey !== nextRequest?.sessionKey ||
+      previous?.approvalId !== nextRequest?.approvalId ||
+      previousQuestionId !== nextQuestionId ||
+      Boolean(previous?.question) !== Boolean(nextRequest?.question);
+    if (!nextRequest) {
+      if (previous) {
+        this.planApprovalRequest = null;
+        this.resetPlanApprovalLocalState();
+      }
+      return;
+    }
+    this.planApprovalRequest = nextRequest;
+    if (changedInteraction) {
+      this.resetPlanApprovalLocalState();
     }
   }
 

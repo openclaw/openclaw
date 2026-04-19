@@ -226,6 +226,7 @@ function emitSessionsChanged(
             execAsk: sessionRow.execAsk,
             execHost: sessionRow.execHost,
             planMode: sessionRow.planMode,
+            pendingInteraction: sessionRow.pendingInteraction,
             // Codex P2 review #68939 (2026-04-19): mirror the
             // `pendingQuestionApprovalId` carry-forward so the
             // webchat /plan answer path sees fresh question

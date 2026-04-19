@@ -97,6 +97,30 @@ export interface PostApprovalPermissions {
   approvalId: string;
 }
 
+export type PendingInteractionStatus = "pending" | "resolved";
+
+export type PendingInteraction =
+  | {
+      kind: "plan";
+      approvalId: string;
+      title: string;
+      createdAt: number;
+      status: PendingInteractionStatus;
+      cycleId?: string;
+    }
+  | {
+      kind: "question";
+      approvalId: string;
+      questionId?: string;
+      title: string;
+      prompt: string;
+      options: string[];
+      allowFreetext: boolean;
+      createdAt: number;
+      status: PendingInteractionStatus;
+      cycleId?: string;
+    };
+
 /**
  * Classification of a pending-agent-injection queue entry. Each writer
  * stamps its kind so the consumer (or future filters) can reason about
@@ -248,6 +272,13 @@ export type SessionEntry = {
   planMode?: {
     mode: "plan" | "normal";
     approval: "none" | "pending" | "approved" | "edited" | "rejected" | "timed_out";
+    /**
+     * Stable token for the active plan-mode cycle. Minted on each
+     * fresh enter_plan_mode transition so close-on-complete, pending
+     * approvals/questions, and cron nudges can reject stale work from
+     * an earlier cycle.
+     */
+    cycleId?: string;
     enteredAt?: number;
     confirmedAt?: number;
     updatedAt?: number;
@@ -308,6 +339,17 @@ export type SessionEntry = {
     /** Unix ms timestamp of the last `lastPlanSteps` write. */
     lastPlanUpdatedAt?: number;
     /**
+     * Persisted subagent gate state for the current plan cycle. Mirrors
+     * the in-memory AgentRunContext set so approval gating can survive
+     * ctx cleanup / restart without failing open.
+     */
+    blockingSubagentRunIds?: string[];
+    /**
+     * Epoch ms timestamp of the most-recent transition where the
+     * blockingSubagentRunIds set drained to zero.
+     */
+    lastSubagentSettledAt?: number;
+    /**
      * PR-9 Wave B3: cron job ids scheduled when this session entered
      * plan mode, used to nudge the agent to keep working the plan. The
      * exit-plan-mode handler (and the close-on-complete persister) call
@@ -346,6 +388,12 @@ export type SessionEntry = {
    * cycle starts from scratch.
    */
   recentlyApprovedAt?: number;
+  /**
+   * Cycle token paired with `recentlyApprovedAt`. Lets follow-up
+   * close-on-complete / retry paths distinguish "the current cycle was
+   * just approved" from "some earlier cycle was approved recently".
+   */
+  recentlyApprovedCycleId?: string;
   /**
    * Post-approval permissions granted to the agent (currently just
    * acceptEdits). Set when the approval action is "edit" (Claude-Code
@@ -408,6 +456,13 @@ export type SessionEntry = {
    */
   pendingAgentInjections?: PendingAgentInjectionEntry[];
   /**
+   * Persisted pending plan/question interaction. This is the durable
+   * source of truth for restart-safe approval/question resolution and
+   * web reconnect rehydration. Legacy question-only fields below remain
+   * as read-compat fallback for older sessions on disk.
+   */
+  pendingInteraction?: PendingInteraction;
+  /**
    * Codex P1 review #68939 (2026-04-19): tracks the most recent
    * `ask_user_question` approvalId so the gateway can validate
    * incoming `/plan answer` patches against an actual pending
@@ -425,30 +480,21 @@ export type SessionEntry = {
    *   the incoming `planApproval.approvalId` must match this field
    *   exactly. Mismatched IDs (stale clicks, retried sends after a
    *   newer question landed) get rejected with a friendly error.
-   * - CLEAR: deleted by `sessions-patch.ts` after a successful
-   *   answer is persisted (one question, one answer — re-asking
-   *   requires a fresh `ask_user_question` call).
+   * - CLEAR: superseded by `pendingInteraction`; retained as legacy
+   *   read-compat fallback only. New writes target `pendingInteraction`.
    */
   pendingQuestionApprovalId?: string;
   /**
    * Codex P2 review #68939 (2026-04-19): the original options the
    * agent offered for the most recent `ask_user_question` call.
-   * Persisted alongside `pendingQuestionApprovalId` (same
-   * lifecycle) so the answer branch can validate the incoming
-   * answer text against the offered set when free-text isn't
-   * allowed. Pre-fix, a text-channel user could submit arbitrary
-   * `/plan answer <anything>` and it would be accepted, bypassing
-   * the question contract.
+   * Legacy read-compat mirror for older sessions. New writes target
+   * `pendingInteraction.options`.
    */
   pendingQuestionOptions?: string[];
   /**
    * Codex P2 review #68939 (2026-04-19): mirror of the
-   * `allowFreetext` flag the agent set on the most recent
-   * `ask_user_question` call. When true, the answer text bypasses
-   * option-membership validation; when false (default), the
-   * answer must match one of `pendingQuestionOptions` exactly
-   * (case-sensitive — matches how the runtime echoes the choice
-   * back).
+   * Legacy read-compat mirror for older sessions. New writes target
+   * `pendingInteraction.allowFreetext`.
    */
   pendingQuestionAllowFreetext?: boolean;
   responseUsage?: "on" | "off" | "tokens" | "full";

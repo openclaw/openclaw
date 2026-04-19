@@ -68,6 +68,7 @@ export interface ScheduledPlanNudge {
 export async function schedulePlanNudges(params: {
   sessionKey: string;
   agentId?: string;
+  planCycleId?: string;
   intervals?: ReadonlyArray<number>;
   deps?: PlanNudgeSchedulerDeps;
   log?: { warn?: (msg: string) => void; info?: (msg: string) => void };
@@ -123,7 +124,11 @@ export async function schedulePlanNudges(params: {
         name: `${PLAN_NUDGE_NAME_PREFIX}${minutes}min:${params.sessionKey}`,
         schedule: { kind: "at", at: fireAtIso },
         sessionTarget: `session:${params.sessionKey}`,
-        payload: { kind: "agentTurn", message },
+        payload: {
+          kind: "agentTurn",
+          message,
+          ...(params.planCycleId ? { planCycleId: params.planCycleId } : {}),
+        },
         deleteAfterRun: true,
         delivery: { mode: "none" },
       };

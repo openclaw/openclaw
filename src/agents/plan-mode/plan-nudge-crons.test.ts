@@ -150,6 +150,28 @@ describe("schedulePlanNudges (Wave B3)", () => {
     expect(warnings.some((w) => w.includes("jobId missing"))).toBe(true);
   });
 
+  it("accepts cron.add responses shaped as { id }", async () => {
+    const idShape: typeof mockCallGatewayTool = vi.fn(async () => ({ id: "job-id-direct" }));
+    const result = await schedulePlanNudges({
+      sessionKey: "k",
+      intervals: [10],
+      deps: { callGatewayTool: idShape, now: () => FIXED_NOW },
+    });
+    expect(result).toEqual([{ jobId: "job-id-direct", fireAtMs: FIXED_NOW + 10 * 60_000 }]);
+  });
+
+  it("accepts cron.add responses shaped as { job: { id } }", async () => {
+    const nestedShape: typeof mockCallGatewayTool = vi.fn(async () => ({
+      job: { id: "job-id-nested" },
+    }));
+    const result = await schedulePlanNudges({
+      sessionKey: "k",
+      intervals: [10],
+      deps: { callGatewayTool: nestedShape, now: () => FIXED_NOW },
+    });
+    expect(result).toEqual([{ jobId: "job-id-nested", fireAtMs: FIXED_NOW + 10 * 60_000 }]);
+  });
+
   it("agentId is forwarded when provided", async () => {
     await schedulePlanNudges({
       sessionKey: "k",
@@ -158,6 +180,38 @@ describe("schedulePlanNudges (Wave B3)", () => {
       deps: { callGatewayTool: mockCallGatewayTool, now: () => FIXED_NOW },
     });
     expect(calls[0]?.params).toMatchObject({ agentId: "main" });
+  });
+
+  it("forwards the active planCycleId into the cron payload when provided", async () => {
+    await schedulePlanNudges({
+      sessionKey: "k",
+      planCycleId: "cycle-123",
+      intervals: [10],
+      deps: { callGatewayTool: mockCallGatewayTool, now: () => FIXED_NOW },
+    });
+
+    expect(calls[0]?.params).toMatchObject({
+      payload: {
+        kind: "agentTurn",
+        planCycleId: "cycle-123",
+      },
+    });
+  });
+
+  it("skips scheduling when the sessionKey fails cron sessionTarget validation", async () => {
+    const warnings: string[] = [];
+    const result = await schedulePlanNudges({
+      sessionKey: "bad/session/key",
+      intervals: [10],
+      deps: { callGatewayTool: mockCallGatewayTool, now: () => FIXED_NOW },
+      log: { warn: (message) => warnings.push(message) },
+    });
+
+    expect(result).toEqual([]);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(
+      warnings.some((message) => message.includes("fails cron sessionTarget validation")),
+    ).toBe(true);
   });
 });
 

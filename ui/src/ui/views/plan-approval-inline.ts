@@ -17,6 +17,7 @@ import type { PlanApprovalRequest } from "../app-tool-stream.ts";
 
 export interface InlinePlanApprovalProps {
   request: PlanApprovalRequest | null;
+  connected: boolean;
   busy: boolean;
   error: string | null;
   /** Local "revise textarea open" state — caller owns it so it survives renders. */
@@ -56,6 +57,7 @@ export function renderInlinePlanApproval(
     return nothing;
   }
   const { request, busy, error, reviseOpen } = props;
+  const actionsDisabled = busy || !props.connected;
   // PR-10 AskUserQuestion: when the approval payload carries a
   // question, render a different card shape (question prompt + N
   // option buttons) instead of the standard plan approval triad.
@@ -93,6 +95,11 @@ export function renderInlinePlanApproval(
       </div>
       <div class="plan-inline-card__meta">${stepCount} ${stepLabel}</div>
       ${error ? html`<div class="plan-inline-card__error">${error}</div>` : nothing}
+      ${!props.connected
+        ? html`<div class="plan-inline-card__error">
+            Reconnect to resolve this plan. The approval stays pending while offline.
+          </div>`
+        : nothing}
       ${reviseOpen
         ? html`
             <textarea
@@ -100,7 +107,7 @@ export function renderInlinePlanApproval(
               placeholder="What should change? (optional, sent to the agent as feedback)"
               rows="3"
               .value=${props.reviseDraft}
-              ?disabled=${busy}
+              ?disabled=${actionsDisabled}
               @input=${(e: Event) =>
                 props.onReviseDraftChange((e.target as HTMLTextAreaElement).value)}
               @keydown=${(e: KeyboardEvent) => {
@@ -117,7 +124,7 @@ export function renderInlinePlanApproval(
               <button
                 class="plan-inline-card__btn plan-inline-card__btn--primary"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${actionsDisabled}
                 @click=${props.onReviseSubmit}
               >
                 Send revision
@@ -125,7 +132,7 @@ export function renderInlinePlanApproval(
               <button
                 class="plan-inline-card__btn"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${actionsDisabled}
                 @click=${props.onReviseCancel}
               >
                 Cancel
@@ -137,7 +144,7 @@ export function renderInlinePlanApproval(
               <button
                 class="plan-inline-card__btn plan-inline-card__btn--primary"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${actionsDisabled}
                 @click=${props.onApprove}
                 title="Execute the plan as proposed — no edits"
               >
@@ -146,7 +153,7 @@ export function renderInlinePlanApproval(
               <button
                 class="plan-inline-card__btn"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${actionsDisabled}
                 @click=${props.onAcceptWithEdits}
                 title="Approve and let the agent adjust steps as it goes"
               >
@@ -155,7 +162,7 @@ export function renderInlinePlanApproval(
               <button
                 class="plan-inline-card__btn plan-inline-card__btn--danger"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${actionsDisabled}
                 @click=${props.onReviseOpen}
                 title="Send back for revision; agent stays in plan mode"
               >
@@ -189,7 +196,7 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
   // When the handler is missing, disable the buttons + surface a
   // visible warning so the wiring gap is obvious instead of mute.
   const answerHandlerMissing = typeof props.onAnswerOption !== "function";
-  const answerButtonsDisabled = busy || answerHandlerMissing;
+  const answerButtonsDisabled = busy || !props.connected || answerHandlerMissing;
   return html`
     <div class="plan-inline-card" role="region" aria-label="Agent question">
       <div class="plan-inline-card__header">
@@ -202,6 +209,11 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
         ${question.options.length} options${question.allowFreetext ? " + free text" : ""}
       </div>
       ${error ? html`<div class="plan-inline-card__error">${error}</div>` : nothing}
+      ${!props.connected
+        ? html`<div class="plan-inline-card__error">
+            Reconnect to answer this question. The prompt stays pending while offline.
+          </div>`
+        : nothing}
       ${answerHandlerMissing
         ? html`<div class="plan-inline-card__error">
             ⚠️ Question handler not wired (host did not pass
@@ -215,7 +227,7 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
               placeholder="Type your answer to the question above…"
               rows="3"
               .value=${props.questionOtherDraft ?? ""}
-              ?disabled=${busy}
+              ?disabled=${busy || !props.connected}
               @input=${(e: Event) =>
                 props.onQuestionOtherDraftChange?.((e.target as HTMLTextAreaElement).value)}
               @keydown=${(e: KeyboardEvent) => {
@@ -235,6 +247,7 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
                 class="plan-inline-card__btn plan-inline-card__btn--primary"
                 type="button"
                 ?disabled=${busy ||
+                !props.connected ||
                 !(props.questionOtherDraft && props.questionOtherDraft.trim().length > 0)}
                 @click=${() => props.onQuestionOtherSubmit?.()}
                 title="Send the typed answer"
@@ -244,7 +257,7 @@ function renderInlineQuestion(props: InlinePlanApprovalProps): TemplateResult {
               <button
                 class="plan-inline-card__btn"
                 type="button"
-                ?disabled=${busy}
+                ?disabled=${busy || !props.connected}
                 @click=${() => props.onQuestionOtherCancel?.()}
                 title="Back to the option list"
               >

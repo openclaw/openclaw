@@ -249,6 +249,34 @@ describe("subagent registry steer restarts", () => {
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
+  it("remaps parent openSubagentRunIds when a steer restart replaces the child run id", async () => {
+    const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
+      await import("../infra/agent-events.js");
+    registerAgentRunContext("parent-run", {
+      sessionKey: MAIN_REQUESTER_SESSION_KEY,
+      inPlanMode: true,
+      openSubagentRunIds: new Set(["run-old"]),
+    });
+    try {
+      registerRun({
+        runId: "run-old",
+        childSessionKey: "agent:main:subagent:steer",
+        task: "initial task",
+      });
+
+      const replaced = mod.replaceSubagentRunAfterSteer({
+        previousRunId: "run-old",
+        nextRunId: "run-new",
+      });
+      expect(replaced).toBe(true);
+      expect([...(getAgentRunContext("parent-run")?.openSubagentRunIds ?? new Set())]).toEqual([
+        "run-new",
+      ]);
+    } finally {
+      clearAgentRunContext("parent-run");
+    }
+  });
+
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {
     {
       registerRun({

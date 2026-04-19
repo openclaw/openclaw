@@ -1177,6 +1177,8 @@ jobs:
             group: boundaries
           - check_name: check-additional-extension-surfaces
             group: extension-surfaces
+          - check_name: check-additional-plan-mode-hardening
+            group: plan-mode-hardening
           - check_name: check-additional-runtime-topology
             group: runtime-topology
     steps:
@@ -1283,6 +1285,11 @@ jobs:
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
               run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
               run_check "test:extensions:package-boundary" pnpm run test:extensions:package-boundary
+              ;;
+            plan-mode-hardening)
+              run_check "test:plan-mode:hardening" pnpm test:plan-mode:hardening
+              run_check "test:plan-mode:coverage" pnpm test:plan-mode:coverage
+              run_check "test:plan-mode:perf" pnpm test:plan-mode:perf
               ;;
             runtime-topology)
               if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then

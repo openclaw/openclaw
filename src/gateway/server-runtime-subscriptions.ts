@@ -1,8 +1,11 @@
-import { onAgentEvent } from "../infra/agent-events.js";
+import { onAgentEvent, setPlanModeSubagentGatePersistenceHandler } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { startPlanSnapshotPersister } from "./plan-snapshot-persister.js";
+import {
+  persistPlanModeSubagentGateState,
+  startPlanSnapshotPersister,
+} from "./plan-snapshot-persister.js";
 import {
   createAgentEventHandler,
   type ChatRunState,
@@ -92,7 +95,11 @@ export function startGatewayEventSubscriptions(params: {
   // updated to reflect the actual suppression mechanism (the
   // earlier "pass a noop emitSessionsChanged" wording implied a
   // param that doesn't exist).
-  const planSnapshotUnsub = startPlanSnapshotPersister({
+  const stopPlanModeSubagentGatePersistence = setPlanModeSubagentGatePersistenceHandler(
+    persistPlanModeSubagentGateState,
+  );
+
+  const stopPlanSnapshotListener = startPlanSnapshotPersister({
     emitSessionsChanged: ({ sessionKey, reason }) => {
       const connIds = params.sessionEventSubscribers.getAll();
       if (connIds.size === 0) {
@@ -105,6 +112,10 @@ export function startGatewayEventSubscriptions(params: {
       );
     },
   });
+  const planSnapshotUnsub = () => {
+    stopPlanSnapshotListener();
+    stopPlanModeSubagentGatePersistence();
+  };
 
   return {
     agentUnsub,

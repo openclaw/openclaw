@@ -630,6 +630,7 @@ export const es: TranslationMap = {
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",
     refreshTitle: "Actualizar datos del chat",
+    planViewToggle: "Toggle plan view sidebar",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
     focusToggle: "Alternar modo de enfoque (ocultar barra lateral + cabecera)",
