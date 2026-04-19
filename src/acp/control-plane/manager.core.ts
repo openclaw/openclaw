@@ -1,3 +1,5 @@
+import { syncAcpManagedFlowTerminalState } from "../../agents/acp-taskflow-orchestrator.js";
+import { verifyAcpWorktreeDiff } from "../../agents/acp-verification-gate.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -5,12 +7,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { findTaskByRunId } from "../../tasks/runtime-internal.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/task-executor.js";
+import { getTaskFlowById } from "../../tasks/task-flow-runtime-internal.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -855,7 +859,7 @@ export class AcpSessionManager {
             });
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-              this.markBackgroundTaskTerminal(taskContext.runId, {
+              await this.markBackgroundTaskTerminal(taskContext.runId, {
                 sessionKey,
                 status: "succeeded",
                 endedAt: Date.now(),
@@ -898,7 +902,7 @@ export class AcpSessionManager {
               errorCode: acpError.code,
             });
             if (taskContext) {
-              this.markBackgroundTaskTerminal(taskContext.runId, {
+              await this.markBackgroundTaskTerminal(taskContext.runId, {
                 sessionKey,
                 status: resolveBackgroundTaskFailureStatus(acpError),
                 endedAt: Date.now(),
@@ -2136,6 +2140,14 @@ export class AcpSessionManager {
 
   private createBackgroundTaskRecord(context: BackgroundTaskContext, startedAt: number): void {
     try {
+      const existing = findTaskByRunId(context.runId);
+      if (
+        existing &&
+        normalizeText(existing.ownerKey) === normalizeText(context.requesterSessionKey) &&
+        normalizeText(existing.childSessionKey) === normalizeText(context.childSessionKey)
+      ) {
+        return;
+      }
       createRunningTaskRun({
         runtime: "acp",
         sourceId: context.runId,
@@ -2176,7 +2188,7 @@ export class AcpSessionManager {
     }
   }
 
-  private markBackgroundTaskTerminal(
+  private async markBackgroundTaskTerminal(
     runId: string,
     params: {
       sessionKey?: string;
@@ -2188,34 +2200,89 @@ export class AcpSessionManager {
       terminalSummary?: string | null;
       terminalOutcome?: "succeeded" | "blocked" | null;
     },
-  ): void {
+  ): Promise<void> {
     try {
+      // Verification gate: for "succeeded" tasks, check that the worktree has
+      // actual file changes. If the agent claimed success but produced zero diffs,
+      // override the status to "failed" with a descriptive summary.
+      let effectiveStatus = params.status;
+      let effectiveTerminalSummary = params.terminalSummary;
+      let effectiveTerminalOutcome = params.terminalOutcome;
+      let effectiveError = params.error;
       if (params.status === "succeeded") {
-        completeTaskRunByRunId({
+        const cwd = this.resolveWorktreeCwdFromTask(runId);
+        if (cwd) {
+          const verification = await verifyAcpWorktreeDiff(cwd);
+          if (!verification.hasChanges) {
+            logVerbose(
+              `acp-manager: verification gate failed for ${runId}: no file changes detected in ${cwd}`,
+            );
+            effectiveStatus = "failed";
+            effectiveTerminalSummary = "no_file_changes";
+            effectiveTerminalOutcome = undefined;
+            effectiveError =
+              "Verification gate: agent reported success but produced no file changes";
+          }
+        } else {
+          logVerbose(
+            `acp-manager: skipping verification gate for ${runId}: no cwd available (legacy flow)`,
+          );
+        }
+      }
+      if (effectiveStatus === "succeeded") {
+        const updatedTasks = completeTaskRunByRunId({
           runId,
           runtime: "acp",
           sessionKey: params.sessionKey,
           endedAt: params.endedAt,
           lastEventAt: params.lastEventAt,
           progressSummary: params.progressSummary,
-          terminalSummary: params.terminalSummary,
-          terminalOutcome: params.terminalOutcome,
+          terminalSummary: effectiveTerminalSummary,
+          terminalOutcome: effectiveTerminalOutcome,
         });
+        for (const task of updatedTasks) {
+          syncAcpManagedFlowTerminalState(task);
+        }
         return;
       }
-      failTaskRunByRunId({
+      const updatedTasks = failTaskRunByRunId({
         runId,
         runtime: "acp",
         sessionKey: params.sessionKey,
-        status: params.status,
+        status: effectiveStatus,
         endedAt: params.endedAt,
         lastEventAt: params.lastEventAt,
-        error: params.error,
+        error: effectiveError,
         progressSummary: params.progressSummary,
-        terminalSummary: params.terminalSummary,
+        terminalSummary: effectiveTerminalSummary,
       });
+      for (const task of updatedTasks) {
+        syncAcpManagedFlowTerminalState(task);
+      }
     } catch (error) {
       logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
     }
+  }
+
+  /**
+   * Resolve the worktree cwd for a task by looking up its parent flow's
+   * stateJson.workflowIntent.cwd. Returns undefined if the flow or cwd
+   * is not available (e.g. legacy flows without workflowIntent.cwd).
+   */
+  private resolveWorktreeCwdFromTask(runId: string): string | undefined {
+    const task = findTaskByRunId(runId);
+    if (!task?.parentFlowId) {
+      return undefined;
+    }
+    const flow = getTaskFlowById(task.parentFlowId);
+    if (!flow?.stateJson || typeof flow.stateJson !== "object" || Array.isArray(flow.stateJson)) {
+      return undefined;
+    }
+    const workflowIntent = (flow.stateJson as Record<string, unknown>).workflowIntent;
+    if (!workflowIntent || typeof workflowIntent !== "object" || Array.isArray(workflowIntent)) {
+      return undefined;
+    }
+    const cwd = (workflowIntent as Record<string, unknown>).cwd;
+    return typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
   }
 }

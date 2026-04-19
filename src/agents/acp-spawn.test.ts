@@ -15,6 +15,8 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { getTaskFlowById, resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../tasks/task-registry.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -485,6 +487,8 @@ function enableTelegramCurrentConversationBindings(): void {
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.getChannelPluginMock.mockReset().mockReturnValue(undefined);
     hoisted.getLoadedChannelPluginMock.mockReset().mockReturnValue(undefined);
@@ -625,6 +629,8 @@ describe("spawnAcpDirect", () => {
   });
 
   afterEach(() => {
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
   });
@@ -1616,6 +1622,47 @@ describe("spawnAcpDirect", () => {
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a managed owner flow for parent bound ACP spawns", async () => {
+    const requesterSessionKey = "agent:main:discord:channel:1491082684791918722";
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: requesterSessionKey,
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:1491082684791918722",
+        agentThreadId: "1493151001098584226",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    const task = findTaskByRunId(accepted.runId);
+    expect(task).toMatchObject({
+      ownerKey: requesterSessionKey,
+      childSessionKey: accepted.childSessionKey,
+      parentFlowId: expect.any(String),
+      runId: accepted.runId,
+      task: "Investigate flaky tests",
+    });
+    expect(getTaskFlowById(task?.parentFlowId ?? "")).toMatchObject({
+      flowId: task?.parentFlowId,
+      syncMode: "managed",
+      ownerKey: requesterSessionKey,
+      controllerId: "agents/acp-spawn",
+      requesterOrigin: {
+        channel: "discord",
+        accountId: "default",
+        to: "channel:1491082684791918722",
+        threadId: "1493151001098584226",
+      },
+    });
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {

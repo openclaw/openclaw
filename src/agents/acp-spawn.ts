@@ -49,6 +49,7 @@ import {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -71,6 +72,7 @@ import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
+import { ensureAcpManagedFlow } from "./acp-taskflow-orchestrator.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
@@ -1203,6 +1205,24 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    const managedFlow =
+      requesterInternalKey && requesterState.origin
+        ? ensureAcpManagedFlow({
+            taskFlow: createRuntimeTaskFlow().bindSession({
+              sessionKey: requesterInternalKey,
+              requesterOrigin: requesterState.origin,
+            }),
+            goal: params.label?.trim() || params.task,
+            currentStep: "spawn-acp-child",
+            routeSnapshot: requesterState.origin,
+            workflowIntent: {
+              kind: "acp_parent_spawn",
+              mode: spawnMode,
+              streamTo: "parent",
+              ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+            },
+          })
+        : undefined;
     try {
       createRunningTaskRun({
         runtime: "acp",
@@ -1210,6 +1230,7 @@ export async function spawnAcpDirect(
         ownerKey: requesterInternalKey,
         scopeKind: "session",
         requesterOrigin: requesterState.origin,
+        parentFlowId: managedFlow?.flowId,
         childSessionKey: sessionKey,
         runId: childRunId,
         label: params.label,

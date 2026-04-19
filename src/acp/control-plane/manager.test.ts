@@ -379,6 +379,133 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("reuses linked managed flow children instead of creating duplicate detached ACP tasks", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "Applying the requested change now.",
+        };
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-linked") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-linked",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:discord:channel:1491082684791918722",
+              label: "Quant patch",
+              deliveryContext: {
+                channel: "discord",
+                accountId: "default",
+                to: "channel:1491082684791918722",
+                threadId: "1493151001098584226",
+              },
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:discord:channel:1491082684791918722") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+              deliveryContext: {
+                channel: "discord",
+                accountId: "default",
+                to: "channel:1491082684791918722",
+                threadId: "1493151001098584226",
+              },
+            },
+          };
+        }
+        return null;
+      });
+
+      const { createManagedTaskFlow, getTaskFlowById } =
+        await import("../../tasks/task-flow-registry.js");
+      const { createRunningTaskRun } = await import("../../tasks/task-executor.js");
+      const { listTaskRecords } = await import("../../tasks/task-registry.js");
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:quant:discord:channel:1491082684791918722",
+        controllerId: "agents/acp-spawn",
+        goal: "Quant patch",
+        currentStep: "await-child",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        },
+        stateJson: {
+          route: {
+            channel: "discord",
+            accountId: "default",
+            to: "channel:1491082684791918722",
+            threadId: "1493151001098584226",
+          },
+          workflowIntent: {
+            kind: "acp_parent_prompt",
+          },
+        },
+      });
+      const linkedTask = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:quant:discord:channel:1491082684791918722",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        },
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child-linked",
+        runId: "direct-parented-run-linked",
+        label: "Quant patch",
+        task: "Implement the feature and report back",
+        startedAt: 100,
+        deliveryStatus: "pending",
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-linked",
+        text: "Implement the feature and report back",
+        mode: "prompt",
+        requestId: "direct-parented-run-linked",
+      });
+      await flushMicrotasks();
+
+      expect(
+        listTaskRecords().filter((task) => task.runId === "direct-parented-run-linked"),
+      ).toHaveLength(1);
+      expect(findTaskByRunId("direct-parented-run-linked")).toMatchObject({
+        taskId: linkedTask.taskId,
+        parentFlowId: flow.flowId,
+        status: "succeeded",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "succeeded",
+      });
+    });
+  });
+
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

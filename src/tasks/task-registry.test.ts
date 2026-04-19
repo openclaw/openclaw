@@ -1022,6 +1022,81 @@ describe("task-registry", () => {
     });
   });
 
+  it("prefers the managed flow replacement route when a linked ACP task shares a runId", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "channel:1491082684791918722",
+        via: "direct",
+      });
+
+      const detachedTask = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:stale-dm-target",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-managed-replacement-delivery",
+        task: "Detached ACP child",
+        status: "succeeded",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        controllerId: "agents/acp-spawn",
+        goal: "Investigate flaky tests",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        },
+      });
+      const linkedTask = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-managed-replacement-delivery",
+        task: "Managed ACP child",
+        preferMetadata: true,
+        status: "succeeded",
+        deliveryStatus: "pending",
+      });
+
+      await maybeDeliverTaskTerminalUpdate(detachedTask.taskId);
+      await maybeDeliverTaskTerminalUpdate(linkedTask.taskId);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        }),
+      );
+      expect(getTaskById(detachedTask.taskId)).toMatchObject({
+        deliveryStatus: "not_applicable",
+      });
+      expect(getTaskById(linkedTask.taskId)).toMatchObject({
+        deliveryStatus: "delivered",
+      });
+    });
+  });
+
   it("does not suppress ACP delivery across different requester scopes when runIds collide", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1071,6 +1146,91 @@ describe("task-registry", () => {
           deliveryStatus: "session_queued",
         }),
       );
+    });
+  });
+
+  it("does not suppress managed flow deliveries across distinct requester thread scopes", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "channel:1491082684791918722",
+        via: "direct",
+      });
+
+      const firstFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        controllerId: "agents/acp-spawn",
+        goal: "Thread A workflow",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        },
+      });
+      const secondFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        controllerId: "agents/acp-spawn",
+        goal: "Thread B workflow",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584227",
+        },
+      });
+
+      const firstTask = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        scopeKind: "session",
+        parentFlowId: firstFlow.flowId,
+        childSessionKey: "agent:codex:acp:shared-child",
+        runId: "run-thread-scope-collision",
+        task: "Thread A ACP child",
+        status: "succeeded",
+        deliveryStatus: "pending",
+      });
+      const secondTask = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:channel:1491082684791918722",
+        scopeKind: "session",
+        parentFlowId: secondFlow.flowId,
+        childSessionKey: "agent:codex:acp:shared-child",
+        runId: "run-thread-scope-collision",
+        task: "Thread B ACP child",
+        status: "succeeded",
+        deliveryStatus: "pending",
+      });
+
+      await maybeDeliverTaskTerminalUpdate(firstTask.taskId);
+      await maybeDeliverTaskTerminalUpdate(secondTask.taskId);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2);
+      expect(hoisted.sendMessageMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          channel: "discord",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584226",
+        }),
+      );
+      expect(hoisted.sendMessageMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          channel: "discord",
+          to: "channel:1491082684791918722",
+          threadId: "1493151001098584227",
+        }),
+      );
+      expect(getTaskById(firstTask.taskId)).toMatchObject({
+        deliveryStatus: "delivered",
+      });
+      expect(getTaskById(secondTask.taskId)).toMatchObject({
+        deliveryStatus: "delivered",
+      });
     });
   });
 

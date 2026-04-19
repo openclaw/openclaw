@@ -594,7 +594,48 @@ function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
   );
 }
 
+function isManagedLinkedTask(task: TaskRecord): boolean {
+  return getLinkedFlowForDelivery(task)?.syncMode === "managed";
+}
+
+function resolveTaskDeliveryScopeKey(task: TaskRecord): string {
+  const owner = resolveTaskDeliveryOwner(task);
+  const threadId =
+    owner.requesterOrigin?.threadId != null && owner.requesterOrigin.threadId !== ""
+      ? String(owner.requesterOrigin.threadId)
+      : undefined;
+  return [
+    task.runtime,
+    task.scopeKind,
+    normalizeOptionalString(owner.sessionKey) ?? "",
+    normalizeOptionalString(owner.requesterOrigin?.channel) ?? "",
+    normalizeOptionalString(owner.requesterOrigin?.accountId) ?? "",
+    normalizeOptionalString(owner.requesterOrigin?.to) ?? "",
+    normalizeOptionalString(threadId) ?? "",
+  ].join("\u0000");
+}
+
+function getDeliveryEquivalentPeerTasks(task: TaskRecord): TaskRecord[] {
+  const scopeKey = resolveTaskDeliveryScopeKey(task);
+  return getPeerTasksForDelivery(task).filter(
+    (candidate) => resolveTaskDeliveryScopeKey(candidate) === scopeKey,
+  );
+}
+
+function findManagedDeliveryReplacementTask(task: TaskRecord): TaskRecord | undefined {
+  if (task.parentFlowId?.trim()) {
+    return undefined;
+  }
+  const managedPeers = getPeerTasksForDelivery(task).filter(
+    (candidate) => candidate.taskId !== task.taskId && isManagedLinkedTask(candidate),
+  );
+  return pickPreferredRunIdTask(managedPeers);
+}
+
 function taskLookupPriority(task: TaskRecord): number {
+  if (isManagedLinkedTask(task)) {
+    return -2;
+  }
   const runtimePriority = task.runtime === "cli" ? 1 : 0;
   return runtimePriority;
 }
@@ -1015,6 +1056,26 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
   return true;
 }
 
+function suppressDetachedManagedReplacementTasks(task: TaskRecord): void {
+  if (!task.runId?.trim() || !isManagedLinkedTask(task)) {
+    return;
+  }
+  const updatedAt = Date.now();
+  for (const candidate of getPeerTasksForDelivery(task)) {
+    if (
+      candidate.taskId === task.taskId ||
+      candidate.parentFlowId?.trim() ||
+      candidate.deliveryStatus !== "pending"
+    ) {
+      continue;
+    }
+    updateTask(candidate.taskId, {
+      deliveryStatus: "not_applicable",
+      lastEventAt: updatedAt,
+    });
+  }
+}
+
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
@@ -1030,8 +1091,22 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
     }
+    const managedReplacement = latest.runId
+      ? findManagedDeliveryReplacementTask(latest)
+      : undefined;
+    if (
+      shouldSuppressDuplicateTerminalDelivery({
+        task: latest,
+        preferredTaskId: managedReplacement?.taskId,
+      })
+    ) {
+      return updateTask(taskId, {
+        deliveryStatus: "not_applicable",
+        lastEventAt: Date.now(),
+      });
+    }
     const preferred = latest.runId
-      ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
+      ? pickPreferredRunIdTask(getDeliveryEquivalentPeerTasks(latest))
       : undefined;
     if (
       shouldSuppressDuplicateTerminalDelivery({ task: latest, preferredTaskId: preferred?.taskId })
@@ -1074,24 +1149,62 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     }
     try {
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-      const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
-      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
+      const latestAfterLoad = tasks.get(taskId);
+      if (!latestAfterLoad || !shouldAutoDeliverTaskTerminalUpdate(latestAfterLoad)) {
+        return latestAfterLoad ? cloneTaskRecord(latestAfterLoad) : null;
+      }
+      const managedReplacementAfterLoad = latestAfterLoad.runId
+        ? findManagedDeliveryReplacementTask(latestAfterLoad)
+        : undefined;
+      if (
+        shouldSuppressDuplicateTerminalDelivery({
+          task: latestAfterLoad,
+          preferredTaskId: managedReplacementAfterLoad?.taskId,
+        })
+      ) {
+        return updateTask(taskId, {
+          deliveryStatus: "not_applicable",
+          lastEventAt: Date.now(),
+        });
+      }
+      const preferredAfterLoad = latestAfterLoad.runId
+        ? pickPreferredRunIdTask(getDeliveryEquivalentPeerTasks(latestAfterLoad))
+        : undefined;
+      if (
+        shouldSuppressDuplicateTerminalDelivery({
+          task: latestAfterLoad,
+          preferredTaskId: preferredAfterLoad?.taskId,
+        })
+      ) {
+        return updateTask(taskId, {
+          deliveryStatus: "not_applicable",
+          lastEventAt: Date.now(),
+        });
+      }
+      const ownerAfterLoad = resolveTaskDeliveryOwner(latestAfterLoad);
+      const ownerSessionKeyAfterLoad = ownerAfterLoad.sessionKey?.trim();
+      if (!ownerSessionKeyAfterLoad || !canDeliverTaskToRequesterOrigin(latestAfterLoad)) {
+        return cloneTaskRecord(latestAfterLoad);
+      }
+      const requesterAgentId = parseAgentSessionKey(ownerSessionKeyAfterLoad)?.agentId;
+      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latestAfterLoad);
+      const eventTextAfterLoad = formatTaskTerminalMessage(latestAfterLoad);
       await sendMessage({
-        channel: owner.requesterOrigin?.channel,
-        to: owner.requesterOrigin?.to ?? "",
-        accountId: owner.requesterOrigin?.accountId,
-        threadId: owner.requesterOrigin?.threadId,
-        content: eventText,
+        channel: ownerAfterLoad.requesterOrigin?.channel,
+        to: ownerAfterLoad.requesterOrigin?.to ?? "",
+        accountId: ownerAfterLoad.requesterOrigin?.accountId,
+        threadId: ownerAfterLoad.requesterOrigin?.threadId,
+        content: eventTextAfterLoad,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
-          sessionKey: ownerSessionKey,
+          sessionKey: ownerSessionKeyAfterLoad,
           agentId: requesterAgentId,
           idempotencyKey,
         },
       });
-      if (latest.terminalOutcome === "blocked") {
-        queueBlockedTaskFollowup(latest);
+      if (latestAfterLoad.terminalOutcome === "blocked") {
+        queueBlockedTaskFollowup(latestAfterLoad);
       }
       return updateTask(taskId, {
         deliveryStatus: "delivered",
@@ -1505,6 +1618,7 @@ export function createTaskRecord(params: {
       error,
     });
   }
+  suppressDetachedManagedReplacementTasks(record);
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
