@@ -4,7 +4,7 @@
 // Usage:
 //   lesson-engine <subcommand> [--agent <name>] [--all] [--dry-run] [--apply] [...]
 //
-// Subcommands: migrate | dedupe | forget | status | maintenance | scan | distill | gate | inject
+// Subcommands: migrate | dedupe | forget | status | maintenance | scan | distill | gate | inject | hit | auto-upgrade
 //
 // Stdout: single machine-readable JSON document (pretty-printed).
 // Stderr: human-readable summary.
@@ -12,6 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { autoUpgradeLessons, type AutoUpgradeResult } from "../src/auto-upgrade.js";
 import { dedupeFile, type DedupeResult } from "../src/dedupe.js";
 import {
   DEFAULT_MIN_CLUSTER_SIZE,
@@ -30,6 +31,7 @@ import {
 } from "../src/error-scanner.js";
 import { forgetFile, type ForgetResult, DEFAULT_MAX_ACTIVE } from "../src/forget.js";
 import { DEFAULT_CONFIDENCE_THRESHOLD, gateCandidates } from "../src/gate.js";
+import { hitLesson, type HitResult } from "../src/hit.js";
 import { injectLessons, type InjectResult } from "../src/inject.js";
 import { migrateFile, type MigrateResult } from "../src/migrate.js";
 import type { AgentName, LessonCandidate, MaintenanceState } from "../src/types.js";
@@ -48,6 +50,8 @@ type Subcommand =
   | "dedupe"
   | "forget"
   | "status"
+  | "hit"
+  | "auto-upgrade"
   | "maintenance"
   | "scan"
   | "distill"
@@ -66,6 +70,7 @@ interface ParsedArgs {
   confidence?: number;
   domainTags?: string[];
   root?: string;
+  lessonId?: string;
   help: boolean;
 }
 
@@ -78,12 +83,14 @@ Commands:
   migrate       Normalize schema + write .bak.<ts>.
   dedupe        Merge near-duplicate active lessons (TF-IDF cosine >= 0.6).
   forget        Score lessons, demote tail active → stale, expire stale → archive.
-  maintenance   Run dedupe then forget; persist maintenance-state.json.
+  maintenance   Run full pipeline: scan→distill→gate→migrate→dedupe→forget→auto-upgrade→inject.
   status        Report current counts per lifecycle.
   scan          Scan session JSONL logs for tool failure error seeds.
   distill       Cluster error seeds and distill into lesson candidates via LLM.
   gate          Promote or reject lesson candidates based on confidence + dedup.
   inject        Select top lessons and write injected-lessons.md for agent startup.
+  hit           Increment hitCount for a lesson; auto-upgrade severity at thresholds (≥2→high, ≥4→critical).
+  auto-upgrade  Upgrade lesson severity based on error seed tag frequency (≥3 distinct fingerprints → +1 step).
 
 Options:
   --agent <name>      One of: ${VALID_AGENTS.join(", ")}
@@ -94,6 +101,7 @@ Options:
   --min-cluster <N>   Minimum cluster size for distill (default ${DEFAULT_MIN_CLUSTER_SIZE}).
   --confidence <N>    Confidence threshold for gate (default ${DEFAULT_CONFIDENCE_THRESHOLD}).
   --domain-tags <t>   Comma-separated tag list for inject filtering.
+  --lesson-id <id>    Lesson ID for the hit command.
   --root <path>       Override AGENT_DATA_ROOT for this invocation.
   -h, --help          Print this help.
 `;
@@ -134,6 +142,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--domain-tags":
         out.domainTags = rest[++i]?.split(",").filter(Boolean);
+        break;
+      case "--lesson-id":
+        out.lessonId = rest[++i];
         break;
       case "--root":
         out.root = rest[++i];
@@ -400,7 +411,9 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
       });
       stderr.push(`[gate] promoted=${gateResult.promoted} rejected=${gateResult.rejected}`);
 
-      // ── migrate → dedupe → forget → inject (per-agent) ──
+      // ── migrate → dedupe → forget → auto-upgrade → inject (per-agent) ──
+      const allPersistedSeeds = dryRun ? seeds : readPersistedSeeds(args.root);
+      const autoUpgradeResults: AutoUpgradeResult[] = [];
       const injectResults: {
         agent: string;
         selected: number;
@@ -426,6 +439,26 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
           maxActive: args.maxActive,
           now,
         });
+
+        // ── auto-upgrade: seed tag frequency → severity bump ──
+        const autoUpgrade = autoUpgradeLessons({
+          agent: agent as AgentName,
+          seeds: allPersistedSeeds,
+          root: args.root,
+          dryRun,
+          now,
+        });
+        autoUpgradeResults.push(autoUpgrade);
+        if (autoUpgrade.upgrades.length > 0) {
+          for (const u of autoUpgrade.upgrades) {
+            stderr.push(
+              `[auto-upgrade] ${agent}: ${u.lessonId} ${u.before}→${u.after} (${u.matchingFingerprints} fingerprints)`,
+            );
+          }
+        } else {
+          stderr.push(`[auto-upgrade] ${agent}: 0 upgrades`);
+        }
+
         const inject = injectLessons({
           agent: agent as AgentName,
           root: args.root,
@@ -473,6 +506,10 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
           scanSeedCount: seeds.length,
           distillSummary,
           gateResult: { promoted: gateResult.promoted, rejected: gateResult.rejected },
+          autoUpgradeResults: autoUpgradeResults.map((r) => ({
+            agent: r.agent,
+            upgrades: r.upgrades.length,
+          })),
           results,
           injectResults,
         },
@@ -598,6 +635,56 @@ async function run(argv: string[], opts: MainOptions = {}): Promise<CliResult> {
         };
       });
       return { stdout: { command: "inject", dryRun, results }, stderr, exitCode: 0 };
+    }
+    case "hit": {
+      if (!args.agent || !isValidAgent(args.agent)) {
+        throw new UserError("--agent <name> is required for hit.");
+      }
+      if (!args.lessonId) {
+        throw new UserError("--lesson-id <id> is required for hit.");
+      }
+      const result: HitResult = hitLesson({
+        agent: args.agent as AgentName,
+        lessonId: args.lessonId,
+        root: args.root,
+        dryRun,
+        now,
+      });
+      if (!result.found) {
+        stderr.push(`[hit] ${args.agent}: lesson '${args.lessonId}' not found`);
+      } else {
+        const upgradeNote = result.upgraded
+          ? ` severity ${result.severityBefore}→${result.severityAfter}`
+          : "";
+        stderr.push(
+          `[hit] ${args.agent}: ${args.lessonId} hitCount=${result.hitCount}${upgradeNote} (${dryRun ? "dry-run" : "applied"})`,
+        );
+      }
+      return { stdout: { command: "hit", dryRun, result }, stderr, exitCode: 0 };
+    }
+    case "auto-upgrade": {
+      const agents = resolveAgents(args);
+      const allSeeds = readPersistedSeeds(args.root);
+      const results = agents.map((agent) => {
+        const r = autoUpgradeLessons({
+          agent: agent as AgentName,
+          seeds: allSeeds,
+          root: args.root,
+          dryRun,
+          now,
+        });
+        if (r.upgrades.length > 0) {
+          for (const u of r.upgrades) {
+            stderr.push(
+              `[auto-upgrade] ${agent}: ${u.lessonId} ${u.before}→${u.after} (${u.matchingFingerprints} fingerprints)`,
+            );
+          }
+        } else {
+          stderr.push(`[auto-upgrade] ${agent}: 0 upgrades (${dryRun ? "dry-run" : "applied"})`);
+        }
+        return { agent, upgrades: r.upgrades };
+      });
+      return { stdout: { command: "auto-upgrade", dryRun, results }, stderr, exitCode: 0 };
     }
     default:
       throw new UserError(`Unknown subcommand: ${String(args.command)}`);

@@ -34,8 +34,8 @@ export interface InjectResult {
 
 // ── Constants ──
 
-const DEFAULT_MAX_TOKENS = 600;
-const MAX_LESSONS = 3;
+const DEFAULT_MAX_TOKENS = 2000;
+const MAX_LESSONS = 10;
 
 const SEVERITY_ORDER: Record<Severity, number> = {
   critical: 0,
