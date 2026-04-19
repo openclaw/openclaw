@@ -74,7 +74,10 @@ if [ -n "$path_input" ]; then
   owner="${path_input%%/*}"
 fi
 
+# Tolerate a trailing slash on BLINK_APIS_URL — otherwise we'd build
+# `https://core.blink.new//v1/github/mint-token` which some proxies 404 on.
 api_base="${BLINK_APIS_URL:-https://core.blink.new}"
+api_base="${api_base%/}"
 url="${api_base}/v1/github/mint-token"
 if [ -n "$owner" ]; then
   # GitHub usernames/orgs are `[A-Za-z0-9-]` (hyphens only, no leading /
