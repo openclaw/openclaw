@@ -10,62 +10,81 @@ metadata:
 
 # Blink Google Calendar
 
-Access the user's Google Calendar. Provider key: `google_calendar` or `composio_calendar` (check `blink connector status` for the exact key).
+Access the user's Google Calendar via the Blink connector.
 
-## List calendars
+## Step 1: Find the correct provider key
+
+ALWAYS run this first — the key varies per account:
 ```bash
-blink connector exec google_calendar /users/me/calendarList GET
+blink connector status
+```
+Look for `google_calendar` or `composio_calendar` in the output. Use whichever appears. Examples below use `CALENDAR` as a placeholder — replace it with the actual key from status output.
+
+## Endpoints
+
+All endpoints are relative to the Google Calendar API v3 base URL. Do NOT include a leading `/`.
+
+### List calendars
+```bash
+blink connector exec CALENDAR users/me/calendarList GET
 ```
 
-## Get upcoming events (primary calendar)
+### Get upcoming events (primary calendar)
 ```bash
-blink connector exec google_calendar /calendars/primary/events GET \
-  '{"timeMin": "2026-03-14T00:00:00Z", "timeMax": "2026-03-21T00:00:00Z", "singleEvents": true, "orderBy": "startTime", "maxResults": 20}'
+blink connector exec CALENDAR calendars/primary/events GET \
+  '{"timeMin": "2026-04-17T00:00:00Z", "timeMax": "2026-04-18T00:00:00Z", "singleEvents": "true", "orderBy": "startTime", "maxResults": "20"}'
 ```
 
-## Search for events
+### Search for events
 ```bash
-blink connector exec google_calendar /calendars/primary/events GET \
-  '{"q": "standup", "timeMin": "2026-03-14T00:00:00Z", "maxResults": 10}'
+blink connector exec CALENDAR calendars/primary/events GET \
+  '{"q": "standup", "timeMin": "2026-04-01T00:00:00Z", "maxResults": "10"}'
 ```
 
-## Get a specific event
+### Get a specific event
 ```bash
-blink connector exec google_calendar /calendars/primary/events/EVENT_ID GET
+blink connector exec CALENDAR calendars/primary/events/EVENT_ID GET
 ```
 
-## Create an event
+### Create an event
 ```bash
-blink connector exec google_calendar /calendars/primary/events POST '{
+blink connector exec CALENDAR calendars/primary/events POST '{
   "summary": "Team Standup",
-  "start": {"dateTime": "2026-03-15T10:00:00", "timeZone": "America/New_York"},
-  "end": {"dateTime": "2026-03-15T10:30:00", "timeZone": "America/New_York"},
+  "start": {"dateTime": "2026-04-18T10:00:00", "timeZone": "America/New_York"},
+  "end": {"dateTime": "2026-04-18T10:30:00", "timeZone": "America/New_York"},
   "attendees": [{"email": "colleague@example.com"}],
   "description": "Daily standup meeting"
 }'
 ```
 
-## Update an event
+### Update an event
 ```bash
-blink connector exec google_calendar /calendars/primary/events/EVENT_ID PATCH '{
+blink connector exec CALENDAR calendars/primary/events/EVENT_ID PATCH '{
   "summary": "Updated Meeting Title",
   "description": "Updated description"
 }'
 ```
 
-## Delete an event
+### Delete an event
 ```bash
-blink connector exec google_calendar /calendars/primary/events/EVENT_ID DELETE '{}'
+blink connector exec CALENDAR calendars/primary/events/EVENT_ID DELETE '{}'
 ```
 
-## Find free/busy time
+### Find free/busy time
 ```bash
-blink connector exec google_calendar /freeBusy POST '{
-  "timeMin": "2026-03-15T09:00:00Z",
-  "timeMax": "2026-03-15T17:00:00Z",
+blink connector exec CALENDAR freeBusy POST '{
+  "timeMin": "2026-04-18T09:00:00Z",
+  "timeMax": "2026-04-18T17:00:00Z",
   "items": [{"id": "primary"}]
 }'
 ```
+
+## Important notes
+
+- **All query parameter values must be strings** in the JSON params — use `"true"` not `true`, `"20"` not `20`.
+- **No leading `/`** on endpoints — use `calendars/primary/events`, not `/calendars/primary/events`.
+- `singleEvents` must be `"true"` (string) when using `orderBy: "startTime"`.
+- Use ISO 8601 format for dates: `2026-04-17T00:00:00Z`.
 
 ## Common use cases
 - "What's on my calendar tomorrow?" → list events with tomorrow's date range

@@ -1,5 +1,6 @@
 ---
-name: blink-connector
+
+## name: blink-connector
 description: >
   Call any linked Blink Connector via the Blink CLI. Supports Notion,
   Slack, Discord, Google (Gmail, Drive, Calendar, Docs, Sheets, Slides),
@@ -12,13 +13,13 @@ description: >
   Use when the user asks you to interact with a connected third-party service.
 metadata:
   { "blink": { "requires_env": ["BLINK_API_KEY", "BLINK_AGENT_ID"] } }
----
 
 # Blink Connector
 
 Call any linked connector via the `blink connector exec` CLI command.
 
 ## Usage
+
 ```bash
 blink connector exec <provider> <endpoint> [GET|POST|PUT|PATCH|DELETE] [json-params]
 ```
@@ -28,9 +29,11 @@ Do NOT include the API version prefix — it's already in the base URL.
 For example, Attio's base is `https://api.attio.com/v2/` so use `objects`, NOT `/v2/objects`.
 
 ## Check which connectors are linked
+
 ```bash
 blink connector status
 ```
+
 A missing provider means it's not linked — ask the user to connect it in the Agent Integrations tab.
 
 ## Provider Keys & Base URLs
@@ -101,6 +104,7 @@ A missing provider means it's not linked — ask the user to connect it in the A
 ## Examples by Provider
 
 ### Notion
+
 ```bash
 # Search all pages and databases
 blink connector exec notion search POST '{"query":"meeting notes","page_size":10}'
@@ -119,6 +123,7 @@ blink connector exec notion pages POST '{"parent":{"database_id":"DB_ID"},"prope
 ```
 
 ### Slack
+
 ```bash
 # Post a message
 blink connector exec slack chat.postMessage POST '{"channel":"#general","text":"Hello!"}'
@@ -131,6 +136,7 @@ blink connector exec slack conversations.history POST '{"channel":"C123456","lim
 ```
 
 ### Discord
+
 ```bash
 # List guilds (servers)
 blink connector exec discord users/@me/guilds GET
@@ -143,18 +149,28 @@ blink connector exec discord channels/CHANNEL_ID/messages POST '{"content":"Hell
 ```
 
 ### Google Calendar
+
+**IMPORTANT**: Run `blink connector status` first — use `google_calendar` or `composio_calendar`, whichever appears. Examples below use `CALENDAR` as placeholder.
+
 ```bash
-# List upcoming events
-blink connector exec google_calendar calendars/primary/events GET '{"timeMin":"2026-03-15T00:00:00Z","maxResults":"10","singleEvents":"true","orderBy":"startTime"}'
+# List calendars
+blink connector exec CALENDAR users/me/calendarList GET
+
+# List upcoming events (all param values must be strings)
+blink connector exec CALENDAR calendars/primary/events GET '{"timeMin":"2026-04-17T00:00:00Z","timeMax":"2026-04-18T00:00:00Z","maxResults":"10","singleEvents":"true","orderBy":"startTime"}'
 
 # Create an event
-blink connector exec google_calendar calendars/primary/events POST '{"summary":"Team Meeting","start":{"dateTime":"2026-04-01T10:00:00Z"},"end":{"dateTime":"2026-04-01T11:00:00Z"}}'
+blink connector exec CALENDAR calendars/primary/events POST '{"summary":"Team Meeting","start":{"dateTime":"2026-04-18T10:00:00","timeZone":"America/New_York"},"end":{"dateTime":"2026-04-18T11:00:00","timeZone":"America/New_York"}}'
 
-# List calendars
-blink connector exec google_calendar users/me/calendarList GET
+# Delete an event
+blink connector exec CALENDAR calendars/primary/events/EVENT_ID DELETE '{}'
+
+# Find free/busy time
+blink connector exec CALENDAR freeBusy POST '{"timeMin":"2026-04-18T09:00:00Z","timeMax":"2026-04-18T17:00:00Z","items":[{"id":"primary"}]}'
 ```
 
 ### Gmail
+
 ```bash
 # List unread messages
 blink connector exec google_gmail users/me/messages GET '{"labelIds":"INBOX","q":"is:unread","maxResults":"10"}'
@@ -170,6 +186,7 @@ blink connector exec google_gmail users/me/messages/send POST '{"raw":"BASE64URL
 ```
 
 ### Google Drive
+
 ```bash
 # List files
 blink connector exec google_drive files GET '{"pageSize":"20","fields":"files(id,name,mimeType,modifiedTime)"}'
@@ -182,6 +199,7 @@ blink connector exec google_drive files/FILE_ID GET '{"fields":"id,name,mimeType
 ```
 
 ### Google Docs
+
 ```bash
 # Get a document's content
 blink connector exec google_docs documents/DOCUMENT_ID GET
@@ -191,6 +209,7 @@ blink connector exec google_docs documents POST '{"title":"My New Document"}'
 ```
 
 ### Google Sheets
+
 ```bash
 # Create a spreadsheet
 blink connector exec google_sheets spreadsheets POST '{"properties":{"title":"My Spreadsheet"}}'
@@ -206,6 +225,7 @@ blink connector exec google_sheets spreadsheets/SPREADSHEET_ID GET
 ```
 
 ### Google Slides
+
 ```bash
 # Get a presentation
 blink connector exec google_slides presentations/PRESENTATION_ID GET
@@ -215,6 +235,7 @@ blink connector exec google_slides presentations POST '{"title":"My Presentation
 ```
 
 ### YouTube
+
 ```bash
 # List your channels
 blink connector exec youtube channels GET '{"part":"snippet,statistics","mine":"true"}'
@@ -230,6 +251,7 @@ blink connector exec youtube videos GET '{"part":"snippet,statistics","id":"VIDE
 ```
 
 ### HubSpot
+
 ```bash
 # Search contacts
 blink connector exec hubspot crm/v3/objects/contacts/search POST '{"filterGroups":[{"filters":[{"propertyName":"email","operator":"CONTAINS_TOKEN","value":"example.com"}]}],"limit":10}'
@@ -245,6 +267,7 @@ blink connector exec hubspot crm/v3/objects/deals GET '{"limit":"10"}'
 ```
 
 ### Airtable
+
 ```bash
 # List bases
 blink connector exec airtable meta/bases GET
@@ -257,6 +280,7 @@ blink connector exec airtable BASE_ID/TABLE_NAME POST '{"records":[{"fields":{"N
 ```
 
 ### Microsoft Outlook
+
 ```bash
 # List inbox
 blink connector exec microsoft_outlook me/messages GET '{"$top":"20","$select":"subject,from,receivedDateTime,isRead","$orderby":"receivedDateTime desc"}'
@@ -269,6 +293,7 @@ blink connector exec microsoft_outlook me/messages/MESSAGE_ID GET
 ```
 
 ### Microsoft Calendar
+
 ```bash
 # List events
 blink connector exec microsoft_calendar me/events GET '{"$top":"10","$orderby":"start/dateTime"}'
@@ -278,6 +303,7 @@ blink connector exec microsoft_calendar me/events POST '{"subject":"Meeting","st
 ```
 
 ### Microsoft OneDrive
+
 ```bash
 # List root files
 blink connector exec microsoft_onedrive me/drive/root/children GET
@@ -287,6 +313,7 @@ blink connector exec microsoft_onedrive me/drive/root/search(q='report') GET
 ```
 
 ### Microsoft Teams
+
 ```bash
 # List joined teams
 blink connector exec microsoft_teams me/joinedTeams GET
@@ -296,6 +323,7 @@ blink connector exec microsoft_teams teams/TEAM_ID/channels GET
 ```
 
 ### LinkedIn
+
 ```bash
 # Get profile info (name, email, picture)
 blink connector exec linkedin userinfo GET
@@ -308,6 +336,7 @@ blink connector exec linkedin 'socialActions/urn%3Ali%3Ashare%3A123/likes' POST 
 ```
 
 ### Salesforce
+
 ```bash
 # SOQL query
 blink connector exec salesforce services/data/v62.0/query GET '{"q":"SELECT Id,Name,Email FROM Contact LIMIT 20"}'
@@ -320,9 +349,13 @@ blink connector exec salesforce services/data/v62.0/sobjects/Contact/CONTACT_ID 
 ```
 
 ### GitHub
+
 ```bash
-# List repos
-blink connector exec github user/repos GET
+# Get authenticated user
+blink connector exec github user GET
+
+# List repos (sorted by last update)
+blink connector exec github user/repos GET '{"per_page":"10","sort":"updated"}'
 
 # Get repo details
 blink connector exec github repos/OWNER/REPO GET
@@ -335,9 +368,47 @@ blink connector exec github repos/OWNER/REPO/issues POST '{"title":"Bug report",
 
 # List pull requests
 blink connector exec github repos/OWNER/REPO/pulls GET '{"state":"open"}'
+
+# Browse repo file tree (root)
+blink connector exec github repos/OWNER/REPO/contents/ GET
+
+# Browse a specific directory
+blink connector exec github repos/OWNER/REPO/contents/src GET
+
+# Get file contents (returns base64-encoded content)
+blink connector exec github repos/OWNER/REPO/contents/README.md GET
 ```
 
+#### Cloning a repo locally
+
+The `blink connector exec` command calls the GitHub REST API — it CANNOT run `git clone`. To get repo files locally:
+
+**Option 1 — Download via tarball (preferred for full repo)**:
+```bash
+# Get the repo info to find clone_url
+REPO_INFO=$(blink connector exec github repos/OWNER/REPO GET --json)
+# Download the tarball using curl (no auth needed for public repos)
+curl -L "https://api.github.com/repos/OWNER/REPO/tarball/main" -o repo.tar.gz
+tar -xzf repo.tar.gz
+```
+
+**Option 2 — Browse files via API (for reading specific files)**:
+```bash
+# List the root directory
+blink connector exec github repos/OWNER/REPO/contents/ GET
+
+# Read a specific file (content is base64-encoded in the response)
+blink connector exec github repos/OWNER/REPO/contents/package.json GET
+```
+
+**Option 3 — git clone (public repos only, or if SSH key exists)**:
+```bash
+git clone https://github.com/OWNER/REPO.git
+```
+Note: `git clone` for private repos requires SSH keys or a personal access token configured on the machine — the connector's OAuth token is not available for git CLI.
+
 ### Jira
+
 ```bash
 # Get myself
 blink connector exec jira myself GET
@@ -356,6 +427,7 @@ blink connector exec jira project GET
 ```
 
 ### Asana
+
 ```bash
 # Get user info
 blink connector exec asana users/me GET
@@ -374,6 +446,7 @@ blink connector exec asana tasks POST '{"data":{"name":"New Task","projects":["P
 ```
 
 ### Linear (GraphQL)
+
 ```bash
 # Get viewer info
 blink connector exec linear '{ viewer { id name email teams { nodes { id name } } } }' POST
@@ -389,6 +462,7 @@ blink connector exec linear '{ issueSearch(query: "bug", first: 10) { nodes { id
 ```
 
 ### Attio
+
 ```bash
 # List all objects (custom + standard)
 blink connector exec attio objects GET
@@ -416,6 +490,7 @@ blink connector exec attio notes GET '{"limit":"20"}'
 ```
 
 ### Pipedrive
+
 ```bash
 # Get current user
 blink connector exec pipedrive users/me GET
@@ -440,6 +515,7 @@ blink connector exec pipedrive activities GET '{"limit":"20"}'
 ```
 
 ### Zoom
+
 ```bash
 # List meetings
 blink connector exec zoom users/me/meetings GET
@@ -455,6 +531,7 @@ blink connector exec zoom users/me/recordings GET '{"from":"2026-03-01","to":"20
 ```
 
 ### Stripe
+
 ```bash
 # List customers
 blink connector exec stripe customers GET '{"limit":"10"}'
@@ -473,6 +550,7 @@ blink connector exec stripe invoices GET '{"limit":"10"}'
 ```
 
 ### Shopify
+
 ```bash
 # List orders
 blink connector exec shopify orders.json GET '{"limit":"10"}'
@@ -488,6 +566,7 @@ blink connector exec shopify customers.json GET '{"limit":"10"}'
 ```
 
 ### Figma
+
 ```bash
 # Get user info
 blink connector exec figma me GET
@@ -503,6 +582,7 @@ blink connector exec figma files/FILE_KEY/comments GET
 ```
 
 ### Mailchimp
+
 ```bash
 # Ping (health check)
 blink connector exec mailchimp ping GET
@@ -521,6 +601,7 @@ blink connector exec mailchimp lists/LIST_ID/members POST '{"email_address":"use
 ```
 
 ### Calendly
+
 ```bash
 # Get current user
 blink connector exec calendly users/me GET
@@ -536,6 +617,7 @@ blink connector exec calendly scheduled_events/EVENT_UUID GET
 ```
 
 ### Typeform
+
 ```bash
 # List forms
 blink connector exec typeform forms GET '{"page_size":"10"}'
@@ -548,6 +630,7 @@ blink connector exec typeform forms/FORM_ID/responses GET '{"page_size":"10"}'
 ```
 
 ### ConvertKit (Kit)
+
 ```bash
 # Get account info
 blink connector exec convertkit account GET
@@ -566,6 +649,7 @@ blink connector exec convertkit sequences GET
 ```
 
 ### Vercel
+
 ```bash
 # Get user
 blink connector exec vercel v2/user GET
@@ -581,6 +665,7 @@ blink connector exec vercel v9/projects/PROJECT_ID GET
 ```
 
 ### Reddit
+
 ```bash
 # Get your own identity
 blink connector exec reddit api/v1/me GET
@@ -614,6 +699,7 @@ blink connector exec reddit r/SUBREDDIT/comments/POST_ID GET '{"limit":"20","sor
 ```
 
 ### ClickUp
+
 ```bash
 # List teams (workspaces)
 blink connector exec clickup team GET
@@ -656,6 +742,7 @@ blink connector exec composio_twitter users/USER_ID/tweets GET '{"max_results":"
 ```
 
 ### Instagram
+
 ```bash
 # Get user profile
 blink connector exec instagram me GET '{"fields":"id,username,media_count"}'
@@ -665,6 +752,7 @@ blink connector exec instagram me/media GET '{"fields":"id,caption,media_type,ti
 ```
 
 ### TikTok
+
 ```bash
 # Get user info
 blink connector exec tiktok user/info/ GET '{"fields":"display_name,follower_count,following_count"}'
@@ -674,6 +762,7 @@ blink connector exec tiktok video/list/ POST '{"max_count":10}'
 ```
 
 ### Loom
+
 ```bash
 # List videos
 blink connector exec loom videos GET '{"limit":"10"}'
@@ -683,6 +772,7 @@ blink connector exec loom videos/VIDEO_ID GET
 ```
 
 ### Etsy
+
 ```bash
 # Get user info
 blink connector exec etsy application/users/me GET
@@ -696,7 +786,7 @@ blink connector exec etsy application/shops/SHOP_ID/listings GET '{"limit":"25"}
 
 ### Composio Connectors
 
-**IMPORTANT**: When `blink connector status` shows a `composio_*` provider (e.g. `composio_figma` instead of `figma`), use that exact key. The endpoints are the same as the legacy connector — just swap the provider key.
+**IMPORTANT**: When `blink connector status` shows a `composio_`* provider (e.g. `composio_figma` instead of `figma`), use that exact key. The endpoints are the same as the legacy connector — just swap the provider key.
 
 ```bash
 # If status shows composio_figma:
@@ -712,6 +802,7 @@ blink connector exec composio_gmail users/me/messages GET '{"q":"is:unread","max
 ```
 
 ### Facebook
+
 ```bash
 # Get my profile
 blink connector exec composio_facebook me GET '{"fields":"id,name,email"}'
@@ -724,6 +815,7 @@ blink connector exec composio_facebook PAGE_ID/feed GET '{"limit":"10"}'
 ```
 
 ### Monday (GraphQL)
+
 ```bash
 # List boards
 blink connector exec composio_monday "" POST '{"query":"{ boards(limit:10) { id name } }"}'
@@ -733,6 +825,7 @@ blink connector exec composio_monday "" POST '{"query":"{ boards(ids: BOARD_ID) 
 ```
 
 ### Google Analytics
+
 ```bash
 # List account summaries
 blink connector exec composio_googleanalytics accountSummaries GET
@@ -742,6 +835,7 @@ blink connector exec composio_googleanalytics accounts GET
 ```
 
 ### Zendesk
+
 ```bash
 # List tickets
 blink connector exec composio_zendesk tickets GET
@@ -754,6 +848,7 @@ blink connector exec composio_zendesk search GET '{"query":"status:open type:tic
 ```
 
 ### Apollo
+
 ```bash
 # Search people
 blink connector exec composio_apollo people/match POST '{"email":"user@example.com"}'
@@ -763,6 +858,7 @@ blink connector exec composio_apollo organizations/search POST '{"q_organization
 ```
 
 ### Supabase
+
 ```bash
 # List organizations
 blink connector exec composio_supabase organizations GET
@@ -772,6 +868,7 @@ blink connector exec composio_supabase projects GET
 ```
 
 ### Amplitude
+
 ```bash
 # List charts
 blink connector exec composio_amplitude 2/charts GET
@@ -781,6 +878,7 @@ blink connector exec composio_amplitude 2/users/search GET '{"user":"user@exampl
 ```
 
 ## Scripting — capture output
+
 ```bash
 # Get a value from JSON response
 RESULT=$(blink connector exec github user/repos GET --json)
@@ -802,7 +900,10 @@ blink connector exec composio_reddit api/v1/me GET --account account_id_here
 The `account_id` comes from the `blink connector status` output.
 
 ## Auto-link a connector
+
 If a connector is connected to the workspace but not linked to this agent:
+
 ```bash
 blink connector link <provider>
 ```
+
