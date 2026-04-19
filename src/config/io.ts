@@ -31,6 +31,8 @@ import {
   resolveConfigEnvVars,
 } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
+import { verifyConfigHmac, writeConfigHmacSig, writeConfigHmacSigSync } from "./io.hmac-integrity.js";
+import { appendConfigSecurityAuditEntrySync } from "./config-audit.js";
 import {
   ConfigIncludeError,
   readConfigIncludeFileWithGuards,
@@ -1007,10 +1009,11 @@ function createConfigFileSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
   warnings: ConfigFileSnapshot["warnings"];
   legacyIssues: LegacyConfigIssue[];
+  integrityWarning?: string;
 }): ConfigFileSnapshot {
   const sourceConfig = asResolvedSourceConfig(params.sourceConfig);
   const runtimeConfig = asRuntimeConfig(params.runtimeConfig);
-  return {
+  const snapshot: ConfigFileSnapshot = {
     path: params.path,
     exists: params.exists,
     raw: params.raw,
@@ -1025,6 +1028,10 @@ function createConfigFileSnapshot(params: {
     warnings: params.warnings,
     legacyIssues: params.legacyIssues,
   };
+  if (params.integrityWarning) {
+    snapshot.integrityWarning = params.integrityWarning;
+  }
+  return snapshot;
 }
 
 async function finalizeReadConfigSnapshotInternalResult(
@@ -1103,6 +1110,29 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
+      // HMAC integrity check: reject config modified outside the gateway.
+      const hmacResult = verifyConfigHmac(configPath, raw);
+      if (hmacResult.status === "mismatch" ||
+          (hmacResult.status === "no-sig" && hmacResult.suspicious)) {
+        const reason = hmacResult.status === "mismatch"
+          ? "config file was modified outside the gateway process"
+          : "config signature file is missing (possible deletion to bypass integrity check)";
+        deps.logger.error(
+          `[security] CONFIG REJECTED: ${reason}. ` +
+          "External config injection is blocked. " +
+          "Use the gateway API (config.patch) to modify config.",
+        );
+        appendConfigSecurityAuditEntrySync({
+          env: deps.env,
+          homedir: deps.homedir,
+          actor: "filesystem",
+          changedPaths: [configPath],
+          sourceHash: null,
+          resultHash: hashConfigRaw(raw),
+        });
+        // Return empty config so gateway starts in degraded/safe mode.
+        return {};
+      }
       const parsed = deps.json5.parse(raw);
       const recovered = maybeRecoverSuspiciousConfigReadSync({
         deps,
@@ -1244,6 +1274,31 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     try {
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const rawHash = hashConfigRaw(raw);
+
+      // HMAC integrity check for async read path (hot-reload uses this).
+      const asyncHmacResult = verifyConfigHmac(configPath, raw);
+      let asyncIntegrityWarning: string | undefined;
+      if (asyncHmacResult.status === "mismatch" ||
+          (asyncHmacResult.status === "no-sig" && asyncHmacResult.suspicious)) {
+        const reason = asyncHmacResult.status === "mismatch"
+          ? "config file was modified outside the gateway process"
+          : "config signature file is missing (possible deletion to bypass integrity check)";
+        const warning =
+          `[security] CONFIG REJECTED: ${reason}. ` +
+          "External config injection is blocked. " +
+          "Use the gateway API (config.patch) to modify config.";
+        deps.logger.error(warning);
+        asyncIntegrityWarning = warning;
+        appendConfigSecurityAuditEntrySync({
+          env: deps.env,
+          homedir: deps.homedir,
+          actor: "filesystem",
+          changedPaths: [configPath],
+          sourceHash: null,
+          resultHash: rawHash,
+        });
+      }
+
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1349,6 +1404,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           issues: [],
           warnings: [...validated.warnings, ...envVarWarnings],
           legacyIssues: legacyResolution.sourceLegacyIssues,
+          integrityWarning: asyncIntegrityWarning,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       });
@@ -1692,6 +1748,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             undefined,
             await deps.fs.promises.stat(configPath).catch(() => null),
           );
+          writeConfigHmacSigSync(configPath, json);
           return { persistedHash: nextHash };
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
@@ -1706,6 +1763,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      // Sign the written config so future reads can verify integrity.
+      writeConfigHmacSigSync(configPath, json);
       return { persistedHash: nextHash };
     } catch (err) {
       await appendWriteAudit("failed", err);
@@ -1854,7 +1913,10 @@ export async function writeConfigFile(
     }),
     unsetPaths: options.unsetPaths,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
-  });
+  );
+  // Note: HMAC signing is handled inside createConfigIO().writeConfigFile()
+  // at both the rename and copy-fallback success paths, so no additional
+  // signing is needed here.
   if (
     options.skipRuntimeSnapshotRefresh &&
     !hadRuntimeSnapshot &&

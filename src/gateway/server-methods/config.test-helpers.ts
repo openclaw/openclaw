@@ -58,7 +58,7 @@ export function createConfigHandlerHarness(args?: {
   const options = {
     req: { type: "req", id: "1", method: args?.method ?? "config.get" },
     params: args?.params ?? {},
-    client: null,
+    client: { connect: { scopes: ["operator.admin"] } },
     isWebchatConnect: () => false,
     respond,
     context: {

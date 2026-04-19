@@ -30,6 +30,14 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     groupLabel: "Custom Provider",
     groupHint: "Any OpenAI or Anthropic compatible endpoint",
   },
+  {
+    value: "codexbar",
+    label: "CodexBar",
+    hint: "Use CodexBar as your LM provider manager",
+    groupId: "codexbar",
+    groupLabel: "CodexBar (External LM Manager)",
+    groupHint: "Skip LM config — manage providers via CodexBar after setup",
+  },
 ];
 
 export function formatStaticAuthChoiceChoicesForCli(params?: {

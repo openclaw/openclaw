@@ -533,7 +533,20 @@ export async function runSetupWizard(
     throw new WizardCancelledError("auth choice is required");
   }
 
-  if (authChoice === "custom-api-key") {
+  if (authChoice === "codexbar") {
+    // CodexBar manages LM providers externally — skip all LM config.
+    await prompter.note(
+      [
+        "CodexBar will manage your LM providers after setup.",
+        "",
+        "After onboarding completes:",
+        "1. Open CodexBar → LM Hub → Inject to OpenClaw",
+        "2. Enter your gateway token (shown at the end of setup)",
+        "3. CodexBar will configure your models and fallback chain",
+      ].join("\n"),
+      "CodexBar LM Manager",
+    );
+  } else if (authChoice === "custom-api-key") {
     const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
     const customResult = await promptCustomApiConfig({
       prompter,
