@@ -64,7 +64,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
-      .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
+      .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
       .option("--announce", "Announce summary to a chat (subagent-style)")
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
