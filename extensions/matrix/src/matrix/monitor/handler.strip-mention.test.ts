@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripMatrixMentionPrefixes } from "./handler";
+import { stripMatrixMentionPrefixes } from "./handler.js";
 
 describe("stripMatrixMentionPrefixes", () => {
   it("returns original text when mentionRegexes is empty", () => {
