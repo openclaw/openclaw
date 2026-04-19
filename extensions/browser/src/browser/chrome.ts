@@ -171,13 +171,22 @@ export async function isChromeReachable(
       // Handshake-ready direct WS endpoint — probe via WS handshake.
       return await canOpenWebSocket(cdpUrl, timeoutMs);
     }
-    // Either an http(s) discovery URL or a bare ws/wss root that needs
-    // /json/version discovery to locate the real handshake path.
+    // Either an http(s) discovery URL or a bare ws/wss root. Try
+    // /json/version discovery first. For bare ws/wss URLs, fall back to a
+    // direct WS handshake when discovery is unavailable — some providers
+    // (e.g. Browserless/Browserbase) expose a direct WebSocket root without
+    // a /json/version endpoint.
     const discoveryUrl = isWebSocketUrl(cdpUrl)
       ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
       : cdpUrl;
     const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
-    return Boolean(version);
+    if (version) {
+      return true;
+    }
+    if (isWebSocketUrl(cdpUrl)) {
+      return await canOpenWebSocket(cdpUrl, timeoutMs);
+    }
+    return false;
   } catch {
     return false;
   }
@@ -215,6 +224,14 @@ export async function getChromeWebSocketUrl(
   const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
+    // /json/version unavailable or returned no WebSocket URL. For bare
+    // ws/wss inputs, the URL itself may be a direct WebSocket endpoint
+    // (e.g. Browserless/Browserbase-style providers without /json/version).
+    // The SSRF check on cdpUrl was already performed at the start of this
+    // function, so we can return it directly.
+    if (isWebSocketUrl(cdpUrl)) {
+      return cdpUrl;
+    }
     return null;
   }
   const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);

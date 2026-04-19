@@ -171,7 +171,7 @@ describe("cdp", () => {
     expect(receivedHeaders.host).toBe(`127.0.0.1:${wsPort}`);
   });
 
-  it("still enforces SSRF policy for direct WebSocket URLs", async () => {
+  it("enforces SSRF policy on the navigation target URL before any CDP connection attempt", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
       await expect(
@@ -329,7 +329,7 @@ describe("cdp", () => {
     expect(res.result.value).toBe(2);
   });
 
-  it("fails when /json/version omits webSocketDebuggerUrl", async () => {
+  it("fails when /json/version omits webSocketDebuggerUrl for an HTTP cdpUrl", async () => {
     const httpPort = await startVersionHttpServer({});
     await expect(
       createTargetViaCdp({
@@ -337,6 +337,23 @@ describe("cdp", () => {
         url: "https://example.com",
       }),
     ).rejects.toThrow("CDP /json/version missing webSocketDebuggerUrl");
+  });
+
+  it("falls back to direct WS connection when /json/version is unavailable for a bare ws:// cdpUrl", async () => {
+    // Simulates a Browserless/Browserbase-style provider: the cdpUrl IS a
+    // WebSocket root (no /devtools/ path) but there is no HTTP /json/version
+    // endpoint. The WS server accepts Target.createTarget directly.
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Target.createTarget") {
+        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "WS_FALLBACK" } }));
+      }
+    });
+    // No HTTP server on this port — discovery will fail, triggering the fallback.
+    const created = await createTargetViaCdp({
+      cdpUrl: `ws://127.0.0.1:${wsPort}`,
+      url: "https://example.com",
+    });
+    expect(created.targetId).toBe("WS_FALLBACK");
   });
 
   it("captures an aria snapshot via CDP", async () => {

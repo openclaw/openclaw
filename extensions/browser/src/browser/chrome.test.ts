@@ -499,16 +499,53 @@ describe("browser chrome helpers", () => {
     });
   });
 
-  it("reports unreachable when a bare ws:// CDP URL points at a server missing /json/version", async () => {
+  it("reports unreachable when a bare ws:// CDP URL points at a server with no /json/version and refuses WS", async () => {
     // Negative counterpart to the #68027 happy path — a bare ws URL
     // pointed at a port that neither serves /json/version nor accepts
-    // WS upgrades at root must resolve false without hanging.
+    // WS upgrades must resolve false without hanging.
     const fetchSpy = vi.fn().mockRejectedValue(new Error("connection refused"));
     vi.stubGlobal("fetch", fetchSpy);
+    // Port 19998 is not listening; the WS fallback probe will also fail.
     await expect(isChromeReachable("ws://127.0.0.1:19998", 50)).resolves.toBe(false);
-    // fetch() must have been invoked — discovery path was taken, not a
-    // bare-root WS handshake that Chrome never accepts.
+    // fetch() must have been invoked — HTTP discovery is always tried first.
     expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("falls back to a direct WS probe when /json/version is unavailable for a bare ws:// URL", async () => {
+    // Covers the WS-fallback path in isChromeReachable: /json/version returns
+    // nothing (simulated by empty response) but the WS socket IS accepting
+    // connections (Browserless/Browserbase-style provider).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}), // empty — no webSocketDebuggerUrl
+      } as unknown as Response),
+    );
+    // A real WS server accepts the handshake.
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const port = (wss.address() as AddressInfo).port;
+    try {
+      await expect(isChromeReachable(`ws://127.0.0.1:${port}`, 500)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
+  it("returns the original ws:// URL from getChromeWebSocketUrl when /json/version provides no debugger URL", async () => {
+    // Covers the getChromeWebSocketUrl WS-fallback: discovery succeeds but
+    // webSocketDebuggerUrl is absent — the original URL is returned as-is.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}),
+      } as unknown as Response),
+    );
+    await expect(getChromeWebSocketUrl("ws://127.0.0.1:12345", 50)).resolves.toBe(
+      "ws://127.0.0.1:12345",
+    );
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
