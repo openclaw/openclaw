@@ -196,6 +196,12 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
               return;
             }
 
+            // If Google auth is pending, inject system prompt to only acknowledge name
+            const hasPendingGoogle = pendingGoogleAuth.has(authorId);
+            if (hasPendingGoogle) {
+              content = `[System: The user just told you their name. Acknowledge it warmly in ONE short sentence only (e.g. "Nice to meet you, Horse! 🐴"). Do NOT ask any questions, do NOT say "what can I help you with", do NOT mention Google. Just the name acknowledgment and nothing else.]\n${content}`;
+            }
+
             void routeDM({
               discordUserId: authorId,
               channelId,
@@ -206,7 +212,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
               agentTimeoutMs,
               inflight,
             }).then(async (success) => {
-              // After the agent responds to the user's name, send Google auth embed
+              // After the agent responds to the user's name, send Google auth link
               const pending = pendingGoogleAuth.get(authorId);
               if (success && pending) {
                 pendingGoogleAuth.delete(authorId);
@@ -218,7 +224,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
                   await discordSend(
                     discordToken,
                     channelId,
-                    `Would you like to connect your Google account? This lets me help with your calendar, email, files, and more.\n\n[Click here to connect Google](${authUrl})`,
+                    `Click [here](${authUrl}) to connect your Google account!`,
                   );
                   runtime.log(`[router] sent Google auth embed to ${authorId}`);
                 } catch (err) {
