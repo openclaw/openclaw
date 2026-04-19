@@ -711,7 +711,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           throw new Error("Request was aborted");
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
+          throw new Error(output.errorMessage || "An unknown error occurred");
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
@@ -896,7 +896,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           throw new Error("Request was aborted");
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
+          throw new Error(output.errorMessage || "An unknown error occurred");
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
