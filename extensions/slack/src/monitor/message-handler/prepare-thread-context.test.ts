@@ -46,7 +46,7 @@ describe("resolveSlackThreadContextData", () => {
 
   async function resolveAllowlistedThreadContext(params: {
     repliesMessages: Array<Record<string, string>>;
-    threadStarter: { text: string; userId: string; ts: string };
+    threadStarter: { text: string; userId?: string; ts: string; botId?: string };
     allowFromLower: string[];
     allowNameMatching: boolean;
   }) {
@@ -128,5 +128,50 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toContain("starter from Alice");
     expect(result.threadHistoryBody).toContain("starter from Alice");
     expect(result.threadHistoryBody).not.toContain("blocked follow-up");
+  });
+
+  it("omits bot-authored starter text and history from a new thread session", async () => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [
+        { text: "bot starter", bot_id: "B1", ts: "100.000" },
+        { text: "allowed follow-up", user: "U1", ts: "100.800" },
+        { text: "current message", user: "U1", ts: "101.000" },
+      ],
+      threadStarter: {
+        text: "bot starter",
+        botId: "B1",
+        ts: "100.000",
+      },
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+    });
+
+    expect(result.threadStarterBody).toBeUndefined();
+    expect(result.threadLabel).toBe("Slack thread #general");
+    expect(result.threadHistoryBody).toContain("allowed follow-up");
+    expect(result.threadHistoryBody).not.toContain("bot starter");
+    expect(result.threadHistoryBody).not.toContain("current message");
+  });
+
+  it("keeps third-party bot starter text in a new thread session", async () => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [
+        { text: "other bot starter", bot_id: "B2", ts: "100.000" },
+        { text: "allowed follow-up", user: "U1", ts: "100.800" },
+        { text: "current message", user: "U1", ts: "101.000" },
+      ],
+      threadStarter: {
+        text: "other bot starter",
+        botId: "B2",
+        ts: "100.000",
+      },
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+    });
+
+    expect(result.threadStarterBody).toBe("other bot starter");
+    expect(result.threadLabel).toContain("other bot starter");
+    expect(result.threadHistoryBody).toContain("other bot starter");
+    expect(result.threadHistoryBody).toContain("allowed follow-up");
   });
 });

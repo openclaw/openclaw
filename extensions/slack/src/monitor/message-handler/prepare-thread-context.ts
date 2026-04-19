@@ -85,22 +85,25 @@ export async function resolveSlackThreadContextData(params: {
     params.allowNameMatching && starter?.userId
       ? (await params.ctx.resolveUserName(starter.userId))?.name
       : undefined;
+  const starterIsCurrentBot = Boolean(starter?.botId && starter.botId === params.ctx.botUserId);
   const starterAllowed =
     !starter ||
-    isSlackThreadContextSenderAllowed({
-      allowFromLower: params.allowFromLower,
-      allowNameMatching: params.allowNameMatching,
-      userId: starter.userId,
-      userName: starterSenderName,
-      botId: starter.botId,
-    });
+    (!starterIsCurrentBot &&
+      isSlackThreadContextSenderAllowed({
+        allowFromLower: params.allowFromLower,
+        allowNameMatching: params.allowNameMatching,
+        userId: starter.userId,
+        userName: starterSenderName,
+        botId: starter.botId,
+      }));
   const includeStarterContext =
     !starter ||
-    shouldIncludeSupplementalContext({
-      mode: params.contextVisibilityMode,
-      kind: "thread",
-      senderAllowed: starterAllowed,
-    });
+    (!starterIsCurrentBot &&
+      shouldIncludeSupplementalContext({
+        mode: params.contextVisibilityMode,
+        kind: "thread",
+        senderAllowed: starterAllowed,
+      }));
 
   if (starter?.text && includeStarterContext) {
     threadStarterBody = starter.text;
@@ -120,7 +123,9 @@ export async function resolveSlackThreadContextData(params: {
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
-  if (starter?.text && !includeStarterContext) {
+  if (starter?.text && starterIsCurrentBot) {
+    logVerbose("slack: omitted current-bot thread starter from context");
+  } else if (starter?.text && !includeStarterContext) {
     logVerbose(
       `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
     );
@@ -142,12 +147,15 @@ export async function resolveSlackThreadContextData(params: {
     });
 
     if (threadHistory.length > 0) {
-      const threadHistoryWithoutBots = threadHistory.filter((historyMsg) => !historyMsg.botId);
-      const omittedBotHistoryCount = threadHistory.length - threadHistoryWithoutBots.length;
+      const threadHistoryWithoutCurrentBot = threadHistory.filter(
+        (historyMsg) => !historyMsg.botId || historyMsg.botId !== params.ctx.botUserId,
+      );
+      const omittedCurrentBotHistoryCount =
+        threadHistory.length - threadHistoryWithoutCurrentBot.length;
 
       const uniqueUserIds = [
         ...new Set(
-          threadHistoryWithoutBots
+          threadHistoryWithoutCurrentBot
             .map((item) => item.userId)
             .filter((id): id is string => Boolean(id)),
         ),
@@ -164,7 +172,7 @@ export async function resolveSlackThreadContextData(params: {
 
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
         filterSupplementalContextItems({
-          items: threadHistoryWithoutBots,
+          items: threadHistoryWithoutCurrentBot,
           mode: params.contextVisibilityMode,
           kind: "thread",
           isSenderAllowed: (historyMsg) => {
@@ -178,9 +186,9 @@ export async function resolveSlackThreadContextData(params: {
             });
           },
         });
-      if (omittedHistoryCount > 0 || omittedBotHistoryCount > 0) {
+      if (omittedHistoryCount > 0 || omittedCurrentBotHistoryCount > 0) {
         logVerbose(
-          `slack: omitted ${omittedHistoryCount + omittedBotHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
+          `slack: omitted ${omittedHistoryCount + omittedCurrentBotHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
         );
       }
 
