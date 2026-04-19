@@ -15,7 +15,7 @@ import { resolveSkillSource } from "../agents/skills/source.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -692,11 +692,17 @@ export async function collectPluginsTrustFindings(params: {
       // Warn about allowlist entries that don't match any installed plugin ID.
       // An attacker could register a plugin with an allowlisted ID after the
       // allowlist was created, exploiting the pre-approved entry.
-      // Exclude bundled channel plugin IDs (telegram, discord, etc.) from the
+      // Exclude bundled plugin IDs (telegram, discord, browser, anthropic, etc.) from the
       // phantom check — they are never in the extensions directory but are
       // legitimate allowlist targets.
+      // Use loadPluginManifestRegistry to get all bundled plugins (not just channel plugins),
+      // because listChannelPlugins() only returns runtime-loaded channel plugins and can
+      // be empty in CLI/audit context (see issue #68786).
       const installedPluginIds = new Set(pluginDirs.map((dir) => path.basename(dir).toLowerCase()));
-      const bundledPluginIds = new Set(listChannelPlugins().map((p) => p.id.toLowerCase()));
+      const registry = loadPluginManifestRegistry({ cache: true, config: params.cfg });
+      const bundledPluginIds = new Set(
+        registry.plugins.filter((p) => p.origin === "bundled").map((p) => p.id.toLowerCase())
+      );
       const phantomEntries = allow.filter((entry) => {
         if (typeof entry !== "string" || entry === "group:plugins") {
           return false;
