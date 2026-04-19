@@ -60,6 +60,7 @@ type CronUpdatePatch = {
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      toolsAllow?: string[] | null;
     };
     delivery?: {
       mode?: string;
@@ -73,7 +74,7 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string; lightContext?: boolean };
+  payload?: { model?: string; thinking?: string; lightContext?: boolean; toolsAllow?: string[] };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -827,6 +828,57 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as { patch?: { failureAlert?: boolean } };
     expect(patch?.patch?.failureAlert).toBe(false);
+  });
+
+  it.each([
+    { toolsInput: "exec,read,write", expected: ["exec", "read", "write"], desc: "comma-separated" },
+    {
+      toolsInput: "exec read write",
+      expected: ["exec", "read", "write"],
+      desc: "space-separated (PowerShell)",
+    },
+    {
+      toolsInput: "exec, read, write",
+      expected: ["exec", "read", "write"],
+      desc: "comma-space-separated",
+    },
+    {
+      toolsInput: "  exec  ,  read  ,  write  ",
+      expected: ["exec", "read", "write"],
+      desc: "with extra whitespace",
+    },
+    { toolsInput: "exec", expected: ["exec"], desc: "single tool" },
+  ])("parses --tools $desc on cron add", async ({ toolsInput, expected }) => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Tools test",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--tools",
+      toolsInput,
+    ]);
+    expect(params?.payload?.toolsAllow).toEqual(expected);
+  });
+
+  it.each([
+    { toolsInput: "exec,read,write", expected: ["exec", "read", "write"], desc: "comma-separated" },
+    {
+      toolsInput: "exec read write",
+      expected: ["exec", "read", "write"],
+      desc: "space-separated (PowerShell)",
+    },
+  ])("parses --tools $desc on cron edit", async ({ toolsInput, expected }) => {
+    const patch = await runCronEditAndGetPatch(["--tools", toolsInput, "--message", "hello"]);
+    expect(patch?.patch?.payload?.toolsAllow).toEqual(expected);
+  });
+
+  it("clears tools on cron edit with --clear-tools", async () => {
+    const patch = await runCronEditAndGetPatch(["--clear-tools"]);
+    expect(patch?.patch?.payload?.toolsAllow).toBeNull();
   });
 
   it("patches failure alert mode/accountId on cron edit", async () => {
