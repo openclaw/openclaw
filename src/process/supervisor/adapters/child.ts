@@ -2,9 +2,9 @@ import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_pr
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
-  resolveEffectiveWindowsPath,
   resolveWindowsCmdShimArgv,
   resolveWindowsCommandShim,
+  resolveWindowsPathEnv,
 } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
@@ -36,7 +36,7 @@ export async function createChildAdapter(params: {
   const withResolvedShim = [...params.argv];
   withResolvedShim[0] = resolveCommand(withResolvedShim[0] ?? "");
   const resolvedArgv = resolveWindowsCmdShimArgv(withResolvedShim, {
-    pathEnv: resolveEffectiveWindowsPath(params.env),
+    pathEnv: resolveWindowsPathEnv(params.env),
   });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");

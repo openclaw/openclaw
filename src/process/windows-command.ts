@@ -21,13 +21,13 @@ export function resolveWindowsCommandShim(params: {
   return params.command;
 }
 
-export function resolveEffectiveWindowsPath(env: NodeJS.ProcessEnv | undefined): string {
+export function resolveWindowsPathEnv(env: NodeJS.ProcessEnv | undefined): string {
   if (env === undefined) {
     return process.env.PATH ?? "";
   }
   for (const [key, value] of Object.entries(env)) {
-    if (key.toUpperCase() === "PATH") {
-      return typeof value === "string" ? value : "";
+    if (key.toUpperCase() === "PATH" && typeof value === "string") {
+      return value;
     }
   }
   return "";
@@ -44,6 +44,18 @@ function findCmdShimOnPath(name: string, pathEnv: string): string | null {
     }
   }
   return null;
+}
+
+function hasExeOnPath(baseName: string, pathEnv: string): boolean {
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    if (fs.existsSync(path.join(dir, `${baseName}.exe`))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resolveWindowsCmdShimArgv(
@@ -72,7 +84,11 @@ export function resolveWindowsCmdShimArgv(
       shimPath = resolved;
     }
   } else if (!ext && !hasSeparator) {
-    const resolved = findCmdShimOnPath(`${first}.cmd`, options?.pathEnv ?? process.env.PATH ?? "");
+    const pathEnvValue = options?.pathEnv ?? process.env.PATH ?? "";
+    if (hasExeOnPath(first, pathEnvValue)) {
+      return result;
+    }
+    const resolved = findCmdShimOnPath(`${first}.cmd`, pathEnvValue);
     if (!resolved) {
       return result;
     }
