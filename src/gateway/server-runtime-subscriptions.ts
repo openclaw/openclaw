@@ -83,21 +83,23 @@ export function startGatewayEventSubscriptions(params: {
   // session state outside the `sessions.patch` RPC handler and the UI
   // never gets a refresh signal — the live-plan sidebar drifts behind
   // the runtime until the user manually refreshes.
-  const planSnapshotUnsub = params.minimalTestGateway
-    ? null
-    : startPlanSnapshotPersister({
-        emitSessionsChanged: ({ sessionKey, reason }) => {
-          const connIds = params.sessionEventSubscribers.getAll();
-          if (connIds.size === 0) {
-            return;
-          }
-          params.broadcastToConnIds(
-            "sessions.changed",
-            { sessionKey, reason, ts: Date.now() },
-            connIds,
-          );
-        },
-      });
+  // Consolidation pass note: removed the `params.minimalTestGateway`
+  // conditional from PR-11 because the param was renamed/dropped in
+  // upstream's restructure. Always starting the persister; tests
+  // that need to suppress it can pass a noop emitSessionsChanged.
+  const planSnapshotUnsub = startPlanSnapshotPersister({
+    emitSessionsChanged: ({ sessionKey, reason }) => {
+      const connIds = params.sessionEventSubscribers.getAll();
+      if (connIds.size === 0) {
+        return;
+      }
+      params.broadcastToConnIds(
+        "sessions.changed",
+        { sessionKey, reason, ts: Date.now() },
+        connIds,
+      );
+    },
+  });
 
   return {
     agentUnsub,
