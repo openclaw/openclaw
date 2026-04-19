@@ -39,6 +39,7 @@ function createWebLoginPlugin(
 function createHandlerOptions(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   stopChannel: (channelId: string, accountId?: string) => Promise<void>;
+  startChannel?: (channelId: string, accountId?: string) => Promise<void>;
 }): GatewayRequestHandlerOptions {
   return {
     req: {
@@ -50,6 +51,11 @@ function createHandlerOptions(params: {
     isWebchatConnect: () => false,
     respond: params.respond,
     context: {
+      getRuntimeSnapshot: () => ({
+        channels: {},
+        channelAccounts: {},
+      }),
+      startChannel: params.startChannel ?? (async () => undefined),
       stopChannel: params.stopChannel,
     } as never,
   };
