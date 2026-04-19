@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { formatErrorMessage } from "./errors.js";
-import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
+import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 
@@ -48,7 +48,13 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     // Avoid detached kickstart/start handoffs here so restart timing stays tied
     // to launchd's native supervision rather than a second helper process.
     if (supervisor === "schtasks") {
-      const restart = triggerOpenClawRestart();
+      // Call the scheduled-task relaunch directly rather than routing through
+      // triggerOpenClawRestart. This codepath is already the Windows-specific
+      // handoff, and triggerOpenClawRestart carries cross-cutting logic
+      // (stale-pid cleanup, platform dispatch, SIGUSR1 fast-path for top-level
+      // callers) that is either redundant here or can skip the scheduled-task
+      // spawn entirely, leaving the gateway dead on exit (see closed #68507).
+      const restart = relaunchGatewayScheduledTask(process.env);
       if (!restart.ok) {
         return {
           mode: "failed",

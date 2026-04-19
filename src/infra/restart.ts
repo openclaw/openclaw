@@ -509,6 +509,20 @@ export function triggerOpenClawRestart(): RestartAttempt {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
 
+  // Prefer the in-process SIGUSR1 handoff when the gateway run-loop is up.
+  // Spawning systemctl/launchctl/schtasks from inside the gateway is prone
+  // to child-dies-with-parent races (see #40932): the caller often exits
+  // shortly after triggerOpenClawRestart returns, and a synchronous child
+  // that has already signalled the supervisor can still race the exit.
+  // SIGUSR1 feeds the run-loop's graceful drain/restart cycle instead —
+  // and because process-respawn.ts calls relaunchGatewayScheduledTask
+  // directly for the Windows schtasks handoff, taking this fast path here
+  // no longer bypasses the scheduled-task spawn on exit.
+  if (process.listenerCount("SIGUSR1") > 0) {
+    scheduleGatewaySigusr1Restart({ reason: "cli" });
+    return { ok: true, method: "sigusr1", tried: [] };
+  }
+
   cleanStaleGatewayProcessesSync();
 
   const tried: string[] = [];
