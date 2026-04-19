@@ -345,6 +345,52 @@ export function createSessionsSpawnTool(
         },
       );
 
+      // Track the spawned subagent in minions for crash recovery. Insert as
+      // status='active' with a lock so the worker's claim loop (which only
+      // claims 'waiting') won't touch it. Only stall detection can re-queue
+      // the row if the gateway crashes and the lock expires.
+      if (result.status === "accepted") {
+        try {
+          const { resolveDurabilityMode } = await import("../../minions/durability-config.js");
+          if (resolveDurabilityMode() === "minions") {
+            const { MinionStore } = await import("../../minions/store.js");
+            const store = MinionStore.openDefault();
+            const now = Date.now();
+            const lockToken = `spawn-track:${result.runId ?? now}`;
+            const lockUntil = now + 30000;
+            store.db
+              .prepare(
+                `INSERT INTO minion_jobs (
+                  name, queue, status, data, lock_token, lock_until,
+                  idempotency_key, timeout_ms, created_at, updated_at, started_at, attempts_started
+                ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+              )
+              .run(
+                "subagent.spawn",
+                "default",
+                JSON.stringify({
+                  task,
+                  childSessionKey: result.childSessionKey,
+                  runId: result.runId,
+                  label: label || undefined,
+                  agentId: requestedAgentId,
+                  model: modelOverride,
+                  requesterSessionKey: opts?.agentSessionKey,
+                }),
+                lockToken,
+                lockUntil,
+                result.runId ? `spawn:${result.runId}` : null,
+                runTimeoutSeconds ? runTimeoutSeconds * 1000 : null,
+                now,
+                now,
+                now,
+              );
+          }
+        } catch {
+          // Best-effort: minion tracking failure doesn't fail the spawn.
+        }
+      }
+
       return jsonResult(result);
     },
   };

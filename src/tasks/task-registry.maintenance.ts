@@ -28,6 +28,10 @@ const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
+// Lost-detection flag removed: the task-registry sweep runs as a safety net
+// alongside minions. Minion stall detection is faster (sub-second heartbeat)
+// but the old sweep catches any task type that doesn't have a minion row yet.
+
 /**
  * Number of tasks to process before yielding to the event loop.
  * Keeps the main thread responsive during large sweeps.

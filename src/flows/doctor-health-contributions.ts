@@ -58,6 +58,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
+import { migrateLegacyTasks } from "../minions/migration.js";
+import { MinionStore } from "../minions/store.js";
 import type { FlowContribution } from "./types.js";
 
 export type DoctorFlowMode = "local" | "remote";
@@ -239,6 +241,33 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   if (migrated.warnings.length > 0) {
     note(migrated.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
+async function runMinionsMigrationHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
+  try {
+    const store = MinionStore.openDefault();
+    const result = migrateLegacyTasks(store);
+    if (!result) {
+      return;
+    }
+    const lines = [
+      `Imported ${result.imported} in-flight task(s) into minions.`,
+      `Skipped ${result.skipped} terminal task(s).`,
+    ];
+    if (result.errors.length > 0) {
+      lines.push(`${result.errors.length} error(s) during import.`);
+      for (const err of result.errors.slice(0, 5)) {
+        lines.push(`  ${err.taskId}: ${err.error}`);
+      }
+    }
+    lines.push(`Legacy file archived: ${shortenHomePath(result.renamedTo)}`);
+    note(lines.join("\n"), "Minions migration");
+  } catch (err) {
+    note(
+      `Minion migration check failed: ${err instanceof Error ? err.message : String(err)}`,
+      "Minions migration",
+    );
   }
 }
 
@@ -616,6 +645,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:final-config-validation",
       label: "Final config validation",
       run: runFinalConfigValidationHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:minions-migration",
+      label: "Minions migration",
+      run: runMinionsMigrationHealth,
     }),
   ];
 }

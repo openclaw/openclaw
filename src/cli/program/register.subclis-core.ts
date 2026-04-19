@@ -194,6 +194,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerChannelsCli",
     },
     {
+      commandNames: ["minions"],
+      loadModule: () => import("../minions-cli.js"),
+      exportName: "registerMinionsCli",
+    },
+    {
       commandNames: ["directory"],
       loadModule: () => import("../directory-cli.js"),
       exportName: "registerDirectoryCli",
