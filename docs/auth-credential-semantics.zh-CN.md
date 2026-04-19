@@ -1,26 +1,23 @@
-# [中文翻译] ---\n\n这是 docs/auth-credential-semantics.md 的中文翻译版本。\n\n原文内容：\n\n---
-
-title: "Auth Credential Semantics"
-summary: "Canonical credential eligibility and resolution semantics for auth profiles"
+---
+title: "认证凭证语义"
+summary: "认证配置文件的规范凭证 eligibility 和解析语义"
 read_when:
-
-- Working on auth profile resolution or credential routing
-- Debugging model auth failures or profile order
-
+  - 处理认证配置文件解析或凭证路由工作时
+  - 调试模型认证失败或配置文件顺序时
 ---
 
-# Auth Credential Semantics
+# 认证凭证语义
 
-This document defines the canonical credential eligibility and resolution semantics used across:
+本文档定义了在以下各处使用的规范凭证 eligibility 和解析语义：
 
 - `resolveAuthProfileOrder`
 - `resolveApiKeyForProfile`
 - `models status --probe`
 - `doctor-auth`
 
-The goal is to keep selection-time and runtime behavior aligned.
+目标是保持选择时和运行时行为保持一致。
 
-## Stable Probe Reason Codes
+## 稳定的探测原因代码
 
 - `ok`
 - `excluded_by_auth_order`
@@ -30,54 +27,46 @@ The goal is to keep selection-time and runtime behavior aligned.
 - `unresolved_ref`
 - `no_model`
 
-## Token Credentials
+## 令牌凭证
 
-Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
+令牌凭证（`type: "token"`）支持内联 `token` 和/或 `tokenRef`。
 
-### Eligibility rules
+### 资格规则
 
-1. A token profile is ineligible when both `token` and `tokenRef` are absent.
-2. `expires` is optional.
-3. If `expires` is present, it must be a finite number greater than `0`.
-4. If `expires` is invalid (`NaN`, `0`, negative, non-finite, or wrong type), the profile is ineligible with `invalid_expires`.
-5. If `expires` is in the past, the profile is ineligible with `expired`.
-6. `tokenRef` does not bypass `expires` validation.
+1. 当 `token` 和 `tokenRef` 都缺失时，令牌配置文件不合格。
+2. `expires` 是可选的。
+3. 如果存在 `expires`，则必须是一个大于 `0` 的有限数。
+4. 如果 `expires` 无效（`NaN`、`0`、负数、非有限数或类型错误），配置文件不合格，原因为 `invalid_expires`。
+5. 如果 `expires` 已过期，配置文件不合格，原因为 `expired`。
+6. `tokenRef` 不绕过 `expires` 验证。
 
-### Resolution rules
+### 解析规则
 
-1. Resolver semantics match eligibility semantics for `expires`.
-2. For eligible profiles, token material may be resolved from inline value or `tokenRef`.
-3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
+1. 解析器语义与 `expires` 的资格语义相匹配。
+2. 对于符合条件的配置文件，令牌材料可以从内联值或 `tokenRef` 解析。
+3. 无法解析的引用在 `models status --probe` 输出中产生 `unresolved_ref`。
 
-## Explicit Auth Order Filtering
+## 显式认证顺序过滤
 
-- When `auth.order.<provider>` or the auth-store order override is set for a
-  provider, `models status --probe` only probes profile ids that remain in the
-  resolved auth order for that provider.
-- A stored profile for that provider that is omitted from the explicit order is
-  not silently tried later. Probe output reports it with
-  `reasonCode: excluded_by_auth_order` and the detail
-  `Excluded by auth.order for this provider.`
+- 当为某个提供程序设置了 `auth.order.<provider>` 或认证存储顺序覆盖时，`models status --probe` 仅探测保留在该提供程序解析后的认证顺序中的配置文件ID。
+- 该提供程序未包含在显式顺序中的存储配置文件不会在后面被静默尝试。探测输出将其报告为 `reasonCode: excluded_by_auth_order` 和详细信息 `Excluded by auth.order for this provider.`
 
-## Probe Target Resolution
+## 探测目标解析
 
-- Probe targets can come from auth profiles, environment credentials, or
-  `models.json`.
-- If a provider has credentials but OpenClaw cannot resolve a probeable model
-  candidate for it, `models status --probe` reports `status: no_model` with
-  `reasonCode: no_model`.
+- 探测目标可以来自认证配置文件、环境凭证或 `models.json`。
+- 如果某个提供程序有凭证，但 OpenClaw 无法为其解析出可探测的模型候选项，`models status --probe` 报告 `status: no_model` 以及 `reasonCode: no_model`。
 
-## OAuth SecretRef Policy Guard
+## OAuth SecretRef 策略防护
 
-- SecretRef input is for static credentials only.
-- If a profile credential is `type: "oauth"`, SecretRef objects are not supported for that profile credential material.
-- If `auth.profiles.<id>.mode` is `"oauth"`, SecretRef-backed `keyRef`/`tokenRef` input for that profile is rejected.
-- Violations are hard failures in startup/reload auth resolution paths.
+- SecretRef 输入仅用于静态凭证。
+- 如果配置文件凭证是 `type: "oauth"`，则该配置文件凭证材料不支持 SecretRef 对象。
+- 如果 `auth.profiles.<id>.mode` 是 `"oauth"`，则该配置文件的基于 SecretRef 的 `keyRef`/`tokenRef` 输入将被拒绝。
+- 违规是启动/重新加载认证解析路径中的严重失败。
 
-## Legacy-Compatible Messaging
+## 旧版兼容消息传递
 
-For script compatibility, probe errors keep this first line unchanged:
+为了脚本兼容性，探测错误保持第一行不变：
 
 `Auth profile credentials are missing or expired.`
 
-Human-friendly detail and stable reason codes may be added on subsequent lines.
+可以在后续行中添加用户友好的详细信息和稳定的原因代码。
