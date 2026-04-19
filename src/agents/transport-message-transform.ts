@@ -34,6 +34,10 @@ function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
 function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   if (message.role !== "assistant") {
     return false;
+  }
+  return message.stopReason === "error" || message.stopReason === "aborted";
+}
+
 const log = createSubsystemLogger("agents/transport-message-transform");
 
 /**
@@ -63,16 +67,29 @@ function appendMissingToolResults(
   pendingToolCalls: PendingToolCall[],
   existingToolResultIds: ReadonlySet<string>,
 ): void {
+  // Copilot review #68939 (2026-04-19): cap per-call log volume.
+  // Pre-fix, the loop emitted one warn line per missing tool_result
+  // — under failure modes where a reconstruction step drops many
+  // pairings (e.g., a model hiccup leaving 50+ dangling tool_uses),
+  // gateway.err.log gets flooded with one line each. Cap at the
+  // first 5 warns + a single aggregate summary so operators still
+  // see the issue but the log stays usable under incident
+  // conditions.
+  const TRANSPORT_REPAIR_PER_TURN_LOG_CAP = 5;
+  const repaired: Array<{ name: string; id: string }> = [];
   for (const toolCall of pendingToolCalls) {
     if (!existingToolResultIds.has(toolCall.id)) {
-      // PR-9 Wave C-#1b: log the repair so operators can grep
-      // `transport-repair` in gateway logs to find the originating
-      // session+turn. The placeholder text already includes the same
-      // marker so it's discoverable from both sides.
-      log.warn(
-        `transport-repair: synthesized placeholder for unpaired tool_use ` +
-          `name=${toolCall.name} id=${toolCall.id}`,
-      );
+      if (repaired.length < TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
+        // PR-9 Wave C-#1b: log the repair so operators can grep
+        // `transport-repair` in gateway logs to find the originating
+        // session+turn. The placeholder text already includes the
+        // same marker so it's discoverable from both sides.
+        log.warn(
+          `transport-repair: synthesized placeholder for unpaired tool_use ` +
+            `name=${toolCall.name} id=${toolCall.id}`,
+        );
+      }
+      repaired.push({ name: toolCall.name, id: toolCall.id });
       result.push({
         role: "toolResult",
         toolCallId: toolCall.id,
@@ -83,7 +100,16 @@ function appendMissingToolResults(
       });
     }
   }
-  return message.stopReason === "error" || message.stopReason === "aborted";
+  if (repaired.length > TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
+    log.warn(
+      `transport-repair: synthesized ${repaired.length} placeholders this turn ` +
+        `(only first ${TRANSPORT_REPAIR_PER_TURN_LOG_CAP} logged individually); ` +
+        `remaining tool_use ids: ${repaired
+          .slice(TRANSPORT_REPAIR_PER_TURN_LOG_CAP)
+          .map((r) => r.id)
+          .join(", ")}`,
+    );
+  }
 }
 
 export function transformTransportMessages(

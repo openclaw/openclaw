@@ -125,6 +125,22 @@ export type PlanModeDebugEvent =
  * flag is the persistent path. Either signal turns it on.
  */
 function isDebugEnabled(): boolean {
+  return isPlanModeDebugEnabled();
+}
+
+/**
+ * Copilot review #68939 (2026-04-19): exported shared helper for
+ * "is plan-mode debug logging enabled?" so callers like
+ * `plan_mode_status` can resolve the flag without duplicating the
+ * env-wins-over-config logic. Single source of truth for the
+ * activation predicate.
+ *
+ * Returns true when EITHER `OPENCLAW_DEBUG_PLAN_MODE=1` is set in
+ * the process env OR `agents.defaults.planMode.debug === true` in
+ * the loaded config. Errors loading config are swallowed (returns
+ * false), matching the previous local helper's behavior.
+ */
+export function isPlanModeDebugEnabled(): boolean {
   if (process.env.OPENCLAW_DEBUG_PLAN_MODE === "1") {
     return true;
   }

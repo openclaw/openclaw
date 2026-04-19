@@ -260,22 +260,30 @@ export async function runBeforeToolCallHook(args: {
   // and BEFORE the plugin hookRunner (so plugins can't bypass the gate
   // by handling the call earlier in the pipeline).
   //
-  // Bug 3+4 + iter-2 Bug A fix: read the LATEST planMode for every
-  // tool call. `getLatestPlanMode` (wired in
-  // agent-runner-execution.ts) does a TRUE fresh disk read with the
-  // deletion-as-normal semantic — `undefined` ONLY when the disk
-  // can't be read (missing path/key, error, no entry). When the
-  // callback is wired and returned a value, USE IT — do NOT fall
-  // back to the stale cached snapshot. The fallback to
+  // Bug 3+4 + iter-2 Bug A fix: read the LATEST known planMode for
+  // every tool call. `getLatestPlanMode` (wired in
+  // agent-runner-execution.ts) is the live lookup for the latest
+  // mode for this session; `undefined` means there is no live value
+  // available to this call path. When the callback is wired and
+  // returns a value, USE IT — do NOT fall back to the stale cached
+  // snapshot captured at run start. The fallback to
   // `args.ctx.planMode` is reserved for environments without the
-  // callback (test contexts) or when the disk is unreadable.
+  // callback (test contexts) or when no live data is available.
+  //
+  // Copilot review #68939 (2026-04-19): the comment used to assert
+  // a "TRUE fresh disk read" — that's the implementation detail of
+  // the current backing store. Restated in terms of CONTRACT
+  // (returns latest known mode; `undefined` means "no live data")
+  // so future re-implementations of the callback (e.g., in-memory
+  // event-driven cache) don't invalidate the doc.
   //
   // Iter-2 Bug A root cause was the previous `??` fallback chain:
-  // `getLatestPlanMode() ?? planMode`. When approval deleted
-  // planMode on disk, the helper returned undefined → fell back to
-  // the stale "plan" snapshot → mutation gate kept blocking
-  // post-approval. Now the helper returns "normal" on deletion AND
-  // the fallback is an explicit "no live data" branch.
+  // `getLatestPlanMode() ?? planMode`. A semantic "no live data"
+  // result was treated the same as a concrete mode, so when approval
+  // deleted planMode on disk and the helper returned undefined, the
+  // stale "plan" snapshot kept blocking post-approval mutation
+  // calls. Now the helper returns "normal" on deletion AND the
+  // fallback is an explicit "no live data" branch.
   const liveMode = args.ctx?.getLatestPlanMode?.();
   const latestPlanMode = liveMode !== undefined ? liveMode : args.ctx?.planMode;
   if (latestPlanMode === "plan") {

@@ -21,15 +21,21 @@ import { type AnyAgentTool } from "./common.js";
  * letting the runtime own the session-state contract.
  */
 
-const EnterPlanModeToolSchema = Type.Object({
-  reason: Type.Optional(
-    Type.String({
-      description:
-        "Optional short justification shown alongside the mode-entered event " +
-        "(e.g. 'multi-file refactor — surface the plan first').",
-    }),
-  ),
-});
+const EnterPlanModeToolSchema = Type.Object(
+  {
+    reason: Type.Optional(
+      Type.String({
+        description:
+          "Optional short justification shown alongside the mode-entered event " +
+          "(e.g. 'multi-file refactor — surface the plan first').",
+      }),
+    ),
+  },
+  // Copilot review #68939 (2026-04-19): forbid additional properties
+  // for consistency with `plan_mode_status` and the post-third-wave
+  // schema-hardening direction.
+  { additionalProperties: false },
+);
 
 export interface CreateEnterPlanModeToolOptions {
   /** Stable run identifier used by the runner to scope mode-entered events. */

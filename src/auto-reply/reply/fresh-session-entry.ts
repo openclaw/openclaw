@@ -41,10 +41,23 @@ export function resolveLatestPlanModeFromDisk(params: {
     if (mode === "plan") {
       return "plan";
     }
-    // mode === "normal" OR planMode object deleted (post-approval).
-    // Per the deletion-as-normal contract documented above, both
-    // collapse to "normal" so consumers don't false-positive on a
-    // stale "plan" cached snapshot.
+    // mode === "normal" OR planMode object deleted (post-approval) OR
+    // any unrecognized value (corruption / forward-compat). Per the
+    // deletion-as-normal contract documented above + the
+    // corruption-tolerance contract codified in
+    // `fresh-session-entry.test.ts:294-306`, all of these collapse
+    // to "normal" so consumers don't false-positive on a stale
+    // "plan" cached snapshot AND don't permanently block the user
+    // out when on-disk state is corrupt.
+    //
+    // (Copilot review #68939 (2026-04-19) suggested returning
+    // `undefined` for unknown values to preserve forward-compat
+    // gating — that would FAIL CLOSED in the corruption case the
+    // existing test exercises, locking the user out indefinitely.
+    // The fail-open-to-normal trade-off is intentional and lives in
+    // the test contract; tightening it would need a separate design
+    // discussion + new mutation-gate-side fail-closed semantics for
+    // unknown values.)
     return "normal";
   } catch {
     return undefined;

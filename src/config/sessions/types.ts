@@ -342,6 +342,27 @@ export type SessionEntry = {
    *   requires a fresh `ask_user_question` call).
    */
   pendingQuestionApprovalId?: string;
+  /**
+   * Codex P2 review #68939 (2026-04-19): the original options the
+   * agent offered for the most recent `ask_user_question` call.
+   * Persisted alongside `pendingQuestionApprovalId` (same
+   * lifecycle) so the answer branch can validate the incoming
+   * answer text against the offered set when free-text isn't
+   * allowed. Pre-fix, a text-channel user could submit arbitrary
+   * `/plan answer <anything>` and it would be accepted, bypassing
+   * the question contract.
+   */
+  pendingQuestionOptions?: string[];
+  /**
+   * Codex P2 review #68939 (2026-04-19): mirror of the
+   * `allowFreetext` flag the agent set on the most recent
+   * `ask_user_question` call. When true, the answer text bypasses
+   * option-membership validation; when false (default), the
+   * answer must match one of `pendingQuestionOptions` exactly
+   * (case-sensitive — matches how the runtime echoes the choice
+   * back).
+   */
+  pendingQuestionAllowFreetext?: boolean;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;

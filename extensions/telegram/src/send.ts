@@ -1576,10 +1576,22 @@ export type TelegramDocumentOpts = {
    * will receive `parse_mode: <this value>` whenever a caption is
    * attached. When no caption is present, no `parse_mode` is sent.
    *
-   * Copilot review #68939 (2026-04-19): docstring previously claimed
-   * "omit/empty to disable" which contradicted both the type union
-   * (no falsy value accepted) and the implementation (`?? (caption ?
-   * "HTML" : undefined)` always produces a value when caption is set).
+   * **Caller responsibility — escape user-controlled caption text.**
+   * Copilot review #68939 (2026-04-19): because the default is HTML
+   * mode, captions derived from agent- or user-controlled strings
+   * (plan titles, summaries, etc.) MUST be HTML-escaped by the
+   * caller before being passed in. The plan-archetype-bridge does
+   * this via `escapeHtml()` in `buildPlanAttachmentCaption`. New
+   * callers should mirror that pattern (or, if calling with
+   * `parseMode: "MarkdownV2"`, escape per Telegram's MarkdownV2
+   * grammar instead). Failure to escape risks accidental link
+   * injection / formatting drift — the bridge ESCAPES, so its
+   * captions are safe.
+   *
+   * Earlier docstring claimed "omit/empty to disable" which
+   * contradicted both the type union (no falsy value accepted) and
+   * the implementation (`?? (caption ? "HTML" : undefined)` always
+   * produces a value when caption is set).
    */
   parseMode?: "HTML" | "MarkdownV2";
   /** Disable the upload + caption notification (silent attachment). */

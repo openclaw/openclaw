@@ -23,7 +23,16 @@
  */
 import { callGatewayTool } from "../tools/gateway.js";
 
-/** Default nudge intervals (minutes). Overridable via `agents.defaults.planMode.nudgeMinutes`. */
+/**
+ * Default nudge intervals (minutes). Callers may override via the
+ * `intervals` parameter on `schedulePlanNudges()`.
+ *
+ * Copilot review #68939 (2026-04-19): the prior comment claimed an
+ * `agents.defaults.planMode.nudgeMinutes` config override existed,
+ * but the planMode defaults schema doesn't carry that field. The
+ * actual override is the per-call `intervals` argument; corrected
+ * the comment to advertise the real escape hatch.
+ */
 const DEFAULT_NUDGE_MINUTES = [10, 30, 60] as const;
 
 /** Marker string embedded in cron job names so we can recognize / safely cleanup our own nudges. */
@@ -90,6 +99,26 @@ export async function schedulePlanNudges(params: {
         "another resume via cron sessionTarget:'current'. If the plan is " +
         "complete, exit_plan_mode (or update_plan with all steps marked " +
         "completed/cancelled to auto-close).";
+      // Copilot review #68939 (2026-04-19): validate the sessionKey
+      // against the same constraints the cron service applies in
+      // `assertSafeCronSessionTargetId` (no `/`, `\`, or `\0`
+      // characters). Pre-fix, an exotic sessionKey could produce a
+      // sessionTarget the cron jobs.ts validator rejects, causing
+      // the plan-nudge schedule call to fail at gateway-side
+      // assertion time. Belt-and-suspenders here keeps the failure
+      // local + actionable instead of a generic cron-validator
+      // error 60 seconds later.
+      const { assertSafeCronSessionTargetId } = await import("../../cron/session-target.js");
+      try {
+        assertSafeCronSessionTargetId(params.sessionKey);
+      } catch (validationErr) {
+        params.log?.warn?.(
+          `plan-nudge schedule skipped: sessionKey "${params.sessionKey}" fails cron sessionTarget validation: ${
+            validationErr instanceof Error ? validationErr.message : String(validationErr)
+          }`,
+        );
+        continue;
+      }
       const job: Record<string, unknown> = {
         name: `${PLAN_NUDGE_NAME_PREFIX}${minutes}min:${params.sessionKey}`,
         schedule: { kind: "at", at: fireAtIso },
