@@ -116,10 +116,12 @@ export async function monitorWebSocket({
     }
 
     wsClients.set(accountId, wsClient);
+    let closedByAbort = false;
 
     try {
       await new Promise<void>((resolve, reject) => {
         function handleAbort() {
+          closedByAbort = true;
           try {
             wsClient.close();
           } catch {}
@@ -150,12 +152,14 @@ export async function monitorWebSocket({
     } catch (err) {
       error(`feishu[${accountId}]: WebSocket error: ${String(err)}`);
     } finally {
-      try {
-        wsClient.close();
-      } catch {}
-      wsClients.delete(accountId);
-      botOpenIds.delete(accountId);
-      botNames.delete(accountId);
+      if (!closedByAbort) {
+        try {
+          wsClient.close();
+        } catch {}
+        wsClients.delete(accountId);
+        botOpenIds.delete(accountId);
+        botNames.delete(accountId);
+      }
     }
 
     if (isAborted()) {
