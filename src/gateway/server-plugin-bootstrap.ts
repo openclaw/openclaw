@@ -1,4 +1,5 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
+import { ensureStatefulTargetBuiltinsRegistered } from "../channels/plugins/stateful-target-builtins.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -81,6 +82,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });
+  void ensureStatefulTargetBuiltinsRegistered().catch(() => {});
   if ((params.logDiagnostics ?? true) && loaded.pluginRegistry.diagnostics.length > 0) {
     logGatewayPluginDiagnostics({
       diagnostics: loaded.pluginRegistry.diagnostics,
