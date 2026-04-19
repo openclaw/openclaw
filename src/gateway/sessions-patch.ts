@@ -500,6 +500,34 @@ export async function applySessionsPatchToStore(params: {
         // Without this, `/plan auto on` then `/plan on` silently loses
         // the flag (user-visible bug — review M3).
         const carryAutoApprove = next.planMode?.autoApprove === true;
+        // Iter-3 D2: first-time intro injection. If this session has
+        // never seen plan mode before (no `planModeIntroDeliveredAt`
+        // marker), write a `[PLAN_MODE_INTRO]:` synthetic message via
+        // `pendingAgentInjection` so the agent's NEXT turn opens with
+        // a quick lifecycle overview + pointer to /plan self-test.
+        // One-shot semantic: marker survives planMode delete on
+        // approve/edit so subsequent enter_plan_mode calls in the
+        // same session skip the intro.
+        const isFirstPlanModeEntry = next.planModeIntroDeliveredAt === undefined;
+        if (isFirstPlanModeEntry) {
+          next.planModeIntroDeliveredAt = planNow;
+          // Don't overwrite an existing pendingAgentInjection (e.g. a
+          // simultaneous [QUESTION_ANSWER]: from a prior turn). Append
+          // intro to it so both signals reach the agent's next turn.
+          const introLines = [
+            "[PLAN_MODE_INTRO]: Plan mode is now active for the first time on this session. Quick lifecycle:",
+            "  1. Investigate read-only (read, grep, web_search, lcm_*); track progress with update_plan.",
+            "  2. When ready, call exit_plan_mode(title=..., plan=[...]) to propose. STOP after that tool call — no chat text in the same turn.",
+            "  3. Wait for the user's Approve/Edit/Reject decision (arrives as [PLAN_DECISION]: ... in your next turn).",
+            "  4. After approval, mutating tools (write, edit, exec, bash) UNLOCK; execute the plan. Use update_plan to mark steps completed.",
+            "Hard rules: do NOT post chat after exit_plan_mode in the same turn; wait for ALL spawned subagents BEFORE exit_plan_mode; update_plan does NOT submit (only exit_plan_mode does).",
+            "Full reference: see the bootstrap-injected plan-mode reference card above (state diagram + tag taxonomy + slash commands + debugging tips). Run `/plan self-test` to verify your local install end-to-end.",
+          ].join("\n");
+          next.pendingAgentInjection =
+            next.pendingAgentInjection !== undefined
+              ? `${next.pendingAgentInjection}\n\n${introLines}`
+              : introLines;
+        }
         next.planMode = {
           mode: "plan",
           approval: "none",
