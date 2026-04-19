@@ -503,7 +503,6 @@ async function routeDM(params: {
   const {
     discordUserId,
     channelId,
-    messageContent,
     attachments,
     instance,
     discordToken,
@@ -511,6 +510,7 @@ async function routeDM(params: {
     agentTimeoutMs,
     inflight,
   } = params;
+  let messageContent = params.messageContent;
 
   // Serialize per-user
   if (inflight.has(discordUserId)) {
@@ -531,7 +531,9 @@ async function routeDM(params: {
     void discordTyping(discordToken, channelId);
 
     try {
-      // Download attachments and convert to base64 for the gateway
+      // Process attachments: transcribe audio locally, pass images to gateway
+      const WHISPER_URL =
+        process.env.OPENCLAW_WHISPER_URL ?? "http://127.0.0.1:8787/v1/audio/transcriptions";
       let gatewayAttachments: Array<{
         type: string;
         mimeType: string;
@@ -550,20 +552,54 @@ async function routeDM(params: {
             if (!resp.ok) continue;
             const buf = Buffer.from(await resp.arrayBuffer());
             const mime = att.content_type ?? "application/octet-stream";
-            const kind = mime.startsWith("audio/")
-              ? "audio"
-              : mime.startsWith("image/")
-                ? "image"
-                : "file";
-            gatewayAttachments.push({
-              type: kind,
-              mimeType: mime,
-              fileName: att.filename,
-              content: buf.toString("base64"),
-            });
-            runtime.log(
-              `[router] downloaded attachment ${att.filename} (${mime}, ${buf.length} bytes)`,
-            );
+
+            if (mime.startsWith("audio/")) {
+              // Transcribe audio locally via whisper server
+              runtime.log(
+                `[router] transcribing ${att.filename} (${mime}, ${buf.length} bytes)...`,
+              );
+              try {
+                const form = new FormData();
+                form.append("file", new Blob([buf], { type: mime }), att.filename);
+                form.append("model", "whisper-1");
+                const whisperResp = await fetch(WHISPER_URL, {
+                  method: "POST",
+                  body: form,
+                });
+                if (whisperResp.ok) {
+                  const result = (await whisperResp.json()) as { text?: string };
+                  const transcript = result.text?.trim();
+                  if (transcript) {
+                    runtime.log(`[router] transcribed: ${transcript.slice(0, 80)}`);
+                    // Prepend transcript to message content
+                    messageContent = messageContent
+                      ? `${messageContent}\n\n[Voice message transcript]: ${transcript}`
+                      : `[Voice message transcript]: ${transcript}`;
+                  } else {
+                    runtime.log(`[router] transcription returned empty text`);
+                  }
+                } else {
+                  runtime.error(
+                    `[router] whisper failed (${whisperResp.status}): ${await whisperResp.text().catch(() => "")}`,
+                  );
+                }
+              } catch (whisperErr) {
+                runtime.error(`[router] whisper error: ${whisperErr}`);
+              }
+            } else if (mime.startsWith("image/")) {
+              // Pass images to gateway as attachments
+              gatewayAttachments.push({
+                type: "image",
+                mimeType: mime,
+                fileName: att.filename,
+                content: buf.toString("base64"),
+              });
+              runtime.log(
+                `[router] downloaded image ${att.filename} (${mime}, ${buf.length} bytes)`,
+              );
+            } else {
+              runtime.log(`[router] skipping unsupported attachment ${att.filename} (${mime})`);
+            }
           } catch (dlErr) {
             runtime.error(`[router] failed to download attachment ${att.filename}: ${dlErr}`);
           }
@@ -578,7 +614,7 @@ async function routeDM(params: {
         token: freshToken || undefined,
         method: "agent",
         params: {
-          message: messageContent || (gatewayAttachments.length > 0 ? "<media>" : ""),
+          message: messageContent || "<media>",
           channel: "webchat",
           deliver: false,
           idempotencyKey,
@@ -794,6 +830,13 @@ async function recoverUnansweredDMs(
         id: string;
         author: { id: string; bot?: boolean };
         content: string;
+        attachments?: Array<{
+          id: string;
+          filename: string;
+          content_type?: string;
+          url: string;
+          size: number;
+        }>;
       }>;
       if (messages.length === 0) continue;
 
@@ -813,14 +856,18 @@ async function recoverUnansweredDMs(
 
       if (!lastUserMsg) continue;
       const content = lastUserMsg.content?.trim();
-      if (!content) continue;
+      const msgAttachments = lastUserMsg.attachments ?? [];
+      if (!content && msgAttachments.length === 0) continue;
 
-      runtime.log(`[router] recovering unanswered DM from ${userId}: ${content.slice(0, 60)}`);
+      runtime.log(
+        `[router] recovering unanswered DM from ${userId}: ${content?.slice(0, 60) || `(${msgAttachments.length} attachment(s))`}`,
+      );
 
       void routeDM({
         discordUserId: userId,
         channelId,
-        messageContent: content,
+        messageContent: content ?? "",
+        attachments: msgAttachments,
         instance,
         discordToken,
         runtime,
