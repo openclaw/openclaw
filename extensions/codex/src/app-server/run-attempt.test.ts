@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
+import * as elicitationBridge from "./elicitation-bridge.js";
 import * as requestUserInputBridge from "./request-user-input-bridge.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
@@ -296,6 +297,83 @@ describe("runCodexAppServerAttempt", () => {
           answers: ["Allow once"],
         },
       },
+    });
+    expect(bridgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
+  it("routes MCP approval elicitations through the native bridge", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const bridgeSpy = vi
+      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .mockResolvedValue({
+        action: "accept",
+        content: { approve: true },
+        _meta: null,
+      });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+      }
+      if (method === "turn/start") {
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: { id: string; method: string; params?: unknown }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+
+    const result = await handleRequest?.({
+      id: "request-elicitation-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "codex_apps__github",
+        mode: "form",
+      },
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: { approve: true },
+      _meta: null,
     });
     expect(bridgeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
