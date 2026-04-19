@@ -611,7 +611,7 @@ function normalizePersistedDeliveryChannel(
   return channel;
 }
 
-function buildFailureAlert(form: CronFormState, existingChannel?: string | undefined) {
+function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
