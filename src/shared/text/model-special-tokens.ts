@@ -19,6 +19,8 @@ import { collapseRepeatedVisibleSuffixAfterDelimiter } from "./repeated-visible-
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
+const CHANNEL_DELIMITER_PREFIX_HINT_RE =
+  /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must|internal planning|plan:)\b/i;
 
 function overlapsCodeRegion(
   start: number,
@@ -30,6 +32,11 @@ function overlapsCodeRegion(
 
 function shouldInsertSeparator(before: string | undefined, after: string | undefined): boolean {
   return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
+}
+
+function looksLikeLeakedChannelDelimiterPrefix(prefix: string): boolean {
+  const trimmed = prefix.trim();
+  return Boolean(trimmed) && CHANNEL_DELIMITER_PREFIX_HINT_RE.test(trimmed);
 }
 
 export function stripModelSpecialTokens(text: string): string {
@@ -50,7 +57,11 @@ export function stripModelSpecialTokens(text: string): string {
     const matched = match[0];
     const start = match.index ?? 0;
     const end = start + matched.length;
-    if (!isInsideCode(start, codeRegions) && !overlapsCodeRegion(start, end, codeRegions)) {
+    if (
+      !isInsideCode(start, codeRegions) &&
+      !overlapsCodeRegion(start, end, codeRegions) &&
+      looksLikeLeakedChannelDelimiterPrefix(text.slice(0, start))
+    ) {
       lastChannelDelimiterEnd = end;
     }
   }

@@ -605,6 +605,13 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("hahaha");
   });
 
+  it("preserves literal channel delimiter mentions in ordinary prose", () => {
+    expect(sanitizeAssistantVisibleText("The marker <channel|> splits streams.")).toBe(
+      "The marker <channel|> splits streams.",
+    );
+    expect(sanitizeAssistantVisibleText("Before <channel|> after")).toBe("Before <channel|> after");
+  });
+
   it("drops a bare trailing control delimiter with no visible suffix", () => {
     const input = "Internal planning<channel|>";
 

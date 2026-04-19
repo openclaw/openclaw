@@ -22,4 +22,11 @@ describe("stripModelSpecialTokens", () => {
     const text = "Just a normal response.";
     expect(stripModelSpecialTokens(text)).toBe(text);
   });
+
+  it("preserves literal channel delimiter mentions when they are part of ordinary prose", () => {
+    expect(stripModelSpecialTokens("The marker <channel|> splits streams.")).toBe(
+      "The marker <channel|> splits streams.",
+    );
+    expect(stripModelSpecialTokens("Before <channel|> after")).toBe("Before <channel|> after");
+  });
 });
