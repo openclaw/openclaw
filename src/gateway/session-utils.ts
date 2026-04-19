@@ -24,6 +24,9 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
+import { subagentRuns } from "../agents/subagent-registry-memory.js";
+import { getSubagentRunsSnapshotForRead } from "../agents/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -326,6 +329,156 @@ function resolveChildSessionKeys(
   }
   const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
+}
+
+function resolveSubagentControllerSessionKey(
+  run: Pick<SubagentRunRecord, "controllerSessionKey" | "requesterSessionKey"> | null | undefined,
+): string | undefined {
+  return (
+    normalizeOptionalString(run?.controllerSessionKey) ||
+    normalizeOptionalString(run?.requesterSessionKey) ||
+    undefined
+  );
+}
+
+function buildDisplaySubagentRunIndex(): ReadonlyMap<string, SubagentRunRecord> {
+  const inMemoryActive = new Map<string, SubagentRunRecord>();
+  const inMemoryEnded = new Map<string, SubagentRunRecord>();
+  for (const entry of subagentRuns.values()) {
+    const childSessionKey = normalizeOptionalString(entry.childSessionKey);
+    if (!childSessionKey) {
+      continue;
+    }
+    if (typeof entry.endedAt === "number") {
+      const previous = inMemoryEnded.get(childSessionKey);
+      if (!previous || entry.createdAt > previous.createdAt) {
+        inMemoryEnded.set(childSessionKey, entry);
+      }
+      continue;
+    }
+    const previous = inMemoryActive.get(childSessionKey);
+    if (!previous || entry.createdAt > previous.createdAt) {
+      inMemoryActive.set(childSessionKey, entry);
+    }
+  }
+
+  const fallbackActive = new Map<string, SubagentRunRecord>();
+  const fallbackEnded = new Map<string, SubagentRunRecord>();
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    const childSessionKey = normalizeOptionalString(entry.childSessionKey);
+    if (!childSessionKey || inMemoryActive.has(childSessionKey) || inMemoryEnded.has(childSessionKey)) {
+      continue;
+    }
+    if (typeof entry.endedAt === "number") {
+      const previous = fallbackEnded.get(childSessionKey);
+      if (!previous || entry.createdAt > previous.createdAt) {
+        fallbackEnded.set(childSessionKey, entry);
+      }
+      continue;
+    }
+    const previous = fallbackActive.get(childSessionKey);
+    if (!previous || entry.createdAt > previous.createdAt) {
+      fallbackActive.set(childSessionKey, entry);
+    }
+  }
+
+  const latestDisplayRuns = new Map<string, SubagentRunRecord>();
+  for (const childSessionKey of new Set([...inMemoryActive.keys(), ...inMemoryEnded.keys()])) {
+    const active = inMemoryActive.get(childSessionKey);
+    const ended = inMemoryEnded.get(childSessionKey);
+    if (ended && (!active || ended.createdAt > active.createdAt)) {
+      latestDisplayRuns.set(childSessionKey, ended);
+      continue;
+    }
+    if (active) {
+      latestDisplayRuns.set(childSessionKey, active);
+    }
+  }
+
+  for (const childSessionKey of new Set([...fallbackActive.keys(), ...fallbackEnded.keys()])) {
+    const active = fallbackActive.get(childSessionKey);
+    const ended = fallbackEnded.get(childSessionKey);
+    if (active) {
+      latestDisplayRuns.set(childSessionKey, active);
+      continue;
+    }
+    if (ended) {
+      latestDisplayRuns.set(childSessionKey, ended);
+    }
+  }
+  return latestDisplayRuns;
+}
+
+function appendChildSessionKey(
+  index: Map<string, Set<string>>,
+  controllerSessionKey: string | undefined,
+  childSessionKey: string,
+): void {
+  const controllerKey = normalizeOptionalString(controllerSessionKey);
+  if (!controllerKey) {
+    return;
+  }
+  const childSet = index.get(controllerKey);
+  if (childSet) {
+    childSet.add(childSessionKey);
+    return;
+  }
+  index.set(controllerKey, new Set([childSessionKey]));
+}
+
+function buildChildSessionIndex(params: {
+  store: Record<string, SessionEntry>;
+  displaySubagentRunsByChildSessionKey: ReadonlyMap<string, SubagentRunRecord>;
+}): ReadonlyMap<string, string[]> {
+  const index = new Map<string, Set<string>>();
+
+  for (const [childSessionKey, run] of params.displaySubagentRunsByChildSessionKey.entries()) {
+    appendChildSessionKey(index, resolveSubagentControllerSessionKey(run), childSessionKey);
+  }
+
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (!entry) {
+      continue;
+    }
+    if (params.displaySubagentRunsByChildSessionKey.has(key)) {
+      continue;
+    }
+    appendChildSessionKey(index, normalizeOptionalString(entry.spawnedBy), key);
+    appendChildSessionKey(index, normalizeOptionalString(entry.parentSessionKey), key);
+  }
+
+  const finalized = new Map<string, string[]>();
+  for (const [controllerSessionKey, childSessionKeys] of index.entries()) {
+    if (childSessionKeys.size > 0) {
+      finalized.set(controllerSessionKey, Array.from(childSessionKeys));
+    }
+  }
+  return finalized;
+}
+
+function resolveGatewaySessionDisplayName(key: string, entry?: SessionEntry): string | undefined {
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  const subject = entry?.subject;
+  const groupChannel = entry?.groupChannel;
+  const space = entry?.space;
+  const id = parsed?.id;
+  const originLabel = entry?.origin?.label;
+  return (
+    entry?.displayName ??
+    (channel
+      ? buildGroupDisplayName({
+          provider: channel,
+          subject,
+          groupChannel,
+          space,
+          id,
+          key,
+        })
+      : undefined) ??
+    entry?.label ??
+    originLabel
+  );
 }
 
 function resolveTranscriptUsageFallback(params: {
@@ -1118,6 +1271,8 @@ export function buildGatewaySessionRow(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  childSessionKeysByController?: ReadonlyMap<string, string[]>;
+  displaySubagentRunsByChildSessionKey?: ReadonlyMap<string, SubagentRunRecord>;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1127,30 +1282,16 @@ export function buildGatewaySessionRow(params: {
   const subject = entry?.subject;
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
-  const id = parsed?.id;
   const origin = entry?.origin;
-  const originLabel = origin?.label;
-  const displayName =
-    entry?.displayName ??
-    (channel
-      ? buildGroupDisplayName({
-          provider: channel,
-          subject,
-          groupChannel,
-          space,
-          id,
-          key,
-        })
-      : undefined) ??
-    entry?.label ??
-    originLabel;
+  const displayName = resolveGatewaySessionDisplayName(key, entry);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getSessionDisplaySubagentRunByChildSessionKey(key);
+  const subagentRun =
+    params.displaySubagentRunsByChildSessionKey?.get(key) ??
+    getSessionDisplaySubagentRunByChildSessionKey(key);
   const subagentOwner =
-    normalizeOptionalString(subagentRun?.controllerSessionKey) ||
-    normalizeOptionalString(subagentRun?.requesterSessionKey);
+    resolveSubagentControllerSessionKey(subagentRun);
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
@@ -1211,7 +1352,8 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = resolveChildSessionKeys(key, store);
+  const childSessions =
+    params.childSessionKeysByController?.get(key) ?? resolveChildSessionKeys(key, store);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
@@ -1346,8 +1488,36 @@ export function listSessionsFromStore(params: {
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
+  const displaySubagentRunsByChildSessionKey = buildDisplaySubagentRunIndex();
+  const childSessionKeysByController = buildChildSessionIndex({
+    store,
+    displaySubagentRunsByChildSessionKey,
+  });
+  const matchesSearch = (key: string, entry?: SessionEntry): boolean => {
+    if (!search) {
+      return true;
+    }
+    const fields = [
+      resolveGatewaySessionDisplayName(key, entry),
+      entry?.label,
+      entry?.subject,
+      entry?.sessionId,
+      key,
+    ];
+    return fields.some(
+      (field) =>
+        typeof field === "string" && normalizeLowercaseStringOrEmpty(field).includes(search),
+    );
+  };
+  const isWithinActiveWindow = (entry?: SessionEntry): boolean => {
+    if (activeMinutes === undefined) {
+      return true;
+    }
+    const cutoff = now - activeMinutes * 60_000;
+    return (entry?.updatedAt ?? 0) >= cutoff;
+  };
 
-  let sessions = Object.entries(store)
+  let sessionEntries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1377,11 +1547,9 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+      const latest = displaySubagentRunsByChildSessionKey.get(key);
       if (latest) {
-        const latestControllerSessionKey =
-          normalizeOptionalString(latest.controllerSessionKey) ||
-          normalizeOptionalString(latest.requesterSessionKey);
+        const latestControllerSessionKey = resolveSubagentControllerSessionKey(latest);
         return latestControllerSessionKey === spawnedBy;
       }
       return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
@@ -1392,7 +1560,16 @@ export function listSessionsFromStore(params: {
       }
       return entry?.label === label;
     })
-    .map(([key, entry]) =>
+    .filter(([key, entry]) => matchesSearch(key, entry))
+    .filter(([, entry]) => isWithinActiveWindow(entry))
+    .toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
+
+  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
+    const limit = Math.max(1, Math.floor(opts.limit));
+    sessionEntries = sessionEntries.slice(0, limit);
+  }
+
+  const sessions = sessionEntries.map(([key, entry]) =>
       buildGatewaySessionRow({
         cfg,
         storePath,
@@ -1402,28 +1579,10 @@ export function listSessionsFromStore(params: {
         now,
         includeDerivedTitles,
         includeLastMessage,
+        childSessionKeysByController,
+        displaySubagentRunsByChildSessionKey,
       }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-
-  if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
-      return fields.some(
-        (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
-      );
-    });
-  }
-
-  if (activeMinutes !== undefined) {
-    const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
-  }
-
-  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
-    const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
-  }
+    );
 
   return {
     ts: now,

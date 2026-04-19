@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -185,6 +185,27 @@ describe("listSessionsFromStore search", () => {
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0].key).toBe(testCase.expectedKey);
     }
+  });
+
+  test("matches search against derived group display names", () => {
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:slack:group:eng": {
+          sessionId: "sess-slack-1",
+          updatedAt: Date.now(),
+          channel: "slack",
+          groupChannel: "eng",
+          space: "acme",
+        } as SessionEntry,
+      },
+      opts: { search: "acme#eng" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.displayName).toBe("slack:acme#eng");
+    expect(result.sessions[0]?.key).toBe("agent:main:slack:group:eng");
   });
 
   test("hides cron run alias session keys from sessions list", () => {
@@ -469,6 +490,83 @@ describe("listSessionsFromStore search", () => {
         expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
       },
     });
+  });
+
+  test("applies limit before transcript fallback row construction", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-limit-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const sessions = [
+      { sessionId: "sess-newer", updatedAt: now, totalTokens: 321 },
+      { sessionId: "sess-older", updatedAt: now - 1_000, totalTokens: 654 },
+    ] as const;
+
+    for (const session of sessions) {
+      fs.writeFileSync(
+        path.join(tmpDir, `${session.sessionId}.jsonl`),
+        [
+          JSON.stringify({ type: "session", version: 1, id: session.sessionId }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              usage: {
+                input: session.totalTokens,
+              },
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+    }
+
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath,
+        store: {
+          "agent:main:newer": {
+            sessionId: "sess-newer",
+            updatedAt: now,
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            totalTokens: 0,
+            totalTokensFresh: false,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          } as SessionEntry,
+          "agent:main:older": {
+            sessionId: "sess-older",
+            updatedAt: now - 1_000,
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            totalTokens: 0,
+            totalTokensFresh: false,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          } as SessionEntry,
+        },
+        opts: { limit: 1 },
+      });
+
+      const transcriptReads = readFileSyncSpy.mock.calls.filter(
+        ([target, encoding]) => typeof target === "number" && encoding === "utf-8",
+      );
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.key).toBe("agent:main:newer");
+      expect(result.sessions[0]?.totalTokens).toBe(321);
+      expect(transcriptReads).toHaveLength(1);
+    } finally {
+      readFileSyncSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   test("uses subagent run model immediately for child sessions while transcript usage fills live totals", () => {
