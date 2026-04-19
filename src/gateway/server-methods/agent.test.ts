@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -12,6 +13,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -204,6 +206,42 @@ function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function setAgentTargetParsingRegistry() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          id: "slack",
+          meta: {
+            id: "slack",
+            label: "Slack",
+            selectionLabel: "Slack",
+            docsPath: "/channels/slack",
+            blurb: "test stub",
+          },
+          capabilities: { chatTypes: ["channel"] },
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({}),
+          },
+          messaging: {
+            parseExplicitTarget: ({ raw }: { raw: string }) => {
+              const trimmed = raw.trim();
+              const channelMatch = /^channel:(.+)$/i.exec(trimmed);
+              return {
+                to: channelMatch?.[1]?.trim() ?? trimmed,
+                chatType: "channel" as const,
+              };
+            },
+          },
+        },
+      },
+    ]),
+  );
+}
+
 function setupNewYorkTimeConfig(isoDate: string) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
@@ -366,6 +404,7 @@ describe("gateway agent handler", () => {
     resetTaskRegistryForTests();
     mocks.loadConfigReturn = {};
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
+    setActivePluginRegistry(createTestRegistry());
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
   });
@@ -1215,6 +1254,357 @@ describe("gateway agent handler", () => {
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("uses the current request route over stale session delivery context", async () => {
+    const existingEntry = buildExistingMainStoreEntry({
+      deliveryContext: {
+        channel: "feishu",
+        to: "user:ou_stale",
+        accountId: "feishu-account",
+      },
+      lastChannel: "feishu",
+      lastTo: "user:ou_stale",
+      lastAccountId: "feishu-account",
+    });
+    mockMainSessionEntry(existingEntry);
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "discord turn",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        channel: "discord",
+        to: "channel:1472577149004283935",
+        accountId: "discord-account",
+        idempotencyKey: "test-discord-current-route",
+      },
+      { reqId: "discord-current-route-1" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      messageChannel?: string;
+      runContext?: {
+        messageChannel?: string;
+        currentChannelId?: string;
+        accountId?: string;
+      };
+    };
+    expect(callArgs.channel).toBe("discord");
+    expect(callArgs.to).toBe("channel:1472577149004283935");
+    expect(callArgs.accountId).toBe("discord-account");
+    expect(callArgs.messageChannel).toBe("discord");
+    expect(callArgs.runContext).toMatchObject({
+      messageChannel: "discord",
+      currentChannelId: "channel:1472577149004283935",
+      accountId: "discord-account",
+    });
+    expect(capturedEntry).toMatchObject({
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:1472577149004283935",
+        accountId: "discord-account",
+      },
+      lastChannel: "discord",
+      lastTo: "channel:1472577149004283935",
+      lastAccountId: "discord-account",
+    });
+  });
+
+  it("uses a deliver-time same-channel request route over a stale session target", async () => {
+    const existingEntry = buildExistingMainStoreEntry({
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:stale",
+        accountId: "discord-old",
+        threadId: "thread-old",
+      },
+      lastChannel: "discord",
+      lastTo: "channel:stale",
+      lastAccountId: "discord-old",
+      lastThreadId: "thread-old",
+    });
+    mockMainSessionEntry(existingEntry);
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "discord same-channel turn",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        channel: "discord",
+        to: "channel:fresh",
+        accountId: "discord-new",
+        idempotencyKey: "test-discord-same-channel-current-route",
+      },
+      { reqId: "discord-same-channel-current-route-1" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+      runContext?: {
+        currentChannelId?: string;
+        accountId?: string;
+      };
+    };
+    expect(callArgs.channel).toBe("discord");
+    expect(callArgs.to).toBe("channel:fresh");
+    expect(callArgs.accountId).toBe("discord-new");
+    expect(callArgs.threadId).toBeUndefined();
+    expect(callArgs.runContext).toMatchObject({
+      currentChannelId: "channel:fresh",
+      accountId: "discord-new",
+    });
+    const deliveryContext = capturedEntry?.deliveryContext as
+      | { channel?: string; to?: string; accountId?: string; threadId?: string }
+      | undefined;
+    expect(deliveryContext).toMatchObject({
+      channel: "discord",
+      to: "channel:fresh",
+      accountId: "discord-new",
+    });
+    expect(deliveryContext?.threadId).toBeUndefined();
+    expect(capturedEntry?.lastChannel).toBe("discord");
+    expect(capturedEntry?.lastTo).toBe("channel:fresh");
+    expect(capturedEntry?.lastAccountId).toBe("discord-new");
+    expect(capturedEntry?.lastThreadId).toBeUndefined();
+  });
+
+  it("preserves same-channel target fields when only the request thread changes", async () => {
+    const existingEntry = buildExistingMainStoreEntry({
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:fresh",
+        accountId: "discord-account",
+        threadId: "thread-old",
+      },
+      lastChannel: "discord",
+      lastTo: "channel:fresh",
+      lastAccountId: "discord-account",
+      lastThreadId: "thread-old",
+    });
+    mockMainSessionEntry(existingEntry);
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "discord same-channel thread turn",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        channel: "discord",
+        threadId: "thread-new",
+        idempotencyKey: "test-discord-same-channel-thread-route",
+      },
+      { reqId: "discord-same-channel-thread-route-1" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
+    expect(callArgs.channel).toBe("discord");
+    expect(callArgs.to).toBeUndefined();
+    expect(callArgs.accountId).toBeUndefined();
+    expect(callArgs.threadId).toBe("thread-new");
+    const deliveryContext = capturedEntry?.deliveryContext as
+      | { channel?: string; to?: string; accountId?: string; threadId?: string }
+      | undefined;
+    expect(deliveryContext).toMatchObject({
+      channel: "discord",
+      to: "channel:fresh",
+      accountId: "discord-account",
+      threadId: "thread-new",
+    });
+    expect(capturedEntry?.lastChannel).toBe("discord");
+    expect(capturedEntry?.lastTo).toBe("channel:fresh");
+    expect(capturedEntry?.lastAccountId).toBe("discord-account");
+    expect(capturedEntry?.lastThreadId).toBe("thread-new");
+  });
+
+  it("preserves the stored thread when the request target is canonically equivalent", async () => {
+    setAgentTargetParsingRegistry();
+    const existingEntry = buildExistingMainStoreEntry({
+      deliveryContext: {
+        channel: "slack",
+        to: "channel:C1",
+        accountId: "slack-account",
+        threadId: "1700.1",
+      },
+      lastChannel: "slack",
+      lastTo: "channel:C1",
+      lastAccountId: "slack-account",
+      lastThreadId: "1700.1",
+    });
+    mockMainSessionEntry(existingEntry);
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "slack equivalent route turn",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        channel: "slack",
+        to: "C1",
+        accountId: "slack-account",
+        idempotencyKey: "test-slack-equivalent-target-route",
+      },
+      { reqId: "slack-equivalent-target-route-1" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
+    expect(callArgs.channel).toBe("slack");
+    expect(callArgs.to).toBe("C1");
+    expect(callArgs.accountId).toBe("slack-account");
+    expect(callArgs.threadId).toBe("1700.1");
+    const deliveryContext = capturedEntry?.deliveryContext as
+      | { channel?: string; to?: string; accountId?: string; threadId?: string }
+      | undefined;
+    expect(deliveryContext).toMatchObject({
+      channel: "slack",
+      to: "channel:C1",
+      accountId: "slack-account",
+      threadId: "1700.1",
+    });
+    expect(capturedEntry?.lastChannel).toBe("slack");
+    expect(capturedEntry?.lastTo).toBe("channel:C1");
+    expect(capturedEntry?.lastAccountId).toBe("slack-account");
+    expect(capturedEntry?.lastThreadId).toBe("1700.1");
+  });
+
+  it("keeps stored route fields when a channel-only request switches channel", async () => {
+    const existingEntry = buildExistingMainStoreEntry({
+      deliveryContext: {
+        channel: "feishu",
+        to: "user:ou_stale",
+        accountId: "feishu-account",
+        threadId: "feishu-thread",
+      },
+      lastChannel: "feishu",
+      lastTo: "user:ou_stale",
+      lastAccountId: "feishu-account",
+      lastThreadId: "feishu-thread",
+    });
+    mockMainSessionEntry(existingEntry);
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "discord channel-only turn",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        channel: "discord",
+        idempotencyKey: "test-discord-channel-only",
+      },
+      { reqId: "discord-channel-only-1" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
+    expect(callArgs.channel).toBe("discord");
+    expect(callArgs.to).toBeUndefined();
+    expect(callArgs.accountId).toBeUndefined();
+    expect(callArgs.threadId).toBeUndefined();
+    const deliveryContext = capturedEntry?.deliveryContext as
+      | { channel?: string; to?: string; accountId?: string; threadId?: string }
+      | undefined;
+    expect(deliveryContext).toMatchObject({
+      channel: "feishu",
+      to: "user:ou_stale",
+      accountId: "feishu-account",
+      threadId: "feishu-thread",
+    });
+    expect(capturedEntry?.lastChannel).toBe("feishu");
+    expect(capturedEntry?.lastTo).toBe("user:ou_stale");
+    expect(capturedEntry?.lastAccountId).toBe("feishu-account");
+    expect(capturedEntry?.lastThreadId).toBe("feishu-thread");
   });
 
   it("terminalizes successful async gateway agent runs in the shared task registry", async () => {

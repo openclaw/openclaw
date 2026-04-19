@@ -23,6 +23,7 @@ import {
   buildSessionStartupContextPrelude,
   shouldApplyStartupContext,
 } from "../../auto-reply/reply/startup-context.js";
+import { resolveComparableTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
@@ -133,6 +134,45 @@ function resolveAllowModelOverrideFromClient(
 
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   return resolveSenderIsOwnerFromClient(client);
+}
+
+function resolveComparableRouteTarget(params: {
+  channel?: string;
+  target?: string;
+}): string | undefined {
+  const rawTarget = normalizeOptionalString(params.target);
+  if (!rawTarget) {
+    return undefined;
+  }
+  if (!params.channel) {
+    return rawTarget;
+  }
+  try {
+    return (
+      resolveComparableTargetForChannel({
+        channel: params.channel,
+        rawTarget,
+      })?.to ?? rawTarget
+    );
+  } catch {
+    return rawTarget;
+  }
+}
+
+function routeTargetDiffers(params: {
+  channel?: string;
+  requestTo?: string;
+  sessionTo?: string;
+}): boolean {
+  const requestTarget = resolveComparableRouteTarget({
+    channel: params.channel,
+    target: params.requestTo,
+  });
+  const sessionTarget = resolveComparableRouteTarget({
+    channel: params.channel,
+    target: params.sessionTo,
+  });
+  return requestTarget != null && sessionTarget != null && requestTarget !== sessionTarget;
 }
 
 async function runSessionResetFromAgent(params: {
@@ -857,13 +897,61 @@ export const agentHandlers: GatewayRequestHandlers = {
         // string and numeric threadIds (e.g., Matrix uses integers).
         threadId: request.threadId,
       });
-      const effectiveDelivery = mergeDeliveryContext(
-        deliveryFields.deliveryContext,
-        requestDeliveryHint,
-      );
+      const requestChannel =
+        requestDeliveryHint?.channel && requestDeliveryHint.channel !== "last"
+          ? requestDeliveryHint.channel
+          : undefined;
+      const sessionDelivery = deliveryFields.deliveryContext;
+      const sessionChannel = sessionDelivery?.channel;
+      const requestHasConcreteTarget = requestDeliveryHint?.to != null;
+      const requestHasConcreteRoute =
+        requestHasConcreteTarget || requestDeliveryHint?.threadId != null;
+      const routeValueDiffers = (
+        requestValue: string | number | undefined,
+        sessionValue: string | number | undefined,
+      ) =>
+        requestValue != null &&
+        sessionValue != null &&
+        String(requestValue) !== String(sessionValue);
+      const channelConflictsWithSession =
+        requestChannel != null && sessionChannel != null && requestChannel !== sessionChannel;
+      const requestTargetDiffers = routeTargetDiffers({
+        channel: requestChannel ?? sessionChannel,
+        requestTo: requestDeliveryHint?.to,
+        sessionTo: sessionDelivery?.to,
+      });
+      const deliverRouteConflictsWithSession =
+        request.deliver === true &&
+        requestChannel != null &&
+        sessionChannel === requestChannel &&
+        requestHasConcreteRoute &&
+        (requestTargetDiffers ||
+          routeValueDiffers(requestDeliveryHint?.accountId, sessionDelivery?.accountId) ||
+          routeValueDiffers(requestDeliveryHint?.threadId, sessionDelivery?.threadId));
+      // Preserve existing session routes for normal follow-ups and channel-only
+      // turns. A request must include a concrete target before it can replace a
+      // conflicting persisted route.
+      const requestReplacesSessionRoute =
+        (channelConflictsWithSession && requestHasConcreteTarget) ||
+        deliverRouteConflictsWithSession;
+      const effectiveDelivery = channelConflictsWithSession
+        ? requestHasConcreteTarget
+          ? requestDeliveryHint
+          : sessionDelivery
+        : deliverRouteConflictsWithSession
+          ? requestTargetDiffers
+            ? normalizeDeliveryContext({
+                channel: requestDeliveryHint?.channel ?? sessionDelivery?.channel,
+                to: requestDeliveryHint?.to ?? sessionDelivery?.to,
+                accountId: requestDeliveryHint?.accountId ?? sessionDelivery?.accountId,
+                threadId: requestDeliveryHint?.threadId,
+              })
+            : mergeDeliveryContext(requestDeliveryHint, sessionDelivery)
+          : mergeDeliveryContext(sessionDelivery, requestDeliveryHint);
       const effectiveDeliveryFields = normalizeSessionDeliveryFields({
         deliveryContext: effectiveDelivery,
       });
+      const existingRouteFallback = requestReplacesSessionRoute ? undefined : entry;
       const nextEntryPatch: SessionEntry = {
         sessionId,
         updatedAt: now,
@@ -885,10 +973,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
         deliveryContext: effectiveDeliveryFields.deliveryContext,
-        lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
-        lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
-        lastAccountId: effectiveDeliveryFields.lastAccountId ?? entry?.lastAccountId,
-        lastThreadId: effectiveDeliveryFields.lastThreadId ?? entry?.lastThreadId,
+        lastChannel: effectiveDeliveryFields.lastChannel ?? existingRouteFallback?.lastChannel,
+        lastTo: effectiveDeliveryFields.lastTo ?? existingRouteFallback?.lastTo,
+        lastAccountId:
+          effectiveDeliveryFields.lastAccountId ?? existingRouteFallback?.lastAccountId,
+        lastThreadId: effectiveDeliveryFields.lastThreadId ?? existingRouteFallback?.lastThreadId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,
@@ -1178,6 +1267,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
+            currentChannelId: resolvedTo,
             currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
           },
           groupId: resolvedGroupId,
