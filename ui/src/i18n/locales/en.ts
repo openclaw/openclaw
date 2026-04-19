@@ -276,6 +276,17 @@ export const en: TranslationMap = {
       cost: "Usage Cost",
       skills: "Skills",
       recentSessions: "Recent Sessions",
+      modelAuth: "Model Auth",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} expired",
+      modelAuthExpiring: "{count} expiring",
+      modelAuthProviders: "{count} providers",
+      modelAuthUsageLeft: "{pct}% left",
+      modelAuthExpiresIn: "expires {when}",
+      modelAuthAttentionExpiredTitle: "Model auth expired",
+      modelAuthAttentionExpiringTitle: "Model auth expiring soon",
+      modelAuthAttentionExpiredDesc: "{providers} — re-authenticate with openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Attention",
@@ -509,7 +520,8 @@ export const en: TranslationMap = {
       avgTokens: "Avg Tokens / Msg",
       avgTokensHint: "Average tokens per message in this range.",
       avgCost: "Avg Usage Cost / Msg",
-      avgCostHint: "Average estimated or provider-reported usage cost per message. This is not necessarily your actual bill.",
+      avgCostHint:
+        "Average estimated or provider-reported usage cost per message. This is not necessarily your actual bill.",
       avgCostHintMissing:
         "Average estimated or provider-reported usage cost per message. This is not necessarily your actual bill, and cost data is missing for some or all sessions in this range.",
       acrossMessages: "Across {count} messages",
