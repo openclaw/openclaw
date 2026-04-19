@@ -510,6 +510,25 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("preserves configured node pins when profile=user node discovery errors", async () => {
+    nodesUtilsMocks.listNodes.mockRejectedValueOnce(new Error("gateway unavailable"));
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      gateway: { nodes: { browser: { node: "node-1" } } },
+    });
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status", profile: "user" })).rejects.toThrow(
+      /gateway unavailable/i,
+    );
+
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it('allows profile="user" with target="node"', async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({

@@ -395,6 +395,7 @@ export function createBrowserTool(opts?: {
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
+      const configuredNode = browserToolDeps.loadConfig().gateway?.nodes?.browser?.node?.trim();
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
@@ -420,7 +421,7 @@ export function createBrowserTool(opts?: {
       } catch (error) {
         // Keep the logged-in user browser usable on the host when auto-discovery
         // of browser nodes fails transiently. Explicit node requests still fail.
-        if (!(isUserBrowserProfile && !target && !requestedNode)) {
+        if (!(isUserBrowserProfile && !target && !requestedNode && !configuredNode)) {
           throw error;
         }
       }
