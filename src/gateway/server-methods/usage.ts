@@ -49,6 +49,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const MAX_COST_USAGE_CACHE_ENTRIES = 100;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -63,6 +64,28 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+
+/** Evict stale (TTL-expired, non-in-flight) entries, then FIFO-evict oldest if over cap. */
+function pruneCostUsageCache(now: number): void {
+  // 1. Prune TTL-expired entries that have no in-flight promise.
+  for (const [key, entry] of costUsageCache) {
+    if (
+      !entry.inFlight &&
+      entry.updatedAt !== undefined &&
+      now - entry.updatedAt >= COST_USAGE_CACHE_TTL_MS
+    ) {
+      costUsageCache.delete(key);
+    }
+  }
+  // 2. FIFO evict oldest if still over cap.
+  while (costUsageCache.size > MAX_COST_USAGE_CACHE_ENTRIES) {
+    const oldestKey = costUsageCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    costUsageCache.delete(oldestKey);
+  }
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -326,6 +349,7 @@ async function loadCostUsageSummaryCached(params: {
   })
     .then((summary) => {
       costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      pruneCostUsageCache(Date.now());
       return summary;
     })
     .catch((err) => {
@@ -363,6 +387,7 @@ export const __test = {
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
+  pruneCostUsageCache,
 };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
