@@ -1,18 +1,16 @@
 /**
- * WebSocket 客户端多账号存储
+ * WebSocket client multi-account storage
  *
- * 使用 Map<accountId, WsClient> 管理多个并发连接，
- * 在 ws-gateway 启动时保存对应账号的 WsClient 引用，
- * 供 channel.ts 的 outbound.sendText 使用。
+ * Uses Map<accountId, WsClient> to manage concurrent connections.
+ * Each account's WsClient reference is stored when the ws-gateway starts
+ * and consumed by the outbound sendText path.
  */
 import type { YuanbaoWsClient } from "./client.js";
 
 const activeClients = new Map<string, YuanbaoWsClient>();
 
 /**
- * 保存指定账号的 WebSocket 客户端引用
- * @param accountId - Account ID
- * @param client - WsClient 实例，传 null 表示移除该账号的引用
+ * Store a WebSocket client reference for the given account.
  */
 export function setActiveWsClient(accountId: string, client: YuanbaoWsClient | null): void {
   if (client) {
@@ -23,17 +21,14 @@ export function setActiveWsClient(accountId: string, client: YuanbaoWsClient | n
 }
 
 /**
- * 获取指定账号的 WebSocket 客户端引用
- * @param accountId - Account ID
- * @returns WsClient 实例或 null
+ * Get the WebSocket client reference for the given account.
  */
 export function getActiveWsClient(accountId: string): YuanbaoWsClient | null {
   return activeClients.get(accountId) ?? null;
 }
 
 /**
- * 获取所有活跃的 WebSocket 客户端
- * @returns 只读的 accountId → WsClient 映射
+ * Get all active WebSocket clients.
  */
 export function getAllActiveWsClients(): ReadonlyMap<string, YuanbaoWsClient> {
   return activeClients;

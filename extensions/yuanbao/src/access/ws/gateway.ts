@@ -1,12 +1,12 @@
 /**
- * WebSocket 网关适配器
+ * WebSocket gateway adapter
  *
- * 将 YuanbaoWsClient 与 OpenClaw channel gateway 生命周期集成。
- * Responsible for:
- *   - 根据账号配置构建连接参数（通过 sign-token 接口获取鉴权 token）
- *   - 绑定 abortSignal 实现优雅关闭
- *   - 通过 statusSink 上报连接状态
- *   - 将收到的推送事件转换为 YuanbaoInboundMessage 并注入消息处理管线
+ * Integrates YuanbaoWsClient with the OpenClaw channel gateway lifecycle.
+ * Responsibilities:
+ *   - Build connection params from account config (obtain auth token via sign-token API)
+ *   - Bind abortSignal for graceful shutdown
+ *   - Report connection status via statusSink
+ *   - Convert incoming push events into YuanbaoInboundMessage and feed them into the message pipeline
  */
 
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -39,25 +39,22 @@ export type StartWsGatewayParams = {
   config: OpenClawConfig;
   abortSignal: AbortSignal;
   log?: GatewayLog;
-  /** PluginRuntime 实例，用于接入 OpenClaw 消息管线 */
+  /** PluginRuntime instance for connecting to the OpenClaw message pipeline */
   runtime?: PluginRuntime;
   statusSink?: (patch: GatewayStatusPatch) => void;
 };
 
 /**
- * 启动 WebSocket 网关
+ * Start the WebSocket gateway.
  *
- * 流程：签票获取 token → 建立 WS 连接 → 鉴权
- * 返回一个 Promise，在 abortSignal 触发前保持挂起。
- *
- * @param params - Gateway startup参数，包含账号配置、abort 信号、日志和状态上报等
- * @returns 在 abortSignal 触发时 resolve 的 Promise
+ * Flow: sign token → establish WS connection → authenticate.
+ * Returns a Promise that stays pending until abortSignal fires.
  */
 export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promise<void> {
   const { account, config, abortSignal, log, runtime, statusSink } = params;
   const gwlog = createLog("ws", log);
 
-  // 构建鉴权信息（需要异步签票）
+  // Build auth info (requires async token signing)
   const auth = await resolveWsAuth(account, log);
 
   const client = new YuanbaoWsClient({
@@ -78,9 +75,9 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
           lastConnectedAt: Date.now(),
         });
 
-        // 建联成功后同步命令列表到后台
+        // Sync command list to the backend after connection is established
         syncCommandsToServer(client, account.accountId, config).catch((err) => {
-          gwlog.warn(`[${account.accountId}] 同步命令列表失败（不影响正常功能）`, {
+          gwlog.warn(`[${account.accountId}] failed to sync command list (non-blocking)`, {
             error: String(err),
           });
         });
@@ -143,13 +140,13 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
     },
   });
 
-  // 启动连接
+  // Start the connection
   client.connect();
 
-  // 保存到多账号引用（供 outbound.sendText 使用）
+  // Store client reference for multi-account use (used by outbound.sendText)
   setActiveWsClient(account.accountId, client);
 
-  // 返回 Promise，在 abortSignal 触发时断开连接并 resolve。
+  // Return a Promise that resolves when abortSignal fires.
   return new Promise<void>((resolve) => {
     const onAbort = () => {
       gwlog.info(`[${account.accountId}] received stop signal, disconnecting WebSocket`);
@@ -171,10 +168,8 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
   });
 }
 
-// ============ 内部辅助 ============
-
 /**
- * 根据账号配置构建 WS 鉴权信息（通过 sign-token 接口获取，基于 duration 字段缓存）。
+ * Build WS auth info from account config (obtained via sign-token API, cached by duration).
  */
 async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) {
   const mlog = createLog("ws", log);
@@ -182,7 +177,7 @@ async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) 
     botId: account.botId,
     token: account.token,
   });
-  // 如果已有预签的静态 token，直接使用
+  // If a pre-signed static token is available, use it directly
   if (account.token) {
     const uid = account.botId || "";
     mlog.info(`[${account.accountId}] using pre-configured static token`, {
@@ -219,22 +214,22 @@ async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) 
 }
 
 /**
- * 将推送内容解析为腾讯 IM MsgBody 格式。
+ * Parse push content into Tencent IM MsgBody format.
  */
 function parsePushContentToMsgBody(content: unknown): YuanbaoMsgBodyElement[] | undefined {
   if (typeof content === "string" && content.trim()) {
-    // 尝试 JSON 解析（推送内容可能是 JSON 字符串）
+    // Try JSON parse (push content may be a JSON string)
     try {
       const parsed = JSON.parse(content);
       if (parsed?.msg_body && Array.isArray(parsed.msg_body)) {
         return parsed.msg_body;
       }
-      // 如果是其他 JSON 格式，尝试Extract text 字段
+      // If it's another JSON format, try to extract the text field
       if (parsed?.text) {
         return [{ msg_type: "TIMTextElem", msg_content: { text: parsed.text } }];
       }
     } catch {
-      // 非 JSON，当作纯文本
+      // Not JSON — treat as plain text
     }
     return [{ msg_type: "TIMTextElem", msg_content: { text: content } }];
   }
@@ -243,7 +238,7 @@ function parsePushContentToMsgBody(content: unknown): YuanbaoMsgBodyElement[] | 
 
 type InboundResult = { msg: YuanbaoInboundMessage; chatType: "c2c" | "group" };
 
-/** 根据消息字段推断聊天类型 */
+/** Infer chat type from message fields */
 function inferChatType(msg: Record<string, unknown>): "c2c" | "group" {
   if (msg.group_code) {
     return "group";
@@ -255,22 +250,22 @@ function inferChatType(msg: Record<string, unknown>): "c2c" | "group" {
   return "c2c";
 }
 
-/** 检查消息是否含有至少一个有效的业务字段 */
+/** Check whether the message has at least one valid business field */
 function hasValidMsgFields(msg: Record<string, unknown>): boolean {
   return Boolean(msg.callback_command || msg.from_account || msg.msg_body);
 }
 
-/** 尝试用 protobuf 解码 rawData，失败返回 null */
+/** Try protobuf decode on rawData; returns null on failure */
 function decodeFromProtobuf(rawData: Uint8Array, pushType: string): InboundResult | null {
   const decoded = decodeInboundMessage(rawData);
   if (!decoded || !hasValidMsgFields(decoded as Record<string, unknown>)) {
     return null;
   }
-  createLog("ws").debug(`[${pushType}] WS 推送事件解析`, { ...decoded });
+  createLog("ws").debug(`[${pushType}] WS push event decoded`, { ...decoded });
   return { msg: decoded, chatType: inferChatType(decoded as Record<string, unknown>) };
 }
 
-/** protobuf 解码失败后，尝试将 rawData 当 JSON 文本解码 */
+/** Fallback: try to decode rawData as JSON text when protobuf fails */
 function decodeFromRawDataJson(rawData: Uint8Array, pushType: string): InboundResult | null {
   try {
     const rawJson = JSON.parse(new TextDecoder().decode(rawData));
@@ -278,18 +273,18 @@ function decodeFromRawDataJson(rawData: Uint8Array, pushType: string): InboundRe
       return null;
     }
     const msg = rawJson as YuanbaoInboundMessage;
-    // 从 log_ext 中回填 trace_id
+    // Back-fill trace_id from log_ext
     if (!msg.trace_id) {
       msg.trace_id = rawJson.log_ext?.trace_id;
     }
-    createLog("ws").info(`[${pushType}] WS 推送事件解析`, { ...msg });
+    createLog("ws").info(`[${pushType}] WS push event decoded`, { ...msg });
     return { msg, chatType: inferChatType(msg as Record<string, unknown>) };
   } catch {
     return null;
   }
 }
 
-/** 从 DirectedPush content 字段解析Message body */
+/** Decode message body from the DirectedPush content field */
 function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
   const msgBody = parsePushContentToMsgBody(pushEvent.content);
   if (!msgBody) {
@@ -300,7 +295,7 @@ function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
   try {
     parsedContent = JSON.parse(pushEvent.content as string);
   } catch {
-    /* 纯文本内容，JSON 解析失败是预期行为 */
+    /* Plain text content — JSON parse failure is expected */
   }
 
   const logExt = parsedContent.log_ext as { trace_id?: string } | undefined;
@@ -323,14 +318,10 @@ function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
 }
 
 /**
- * 将 WS 推送事件转换为 YuanbaoInboundMessage + chatType。
- * 返回 null 表示该推送不需要进入消息处理管线。
+ * Convert a WS push event into YuanbaoInboundMessage + chatType.
+ * Returns null if the push does not need to enter the message pipeline.
  *
- * 解码Priority:rawData protobuf → rawData JSON 回退 → DirectedPush content
- *
- * @param pushEvent - WebSocket 推送事件
- * @param log - 可选日志对象
- * @returns 包含解码后消息和聊天类型的对象，或 null
+ * Decode priority: rawData protobuf → rawData JSON fallback → DirectedPush content
  */
 export function wsPushToInboundMessage(
   pushEvent: WsPushEvent,
@@ -338,10 +329,10 @@ export function wsPushToInboundMessage(
 ): InboundResult | null {
   const wsLog = createLog("ws", log);
 
-  // 先尝试用完整的 ConnMsg.data 直接解码（后台可能没有 PushMsg 外层）
+  // First try decoding full ConnMsg.data directly (backend may omit the PushMsg wrapper)
   if (pushEvent.connData && pushEvent.connData.length > 0) {
     wsLog.debug(
-      `[${pushEvent.type}] WS 推送事件解析 type=connData (connData.length=${pushEvent.connData.length})`,
+      `[${pushEvent.type}] WS push decode via connData (connData.length=${pushEvent.connData.length})`,
     );
     const pushType = String(pushEvent.type ?? "");
     const result = decodeFromProtobuf(pushEvent.connData, pushType);
@@ -350,21 +341,21 @@ export function wsPushToInboundMessage(
     }
   }
 
-  // connData 解码失败，兜底用 rawData（PushMsg.data）解码
+  // connData decode failed — fallback to rawData (PushMsg.data)
   if (pushEvent.rawData && pushEvent.rawData.length > 0) {
     const pushType = String(pushEvent.type ?? "rawData");
-    wsLog.debug(`[${pushType}] WS 推送事件解析`);
+    wsLog.debug(`[${pushType}] WS push decode via rawData`);
     const result =
       decodeFromProtobuf(pushEvent.rawData, pushType) ??
       decodeFromRawDataJson(pushEvent.rawData, pushType);
     if (result) {
       return result;
     }
-    wsLog.warn(`[${pushType}] WS 推送事件解析失败`);
+    wsLog.warn(`[${pushType}] WS push decode failed`);
   }
 
   if (pushEvent.content) {
-    wsLog.debug(`[${pushEvent.type || "content"}] WS 推送事件解析, type=content`, {
+    wsLog.debug(`[${pushEvent.type || "content"}] WS push decode via content`, {
       content: pushEvent.content,
     });
     return decodeFromContent(pushEvent);
@@ -374,10 +365,8 @@ export function wsPushToInboundMessage(
 }
 
 /**
- * 处理从 WebSocket 收到的推送事件。
- * 将事件转换为 YuanbaoInboundMessage 并注入 OpenClaw 消息处理管线。
- *
- * @param params - 包含账号、配置、推送事件、日志、Runtime等上下文
+ * Handle a push event received from WebSocket.
+ * Converts the event into a YuanbaoInboundMessage and feeds it into the OpenClaw message pipeline.
  */
 function handleWsDispatchEvent(params: {
   account: ResolvedYuanbaoAccount;
@@ -415,7 +404,7 @@ function handleWsDispatchEvent(params: {
 
   const { msg, chatType } = converted;
 
-  // 解析/生成 trace 上下文
+  // Resolve / generate trace context
   const traceContext = resolveTraceContext({
     traceId: msg.trace_id,
     seqId: msg.seq_id ?? msg.msg_seq,
@@ -433,12 +422,12 @@ function handleWsDispatchEvent(params: {
   });
   dlog.info(`[${account.accountId}][dispatch] received ${isGroup ? "group" : "direct"} message`);
 
-  // 上报入站状态
+  // Report inbound status
   if (statusSink) {
     statusSink({ lastInboundAt: Date.now() });
   }
 
-  // 接入消息处理管线
+  // Feed into the message pipeline
   if (!runtime) {
     dlog.warn(
       `[${account.accountId}][dispatch] PluginRuntime not provided, cannot process message`,
@@ -468,18 +457,12 @@ function handleWsDispatchEvent(params: {
   });
 }
 
-// ============ 命令列表同步 ============
-
 /**
- * 建联成功后同步命令列表到后台
+ * Sync the command list to the backend after connection is established.
  *
- * - bot_commands: 通过 listChatCommandsForConfig 从 OpenClaw 框架动态获取
- * - plugin_commands: 从插件注册阶段动态收集的命令列表
- * 同步失败不影响正常功能，仅打印警告日志。
- *
- * @param client - 当前活跃的 WebSocket 客户端
- * @param accountId - 账号标识（用于日志）
- * @param config - OpenClaw 配置
+ * - bot_commands: dynamically obtained from the OpenClaw framework via listChatCommandsForConfig
+ * - plugin_commands: commands collected during plugin registration
+ * Sync failure does not affect normal operation — only a warning is logged.
  */
 async function syncCommandsToServer(
   client: YuanbaoWsClient,
@@ -488,8 +471,7 @@ async function syncCommandsToServer(
 ): Promise<void> {
   const slog = createLog("ws");
   const payload = await buildSyncCommandsPayload(config);
-  // 按 SyncInformationReq proto 结构打印完整请求内容
-  slog.info(`[${accountId}] 同步命令列表 请求内容:`, {
+  slog.info(`[${accountId}] syncing command list, request payload:`, {
     sync_type: payload.syncType,
     bot_version: payload.botVersion,
     plugin_version: payload.pluginVersion,
@@ -501,11 +483,11 @@ async function syncCommandsToServer(
 
   const rsp = await client.syncInformation(payload);
 
-  slog.info(`[${accountId}] SyncInformationRsp 响应内容:`, { code: rsp.code, msg: rsp.msg });
+  slog.info(`[${accountId}] SyncInformationRsp:`, { code: rsp.code, msg: rsp.msg });
 
   if (rsp.code !== 0) {
-    slog.warn(`[${accountId}] 同步命令列表返回非零码: code=${rsp.code}, msg=${rsp.msg}`);
+    slog.warn(`[${accountId}] sync command list returned non-zero code: code=${rsp.code}, msg=${rsp.msg}`);
   } else {
-    slog.info(`[${accountId}] 同步命令列表成功`);
+    slog.info(`[${accountId}] sync command list succeeded`);
   }
 }
