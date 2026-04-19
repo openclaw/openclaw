@@ -43,8 +43,8 @@ export function createWebOnMessageHandler(params: {
       preflightAudioTranscript?: string | null;
       ackAlreadySent?: boolean;
     },
-  ) =>
-    processMessage({
+  ) => {
+    const processParams: Parameters<typeof processMessage>[0] = {
       cfg: params.cfg,
       msg,
       route,
@@ -61,11 +61,21 @@ export function createWebOnMessageHandler(params: {
       echoHas: params.echoTracker.has,
       echoForget: params.echoTracker.forget,
       buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
-      groupHistory: opts?.groupHistory,
-      suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
-      preflightAudioTranscript: opts?.preflightAudioTranscript,
-      ackAlreadySent: opts?.ackAlreadySent,
-    });
+    };
+    if (opts?.groupHistory !== undefined) {
+      processParams.groupHistory = opts.groupHistory;
+    }
+    if (opts?.suppressGroupHistoryClear !== undefined) {
+      processParams.suppressGroupHistoryClear = opts.suppressGroupHistoryClear;
+    }
+    if (opts?.preflightAudioTranscript !== undefined) {
+      processParams.preflightAudioTranscript = opts.preflightAudioTranscript;
+    }
+    if (opts?.ackAlreadySent === true) {
+      processParams.ackAlreadySent = true;
+    }
+    return processMessage(processParams);
+  };
 
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
@@ -213,8 +223,8 @@ export function createWebOnMessageHandler(params: {
         route,
         groupHistoryKey,
         groupHistories: params.groupHistories,
-        preflightAudioTranscript,
-        ackAlreadySent,
+        ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+        ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
         processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
       })
     ) {
@@ -222,8 +232,8 @@ export function createWebOnMessageHandler(params: {
     }
 
     await processForRoute(msg, route, groupHistoryKey, {
-      preflightAudioTranscript,
-      ackAlreadySent,
+      ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+      ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
     });
   };
 }
