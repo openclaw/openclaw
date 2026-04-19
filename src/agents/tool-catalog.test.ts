@@ -14,4 +14,14 @@ describe("tool-catalog", () => {
     expect(policy!.allow).toContain("video_generate");
     expect(policy!.allow).toContain("update_plan");
   });
+
+  it("includes bundle-mcp in coding and messaging profile policies", () => {
+    const codingPolicy = resolveCoreToolProfilePolicy("coding");
+    expect(codingPolicy).toBeDefined();
+    expect(codingPolicy!.allow).toContain("bundle-mcp");
+
+    const messagingPolicy = resolveCoreToolProfilePolicy("messaging");
+    expect(messagingPolicy).toBeDefined();
+    expect(messagingPolicy!.allow).toContain("bundle-mcp");
+  });
 });
