@@ -220,7 +220,7 @@ describe("resolveWindowsCmdShimArgv", () => {
 
 describe("resolveWindowsPathEnv", () => {
   it("returns the parent process PATH when env is undefined", () => {
-    expect(resolveWindowsPathEnv(undefined)).toBe(process.env.PATH ?? "");
+    expect(resolveWindowsPathEnv()).toBe(process.env.PATH ?? "");
   });
 
   it("returns the provided PATH value when env contains it", () => {
