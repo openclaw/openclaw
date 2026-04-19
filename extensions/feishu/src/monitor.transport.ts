@@ -1,6 +1,7 @@
 import * as http from "http";
 import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
 import {
   applyBasicWebhookRequestGuards,
@@ -82,21 +83,42 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.end(body);
 }
 
-export async function monitorWebSocket({
+// Exponential backoff delays for WebSocket reconnection attempts.
+// After exhausting these, retry indefinitely at the max interval.
+export const WS_RECONNECT_BACKOFF_DELAYS_MS = [
+  5_000, // 5s
+  10_000, // 10s
+  30_000, // 30s
+  60_000, // 1m
+  120_000, // 2m
+] as const;
+
+function getReconnectDelayMs(attempt: number): number {
+  if (attempt < WS_RECONNECT_BACKOFF_DELAYS_MS.length) {
+    return WS_RECONNECT_BACKOFF_DELAYS_MS[attempt];
+  }
+  return WS_RECONNECT_BACKOFF_DELAYS_MS[WS_RECONNECT_BACKOFF_DELAYS_MS.length - 1];
+}
+
+/**
+ * Start a single WebSocket client session. Resolves when the abort signal
+ * fires or the client encounters an unrecoverable startup error.
+ * Rejects if the initial `start()` call throws synchronously.
+ */
+async function startWebSocketSession({
   account,
   accountId,
   runtime,
   abortSignal,
   eventDispatcher,
-}: MonitorTransportParams): Promise<void> {
+}: MonitorTransportParams): Promise<{ reason: "aborted" | "start-error"; error?: unknown }> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-  log(`feishu[${accountId}]: starting WebSocket connection...`);
 
   const wsClient = await createFeishuWSClient(account);
   wsClients.set(accountId, wsClient);
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     let cleanedUp = false;
 
     const cleanup = () => {
@@ -111,20 +133,18 @@ export async function monitorWebSocket({
         error(`feishu[${accountId}]: error closing WebSocket client: ${String(err)}`);
       } finally {
         wsClients.delete(accountId);
-        botOpenIds.delete(accountId);
-        botNames.delete(accountId);
       }
     };
 
     function handleAbort() {
       log(`feishu[${accountId}]: abort signal received, stopping`);
       cleanup();
-      resolve();
+      resolve({ reason: "aborted" });
     }
 
     if (abortSignal?.aborted) {
       cleanup();
-      resolve();
+      resolve({ reason: "aborted" });
       return;
     }
 
@@ -135,9 +155,44 @@ export async function monitorWebSocket({
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
-      reject(err);
+      resolve({ reason: "start-error", error: err });
     }
   });
+}
+
+export async function monitorWebSocket(params: MonitorTransportParams): Promise<void> {
+  const { accountId, runtime, abortSignal } = params;
+  const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
+
+  for (let attempt = 0; ; attempt += 1) {
+    if (abortSignal?.aborted) {
+      return;
+    }
+
+    if (attempt > 0) {
+      const delayMs = getReconnectDelayMs(attempt - 1);
+      log(`feishu[${accountId}]: WebSocket reconnect attempt ${attempt} in ${delayMs / 1000}s...`);
+      const elapsed = await waitForAbortableDelay(delayMs, abortSignal);
+      if (!elapsed) {
+        return;
+      }
+    }
+
+    log(
+      `feishu[${accountId}]: starting WebSocket connection${attempt > 0 ? ` (attempt ${attempt + 1})` : ""}...`,
+    );
+
+    const result = await startWebSocketSession(params);
+
+    if (result.reason === "aborted") {
+      return;
+    }
+
+    // start-error: the SDK's start() threw synchronously — retry
+    const errorMsg = result.error instanceof Error ? result.error.message : "unknown error";
+    error(`feishu[${accountId}]: WebSocket connection failed: ${errorMsg}`);
+  }
 }
 
 export async function monitorWebhook({
