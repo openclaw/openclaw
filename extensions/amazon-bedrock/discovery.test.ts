@@ -433,4 +433,63 @@ describe("bedrock discovery", () => {
     expect(legacyEnabled?.baseUrl).toBe("https://bedrock-runtime.us-west-2.amazonaws.com");
     expect(sendMock).toHaveBeenCalledTimes(4);
   });
+
+  // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
+  it("resolves au. and apac. prefixes for regional inference profiles", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-sonnet-4-6",
+            modelName: "Claude Sonnet 4.6",
+            providerName: "anthropic",
+            inputModalities: ["TEXT", "IMAGE"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "au.anthropic.claude-sonnet-4-6",
+            inferenceProfileName: "AU Anthropic Claude Sonnet 4.6",
+            inferenceProfileArn:
+              "arn:aws:bedrock:ap-southeast-2::inference-profile/au.anthropic.claude-sonnet-4-6",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [], // no ARNs — forces the prefix-regex fallback
+          },
+          {
+            inferenceProfileId: "apac.anthropic.claude-sonnet-4-6",
+            inferenceProfileName: "APAC Anthropic Claude Sonnet 4.6",
+            inferenceProfileArn:
+              "arn:aws:bedrock:ap-northeast-1::inference-profile/apac.anthropic.claude-sonnet-4-6",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "ap-southeast-2", clientFactory });
+
+    // Foundation model + 2 regional inference profiles
+    expect(models).toHaveLength(3);
+
+    const auProfile = models.find((m) => m.id === "au.anthropic.claude-sonnet-4-6");
+    expect(auProfile).toMatchObject({
+      id: "au.anthropic.claude-sonnet-4-6",
+      name: "AU Anthropic Claude Sonnet 4.6",
+      input: ["text", "image"],
+    });
+
+    const apacProfile = models.find((m) => m.id === "apac.anthropic.claude-sonnet-4-6");
+    expect(apacProfile).toMatchObject({
+      id: "apac.anthropic.claude-sonnet-4-6",
+      name: "APAC Anthropic Claude Sonnet 4.6",
+      input: ["text", "image"],
+    });
+  });
 });
