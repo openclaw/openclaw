@@ -156,7 +156,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 | Catalog query        | Queries `/api/tags`                                                                                                                                                 |
 | Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision)                                                             |
 | Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt |
-| Reasoning detection  | Marks `reasoning` when `/api/show` capabilities include `thinking`, or when the model name matches the heuristic (`r1`, `reasoning`, `think`, `gemma4`)             |
+| Reasoning detection  | Marks `reasoning` when `/api/show` capabilities include `thinking`, or when the model name matches the heuristic (`r1`, `reasoning`, `reason`, `think`, `gemma4`)   |
 | Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                               |
 | Costs                | Sets all costs to `0`                                                                                                                                               |
 
@@ -369,7 +369,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   </Accordion>
 
   <Accordion title="Reasoning models">
-    OpenClaw treats models with names such as `deepseek-r1`, `gemma4`, `reasoning`, or `think` as reasoning-capable by default, and also honors the `thinking` capability reported by Ollama's `/api/show` endpoint.
+    OpenClaw treats models whose names contain `r1`, `reasoning`, `reason`, `think`, or `gemma4` (for example `deepseek-r1`, `reason-flux`, `gemma4:12b`) as reasoning-capable by default, and also honors the `thinking` capability reported by Ollama's `/api/show` endpoint.
 
     ```bash
     ollama pull deepseek-r1:32b
