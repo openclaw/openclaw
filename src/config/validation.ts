@@ -585,14 +585,21 @@ function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
 
   const issues: ConfigValidationIssue[] = [];
   for (const origin of cors.allowedOrigins ?? []) {
-    if (origin === "*") {
-      continue;
-    }
     if (origin.length === 0) {
       issues.push({
         path: "gateway.http.cors.allowedOrigins",
         message: "gateway.http.cors.allowedOrigins: empty string is not a valid origin.",
       });
+      continue;
+    }
+    if (origin !== origin.trim()) {
+      issues.push({
+        path: "gateway.http.cors.allowedOrigins",
+        message: `gateway.http.cors.allowedOrigins: "${origin}" must not have leading or trailing whitespace.`,
+      });
+      continue;
+    }
+    if (origin === "*") {
       continue;
     }
     try {
