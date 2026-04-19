@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-18 (run 28)
+**Date:** 2026-04-19 (run 29)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -15,108 +15,115 @@
 | #54363 | fix/chat-send-button-contrast           | CLOSED without merge (2026-03-27) | N/A | N/A | N/A | None (closed without merge) |
 | #54730 | fix/subagent-identity-fallback          | CLOSED without merge (2026-04-17) | N/A | N/A | N/A | None (closed by maintainer) |
 
+No change to any of the four originally monitored PRs since run 28.
+
 ---
 
 ## PR #45911 — fix/telegram-approval-callback-fallback
 
-**Status:** MERGED (merged_at: 2026-03-29T05:15:58Z)
-
-Squash-merge by maintainer `obviyus`. No action required.
-
-**Branch tip (fork):** `14fd49c362b7d84b8fda157967befe2a0ca730f5` (unchanged since run 16)
+**Status:** MERGED (merged_at: 2026-03-29T05:15:58Z). No action required.
 
 ---
 
 ## PR #45584 — feat/cron-fresh-session-option
 
-**Status:** CLOSED without merge — closed_at: 2026-04-17T02:10:17Z
-
-Branch tip `46e2b30607303996c6423abd33ec854c42b57ac3` unchanged since 2026-04-06. No new activity
-since run 27. No maintainer review or approval was ever recorded before close.
-
-**No action required.**
-
-**Fork branch tip:** `46e2b30607303996c6423abd33ec854c42b57ac3` (unchanged)
+**Status:** CLOSED without merge — closed_at: 2026-04-17T02:10:17Z. No action required.
 
 ---
 
 ## PR #54363 — fix/chat-send-button-contrast
 
-**Status:** CLOSED without merge (closed_at: 2026-03-27T14:12:49Z)
-
-Closed without merge. Maintainer `velvet-shark` noted PR #55075 landed the same fix.
-No action required.
-
-**Fork branch tip:** `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` (unchanged)
+**Status:** CLOSED without merge (closed_at: 2026-03-27T14:12:49Z). No action required.
 
 ---
 
 ## PR #54730 — fix/subagent-identity-fallback
 
-**Status:** CLOSED without merge — closed_at: 2026-04-17T02:10:15Z
-
-Branch tip `f052129db44607fed72a0769dc5de6b919bcd5dc` unchanged since 2026-04-06. No new activity
-since run 27.
-
-**No action required.**
-
-**Fork branch tip:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (unchanged)
+**Status:** CLOSED without merge — closed_at: 2026-04-17T02:10:15Z. No action required.
 
 ---
 
-## Actions Taken This Run (run 28 — 2026-04-18)
+## Actions Taken This Run (run 29 — 2026-04-19)
 
 **GitHub API access:** Partial — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI
-not installed; direct PR/CI/review details for `openclaw/openclaw` are inaccessible via MCP.
-`search_pull_requests` and `search_issues` provide read access to state, timestamps, comment
-counts, and labels.
-
-**Branch SHAs confirmed from fork (run 28 vs run 27):**
-
-| Branch                                  | SHA (tip)                                  | Changed since run 27? |
-| --------------------------------------- | ------------------------------------------ | --------------------- |
-| fix/telegram-approval-callback-fallback | `14fd49c362b7d84b8fda157967befe2a0ca730f5` | No |
-| feat/cron-fresh-session-option          | `46e2b30607303996c6423abd33ec854c42b57ac3` | No |
-| fix/chat-send-button-contrast           | `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64` | No |
-| fix/subagent-identity-fallback          | `f052129db44607fed72a0769dc5de6b919bcd5dc` | No |
-
-**Key changes since run 27:** None — all 4 monitored PRs remain in the same closed/merged state.
-Fork branch SHAs also unchanged. No new activity on any monitored branch.
-
-**Open PR activity (outside monitoring scope):** No timestamp or comment count changes vs run 27.
-All four active PRs (#66544, #66225, #56978, #55787) last updated 2026-04-16/17.
-
-**Rebase:** Not attempted — all monitored PRs are closed; no rebase needed.
+not installed; PR comment/review bodies for `openclaw/openclaw` are inaccessible via MCP.
+`search_pull_requests` provides read access to state, timestamps, comment counts, and labels.
 
 **No code changes made this run.**
+**No rebases needed** — all four monitored PRs are closed.
 
 ---
 
-## Open PRs by suboss87 (outside monitoring scope — noted for awareness)
+## Notable Activity Since Run 28 (2026-04-18)
+
+### #55787 — MERGED today
+- **PR:** fix: strip orphaned OpenAI reasoning blocks before responses API call
+- **Merged:** 2026-04-19T07:57:03Z by `jalehman`
+- Was open as of run 28 (assigned to `jalehman`). Now closed/merged.
+- https://github.com/openclaw/openclaw/pull/55787
+
+### #56978 — NOW CLOSED (was open in run 28)
+- **PR:** fix(whatsapp): exclude DM allowFrom from group policy sender bypass
+- No longer in open PRs list as of this run.
+- Superseded by #68446 (opened 2026-04-18), which targets the same bug against the
+  current refactored code path. Author opened #68446 as the canonical replacement.
+- https://github.com/openclaw/openclaw/pull/56978
+
+### #68446 — NEW open PR (opened 2026-04-18)
+- **PR:** fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass
+- Supersedes #56978. One-line fix: `const groupAllowFrom = account.groupAllowFrom ?? [];`
+- Labels: channel: whatsapp-web, size: XS. 2 comments. 👍×1
+- Created: 2026-04-18T07:03:38Z, last updated: 2026-04-18T07:19:26Z
+- https://github.com/openclaw/openclaw/pull/68446
+
+### #66225 — New comment activity today
+- **PR:** fix(agents): align final tag regexes to handle self-closing `<final/>` variant
+- Comment count: 4 → **5** (new comment posted 2026-04-19)
+- Updated: 2026-04-19T00:34:20Z (up from 2026-04-17T02:13:03Z)
+- **⚠ Needs human check** — new comment content inaccessible via MCP; may be review
+  feedback requiring a response or code change.
+- https://github.com/openclaw/openclaw/pull/66225
+
+### #66544 — Timestamp bump today, no new comment
+- **PR:** fix(gateway): exclude heartbeat sender ID from session display name
+- Comment count: 3 (unchanged)
+- Updated: 2026-04-19T00:33:48Z (up from 2026-04-17T02:16:13Z)
+- Timestamp change without comment count change likely indicates a review event, label
+  change, or PR edit. **Low priority** — no new discussion to respond to.
+- https://github.com/openclaw/openclaw/pull/66544
+
+---
+
+## Open PRs by suboss87 (current — 3 total)
 
 | PR | Title | Labels | Updated | Comments | Reactions |
 | --- | --- | --- | --- | --- | --- |
-| #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size: XS | 2026-04-17T02:16:13Z | 3 | 👍×2 |
-| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size: S | 2026-04-17T02:13:03Z | 4 | 👍×1 |
-| #56978 | fix(whatsapp): exclude DM allowFrom from group policy sender bypass | channel: whatsapp-web, size: S | 2026-04-16T05:26:43Z | 4 | 👍×1 |
-| #55787 | fix: strip orphaned OpenAI reasoning blocks before responses API call | agents, size: XS | 2026-04-16T05:26:30Z | 5 | 👍×3 |
-
-No activity change on any of these since run 27 (timestamps and comment counts identical).
-
-**Recently merged by suboss87 (for reference):**
-- openclaw/openclaw#67457 (`fix(ollama): strip provider prefix from model ID`) — merged 2026-04-16T05:45:38Z by `obviyus`
-- openclaw/openclaw#64735 (`fix(hooks): pass workspaceDir in gateway session reset`) — merged 2026-04-14T01:19:07Z by `vincentkoc`
+| #68446 | fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass | channel: whatsapp-web, size: XS | 2026-04-18T07:19:26Z | 2 | 👍×1 |
+| #66544 | fix(gateway): exclude heartbeat sender ID from session display name | gateway, size: XS | 2026-04-19T00:33:48Z | 3 | 👍×1 |
+| #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size: S | 2026-04-19T00:34:20Z | 5 | 👍×1 |
 
 ---
 
 ## PRs Requiring Human Attention
 
-All four originally monitored PRs are resolved (1 merged, 3 closed without merge). No
-items from the original monitoring scope require further human attention.
+1. **#66225** — New comment posted today (comment count 4→5). Review/feedback body is
+   inaccessible in this session (MCP restricted to fork only). Check for code change
+   requests or review threads that need a reply or fix.
+   https://github.com/openclaw/openclaw/pull/66225
 
-The four active open PRs (#66544, #66225, #56978, #55787) are outside the original monitoring
-scope. #56978 has an assignee (`mcaxtr`) — may be awaiting maintainer review. No blockers
-observed.
+All four originally monitored PRs (#45911, #45584, #54363, #54730) remain resolved with
+no further action needed.
+
+---
+
+## Recently Merged by suboss87 (reference)
+
+| PR | Title | Merged |
+| --- | --- | --- |
+| #55787 | fix: strip orphaned OpenAI reasoning blocks before responses API call | 2026-04-19T07:57:03Z (`jalehman`) |
+| #67457 | fix(ollama): strip provider prefix from model ID in chat requests | 2026-04-16T05:45:38Z (`obviyus`) |
+| #64735 | fix(hooks): pass workspaceDir in gateway session reset internal hook context | 2026-04-14T01:19:07Z (`vincentkoc`) |
+| #45911 | fix(telegram): accept approval callbacks from forwarding target recipients | 2026-03-29T05:15:58Z (`obviyus`) |
 
 ---
 
@@ -124,18 +131,16 @@ observed.
 
 - `gh` CLI not installed in this environment (`command not found`).
 - GitHub MCP server is configured for `suboss87/openclaw` only; `openclaw/openclaw` PR CI
-  check runs and review thread bodies are inaccessible via direct MCP calls.
-- `search_pull_requests` and `search_issues` provide partial read access to `openclaw/openclaw`
-  (PR state, closed_at/merged_at, comment counts, label state) but not full comment/review bodies.
-- Upstream `openclaw/openclaw` remote not configured; git proxy not reachable for that repo.
+  check runs and review thread/comment bodies are inaccessible via direct MCP calls.
+- `search_pull_requests` provides partial read access to `openclaw/openclaw` (PR state,
+  timestamps, comment counts, labels) but not full comment/review bodies.
 - **Action required by operator:** Install `gh` CLI (authenticated) or extend MCP scope to
-  `openclaw/openclaw` to restore full monitoring capability.
+  `openclaw/openclaw` to restore full monitoring capability (including review thread content).
 
 ---
 
-## Monitoring Artifact Contamination (standing note — now moot for monitored PRs)
+## Monitoring Artifact Contamination (standing note — moot)
 
-Runs 3–9 accidentally committed `tasks/pr-monitor-report.md` updates to the PR branches
-`feat/cron-fresh-session-option` and `fix/subagent-identity-fallback`. Those PRs are now
-closed, so the artifact contamination is no longer a merge blocker. The fork branches retain
-those artifact commits but no cleanup action is needed unless the branches are reused.
+Runs 3–9 accidentally committed `tasks/pr-monitor-report.md` updates to branches
+`feat/cron-fresh-session-option` and `fix/subagent-identity-fallback`. Both PRs are now
+closed, so this is no longer a merge blocker.
