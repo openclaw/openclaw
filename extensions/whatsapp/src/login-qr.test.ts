@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
+import {
+  startWebLoginWithQr,
+  startWebLoginWithQrAfterPreflight,
+  waitForWebLogin,
+} from "./login-qr.js";
 import {
   createWaSocket,
   logoutWeb,
@@ -185,5 +189,35 @@ describe("login-qr", () => {
       connected: false,
       message: "No active WhatsApp login in progress.",
     });
+  });
+
+  it("reuses an active QR before checking auth stability again", async () => {
+    const first = await startWebLoginWithQr({ accountId: "reuse", timeoutMs: 5000 });
+    expect(first.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "unstable" });
+
+    const second = await startWebLoginWithQr({ accountId: "reuse", timeoutMs: 5000 });
+
+    expect(second).toEqual({
+      qrDataUrl: "data:image/png;base64,base64",
+      message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+    });
+    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts QR login after preflight without re-checking auth state", async () => {
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "unstable" });
+
+    const result = await startWebLoginWithQrAfterPreflight({
+      accountId: "after-preflight",
+      timeoutMs: 5000,
+    });
+
+    expect(result).toEqual({
+      qrDataUrl: "data:image/png;base64,base64",
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+    });
+    expect(createWaSocketMock).toHaveBeenCalledOnce();
   });
 });

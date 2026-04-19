@@ -20,25 +20,6 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
   });
 
-  it("reports auth reads that are still stabilizing", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        statusState: "unstable",
-      },
-    ]);
-
-    expect(issues).toEqual([
-      expect.objectContaining({
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "auth",
-        message: "Auth state is still stabilizing.",
-      }),
-    ]);
-  });
-
   it("reports linked but disconnected runtime state", () => {
     const issues = collectWhatsAppStatusIssues([
       {
@@ -81,6 +62,57 @@ describe("collectWhatsAppStatusIssues", () => {
         accountId: "default",
         kind: "runtime",
         message: expect.stringContaining("Linked but stale"),
+      }),
+    ]);
+  });
+  it("does not report a not-linked auth issue when linked state is unknown", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+      },
+    ]);
+
+    expect(issues).toEqual([]);
+  });
+
+  it("still reports runtime issues when linked state is unknown", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        healthState: "reconnecting",
+        reconnectAttempts: 3,
+        lastError: "auth queue timed out",
+      },
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "runtime",
+        message: "Session reconnecting (reconnectAttempts=3): auth queue timed out",
+      }),
+    ]);
+  });
+
+  it("still reports logged-out auth issues when linked state is unknown", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        healthState: "logged-out",
+        lastError: "401",
+      },
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "auth",
+        message: "Session logged out: 401",
       }),
     ]);
   });
