@@ -367,12 +367,11 @@ describe("chunkMarkdown", () => {
     }
   });
   it("does not break surrogate pairs when splitting long CJK lines", () => {
-    // "𠀀" (U+20000) is a surrogate pair: 2 UTF-16 code units per character.
-    // A line of 500 such characters = 1000 UTF-16 code units.
-    // With tokens=99 (odd), the fine-split must not cut inside a pair.
-    const surrogateChar = "\u{20000}"; // 𠀀
-    const longLine = surrogateChar.repeat(500);
-    const chunks = chunkMarkdown(longLine, { tokens: 99, overlap: 0 });
+    // U+20000 is a surrogate pair: 2 UTF-16 code units per character.
+    // With an odd token budget, the fine-split must not cut inside a pair.
+    const surrogateChar = "\u{20000}"; // U+20000
+    const longLine = surrogateChar.repeat(120);
+    const chunks = chunkMarkdown(longLine, { tokens: 31, overlap: 0 });
     for (const chunk of chunks) {
       // No chunk should contain the Unicode replacement character U+FFFD,
       // which would indicate a broken surrogate pair.

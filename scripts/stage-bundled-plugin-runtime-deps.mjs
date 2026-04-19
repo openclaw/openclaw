@@ -815,7 +815,10 @@ function runNpmInstall(params) {
   const npmEnv = {
     ...(params.npmRunner.env ?? process.env),
     CI: "1",
+    npm_config_audit: "false",
+    npm_config_fund: "false",
     npm_config_loglevel: "error",
+    npm_config_progress: "false",
     npm_config_yes: "true",
   };
   const result = spawnSync(params.npmRunner.command, params.npmRunner.args, {
@@ -1021,6 +1024,8 @@ function installPluginRuntimeDeps(params) {
           npmArgs: [
             "install",
             "--omit=dev",
+            "--no-audit",
+            "--no-fund",
             "--ignore-scripts",
             "--legacy-peer-deps",
             "--package-lock=false",

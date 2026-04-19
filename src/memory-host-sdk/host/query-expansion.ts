@@ -742,7 +742,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
  *
  * Examples:
  * - "that thing we discussed about the API" → ["discussed", "API"]
- * - "之前讨论的那个方案" → ["讨论", "方案"]
+ * - A non-English query about an earlier plan → extracts the core topic terms
  * - "what was the solution for the bug" → ["solution", "bug"]
  */
 export function extractKeywords(

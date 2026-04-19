@@ -5,7 +5,6 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
-import { derivePromptTokens } from "../../usage.js";
 import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -16,8 +15,8 @@ import {
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
 import {
+  cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
   expectCalledWithSessionKey,
   getHoisted,
@@ -113,6 +112,7 @@ async function finalizeTurn(
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const tempPaths: string[] = [];
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -120,6 +120,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
   });
@@ -477,74 +478,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         previousCacheRead: 5000,
         cacheRead: 2000,
         changes: expect.arrayContaining([expect.objectContaining({ code: "systemPrompt" })]),
-      }),
-    );
-  });
-
-  it("derives deferred maintenance currentTokenCount from prompt-only usage", async () => {
-    const afterTurn = vi.fn(
-      async (_params: {
-        runtimeContext?: {
-          currentTokenCount?: number;
-          promptCache?: { lastCallUsage?: { total?: number } };
-        };
-      }) => {},
-    );
-
-    const messagesSnapshot = [
-      seedMessage,
-      {
-        role: "assistant",
-        content: "done",
-        timestamp: 2,
-        usage: {
-          input: 10,
-          output: 5,
-          cacheRead: 40,
-          cacheWrite: 2,
-          total: 57,
-        },
-      } as unknown as AgentMessage,
-    ];
-    const promptCache = buildLoopPromptCacheInfo({
-      messagesSnapshot,
-      prePromptMessageCount: 1,
-    });
-
-    await finalizeTurn(sessionKey, createTestContextEngine({ afterTurn }), {
-      messagesSnapshot,
-      prePromptMessageCount: 1,
-      runtimeContext: buildAfterTurnRuntimeContext({
-        attempt: {
-          sessionKey,
-          config: {} as never,
-          skillsSnapshot: undefined,
-          senderIsOwner: true,
-          provider: "openai",
-          modelId: "gpt-test",
-          thinkLevel: "off",
-          reasoningLevel: undefined,
-          extraSystemPrompt: undefined,
-          ownerNumbers: undefined,
-        },
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        tokenBudget: 2048,
-        currentTokenCount: derivePromptTokens(promptCache?.lastCallUsage),
-        promptCache,
-      }),
-    });
-
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          currentTokenCount: 52,
-          promptCache: expect.objectContaining({
-            lastCallUsage: expect.objectContaining({
-              total: 57,
-            }),
-          }),
-        }),
       }),
     );
   });

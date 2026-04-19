@@ -440,7 +440,7 @@ export async function saveMediaBuffer(
  *
  * @param id      The media ID as returned by SavedMedia.id (may include
  *                extension and original-filename prefix,
- *                e.g. "photo---<uuid>.png" or "图片---<uuid>.png").
+ *                e.g. "photo---<uuid>.png" or "image---<uuid>.png").
  * @param subdir  The subdirectory the file was saved into (default "inbound").
  * @returns       Absolute path to the file on disk.
  * @throws        If the ID is unsafe, the file does not exist, or is not a
