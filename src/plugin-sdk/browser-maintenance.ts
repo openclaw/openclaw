@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { generateSecureToken } from "../infra/secure-random.js";
-import { runExec } from "../process/exec.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type CloseTrackedBrowserTabsParams = {
@@ -14,16 +12,34 @@ type CloseTrackedBrowserTabsParams = {
 type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
+type SecureRandomRuntime = typeof import("../infra/secure-random.js");
+type ExecRuntime = typeof import("../process/exec.js");
+
+let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
+let secureRandomRuntimePromise: Promise<SecureRandomRuntime> | undefined;
+let execRuntimePromise: Promise<ExecRuntime> | undefined;
 
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
 function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  });
+  cachedBrowserMaintenanceSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+  return cachedBrowserMaintenanceSurface;
+}
+
+function loadSecureRandomRuntime(): Promise<SecureRandomRuntime> {
+  secureRandomRuntimePromise ??= import("../infra/secure-random.js");
+  return secureRandomRuntimePromise;
+}
+
+function loadExecRuntime(): Promise<ExecRuntime> {
+  execRuntimePromise ??= import("../process/exec.js");
+  return execRuntimePromise;
 }
 
 export async function closeTrackedBrowserTabsForSessions(
@@ -44,6 +60,10 @@ export async function closeTrackedBrowserTabsForSessions(
 }
 
 export async function movePathToTrash(targetPath: string): Promise<string> {
+  const [{ generateSecureToken }, { runExec }] = await Promise.all([
+    loadSecureRandomRuntime(),
+    loadExecRuntime(),
+  ]);
   try {
     await runExec("trash", [targetPath], { timeoutMs: 10_000 });
     return targetPath;

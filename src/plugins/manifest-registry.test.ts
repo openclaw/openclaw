@@ -382,6 +382,15 @@ describe("loadPluginManifestRegistry", () => {
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
+      providerEndpoints: [
+        {
+          endpointClass: "openai-public",
+          hosts: ["API.OPENAI.COM", ""],
+          baseUrls: ["https://api.openai.com/v1"],
+        },
+      ],
+      syntheticAuthRefs: ["openai-cli"],
+      nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
         "openai-codex": "openai",
       },
@@ -407,6 +416,15 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.providerEndpoints).toEqual([
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        baseUrls: ["https://api.openai.com/v1"],
+      },
+    ]);
+    expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
+    expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
       "openai-codex": "openai",
     });
@@ -497,6 +515,33 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.channelEnvVars).toEqual({
       slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
     });
+  });
+
+  it("preserves qa runner descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "qa-matrix",
+      qaRunners: [
+        {
+          commandName: "matrix",
+          description: "Run the Matrix live QA lane",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "qa-matrix",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.qaRunners).toEqual([
+      {
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+      },
+    ]);
   });
 
   it("preserves channel config metadata from plugin manifests", () => {

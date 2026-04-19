@@ -6,6 +6,7 @@
  * the openclaw WizardPrompter surface.
  */
 
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { FeishuDomain } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -79,16 +80,35 @@ function accountsBaseUrl(domain: FeishuDomain): string {
 }
 
 async function postRegistration<T>(baseUrl: string, body: Record<string, string>): Promise<T> {
-  const response = await fetch(`${baseUrl}${REGISTRATION_PATH}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(body).toString(),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  return await fetchFeishuJson<T>({
+    url: `${baseUrl}${REGISTRATION_PATH}`,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(body).toString(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+    auditContext: "feishu.app-registration.post",
   });
+}
 
-  // The poll endpoint returns 4xx for pending/error states with a JSON body.
-  const data = (await response.json()) as T;
-  return data;
+async function fetchFeishuJson<T>(params: {
+  url: string;
+  init: RequestInit;
+  auditContext: string;
+}): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    init: params.init,
+    policy: { allowedHostnames: [new URL(params.url).hostname] },
+    auditContext: params.auditContext,
+  });
+  try {
+    // Registration poll returns 4xx for pending/error states with a JSON body.
+    return (await response.json()) as T;
+  } finally {
+    await release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,33 +273,25 @@ export async function getAppOwnerOpenId(params: {
 
   try {
     // First, get a tenant_access_token.
-    const tokenRes = await fetch(`${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ app_id: params.appId, app_secret: params.appSecret }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    const tokenData = (await tokenRes.json()) as {
+    const tokenData = await fetchFeishuJson<{
       code?: number;
       tenant_access_token?: string;
-    };
+    }>({
+      url: `${baseUrl}/open-apis/auth/v3/tenant_access_token/internal`,
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_id: params.appId, app_secret: params.appSecret }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      },
+      auditContext: "feishu.app-registration.owner-token",
+    });
     if (!tokenData.tenant_access_token) {
       return undefined;
     }
 
     // Query app info for the owner's open_id.
-    const appRes = await fetch(
-      `${baseUrl}/open-apis/application/v6/applications/${params.appId}?user_id_type=open_id`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${tokenData.tenant_access_token}`,
-          "Content-Type": "application/json",
-        },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      },
-    );
-    const appData = (await appRes.json()) as {
+    const appData = await fetchFeishuJson<{
       code?: number;
       data?: {
         app?: {
@@ -287,7 +299,18 @@ export async function getAppOwnerOpenId(params: {
           creator_id?: string;
         };
       };
-    };
+    }>({
+      url: `${baseUrl}/open-apis/application/v6/applications/${params.appId}?user_id_type=open_id`,
+      init: {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${tokenData.tenant_access_token}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      },
+      auditContext: "feishu.app-registration.owner-app",
+    });
     if (appData.code !== 0) {
       return undefined;
     }

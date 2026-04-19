@@ -5,7 +5,7 @@ import {
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
-export type TraceLevel = "off" | "on";
+export type TraceLevel = "off" | "on" | "raw";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
@@ -22,15 +22,6 @@ const NO_THINKING_LEVELS: ThinkLevel[] = [...BASE_THINKING_LEVELS];
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
   void provider;
-  return false;
-}
-
-export function supportsBuiltInXHighThinking(
-  provider?: string | null,
-  model?: string | null,
-): boolean {
-  void provider;
-  void model;
   return false;
 }
 
@@ -146,6 +137,9 @@ export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined
   }
   if (["on", "true", "yes", "1"].includes(key)) {
     return "on";
+  }
+  if (["raw", "unfiltered"].includes(key)) {
+    return "raw";
   }
   return undefined;
 }

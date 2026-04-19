@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
@@ -56,10 +58,17 @@ function serializeAdaptiveCardActionValue(value: unknown): string | null {
   }
 }
 
-async function isFeedbackInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
+async function isInvokeAuthorized(params: {
+  context: MSTeamsTurnContext;
+  deps: MSTeamsMessageHandlerDeps;
+  deniedLogs: {
+    dm: string;
+    channel: string;
+    group: string;
+  };
+  includeInvokeName?: boolean;
+}): Promise<boolean> {
+  const { context, deps, deniedLogs, includeInvokeName = false } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
     activity: context.activity,
@@ -69,10 +78,13 @@ async function isFeedbackInvokeAuthorized(
     return true;
   }
 
+  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
+
   if (isDirectMessage && resolved.access.decision !== "allow") {
-    deps.log.debug?.("dropping feedback invoke (dm sender not allowlisted)", {
+    deps.log.debug?.(deniedLogs.dm, {
       sender: senderId,
       conversationId,
+      ...maybeInvokeName,
     });
     return false;
   }
@@ -82,23 +94,56 @@ async function isFeedbackInvokeAuthorized(
     resolved.channelGate.allowlistConfigured &&
     !resolved.channelGate.allowed
   ) {
-    deps.log.debug?.("dropping feedback invoke (not in team/channel allowlist)", {
+    deps.log.debug?.(deniedLogs.channel, {
       conversationId,
       teamKey: resolved.channelGate.teamKey ?? "none",
       channelKey: resolved.channelGate.channelKey ?? "none",
+      ...maybeInvokeName,
     });
     return false;
   }
 
   if (!isDirectMessage && !resolved.senderGroupAccess.allowed) {
-    deps.log.debug?.("dropping feedback invoke (group sender not allowlisted)", {
+    deps.log.debug?.(deniedLogs.group, {
       sender: senderId,
       conversationId,
+      ...maybeInvokeName,
     });
     return false;
   }
 
   return true;
+}
+
+async function isFeedbackInvokeAuthorized(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  return isInvokeAuthorized({
+    context,
+    deps,
+    deniedLogs: {
+      dm: "dropping feedback invoke (dm sender not allowlisted)",
+      channel: "dropping feedback invoke (not in team/channel allowlist)",
+      group: "dropping feedback invoke (group sender not allowlisted)",
+    },
+  });
+}
+
+async function isSigninInvokeAuthorized(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  return isInvokeAuthorized({
+    context,
+    deps,
+    deniedLogs: {
+      dm: "dropping signin invoke (dm sender not allowlisted)",
+      channel: "dropping signin invoke (not in team/channel allowlist)",
+      group: "dropping signin invoke (group sender not allowlisted)",
+    },
+    includeInvokeName: true,
+  });
 }
 
 /**
@@ -345,10 +390,8 @@ async function handleFeedbackInvoke(
     const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
       agentId: route.agentId,
     });
-    const fs = await import("node:fs/promises");
-    const pathMod = await import("node:path");
     const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const transcriptFile = pathMod.join(storePath, `${safeKey}.jsonl`);
+    const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
     await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
       // Best effort — transcript dir may not exist yet
     });
@@ -480,6 +523,10 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         // Always ack immediately — silently dropping the invoke causes
         // the Teams card UI to report "Something went wrong".
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
+
+        if (!(await isSigninInvokeAuthorized(ctx, deps))) {
+          return;
+        }
 
         if (!deps.sso) {
           deps.log.debug?.("signin invoke received but msteams.sso is not configured", {

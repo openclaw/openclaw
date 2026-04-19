@@ -18,8 +18,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   normalizeChannelId: (value: string) => value,
+}));
+
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getChannelPlugin(...args),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
