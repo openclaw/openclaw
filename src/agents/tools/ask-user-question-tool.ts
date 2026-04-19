@@ -29,30 +29,35 @@ import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js"
 // as enter_plan_mode / exit_plan_mode display summaries).
 export { ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY };
 
-const AskUserQuestionToolSchema = Type.Object({
-  question: Type.String({
-    description:
-      "The question to ask the user (one or two short sentences). Examples: " +
-      '"Should I ship this as 1 PR or split into 3?", "Preserve the legacy ' +
-      'config path or migrate it?"',
-  }),
-  options: Type.Array(Type.String(), {
-    minItems: 2,
-    maxItems: 6,
-    description:
-      "2-6 selectable answer options. Each is one short phrase the user can " +
-      "click without re-reading the question. The chosen option's text is " +
-      "echoed back in the agent's next turn.",
-  }),
-  allowFreetext: Type.Optional(
-    Type.Boolean({
+const AskUserQuestionToolSchema = Type.Object(
+  {
+    question: Type.String({
       description:
-        "When true, an 'Other...' affordance is added so the user can type " +
-        "a custom answer. Use this when your N options might not cover the " +
-        "user's intent. Defaults to false (locked to the N options).",
+        "The question to ask the user (one or two short sentences). Examples: " +
+        '"Should I ship this as 1 PR or split into 3?", "Preserve the legacy ' +
+        'config path or migrate it?"',
     }),
-  ),
-});
+    options: Type.Array(Type.String(), {
+      minItems: 2,
+      maxItems: 6,
+      description:
+        "2-6 selectable answer options. Each is one short phrase the user can " +
+        "click without re-reading the question. The chosen option's text is " +
+        "echoed back in the agent's next turn.",
+    }),
+    allowFreetext: Type.Optional(
+      Type.Boolean({
+        description:
+          "When true, an 'Other...' affordance is added so the user can type " +
+          "a custom answer. Use this when your N options might not cover the " +
+          "user's intent. Defaults to false (locked to the N options).",
+      }),
+    ),
+  },
+  // Copilot review #68939 (2026-04-19): align with `plan_mode_status`
+  // and `enter_plan_mode` schema-hardening direction.
+  { additionalProperties: false },
+);
 
 export interface CreateAskUserQuestionToolOptions {
   /** Stable run identifier — used to scope question approvals to the run. */

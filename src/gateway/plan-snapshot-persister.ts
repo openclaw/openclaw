@@ -124,16 +124,38 @@ export function startPlanSnapshotPersister(params: {
       typeof approvalId === "string" &&
       approvalId.length > 0;
     if (isQuestionSubmission) {
+      // Codex P2 review #68939 (2026-04-19): also extract the
+      // question's options + allowFreetext from the event payload
+      // so the answer-branch can validate the answer text against
+      // the offered set. The event shape comes from
+      // `pi-embedded-subscribe.handlers.tools.ts:1764-1769` —
+      // `data.question = { prompt, options, allowFreetext }`.
+      const questionData =
+        data && typeof data === "object" && "question" in data
+          ? ((data as { question?: unknown }).question as Record<string, unknown> | undefined)
+          : undefined;
+      const optionsRaw = questionData?.options;
+      const persistedOptions = Array.isArray(optionsRaw)
+        ? optionsRaw.filter((o): o is string => typeof o === "string")
+        : [];
+      const persistedAllowFreetext =
+        typeof questionData?.allowFreetext === "boolean" ? questionData.allowFreetext : false;
       logPlanModeDebug({
         kind: "tool_call",
         sessionKey,
         tool: "ask_user_question",
         runId: evt.runId,
-        details: { approvalId },
+        details: {
+          approvalId,
+          optionCount: persistedOptions.length,
+          allowFreetext: persistedAllowFreetext,
+        },
       });
       void persistPendingQuestionApprovalId({
         sessionKey,
         approvalId,
+        options: persistedOptions,
+        allowFreetext: persistedAllowFreetext,
         emitSessionsChanged: params.emitSessionsChanged,
       }).catch((err) => {
         log.warn(
@@ -291,6 +313,11 @@ async function persistApprovalMetadata(params: {
 async function persistPendingQuestionApprovalId(params: {
   sessionKey: string;
   approvalId: string;
+  // Codex P2 review #68939 (2026-04-19): also persist options +
+  // allowFreetext so the gateway's answer branch can enforce option-
+  // membership validation when freetext is disabled.
+  options: string[];
+  allowFreetext: boolean;
   emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
 }) {
   const cfg = loadConfig();
@@ -303,6 +330,8 @@ async function persistPendingQuestionApprovalId(params: {
     const nextEntry: SessionEntry = {
       ...entry,
       pendingQuestionApprovalId: params.approvalId,
+      pendingQuestionOptions: params.options,
+      pendingQuestionAllowFreetext: params.allowFreetext,
       updatedAt: Date.now(),
     };
     store[params.sessionKey] = nextEntry;

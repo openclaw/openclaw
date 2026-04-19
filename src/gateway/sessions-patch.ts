@@ -594,6 +594,27 @@ export async function applySessionsPatchToStore(params: {
           `planApproval action="answer" rejected: approvalId mismatch (a newer or different question is pending)`,
         );
       }
+      // Codex P2 review #68939 (2026-04-19): when the agent offered
+      // a fixed option set with `allowFreetext: false`, the answer
+      // text MUST match one of those options exactly. Pre-fix, a
+      // text-channel user could submit `/plan answer <arbitrary>`
+      // bypassing the question contract and steering the next
+      // agent turn with unintended free-text. The persister stores
+      // the original options + allowFreetext alongside the
+      // approvalId so we can enforce membership here.
+      const allowFreetext = next.pendingQuestionAllowFreetext === true;
+      if (!allowFreetext) {
+        const offeredOptions = next.pendingQuestionOptions ?? [];
+        if (offeredOptions.length > 0 && !offeredOptions.includes(answer)) {
+          return invalid(
+            `planApproval action="answer" rejected: answer "${answer}" not in offered options [${offeredOptions
+              .map((o) => `"${o}"`)
+              .join(
+                ", ",
+              )}] (the agent disabled free-text for this question — pick one of the offered options exactly)`,
+          );
+        }
+      }
       // PR-11 review fix (Codex P1 cluster #3105216364 / #3105247854 /
       // #3105261556): persist the synthetic `[QUESTION_ANSWER]: <text>`
       // injection on the SessionEntry so the runtime sees it on the
@@ -614,10 +635,12 @@ export async function applySessionsPatchToStore(params: {
         .replace(/@(channel|here|everyone)\b/gi, "@\u{FE6B}$1")
         .replace(/<@/g, "<\u{200B}@");
       next.pendingAgentInjection = `[QUESTION_ANSWER]: ${safeAnswer}`;
-      // Clear the pending-question marker — one question, one
+      // Clear the pending-question markers — one question, one
       // answer. A re-ask requires a fresh `ask_user_question` call
-      // which will re-populate `pendingQuestionApprovalId`.
+      // which will re-populate the trio.
       delete next.pendingQuestionApprovalId;
+      delete next.pendingQuestionOptions;
+      delete next.pendingQuestionAllowFreetext;
     } else if (action === "auto") {
       // PR-10 auto-mode toggle. Sets the session's autoApprove flag
       // without resolving any specific approval. When enabled, future

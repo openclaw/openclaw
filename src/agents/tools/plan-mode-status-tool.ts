@@ -33,11 +33,11 @@
  * pendingAgentInjection consumer, or any other state.
  */
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/io.js";
 import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { getAgentRunContext } from "../../infra/agent-events.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isPlanModeDebugEnabled } from "../plan-mode/plan-mode-debug-log.js";
 import {
   describePlanModeStatusTool,
   PLAN_MODE_STATUS_TOOL_DISPLAY_SUMMARY,
@@ -83,14 +83,24 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
       // so we get the freshest plan-mode state — same `skipCache: true`
       // pattern used by `resolveLatestPlanModeFromDisk` for the
       // mutation-gate freshness contract (iter-2 Bug A).
+      //
+      // Copilot review #68939 (2026-04-19): track read success/
+      // failure explicitly (`sessionStoreReadOk`) so the tool's
+      // human summary can distinguish a true "not in plan mode"
+      // from a "we couldn't read disk to find out" case. Pre-fix,
+      // both collapsed to "Not in plan mode…" and operators
+      // debugging stuck sessions had no signal that the disk read
+      // failed.
       let entry: SessionEntry | undefined;
+      let sessionStoreReadOk = true;
+      let sessionStoreReadError: string | undefined;
       if (storePath && sessionKey) {
         try {
           const liveStore = loadSessionStore(storePath, { skipCache: true });
           entry = liveStore?.[sessionKey];
-        } catch {
-          // Fall through; entry stays undefined and we report the
-          // `inPlanMode: false` default with a warning suffix.
+        } catch (err) {
+          sessionStoreReadOk = false;
+          sessionStoreReadError = err instanceof Error ? err.message : String(err);
         }
       }
 
@@ -99,19 +109,10 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
       const ctx = runId ? getAgentRunContext(runId) : undefined;
       const openSubagentRunIds = ctx?.openSubagentRunIds ? [...ctx.openSubagentRunIds] : [];
 
-      // Debug-flag resolution mirrors plan-mode-debug-log.ts (env
-      // wins over config).
-      const debugLogEnabled = (() => {
-        if (process.env.OPENCLAW_DEBUG_PLAN_MODE === "1") {
-          return true;
-        }
-        try {
-          const cfg = loadConfig();
-          return cfg?.agents?.defaults?.planMode?.debug === true;
-        } catch {
-          return false;
-        }
-      })();
+      // Copilot review #68939 (2026-04-19): use the shared
+      // `isPlanModeDebugEnabled` helper from `plan-mode-debug-log.ts`
+      // instead of duplicating the env-wins-over-config logic.
+      const debugLogEnabled = isPlanModeDebugEnabled();
 
       const planMode = entry?.planMode;
       const inPlanMode = planMode?.mode === "plan";
@@ -132,6 +133,12 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
         debugLogEnabled,
         sessionKey,
         runId,
+        // Copilot review #68939 (2026-04-19): expose disk-read
+        // success/failure to programmatic consumers (e.g. /plan
+        // self-test) so a missing entry can be classified as
+        // "session truly absent" vs "disk read failed".
+        sessionStoreReadOk,
+        ...(sessionStoreReadError ? { sessionStoreReadError } : {}),
       };
 
       // Tool result text: a compact human-readable summary (1-3
@@ -139,9 +146,16 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
       // parsing the full JSON. The `details` object carries the
       // structured snapshot for programmatic consumers (e.g.
       // /plan self-test).
-      const summary = inPlanMode
-        ? `In plan mode (approval=${planMode?.approval ?? "none"}; title="${planMode?.title ?? "(unset)"}"; ${openSubagentRunIds.length} subagent(s) in flight; ${planMode?.lastPlanSteps?.length ?? 0} plan step(s) tracked).`
-        : `Not in plan mode (mode=${planMode?.mode ?? "normal"}; ${entry?.recentlyApprovedAt ? `recently approved at ${new Date(entry.recentlyApprovedAt).toISOString()}` : "no recent approval"}).`;
+      //
+      // Copilot review #68939 (2026-04-19): when the disk read
+      // failed, surface the unknown-state case in the summary
+      // instead of pretending we know "not in plan mode" — that
+      // misleads operators debugging stuck sessions.
+      const summary = !sessionStoreReadOk
+        ? `WARNING: session-store read failed (${sessionStoreReadError ?? "unknown error"}); plan-mode state is UNKNOWN. The agent should treat this as a transient diagnostic failure, not a confirmed "normal" state.`
+        : inPlanMode
+          ? `In plan mode (approval=${planMode?.approval ?? "none"}; title="${planMode?.title ?? "(unset)"}"; ${openSubagentRunIds.length} subagent(s) in flight; ${planMode?.lastPlanSteps?.length ?? 0} plan step(s) tracked).`
+          : `Not in plan mode (mode=${planMode?.mode ?? "normal"}; ${entry?.recentlyApprovedAt ? `recently approved at ${new Date(entry.recentlyApprovedAt).toISOString()}` : "no recent approval"}).`;
       const debugSuffix = debugLogEnabled
         ? " Plan-mode debug log is ENABLED — tail with: tail -F ~/.openclaw/logs/gateway.err.log | grep '\\[plan-mode/'"
         : " Plan-mode debug log is DISABLED — enable with: openclaw config set agents.defaults.planMode.debug true";
