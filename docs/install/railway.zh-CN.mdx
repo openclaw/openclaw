@@ -1,0 +1,89 @@
+---
+summary: "使用一键模板在 Railway 上部署 OpenClaw"
+read_when:
+  - 在 Railway 上部署 OpenClaw
+  - 您需要一键云部署并带有基于浏览器的 Control UI
+title: "Railway"
+---
+
+使用一键模板在 Railway 上部署 OpenClaw，并通过 Web Control UI 访问它。
+这是最简单的"服务器上无需终端"的路径：Railway 为您运行网关。
+
+## 快速检查清单（新用户）
+
+1. 点击下方的 **Deploy on Railway**。
+2. 添加一个挂载在 `/data` 的 **Volume**。
+3. 设置必需的 **Variables**（至少 `OPENCLAW_GATEWAY_PORT` 和 `OPENCLAW_GATEWAY_TOKEN`）。
+4. 在端口 `8080` 上启用 **HTTP Proxy**。
+5. 打开 `https://<your-railway-domain>/openclaw` 并使用配置的共享密钥连接。此模板默认使用 `OPENCLAW_GATEWAY_TOKEN`；如果您将其替换为密码认证，请使用该密码。
+
+## 一键部署
+
+<a href="https://railway.com/deploy/clawdbot-railway-template" target="_blank" rel="noreferrer">
+  Deploy on Railway
+</a>
+
+部署后，在 **Railway → 您的服务 → 设置 → 域名** 中找到您的公共 URL。
+
+Railway 将：
+
+- 给您一个生成的域名（通常是 `https://<something>.up.railway.app`），或者
+- 如果您附加了自定义域名，则使用您的自定义域名。
+
+然后打开：
+
+- `https://<your-railway-domain>/openclaw` — Control UI
+
+## 您将获得
+
+- 托管的 OpenClaw 网关 + Control UI
+- 通过 Railway 卷 (`/data`) 实现的持久存储，因此 `openclaw.json`、
+  每个代理的 `auth-profiles.json`、通道/提供商状态、会话和
+  工作区在重新部署后仍然存在
+
+## 必需的 Railway 设置
+
+### 公共网络
+
+为服务启用 **HTTP Proxy**。
+
+- 端口：`8080`
+
+### 卷（必需）
+
+附加一个挂载在以下位置的卷：
+
+- `/data`
+
+### 变量
+
+在服务上设置这些变量：
+
+- `OPENCLAW_GATEWAY_PORT=8080`（必需 — 必须与公共网络中的端口匹配）
+- `OPENCLAW_GATEWAY_TOKEN`（必需；视为管理员密钥）
+- `OPENCLAW_STATE_DIR=/data/.openclaw`（推荐）
+- `OPENCLAW_WORKSPACE_DIR=/data/workspace`（推荐）
+
+## 连接通道
+
+使用 `/openclaw` 处的 Control UI 或通过 Railway 的 shell 运行 `openclaw onboard` 获取通道设置说明：
+
+- [Telegram](/channels/telegram)（最快 — 只需一个机器人令牌）
+- [Discord](/channels/discord)
+- [所有通道](/channels)
+
+## 备份和迁移
+
+导出您的状态、配置、认证配置文件和工作区：
+
+```bash
+openclaw backup create
+```
+
+这会创建一个包含 OpenClaw 状态和任何已配置工作区的可移植备份归档。有关详细信息，请参阅 [备份](/cli/backup)。
+
+## 后续步骤
+
+- 设置消息通道：[通道](/channels)
+- 配置网关：[网关配置](/gateway/configuration)
+- 保持 OpenClaw 更新：[更新](/install/updating)
