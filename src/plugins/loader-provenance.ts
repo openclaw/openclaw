@@ -213,8 +213,13 @@ export function warnWhenAllowlistIsOpen(params: {
   if (autoDiscoverable.length === 0) {
     return;
   }
-  const discoveredIds = new Set(autoDiscoverable.map((entry) => entry.id));
-  const allowHasMatch = params.allow.some((id) => discoveredIds.has(id));
+  // Match allow entries against every discovered plugin id (including bundled), not only the
+  // workspace/global subset we warn about. Otherwise a correct allowlist that intentionally
+  // trusts bundled ids (for example `plugins.allow = ["telegram"]`) would be flagged as
+  // "does not match any discovered plugin ids" whenever any non-bundled plugin happened to be
+  // present — a false positive that the empty-vs-mismatched split was meant to avoid.
+  const allDiscoveredIds = new Set(params.discoverablePlugins.map((entry) => entry.id));
+  const allowHasMatch = params.allow.some((id) => allDiscoveredIds.has(id));
   if (params.allow.length > 0 && allowHasMatch) {
     return;
   }
@@ -233,7 +238,7 @@ export function warnWhenAllowlistIsOpen(params: {
     );
     return;
   }
-  const unmatchedEntries = params.allow.filter((id) => !discoveredIds.has(id));
+  const unmatchedEntries = params.allow.filter((id) => !allDiscoveredIds.has(id));
   const unmatchedPreview = unmatchedEntries
     .slice(0, 6)
     .map((id) => `"${id}"`)

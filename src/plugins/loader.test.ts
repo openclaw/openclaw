@@ -6045,6 +6045,45 @@ module.exports = {
     );
   });
 
+  it("stays quiet when plugins.allow matches only bundled plugin ids, even while workspace/global plugins are present", () => {
+    // Regression for Codex P2 feedback on #68389: the mismatch warning should be computed
+    // against the full discovered plugin set (bundled + workspace + global), not only the
+    // workspace/global subset that the warning talks about. An allowlist that intentionally
+    // trusts bundled ids like ["telegram"] is valid and must not trip the mismatch path just
+    // because some unrelated non-bundled plugin happens to be auto-discoverable.
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    writeBundledPlugin({
+      id: "warn-bundled-allow-only-plugin",
+      body: simplePluginBody("warn-bundled-allow-only-plugin"),
+    });
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-noise-workspace-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // Allowlist intentionally only trusts a bundled plugin id.
+          allow: ["warn-bundled-allow-only-plugin"],
+        },
+      },
+    });
+    const openAllowWarnings = warnings.filter(
+      (msg) =>
+        msg.includes("plugins.allow is empty") ||
+        msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(
+      openAllowWarnings,
+      "bundled-only allowlists should not trip the mismatch warning",
+    ).toHaveLength(0);
+  });
+
   it("handles workspace-discovered plugins according to trust and precedence", () => {
     useNoBundledPlugins();
     const scenarios = [
