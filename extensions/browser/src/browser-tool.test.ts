@@ -519,6 +519,30 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it('allows profile="user" with an explicit node pin', async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", node: "node-1" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          profile: "user",
+          path: "/",
+          method: "GET",
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
   it('keeps profile="user" on the host when target="host" is explicit', async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
