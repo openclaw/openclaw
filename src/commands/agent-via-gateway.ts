@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -51,6 +52,7 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  newSession?: boolean;
 };
 
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
@@ -89,8 +91,13 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   if (!body) {
     throw new Error("Message (--message) is required");
   }
-  if (!opts.to && !opts.sessionId && !opts.agent) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+  // --new-session is normalized to a concrete sessionId by agentCliCommand() before we get here.
+  // If both are set at this point it is safe to prefer the already-populated sessionId.
+  const effectiveSessionId = opts.sessionId ?? (opts.newSession ? crypto.randomUUID() : undefined);
+  if (!opts.to && !effectiveSessionId && !opts.agent) {
+    throw new Error(
+      "Pass --to <E.164>, --session-id, --new-session, or --agent to choose a session",
+    );
   }
 
   const cfg = loadConfig();
@@ -114,7 +121,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     cfg,
     agentId,
     to: opts.to,
-    sessionId: opts.sessionId,
+    sessionId: effectiveSessionId,
   }).sessionKey;
 
   const channel = normalizeMessageChannel(opts.channel);
@@ -134,7 +141,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           agentId,
           to: opts.to,
           replyTo: opts.replyTo,
-          sessionId: opts.sessionId,
+          sessionId: effectiveSessionId,
           sessionKey,
           thinking: opts.thinking,
           deliver: Boolean(opts.deliver),
@@ -155,8 +162,17 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, response);
+    // Surface the effective session id at the top level so callers using --new-session can
+    // reconnect later without digging into meta. Existing fields are preserved.
+    const jsonPayload =
+      effectiveSessionId && opts.newSession
+        ? { ...response, sessionId: effectiveSessionId }
+        : response;
+    writeRuntimeJson(runtime, jsonPayload);
     return response;
+  }
+  if (opts.newSession && effectiveSessionId) {
+    runtime.log(`session-id: ${effectiveSessionId}`);
   }
 
   const result = response?.result;
@@ -178,18 +194,26 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  if (opts.newSession && opts.sessionId) {
+    throw new Error("--new-session and --session-id are mutually exclusive");
+  }
+  // Normalize --new-session into a concrete sessionId up-front so both embedded and gateway paths
+  // receive the same effective id (keeps behaviour consistent when gateway falls back to local).
+  const normalizedOpts: AgentCliOpts =
+    opts.newSession && !opts.sessionId ? { ...opts, sessionId: crypto.randomUUID() } : opts;
+
   const localOpts = {
-    ...opts,
-    agentId: opts.agent,
-    replyAccountId: opts.replyAccount,
-    cleanupBundleMcpOnRunEnd: opts.local === true,
+    ...normalizedOpts,
+    agentId: normalizedOpts.agent,
+    replyAccountId: normalizedOpts.replyAccount,
+    cleanupBundleMcpOnRunEnd: normalizedOpts.local === true,
   };
-  if (opts.local === true) {
+  if (normalizedOpts.local === true) {
     return await agentCommand(localOpts, runtime, deps);
   }
 
   try {
-    return await agentViaGatewayCommand(opts, runtime);
+    return await agentViaGatewayCommand(normalizedOpts, runtime);
   } catch (err) {
     runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
     return await agentCommand(localOpts, runtime, deps);

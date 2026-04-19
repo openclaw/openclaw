@@ -45,6 +45,11 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
     .option("--json", "Output result as JSON", false)
     .option(
+      "--new-session",
+      "Generate a fresh session id for this invocation (returned in --json output)",
+      false,
+    )
+    .option(
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
     )
@@ -68,6 +73,10 @@ ${formatHelpExamples([
   [
     'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
+  ],
+  [
+    'openclaw agent --agent ops --new-session --message "fresh batch" --json',
+    "Generate a fresh session id and return it in JSON output.",
   ],
 ])}
 
