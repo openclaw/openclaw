@@ -1,10 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { loadConfig } from "../../config/io.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../../infra/device-identity.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
+import { runHeartbeatOnce, setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import {
@@ -149,5 +153,65 @@ export const systemHandlers: GatewayRequestHandlers = {
       getHealthVersion: context.getHealthVersion,
     });
     respond(true, { ok: true }, undefined);
+  },
+  "heartbeat.trigger": async ({ params, respond }) => {
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const reason = normalizeOptionalString(params.reason) ?? "interval";
+
+    const cfg = loadConfig();
+    // Resolve heartbeat config the same way runHeartbeatOnce would, then inject
+    // a synthetic interval so it doesn't skip at the intervalMs gate.
+    // Real scheduling is owned by Paperclip — this just unblocks the gate.
+    const defaults = cfg.agents?.defaults?.heartbeat;
+    const agentList = cfg.agents?.list ?? [];
+    const agentEntry = agentId ? agentList.find((e) => e?.id === agentId) : undefined;
+    const overrides = agentEntry?.heartbeat;
+
+    const heartbeat = {
+      ...defaults,
+      ...(typeof overrides === "object" && overrides !== null ? overrides : {}),
+      every: "60m",
+    };
+
+    // Write Paperclip API context to the agent workspace so the agent can
+    // read it during heartbeat task execution. HEARTBEAT.md directives tell
+    // the agent to load this file for API credentials.
+    const pctx =
+      typeof params.paperclipContext === "object" && params.paperclipContext !== null
+        ? (params.paperclipContext as Record<string, unknown>)
+        : null;
+    if (pctx) {
+      const resolvedAgentId = agentId || undefined;
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolvedAgentId);
+      try {
+        await fs.writeFile(
+          path.join(workspaceDir, "paperclip-run-context.json"),
+          JSON.stringify(pctx, null, 2),
+        );
+      } catch {
+        // Non-fatal — agent can still run tasks that don't need Paperclip API
+      }
+    }
+
+    try {
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: agentId || undefined,
+        sessionKey: sessionKey || undefined,
+        heartbeat,
+        reason,
+      });
+      respond(true, result, undefined);
+    } catch (err: unknown) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INTERNAL_ERROR,
+          `heartbeat trigger failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
   },
 };

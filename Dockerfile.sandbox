@@ -17,6 +17,14 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     python3 \
     ripgrep
 
+# Node.js 24 (matches gateway runtime) — required for Claude Code CLI
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI — pre-installed so subagents don't need setupCommand
+RUN npm install -g @anthropic-ai/claude-code
+
 RUN useradd --create-home --shell /bin/bash sandbox
 USER sandbox
 WORKDIR /home/sandbox
