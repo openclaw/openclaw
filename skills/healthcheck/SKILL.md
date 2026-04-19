@@ -77,8 +77,6 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
          sh -c '
            if command -v ufw >/dev/null 2>&1; then
              sudo -n ufw status verbose 2>/dev/null || ufw status verbose 2>/dev/null || echo "ufw: installed, status requires sudo"
-           elif [ -x /usr/sbin/ufw ] || [ -x /sbin/ufw ] || [ -x /usr/local/sbin/ufw ]; then
-             echo "ufw: installed (binary not on PATH)"
              [ -r /etc/ufw/ufw.conf ] && grep -E "^ENABLED=" /etc/ufw/ufw.conf
            elif command -v firewall-cmd >/dev/null 2>&1; then
              firewall-cmd --state 2>/dev/null; firewall-cmd --list-all 2>/dev/null
