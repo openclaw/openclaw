@@ -252,13 +252,11 @@ export function projectSdkMessage(
       content,
       api: "claude-sdk",
       provider: "anthropic",
+      model: ctx.model ?? "",
       usage: { ...ZERO_USAGE },
       stopReason: "stop",
       timestamp: now,
     };
-    if (ctx.model) {
-      assistantMessage.model = ctx.model;
-    }
     return [
       {
         type: "message",
