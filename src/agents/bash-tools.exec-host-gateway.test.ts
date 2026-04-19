@@ -399,7 +399,7 @@ describe("processGatewayAllowlist", () => {
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
-      segments: [{ resolution: null, argv: ["cat", "<<'EOF'"] }],
+      segments: [{ resolution: null, raw: "cat <<'EOF'", argv: ["cat", "<<'EOF'"] }],
       segmentAllowlistEntries: [{ pattern: "/usr/bin/cat", source: "allow-always" }],
     });
 
@@ -430,7 +430,7 @@ describe("processGatewayAllowlist", () => {
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
-      segments: [{ resolution: null, argv: ["cat", "<<EOF"] }],
+      segments: [{ resolution: null, raw: "cat <<EOF", argv: ["cat", "<<EOF"] }],
       segmentAllowlistEntries: [{ pattern: "/usr/bin/cat", source: "allow-always" }],
     });
 
@@ -463,7 +463,7 @@ describe("processGatewayAllowlist", () => {
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
-      segments: [{ resolution: null, argv: ["cat", "<<\\EOF"] }],
+      segments: [{ resolution: null, raw: "cat <<\\EOF", argv: ["cat", "\\EOF"] }],
       segmentAllowlistEntries: [{ pattern: "/usr/bin/cat", source: "allow-always" }],
     });
 

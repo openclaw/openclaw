@@ -158,15 +158,11 @@ export async function processGatewayAllowlist(
       command: params.command,
       resolvedPath,
     });
+  // Check raw segment text (not normalized argv) so quote characters
+  // are still present: splitShellArgs strips '"/\ before argv is built,
+  // making a post-hoc argv quote check unreliable.
   const hasUnquotedHeredocSegment = allowlistEval.segments.some((segment) =>
-    segment.argv.some((token) => {
-      if (!token.startsWith("<<")) return false;
-      // Quoted heredocs (<<'EOF', <<"EOF", <<-'EOF', <<-"EOF", <<\EOF) are safe:
-      // no variable/command expansion, just literal stdin content.
-      // Only unquoted heredocs need extra approval since $() and `cmd`
-      // inside the body get evaluated by the shell.
-      return !/^-?\s*['"\\]/.test(token.slice(2));
-    }),
+    /<<\s*(?!['"\\])(?:[a-zA-Z_]\w*)/.test(segment.raw),
   );
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasUnquotedHeredocSegment;
