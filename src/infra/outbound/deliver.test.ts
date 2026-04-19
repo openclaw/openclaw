@@ -605,7 +605,7 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["w1", "w2"]);
   });
 
-  it("respects newline chunk mode for WhatsApp", async () => {
+  it("respects newline chunk mode for WhatsApp without splitting short messages", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { textChunkLimit: 4000, chunkMode: "newline" } },
@@ -619,17 +619,43 @@ describe("deliverOutboundPayloads", () => {
       deps: { whatsapp: sendWhatsApp },
     });
 
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "Line one\n\nLine two",
+      expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("splits long WhatsApp text on packed paragraph boundaries in newline mode", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { textChunkLimit: 14, chunkMode: "newline" } },
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "Alpha\n\nBeta\n\nGamma" }],
+      deps: { whatsapp: sendWhatsApp },
+    });
+
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(sendWhatsApp).toHaveBeenNthCalledWith(
       1,
       "+1555",
-      "Line one",
+      "Alpha\n\nBeta",
       expect.objectContaining({ verbose: false }),
     );
     expect(sendWhatsApp).toHaveBeenNthCalledWith(
       2,
       "+1555",
-      "Line two",
+      "Gamma",
       expect.objectContaining({ verbose: false }),
     );
   });

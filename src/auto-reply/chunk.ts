@@ -214,6 +214,7 @@ export function chunkByParagraph(
   const spans = parseFenceSpans(normalized);
 
   const parts: string[] = [];
+  const separators: string[] = [];
   const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
   let lastIndex = 0;
   for (const match of normalized.matchAll(re)) {
@@ -225,23 +226,49 @@ export function chunkByParagraph(
     }
 
     parts.push(normalized.slice(lastIndex, idx));
+    separators.push(match[0]);
     lastIndex = idx + match[0].length;
   }
   parts.push(normalized.slice(lastIndex));
 
   const chunks: string[] = [];
-  for (const part of parts) {
+  let currentChunk = "";
+
+  const pushParagraph = (paragraph: string, separatorBefore?: string) => {
+    if (!currentChunk) {
+      if (paragraph.length <= limit) {
+        currentChunk = paragraph;
+        return;
+      }
+      if (!splitLongParagraphs) {
+        chunks.push(paragraph);
+        return;
+      }
+      chunks.push(...chunkText(paragraph, limit));
+      return;
+    }
+
+    const candidate = `${currentChunk}${separatorBefore ?? "\n\n"}${paragraph}`;
+    if (candidate.length <= limit) {
+      currentChunk = candidate;
+      return;
+    }
+
+    chunks.push(currentChunk);
+    currentChunk = "";
+    pushParagraph(paragraph);
+  };
+
+  for (const [index, part] of parts.entries()) {
     const paragraph = part.replace(/\s+$/g, "");
     if (!paragraph.trim()) {
       continue;
     }
-    if (paragraph.length <= limit) {
-      chunks.push(paragraph);
-    } else if (!splitLongParagraphs) {
-      chunks.push(paragraph);
-    } else {
-      chunks.push(...chunkText(paragraph, limit));
-    }
+    pushParagraph(paragraph, separators[index - 1]);
+  }
+
+  if (currentChunk) {
+    chunks.push(currentChunk);
   }
 
   return chunks;
@@ -263,7 +290,7 @@ export function chunkMarkdownTextWithMode(text: string, limit: number, mode: Chu
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
     const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
     const out: string[] = [];
-    for (const chunk of paragraphChunks) {
+    for (const chunk of paragraphChunks.flatMap(splitPackedFenceParagraphChunk)) {
       const nested = chunkMarkdownText(chunk, limit);
       if (!nested.length && chunk) {
         out.push(chunk);
@@ -290,6 +317,21 @@ function splitByNewline(
   }
   lines.push(text.slice(start));
   return lines;
+}
+
+function splitPackedFenceParagraphChunk(chunk: string): string[] {
+  for (const span of parseFenceSpans(chunk)) {
+    const separator = chunk.slice(span.end).match(/^\n[\t ]*\n+/)?.[0];
+    if (!separator) {
+      continue;
+    }
+    const tail = chunk.slice(span.end + separator.length);
+    if (!tail.trim()) {
+      continue;
+    }
+    return [chunk.slice(0, span.end), ...splitPackedFenceParagraphChunk(tail)];
+  }
+  return [chunk];
 }
 
 function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
