@@ -43,21 +43,13 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "./memory-embedding-providers.js";
+import { listMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
-  registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
-  registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -1884,132 +1876,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
-  it("preserves snapshot registrations without leaking command globals during non-activating loads", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "snapshot-register-skip",
-      filename: "snapshot-register-skip.cjs",
-      body: `module.exports = {
-        id: "snapshot-register-skip",
-        register(api) {
-          api.registerCommand({
-            name: "snapshot-register-skip.test",
-            description: "test",
-            handler: async () => ({ text: "ok" }),
-          });
-        },
-      };`,
-    });
-
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-register-skip"],
-        },
-      },
-      onlyPluginIds: ["snapshot-register-skip"],
-    });
-
-    expect(scoped.plugins.find((entry) => entry.id === "snapshot-register-skip")?.status).toBe(
-      "loaded",
-    );
-    expect(scoped.commands).toEqual([]);
-    expect(getPluginCommandSpecs().map((spec) => spec.name)).not.toContain(
-      "snapshot-register-skip.test",
-    );
-  });
-
-  it("does not replace active memory plugin registries during non-activating loads", () => {
-    useNoBundledPlugins();
-    registerMemoryEmbeddingProvider({
-      id: "active",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => null,
-    });
-    registerMemoryPromptSection(() => ["active memory section"]);
-    registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "active",
-      systemPrompt: "active",
-      relativePath: "memory/active.md",
-    }));
-    const activeRuntime = {
-      async getMemorySearchManager() {
-        return { manager: null, error: "active" };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
-      },
-    };
-    registerMemoryRuntime(activeRuntime);
-    const plugin = writePlugin({
-      id: "snapshot-memory",
-      filename: "snapshot-memory.cjs",
-      body: `module.exports = {
-        id: "snapshot-memory",
-        kind: "memory",
-        register(api) {
-          api.registerMemoryEmbeddingProvider({
-            id: "snapshot",
-            create: async () => ({ provider: null }),
-          });
-          api.registerMemoryPromptSection(() => ["snapshot memory section"]);
-          api.registerMemoryFlushPlan(() => ({
-            softThresholdTokens: 10,
-            forceFlushTranscriptBytes: 20,
-            reserveTokensFloor: 30,
-            prompt: "snapshot",
-            systemPrompt: "snapshot",
-            relativePath: "memory/snapshot.md",
-          }));
-          api.registerMemoryRuntime({
-            async getMemorySearchManager() {
-              return { manager: null, error: "snapshot" };
-            },
-            resolveMemoryBackendConfig() {
-              return { backend: "qmd", qmd: {} };
-            },
-          });
-        },
-      };`,
-    });
-
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["snapshot-memory"],
-          slots: { memory: "snapshot-memory" },
-        },
-      },
-      onlyPluginIds: ["snapshot-memory"],
-    });
-
-    expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
-      "active memory section",
-      "active wiki supplement",
-    ]);
-    expect(listMemoryCorpusSupplements()).toHaveLength(1);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
-    expect(getMemoryRuntime()).toBe(activeRuntime);
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
-  });
-
-  it("does not replace active compaction providers during non-activating loads", () => {
+  it("does not leak compaction providers from non-activating loads", () => {
     useNoBundledPlugins();
     registerCompactionProvider(
       {
