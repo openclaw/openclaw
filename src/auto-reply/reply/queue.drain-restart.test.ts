@@ -259,6 +259,54 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[0]?.prompt).toBe("before-clear");
   });
 
+  it("does not delete a replacement queue when an older drain finishes", async () => {
+    const key = `test-drain-identity-guard-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+    const calls: FollowupRun[] = [];
+    let callCount = 0;
+
+    const runFollowup = async (run: FollowupRun) => {
+      callCount += 1;
+      calls.push(run);
+      if (callCount === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return;
+      }
+      secondProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-clear" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstStarted.promise;
+
+    const { clearSessionQueues, getFollowupQueueDepth } = await import("./queue.js");
+    const { FOLLOWUP_QUEUES } = await import("./queue/state.js");
+    clearSessionQueues([key]);
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-clear" }),
+      settings,
+      "message-id",
+      runFollowup,
+    );
+
+    expect(FOLLOWUP_QUEUES.get(key)?.items.map((item) => item.prompt)).toEqual(["after-clear"]);
+    expect(getFollowupQueueDepth(key)).toBe(1);
+
+    releaseFirst.resolve();
+    await secondProcessed.promise;
+
+    expect(calls.map((call) => call.prompt)).toEqual(["before-clear", "after-clear"]);
+    await vi.waitFor(() => {
+      expect(getFollowupQueueDepth(key)).toBe(0);
+    });
+  });
+
   it("clears the remembered callback after a queue drains fully", async () => {
     const key = `test-auto-clear-callback-${Date.now()}`;
     const calls: FollowupRun[] = [];
