@@ -68,6 +68,20 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
   return dir;
 }
 
+/**
+ * Return `~/.openclaw/media`, OpenClaw's shared media root.
+ *
+ * This mirrors the directory that core's `buildMediaLocalRoots` exposes as an
+ * allowlisted location (see `openclaw/src/media/local-roots.ts`). Using it as a
+ * QQ Bot payload root lets the plugin trust framework-produced files that live
+ * in sibling subdirectories such as `outbound/` (written by
+ * `saveMediaBuffer(..., "outbound", ...)`) or `inbound/`, while still keeping
+ * the check anchored to a single, well-known directory.
+ */
+export function getOpenClawMediaDir(): string {
+  return path.join(getHomeDir(), ".openclaw", "media");
+}
+
 // ---- Basic platform information ----
 
 export type PlatformType = "darwin" | "linux" | "win32" | "other";
@@ -319,7 +333,12 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
   }
 
   const canonicalCandidate = fs.realpathSync(resolvedCandidate);
-  const allowedRoots = [getQQBotMediaDir()];
+  // Trust both the QQ Bot-owned subdirectory and OpenClaw's shared `~/.openclaw/media`
+  // root. Core helpers like `saveMediaBuffer(..., "outbound", ...)` place framework
+  // attachments under sibling directories (e.g. `media/outbound/`) that are already
+  // part of the core media allowlist; we mirror that so auto-routed sends work
+  // without leaving the plugin's trust boundary.
+  const allowedRoots = [getOpenClawMediaDir(), getQQBotMediaDir()];
 
   for (const root of allowedRoots) {
     const resolvedRoot = path.resolve(root);

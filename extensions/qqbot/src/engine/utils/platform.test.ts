@@ -96,6 +96,22 @@ describe("qqbot local media path remapping", () => {
     expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(fs.realpathSync(mediaFile));
   });
 
+  it("allows structured payload files inside sibling OpenClaw media subdirectories", () => {
+    // Core helpers such as `saveMediaBuffer(..., "outbound", ...)` place framework
+    // attachments under sibling directories of `media/qqbot/`. The plugin must
+    // trust the shared `~/.openclaw/media` root so auto-routed sends can access
+    // those files without the path-outside-storage guard firing.
+    const actualHome = getHomeDir();
+    const outboundDir = path.join(actualHome, ".openclaw", "media", "outbound");
+    fs.mkdirSync(outboundDir, { recursive: true });
+    const outboundFile = fs.mkdtempSync(path.join(outboundDir, "qqbot-outbound-"));
+    const mediaFile = path.join(outboundFile, "tts.mp3");
+    fs.writeFileSync(mediaFile, "audio", "utf8");
+    createdPaths.push(outboundFile);
+
+    expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(fs.realpathSync(mediaFile));
+  });
+
   it("blocks structured payload files inside the QQ Bot data directory", () => {
     const { actualHome, testRootName } = createOpenClawTestRoot();
 
