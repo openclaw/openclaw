@@ -119,6 +119,46 @@ For operators, the practical rule is:
 - want `/acp spawn`, bindable sessions, runtime controls, or persistent harness work: use ACP
 - want simple local text fallback through the raw CLI: use CLI backends
 
+### Settings inheritance
+
+ACP Claude Code sessions inherit the host user's CLI settings automatically.
+OpenClaw does **not** pin or override the model, permission mode, or other
+Claude Code settings for ACP sessions. The inheritance chain is:
+
+1. The gateway process environment (including `HOME`) is passed to the
+   `claude-agent-acp` child process.
+2. The adapter's `SettingsManager` reads `~/.claude/settings.json` (and
+   project/local/enterprise overrides) at session creation time.
+3. Model is resolved in priority order:
+   - `ANTHROPIC_MODEL` environment variable (highest)
+   - `settings.model` from merged settings (for example `opus[1m]`)
+   - SDK default (first available model)
+4. Permission mode is resolved from `settings.permissions.defaultMode`
+   (for example `auto`).
+
+This means if you configure `model: "opus[1m]"` and
+`permissions.defaultMode: "auto"` in `~/.claude/settings.json`, ACP Claude
+sessions use those values without any OpenClaw-side override.
+
+What OpenClaw does **not** pass to ACP Claude sessions today:
+
+- No first-class `model` field in `sessions_spawn` for `runtime: "acp"`.
+  The `model` parameter on `sessions_spawn` only applies to `runtime: "subagent"`.
+- No explicit automode/autonomous flag. Claude Code's own permission mode
+  resolution (from settings) is the authority.
+- No `ANTHROPIC_MODEL` injection. If you need to force a model override
+  beyond what `~/.claude/settings.json` provides, set `ANTHROPIC_MODEL` in
+  the gateway process environment.
+
+To override the model at runtime after a session is created, use `/acp model`
+or `/acp set model <id>`.
+
+### Codex settings inheritance
+
+Codex ACP sessions also inherit the full gateway process environment. Codex
+reads its own config (`~/.codex/config.json`) and auth from the inherited
+`HOME`. OpenClaw does not inject Codex-specific model or permission overrides.
+
 ## Bound sessions
 
 ### Current-conversation binds
