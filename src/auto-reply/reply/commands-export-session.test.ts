@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -191,5 +192,63 @@ describe("buildExportSessionReply", () => {
         }),
       }),
     );
+  });
+
+  it("inlines export scripts instead of leaving raw placeholder tokens", async () => {
+    const { buildExportSessionReply } = await import("./commands-export-session.js");
+    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const templateHtml = actualFs.readFileSync(
+      "/Users/m1/openclaw/src/auto-reply/reply/export-html/template.html",
+      "utf8",
+    );
+    const templateCss = actualFs.readFileSync(
+      "/Users/m1/openclaw/src/auto-reply/reply/export-html/template.css",
+      "utf8",
+    );
+    const templateJs = actualFs.readFileSync(
+      "/Users/m1/openclaw/src/auto-reply/reply/export-html/template.js",
+      "utf8",
+    );
+    const markedJs = actualFs.readFileSync(
+      "/Users/m1/openclaw/src/auto-reply/reply/export-html/vendor/marked.min.js",
+      "utf8",
+    );
+    const highlightJs = actualFs.readFileSync(
+      "/Users/m1/openclaw/src/auto-reply/reply/export-html/vendor/highlight.min.js",
+      "utf8",
+    );
+
+    const readFileSyncMock = vi.mocked(fs.readFileSync);
+    readFileSyncMock.mockImplementation((filePath: fs.PathOrFileDescriptor) => {
+      if (typeof filePath !== "string") {
+        return "" as never;
+      }
+      if (filePath.endsWith("template.html")) {
+        return templateHtml as never;
+      }
+      if (filePath.endsWith("template.css")) {
+        return templateCss as never;
+      }
+      if (filePath.endsWith("template.js")) {
+        return templateJs as never;
+      }
+      if (filePath.endsWith("marked.min.js")) {
+        return markedJs as never;
+      }
+      if (filePath.endsWith("highlight.min.js")) {
+        return highlightJs as never;
+      }
+      return "" as never;
+    });
+
+    await buildExportSessionReply(makeParams());
+
+    expect(hoisted.writeFileSyncMock).toHaveBeenCalled();
+    const [, html] = hoisted.writeFileSyncMock.mock.calls.at(-1) ?? [];
+    expect(typeof html).toBe("string");
+    expect(html).not.toContain("MARKED_JS;");
+    expect(html).not.toContain("HIGHLIGHT_JS;");
+    expect(html).not.toContain("JS;");
+    expect(html).toContain("safeMarkedParse");
   });
 });
