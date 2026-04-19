@@ -60,6 +60,29 @@ async function writeBundledPluginPackageJson(
   await fs.writeFile(packageJsonPath, JSON.stringify({ name: packageName }), "utf-8");
 }
 
+function createNpmRootRunner(params: {
+  defaultNpmRoot: string;
+  overrideCommand?: string;
+  overrideNpmRoot?: string;
+}): CommandRunner {
+  return async (argv) => {
+    if (argv[0] === "npm") {
+      return { stdout: `${params.defaultNpmRoot}\n`, stderr: "", code: 0 };
+    }
+    if (params.overrideCommand && argv[0] === params.overrideCommand) {
+      return {
+        stdout: `${params.overrideNpmRoot ?? params.defaultNpmRoot}\n`,
+        stderr: "",
+        code: 0,
+      };
+    }
+    if (argv[0] === "pnpm") {
+      return { stdout: "", stderr: "", code: 1 };
+    }
+    throw new Error(`unexpected command: ${argv.join(" ")}`);
+  };
+}
+
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
@@ -201,18 +224,11 @@ describe("update global helpers", () => {
         await fs.mkdir(brewBin, { recursive: true });
         await fs.writeFile(brewNpm, "", "utf8");
 
-        const runCommand: CommandRunner = async (argv) => {
-          if (argv[0] === "npm") {
-            return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
-          }
-          if (argv[0] === brewNpm) {
-            return { stdout: `${brewRoot}\n`, stderr: "", code: 0 };
-          }
-          if (argv[0] === "pnpm") {
-            return { stdout: "", stderr: "", code: 1 };
-          }
-          throw new Error(`unexpected command: ${argv.join(" ")}`);
-        };
+        const runCommand = createNpmRootRunner({
+          defaultNpmRoot: pathNpmRoot,
+          overrideCommand: brewNpm,
+          overrideNpmRoot: brewRoot,
+        });
 
         await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
           "npm",
@@ -266,15 +282,7 @@ describe("update global helpers", () => {
       const pathNpmRoot = path.join(base, "nvm", "lib", "node_modules");
       await fs.mkdir(pkgRoot, { recursive: true });
 
-      const runCommand: CommandRunner = async (argv) => {
-        if (argv[0] === "npm") {
-          return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
-        }
-        if (argv[0] === "pnpm") {
-          return { stdout: "", stderr: "", code: 1 };
-        }
-        throw new Error(`unexpected command: ${argv.join(" ")}`);
-      };
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
 
       await expect(
         detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000),
@@ -303,18 +311,11 @@ describe("update global helpers", () => {
         await fs.mkdir(pkgRoot, { recursive: true });
         await fs.writeFile(npmCmd, "", "utf8");
 
-        const runCommand: CommandRunner = async (argv) => {
-          if (argv[0] === "npm") {
-            return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
-          }
-          if (argv[0] === npmCmd) {
-            return { stdout: `${npmRoot}\n`, stderr: "", code: 0 };
-          }
-          if (argv[0] === "pnpm") {
-            return { stdout: "", stderr: "", code: 1 };
-          }
-          throw new Error(`unexpected command: ${argv.join(" ")}`);
-        };
+        const runCommand = createNpmRootRunner({
+          defaultNpmRoot: pathNpmRoot,
+          overrideCommand: npmCmd,
+          overrideNpmRoot: npmRoot,
+        });
 
         await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
           "npm",

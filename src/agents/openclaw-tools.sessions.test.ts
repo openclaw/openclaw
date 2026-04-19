@@ -758,7 +758,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
@@ -938,7 +938,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });

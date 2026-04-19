@@ -43,6 +43,37 @@ vi.mock("./channels/shared.js", () => ({
     accountId: string;
     name?: string;
   }) => `${channel} ${accountId}`,
+  appendEnabledConfiguredLinkedBits: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.enabled === "boolean") {
+      bits.push(account.enabled ? "enabled" : "disabled");
+    }
+    if (account.configured === true) {
+      bits.push("configured");
+      if (Object.values(account).includes("configured_unavailable")) {
+        bits.push("secret unavailable in this command path");
+      }
+    }
+  },
+  appendModeBit: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.mode === "string" && account.mode.length > 0) {
+      bits.push(`mode:${account.mode}`);
+    }
+  },
+  appendTokenSourceBits: (bits: string[], account: Record<string, unknown>) => {
+    if (account.tokenSource === "config") {
+      const unavailable = account.tokenStatus === "configured_unavailable" ? " (unavailable)" : "";
+      bits.push(`token:config${unavailable}`);
+    }
+  },
+  appendBaseUrlBit: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.baseUrl === "string" && account.baseUrl) {
+      bits.push(`url:${account.baseUrl}`);
+    }
+  },
+  buildChannelAccountLine: (channel: string, account: Record<string, unknown>, bits: string[]) => {
+    const accountId = typeof account.accountId === "string" ? account.accountId : "default";
+    return `- ${channel} ${accountId}: ${bits.join(", ")}`;
+  },
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({

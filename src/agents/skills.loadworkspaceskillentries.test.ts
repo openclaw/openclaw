@@ -85,6 +85,25 @@ async function setupWorkspaceWithProsePlugin() {
   return { workspaceDir, managedDir, bundledDir };
 }
 
+async function createEscapedBundledSkillFixture(params?: {
+  workspaceDir?: string;
+  outsideDir?: string;
+}) {
+  const workspaceDir = params?.workspaceDir ?? (await createTempWorkspaceDir());
+  const outsideDir = params?.outsideDir ?? (await createTempWorkspaceDir());
+  const bundledDir = path.join(workspaceDir, ".bundled");
+  const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
+  await writeSkill({
+    dir: escapedSkillDir,
+    name: "outside-bundled-skill",
+    description: "Outside bundled",
+  });
+  await fs.mkdir(bundledDir, { recursive: true });
+  const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
+  await fs.symlink(escapedSkillDir, requestedPath, "dir");
+  return { workspaceDir, outsideDir, bundledDir, escapedSkillDir, requestedPath };
+}
+
 describe("loadWorkspaceSkillEntries", () => {
   it("filters plugin-shipped skills through plugin config", async () => {
     const { workspaceDir, managedDir } = await setupWorkspaceWithProsePlugin();
@@ -239,18 +258,7 @@ describe("loadWorkspaceSkillEntries", () => {
   it.runIf(process.platform !== "win32")(
     "calls out bundled symlink escapes as likely local checkout mutations",
     async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const bundledDir = path.join(workspaceDir, ".bundled");
-      const outsideDir = await createTempWorkspaceDir();
-      const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
-      await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-bundled-skill",
-        description: "Outside bundled",
-      });
-      await fs.mkdir(bundledDir, { recursive: true });
-      const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
-      await fs.symlink(escapedSkillDir, requestedPath, "dir");
+      const { workspaceDir, bundledDir, requestedPath } = await createEscapedBundledSkillFixture();
       const warn = captureWarningLogger();
 
       const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
@@ -272,18 +280,10 @@ describe("loadWorkspaceSkillEntries", () => {
   it.runIf(process.platform !== "win32")(
     "uses compact home-relative paths in escaped skill console warnings",
     async () => {
-      const workspaceDir = path.join(fakeHome, "workspace");
-      const outsideDir = path.join(fakeHome, "outside");
-      const bundledDir = path.join(workspaceDir, ".bundled");
-      const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
-      await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-bundled-skill",
-        description: "Outside bundled",
+      const { workspaceDir, bundledDir } = await createEscapedBundledSkillFixture({
+        workspaceDir: path.join(fakeHome, "workspace"),
+        outsideDir: path.join(fakeHome, "outside"),
       });
-      await fs.mkdir(bundledDir, { recursive: true });
-      const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
-      await fs.symlink(escapedSkillDir, requestedPath, "dir");
       const warn = captureWarningLogger();
 
       loadTestWorkspaceSkillEntries(workspaceDir, {

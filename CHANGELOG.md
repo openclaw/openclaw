@@ -6,7 +6,30 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
+
 ### Fixes
+
+- Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
+- Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
+- Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
+- OpenAI/Responses: strip orphaned reasoning blocks before outbound Responses API calls so compacted or restored histories no longer fail on standalone reasoning items. (#55787) Thanks @suboss87.
+- Cron/CLI: parse PowerShell-style `--tools` allow-lists the same way as comma-separated input, so `cron add` and `cron edit` no longer persist `exec read write` as one combined tool entry on Windows. (#68858) Thanks @chen-zhang-cs-code.
+- Browser/user-profile: let existing-session `profile="user"` tool calls auto-route to a connected browser node or use explicit `target="node"`, while still honoring explicit `target="host"` pinning. (#48677)
+- Discord/slash commands: tolerate partial Discord channel metadata in slash-command and model-picker flows so partial channel objects no longer crash when channel names, topics, or thread parent metadata are unavailable. (#68953) Thanks @dutifulbob.
+- BlueBubbles: consolidate outbound HTTP through a typed `BlueBubblesClient` that resolves the SSRF policy once at construction so image attachments stop getting blocked on localhost and reactions stop getting blocked on private-IP BB deployments. Fixes #34749 and #59722. (#68234) Thanks @omarshahine.
+- Cron/gateway: reject ambiguous announce delivery config at add/update time so invalid multi-channel or target-id provider settings fail early instead of persisting broken cron jobs. (#69015) Thanks @obviyus.
+- Cron/main-session delivery: preserve `heartbeat.target="last"` through deferred wake queuing, gateway wake forwarding, and same-target wake coalescing so queued cron replies still return to the last active chat. (#69021) Thanks @obviyus.
+- Cron/gateway: ignore disabled channels when announce delivery ambiguity is checked, and validate main-session delivery patches against the live cron service default agent so hot-reloaded agent config does not falsely reject valid updates. (#69040) Thanks @obviyus.
+
+## 2026.4.19-beta.2
+
+### Fixes
+
+- Agents/openai-completions: always send `stream_options.include_usage` on streaming requests, so local and custom OpenAI-compatible backends report real context usage instead of showing 0%. (#68746) Thanks @kagura-agent.
+- Agents/nested lanes: scope nested agent work per target session so a long-running nested run on one session no longer head-of-line blocks unrelated sessions across the gateway. (#67785) Thanks @stainlu.
+- Agents/status: preserve carried-forward session token totals for providers that omit usage metadata, so `/status` and `openclaw sessions` keep showing the last known context usage instead of dropping back to unknown/0%. (#67695) Thanks @stainlu.
+- Install/update: keep legacy update verification compatible with the QA Lab runtime shim, so updating older global installs to beta no longer fails after npm installs the package successfully.
 
 ## 2026.4.19-beta.1
 
@@ -17,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Browser/CDP: allow the selected remote CDP profile host for CDP health and control checks without widening browser navigation SSRF policy, so WSL-to-Windows Chrome endpoints no longer appear offline under strict defaults. Fixes #68108. (#68207) Thanks @Mlightsnow.
 - Codex: stop cumulative app-server token totals from being treated as fresh context usage, so session status no longer reports inflated context percentages after long Codex threads. (#64669) Thanks @cyrusaf.
 - Browser/CDP: add phase-specific CDP readiness diagnostics and normalize loopback WebSocket host aliases, so Windows browser startup failures surface whether HTTP discovery, WebSocket discovery, SSRF validation, or the `Browser.getVersion` health check failed.
+- Browser/CDP: discover Chrome’s real DevTools websocket from bare `ws://host:port` attach-only roots before declaring the profile down, while still falling back to direct websocket providers that do not expose `/json/version`. Fixes #68027. (#68715) Thanks @visionik.
 
 ## 2026.4.18
 
@@ -54,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - macOS/remote SSH: require an already-trusted host key on the macOS remote command, gateway probe, port tunnel, and pairing probe paths by switching `StrictHostKeyChecking=accept-new` to `StrictHostKeyChecking=yes` and centralizing the shared SSH option fragments in `CommandResolver`, so first-time macOS remote connections no longer silently accept an unknown host key and must be trusted ahead of time via `~/.ssh/known_hosts`. (#68199)
 - CLI/configure: show the channel picker before probing statuses and let remove mode delete configured channel blocks directly from config. (#68007) Thanks @gumadeiras.
 - Control UI/settings: reset scroll position when switching settings pages and align details headers. (#68150) Thanks @BunsDev.
+- WhatsApp/gateway: harden WhatsApp auth persistence and backup recovery, model unstable auth state explicitly in setup/status/health, recover backup-backed login without forcing a fresh QR, and keep local gateway handoff and channel restarts truthful after login. Thanks @mcaxtr.
 - OpenAI Codex/OAuth: keep OpenClaw as the canonical owner for imported Codex CLI OAuth sessions, stop writing refreshed credentials back into `.codex`, and prefer fresher OpenClaw credentials over stale imported CLI state so refresh recovery stays stable. Thanks @vincentkoc.
 - OpenAI Codex/OAuth: treat the OpenAI TLS prerequisites probe as advisory instead of a hard blocker, so Codex sign-in can still proceed when the speculative Node/OpenSSL precheck fails but the real OAuth flow still works. Thanks @vincentkoc.
 - Models status/OAuth health: align OAuth health reporting with the same effective credential view runtime uses, so expired refreshable sessions stop showing healthy by default and fresher imported Codex CLI credentials surface correctly in `models status`, doctor, and gateway auth status. Thanks @vincentkoc.
