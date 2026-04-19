@@ -199,8 +199,13 @@ export const SessionsPatchParamsSchema = Type.Object(
      * the plan-mode lib (#67538):
      *
      * - `"approve"` / `"edit"` → mode flips to `"normal"`, mutations unlock.
-     * - `"reject"` → mode stays `"plan"`, rejectionCount++, optional
-     *   `feedback` is persisted for the agent's next-turn injection.
+     * - `"reject"` → mode stays `"plan"`, rejectionCount++, REQUIRED
+     *   `feedback` (1-8192 chars) is persisted for the agent's next-
+     *   turn injection. Copilot review #68939 (2026-04-19): the
+     *   discriminated union below tightened `feedback` to required
+     *   for the reject variant; this bullet was updated to match
+     *   so API consumers don't implement against the prior optional
+     *   contract.
      *
      * `approvalId` is the version token the runtime emitted with the
      * approval event; the server uses it to ignore stale clicks (e.g.

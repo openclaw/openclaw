@@ -67,7 +67,9 @@ NORMAL MODE → /plan on → INVESTIGATION → exit_plan_mode → PENDING APPROV
 
 ## What you see in webchat
 
-When the agent submits a plan, an **inline approval card** appears in the chat with:
+> Webchat is currently the ONLY channel with the inline-button approval card. All other channels (Telegram, Slack, Discord, CLI) are scoped to text-only `/plan` commands — see "Multi-channel behavior" below. Inline-button cards on non-web channels are deferred to a follow-up PR.
+
+When the agent submits a plan **on webchat**, an **inline approval card** appears in the chat with:
 
 - **Title** (the agent-supplied plan name)
 - **Step list** with checkboxes
