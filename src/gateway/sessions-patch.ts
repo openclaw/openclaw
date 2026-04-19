@@ -544,6 +544,13 @@ export async function applySessionsPatchToStore(params: {
           rejectionCount: 0,
           ...(carryAutoApprove ? { autoApprove: true } : {}),
         };
+        // Clear acceptEdits permission on any new plan-mode cycle.
+        // Scope is the approvalId of the cycle that granted it; a new
+        // cycle regenerates approvalId, so any stale permission is
+        // invalid by definition.
+        if (next.postApprovalPermissions !== undefined) {
+          next.postApprovalPermissions = undefined;
+        }
       }
     } else if (raw !== undefined) {
       return invalid('invalid planMode (use "plan"|"normal" or null)');
@@ -815,6 +822,26 @@ export async function applySessionsPatchToStore(params: {
       // runtime consumer.
       if (action === "approve" || action === "edit") {
         next.recentlyApprovedAt = now;
+        // acceptEdits permission: scoped to this approvalId, cleared
+        // on new plan cycle / close-on-complete. Only set on the
+        // "edit" action; "approve" explicitly does NOT grant
+        // acceptEdits (user approved the plan verbatim).
+        const approvalIdForPermissions =
+          normalizeOptionalString(next.planMode?.approvalId) ||
+          normalizeOptionalString(patch.planApproval.approvalId) ||
+          `decision-${storeKey}-${now}`;
+        if (action === "edit") {
+          next.postApprovalPermissions = {
+            acceptEdits: true,
+            grantedAt: now,
+            approvalId: approvalIdForPermissions,
+          };
+        } else if (next.postApprovalPermissions !== undefined) {
+          // action === "approve": explicitly clear any stale permission
+          // from a prior cycle. The user chose verbatim execution this
+          // cycle; don't carry forward a previous acceptEdits grant.
+          next.postApprovalPermissions = undefined;
+        }
         // Read the plan steps BEFORE the planMode.mode === "normal"
         // branch below deletes `next.planMode` entirely. The approved
         // plan must flow into the injection so the agent has concrete
