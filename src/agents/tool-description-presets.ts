@@ -15,6 +15,19 @@ export const EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
   "Exit plan mode and request user approval of the proposed plan.";
 export const ASK_USER_QUESTION_TOOL_DISPLAY_SUMMARY =
   "Ask the user a multiple-choice question and pause for the answer.";
+export const PLAN_MODE_STATUS_TOOL_DISPLAY_SUMMARY =
+  "Inspect the current plan-mode state (read-only).";
+
+export function describePlanModeStatusTool(): string {
+  return [
+    // Live-test iter-3 D6: introspection tool the agent can call to
+    // self-diagnose plan-mode state without inferring from tool errors.
+    "Read-only inspection of the current plan-mode state for the active session.",
+    "Returns: inPlanMode, approval phase, title, openSubagentCount + IDs, plan step count, recentlyApprovedAt, pendingAgentInjection preview, planModeIntroDeliveredAt, autoApprove, debugLogEnabled.",
+    "Use this when: you want to verify your current plan-mode state before submitting / approving / continuing; the user asks 'what's my plan-mode state?'; debugging why a tool was blocked; verifying state transitions during /plan self-test.",
+    "ALWAYS read-only — never mutates plan-mode state, never consumes pendingAgentInjection, safe to call mid-pending-approval.",
+  ].join(" ");
+}
 
 export function describeAskUserQuestionTool(): string {
   return [

@@ -30,7 +30,52 @@ tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'
 
 ---
 
-## Live testing iteration 2 — fixes (latest sprint)
+## Live testing iteration 3 — self-discovery + R6 subagent gate hardening (latest sprint)
+
+Iter-3 closes the meta-gap surfaced by the user: "will plan mode work reliably for ANY install, on ANY agent, including agents that just installed the patch and have never seen plan mode before?" Plus a deeper subagent-gate race (R6) that survived iter-1's tool-side gate.
+
+### Phase 1 — Self-discovery (commit `c262bffcbf`)
+
+| #   | Surface                            | What changed                                                                                                                                                                                                                                                                                                         |
+| --- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | In-mode bootstrap reference card   | New `src/agents/plan-mode/reference-card.ts` injected on every plan-mode turn alongside `PLAN_ARCHETYPE_PROMPT`. ASCII state diagram + tool contract + `[PLAN_*]:` tag taxonomy + `/plan` slash commands + pitfalls + debug tips. Eliminates the iter-2 "2-turn learning curve"                                      |
+| D2  | One-shot first-time intro          | `[PLAN_MODE_INTRO]:` synthetic injection on the very first `enter_plan_mode` per session (gated by new `SessionEntry.planModeIntroDeliveredAt` marker at root level). Agent's NEXT turn opens with quick lifecycle overview + pointer to `/plan self-test`. Composes with existing `pendingAgentInjection` consumers |
+| D3  | Tool-description discovery pointer | All 3 plan-mode tool descriptions (`enter_plan_mode`, `update_plan`, `exit_plan_mode`) end with: "see the bootstrap-injected reference card OR run `/plan self-test`."                                                                                                                                               |
+| D4  | User-facing concept doc            | New `docs/concepts/plan-mode.md` — when to use, lifecycle, slash commands, multi-channel, persistence, auto-mode, subagent gating, troubleshooting                                                                                                                                                                   |
+| D7  | `plan-mode-101` skill              | New `skills/plan-mode-101/SKILL.md` — same content as the in-mode reference card, available on-demand in normal mode via trigger phrases ("explain plan mode", "what does [PLAN_DECISION] mean", etc.)                                                                                                               |
+
+### Phase 2/3 — R6 subagent gate hardening + D6 introspection tool (commit pending)
+
+| #   | Bug/Deliverable                                                                                                                          | Symptom                                                                                                                                                                                                                                                                               | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R6a | Tool-side subagent gate at `exit_plan_mode` silently bypassed                                                                            | Live test 17:10-17:12: subagent `a1dc12d2` was running when agent called `exit_plan_mode`; gate didn't fire (silent bypass — likely race: subagent drained before tool ran, OR runId/ctx missing). User clicked Approve, agent stalled because subagent return arrived AFTER approval | Always-on `agents/exit-plan-gate` diagnostic logger emits `gate decision: result=blocked\|allowed runId=… sessionKey=… openSubagents=N reason=…` for EVERY `exit_plan_mode` call. Bypass cases (no runId, ctx not registered, openSubagentRunIds undefined) now emit explicit reason strings so operators can tell why the gate didn't fire. Operator can grep `agents/exit-plan-gate` in `gateway.err.log` to see every submission attempt                                   |
+| R6b | Subagent announce-turn injection said "narrate the result" — agent treated the turn as TERMINAL and stopped, breaking the plan-mode flow | The announce reply instruction at `subagent-announce.ts:buildAnnounceReplyInstruction` told the agent "send that user-facing update now." Agent narrated the subagent result and stopped instead of calling `exit_plan_mode` after incorporating the result. Plan-mode cycle stalled  | The instruction is now plan-mode-aware: when the requester session's `planMode.mode === "plan"`, an explicit suffix is appended: "You are currently in PLAN MODE — do not stop after the user-facing update. Your next action MUST be either (a) call `exit_plan_mode(...)` if this subagent's result completes your investigation, OR (b) continue investigation with another tool call." Read at announce-build time from `loadRequesterSessionEntry`'s entry.planMode.mode |
+| D6  | No agent-callable introspection of plan-mode state                                                                                       | Agent had to INFER plan-mode state from tool-rejection errors. No way to programmatically check `am I in plan mode?` / `what's the title?` / `how many subagents are in flight?` / `is debug log enabled?`                                                                            | New `plan_mode_status` tool (`src/agents/tools/plan-mode-status-tool.ts`) — read-only structured snapshot of every plan-mode field, plus the debug-log status. Self-resolves storePath via `resolveDefaultSessionStorePath` so it works without registry plumbing. Wired into the bundled toolset alongside `enter_plan_mode` / `exit_plan_mode` / `ask_user_question`                                                                                                        |
+
+**Activation (already in place from iter-2):**
+
+```bash
+openclaw config set agents.defaults.planMode.debug true
+launchctl kickstart -k gui/$UID/ai.openclaw.gateway
+
+# Tail BOTH the env-gated structured stream AND the iter-3 always-on
+# exit-plan-gate diagnostic in one tail:
+tail -F ~/.openclaw/logs/gateway.err.log | grep -E '\[plan-mode/|plan-approval-gate|exit-plan-gate'
+```
+
+### Deferred to iter-3 commit 3 (next focused commit)
+
+- **D5 — `/plan self-test` slash command** (synthetic plan-mode flow + pass/fail report)
+- **R1 — Subagent cleanup on crash/timeout** (drain `openSubagentRunIds` on error paths)
+- **R2 — Cron-nudge suppression when approval pending** (heartbeat path already does this via `buildActivePlanNudge:742`; cron-fire path needs same check)
+- **R3 — Plan title XSS sanitization audit + test**
+- **R4 — Disk-full graceful error in `sessions-patch.ts`**
+- **R5 — Multi-channel approval dedup test**
+- **Bug B (still deferred from iter-2)** — stale approval card UI auto-dismiss + `PLAN_APPROVAL_EXPIRED` error code
+
+---
+
+## Live testing iteration 2 — fixes (previous sprint)
 
 Live webchat testing of the iter-1 build (commit `3024c6b215`) on 2026-04-19 surfaced 6 deeper edge cases. All addressed in the next commit on `feat/plan-channel-parity`:
 

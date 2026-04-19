@@ -1,6 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import { getAgentRunContext } from "../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { logPlanModeDebug } from "../plan-mode/plan-mode-debug-log.js";
+
+// Live-test iter-3 R6a: always-on logger for the tool-side subagent
+// gate at exit_plan_mode. Mirrors the iter-2 `gateway/plan-approval-gate`
+// diagnostic so operators can see EVERY gate decision (including
+// silent-bypass cases like missing runId or unregistered ctx) without
+// flipping the env-gated plan-mode debug log.
+const exitPlanGateLog = createSubsystemLogger("agents/exit-plan-gate");
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeExitPlanModeTool,
@@ -228,26 +236,46 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
       // Paired with a tool-description warning at the top so the agent
       // sees the requirement up-front (soft steer) as well as hitting
       // this hard block if it ignores the warning.
+      // Live-test iter-3 R6a: ALWAYS-ON diagnostic logging for the
+      // tool-side subagent gate. The iter-1 gate only logs via the
+      // env-gated plan-mode debug log; silent-bypass cases (no runId,
+      // ctx not registered, openSubagentRunIds undefined) left no
+      // trace. With this diagnostic, every exit_plan_mode call emits
+      // ONE line to gateway.err.log explaining the gate decision —
+      // operators can grep `agents/exit-plan-gate` to see every
+      // submission attempt.
+      const ctx = runId ? getAgentRunContext(runId) : undefined;
+      const open = ctx?.openSubagentRunIds;
+      const openCount = open?.size ?? 0;
+      const gateDecision = openCount > 0 ? "blocked" : "allowed";
+      const bypassReason = !runId
+        ? "no runId (test/standalone path)"
+        : !ctx
+          ? "ctx not registered (run cleanup race)"
+          : !open
+            ? "openSubagentRunIds undefined (no subagents tracked)"
+            : openCount === 0
+              ? "openSubagentRunIds empty (no subagents in flight)"
+              : "—";
+      exitPlanGateLog.info(
+        `gate decision: result=${gateDecision} runId=${runId ?? "<none>"} sessionKey=${ctx?.sessionKey ?? "<none>"} openSubagents=${openCount} reason=${bypassReason}`,
+      );
       if (runId) {
-        const ctx = getAgentRunContext(runId);
-        const open = ctx?.openSubagentRunIds;
-        // Live-test iteration 1 Bug 4: log the gate decision so debug
-        // tail shows tool-call gate firings alongside the eventual
-        // approval-side gate (in sessions-patch.ts) — both can fire
-        // for the same plan submission cycle.
+        // Live-test iteration 1 Bug 4: also emit the structured
+        // plan-mode debug event for downstream debug-log tailers.
         logPlanModeDebug({
           kind: "gate_decision",
           sessionKey: ctx?.sessionKey ?? "unknown",
           tool: "exit_plan_mode",
-          allowed: !open || open.size === 0,
+          allowed: openCount === 0,
           planMode: "plan",
-          ...(open && open.size > 0 ? { reason: `${open.size} subagent(s) in flight` } : {}),
+          ...(openCount > 0 ? { reason: `${openCount} subagent(s) in flight` } : {}),
         });
-        if (open && open.size > 0) {
+        if (open && openCount > 0) {
           const ids = [...open].slice(0, 5).join(", ");
-          const more = open.size > 5 ? ` and ${open.size - 5} more` : "";
+          const more = openCount > 5 ? ` and ${openCount - 5} more` : "";
           throw new ToolInputError(
-            `Cannot submit plan: ${open.size} subagent(s) you spawned during this ` +
+            `Cannot submit plan: ${openCount} subagent(s) you spawned during this ` +
               `plan-mode investigation are still running (${ids}${more}). Wait for ` +
               `their completion messages to arrive, then synthesize the final plan ` +
               `from their results and call exit_plan_mode again. Treat unresolved ` +
