@@ -8,11 +8,15 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
-const resolveRuntimePluginRegistryMock = vi.fn();
+const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
+const isPluginRegistryLoadInFlightMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
-  resolveRuntimePluginRegistry: (params: unknown) => resolveRuntimePluginRegistryMock(params),
+  loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
+    resolveCompatibleRuntimePluginRegistryMock(params),
+  isPluginRegistryLoadInFlight: (params: unknown) => isPluginRegistryLoadInFlightMock(params),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -199,11 +203,11 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockClear();
-    resolveRuntimePluginRegistryMock.mockReset();
-    resolveRuntimePluginRegistryMock.mockImplementation((params) =>
-      loadOpenClawPluginsMock(params),
-    );
+    loadOpenClawPluginsMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
+    isPluginRegistryLoadInFlightMock.mockReset();
+    isPluginRegistryLoadInFlightMock.mockReturnValue(false);
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(({ config }: { config: unknown }) => ({
       config,
@@ -339,9 +343,10 @@ describe("resolvePluginTools optional tools", () => {
     expectAutoEnabledOptionalLoad(autoEnabledConfig);
   });
 
-  it("reuses a compatible active registry instead of loading again", () => {
+  it("reloads plugin tool factories instead of reusing a compatible active registry", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    setOptionalDemoRegistry();
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -350,13 +355,19 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activate: false,
+        cache: false,
+      }),
+    );
   });
 
-  it("reuses the active registry for gateway-bindable tool loads before reloading", () => {
+  it("reloads plugin tool factories for gateway-bindable tool loads too", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
-    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+    setOptionalDemoRegistry();
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -366,8 +377,15 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+        activate: false,
+        cache: false,
+      }),
+    );
   });
 
   it("loads plugin tools when gateway-bindable tool loads have no active registry", () => {
@@ -385,7 +403,23 @@ describe("resolvePluginTools optional tools", () => {
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
+      activate: false,
+      cache: false,
     });
+  });
+
+  it("degrades quietly when an equivalent plugin load is already in flight", () => {
+    setOptionalDemoRegistry();
+    isPluginRegistryLoadInFlightMock.mockReturnValue(true);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+      }),
+    );
+
+    expect(tools).toEqual([]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("reloads when gateway binding would otherwise reuse a default-mode active registry", () => {
@@ -410,6 +444,38 @@ describe("resolvePluginTools optional tools", () => {
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
+        activate: false,
+        cache: false,
+      }),
+    );
+  });
+
+  it("does not blindly reuse an incompatible gateway-bindable active registry", () => {
+    setActivePluginRegistry(
+      {
+        tools: [],
+        diagnostics: [],
+      } as never,
+      "gateway-startup",
+      "gateway-bindable",
+    );
+    setOptionalDemoRegistry();
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+        activate: false,
+        cache: false,
       }),
     );
   });

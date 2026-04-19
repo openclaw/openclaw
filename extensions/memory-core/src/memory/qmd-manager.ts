@@ -1016,11 +1016,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     let searchFallbackReason: string | undefined;
     const explicitSearchTool = this.qmd.searchTool;
     const mcporterEnabled = this.qmd.mcporter.enabled;
+    const shouldBypassMcporter =
+      mcporterEnabled &&
+      !explicitSearchTool &&
+      (qmdSearchCommand === "search" || qmdSearchCommand === "vsearch");
+    const usedDirectQmdSearchPath = !mcporterEnabled || shouldBypassMcporter;
     const runSearchAttempt = async (
       allowMissingCollectionRepair: boolean,
     ): Promise<QmdQueryResult[]> => {
       try {
-        if (mcporterEnabled) {
+        if (mcporterEnabled && !shouldBypassMcporter) {
           const minScore = opts?.minScore ?? 0;
           if (explicitSearchTool) {
             if (collectionNames.length > 1) {
@@ -1089,7 +1094,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           throw err;
         }
         if (
-          !mcporterEnabled &&
+          usedDirectQmdSearchPath &&
           qmdSearchCommand !== "query" &&
           this.isUnsupportedQmdOptionError(err)
         ) {
@@ -1113,7 +1118,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
           }
         }
-        const label = mcporterEnabled ? "mcporter/qmd" : `qmd ${qmdSearchCommand}`;
+        const label = usedDirectQmdSearchPath ? `qmd ${qmdSearchCommand}` : "mcporter/qmd";
         log.warn(`${label} failed: ${String(err)}`);
         throw err instanceof Error ? err : new Error(String(err));
       }

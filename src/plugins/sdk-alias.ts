@@ -251,6 +251,7 @@ export function resolvePluginSdkAliasFile(params: {
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
+const cachedExportedExtensionApiAliasMaps = new Map<string, Record<string, string>>();
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
@@ -260,6 +261,38 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".cts",
   ".cjs",
 ] as const;
+const EXPORTED_EXTENSION_API_SOURCE_CANDIDATE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
+
+function parseExportedExtensionApiSubpath(exportKey: string): string | null {
+  const match = exportKey.match(/^\.\/extensions\/([A-Za-z0-9_-]+)\/api$/u);
+  return match?.[1] ?? null;
+}
+
+function listExportedExtensionApiSubpathsFromPackageJson(pkg: PluginSdkPackageJson): string[] {
+  return Object.keys(pkg.exports ?? {})
+    .map((key) => parseExportedExtensionApiSubpath(key))
+    .filter((subpath): subpath is string => subpath !== null)
+    .toSorted();
+}
+
+function readExportedExtensionApiSubpathsFromPackageRoot(packageRoot: string): string[] | null {
+  const pkg = readPluginSdkPackageJson(packageRoot);
+  if (!pkg) {
+    return null;
+  }
+  if (!hasTrustedOpenClawRootIndicator({ packageRoot, packageJson: pkg })) {
+    return null;
+  }
+  const subpaths = listExportedExtensionApiSubpathsFromPackageJson(pkg);
+  return subpaths.length > 0 ? subpaths : null;
+}
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   try {
@@ -430,6 +463,62 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
+function resolveExportedExtensionApiAliasMap(
+  params: {
+    modulePath?: string;
+    argv1?: string;
+    moduleUrl?: string;
+    pluginSdkResolution?: PluginSdkResolutionPreference;
+  } = {},
+): Record<string, string> {
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const packageRoot = resolveLoaderPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  });
+  if (!packageRoot) {
+    return {};
+  }
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+    pluginSdkResolution: params.pluginSdkResolution,
+  });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cached = cachedExportedExtensionApiAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const aliasMap: Record<string, string> = {};
+  for (const extensionId of readExportedExtensionApiSubpathsFromPackageRoot(packageRoot) ?? []) {
+    const packageName = ["openclaw", "extensions", extensionId, "api"].join("/");
+    for (const kind of orderedKinds) {
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "extensions", extensionId, "api.js");
+        if (fs.existsSync(candidate)) {
+          aliasMap[packageName] = candidate;
+          break;
+        }
+        continue;
+      }
+      for (const ext of EXPORTED_EXTENSION_API_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "extensions", extensionId, `api${ext}`);
+        if (!fs.existsSync(candidate)) {
+          continue;
+        }
+        aliasMap[packageName] = candidate;
+        break;
+      }
+      if (Object.prototype.hasOwnProperty.call(aliasMap, packageName)) {
+        break;
+      }
+    }
+  }
+  cachedExportedExtensionApiAliasMaps.set(cacheKey, aliasMap);
+  return aliasMap;
+}
+
 export function buildPluginLoaderAliasMap(
   modulePath: string,
   argv1: string | undefined = STARTUP_ARGV1,
@@ -449,6 +538,11 @@ export function buildPluginLoaderAliasMap(
     ...(extensionApiAlias
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
+    ...Object.fromEntries(
+      Object.entries(
+        resolveExportedExtensionApiAliasMap({ modulePath, argv1, moduleUrl, pluginSdkResolution }),
+      ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+    ),
     ...(pluginSdkAlias
       ? Object.fromEntries(
           PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [

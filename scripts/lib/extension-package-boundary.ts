@@ -16,6 +16,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_EXCLUDE = [
 ] as const;
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/extension-api": ["../src/extensionAPI.ts"],
+  "openclaw/extensions/memory-wiki/api": ["../extensions/memory-wiki/api.d.ts"],
   "openclaw/plugin-sdk": ["../dist/plugin-sdk/src/plugin-sdk/index.d.ts"],
   "openclaw/plugin-sdk/*": ["../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
   "openclaw/plugin-sdk/account-id": ["../dist/plugin-sdk/src/plugin-sdk/account-id.d.ts"],

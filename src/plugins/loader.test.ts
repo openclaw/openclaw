@@ -54,6 +54,7 @@ import {
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -1904,8 +1905,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
-  it("does not replace active memory plugin registries during non-activating loads", () => {
+  it("does not replace active memory plugin registries during non-activating loads", async () => {
     useNoBundledPlugins();
+    const activeWorkspaceDir = makeTempDir();
+    const activeArtifactPath = path.join(activeWorkspaceDir, "MEMORY.md");
+    fs.writeFileSync(activeArtifactPath, "# Active Memory\n", "utf8");
     registerMemoryEmbeddingProvider({
       id: "active",
       create: async () => ({ provider: null }),
@@ -1933,6 +1937,22 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     };
     registerMemoryRuntime(activeRuntime);
+    registerMemoryCapability("active-memory", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: activeWorkspaceDir,
+              relativePath: "MEMORY.md",
+              absolutePath: activeArtifactPath,
+              agentIds: ["main"],
+              contentType: "markdown",
+            },
+          ];
+        },
+      },
+    });
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
@@ -1988,6 +2008,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: activeWorkspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: activeArtifactPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {

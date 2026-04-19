@@ -108,6 +108,8 @@ function resolveActiveMemoryQmdSearchModeOverride(
 }
 
 async function getSupplementMemoryReadResult(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
   relPath: string;
   from?: number;
   lines?: number;
@@ -115,6 +117,8 @@ async function getSupplementMemoryReadResult(params: {
   corpus?: "memory" | "wiki" | "all";
 }) {
   const supplement = await getMemoryCorpusSupplementResult({
+    cfg: params.cfg,
+    agentId: params.agentId,
     lookup: params.relPath,
     fromLine: params.from,
     lineCount: params.lines,
@@ -132,6 +136,8 @@ async function getSupplementMemoryReadResult(params: {
 }
 
 async function resolveMemoryReadFailureResult(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
   error: unknown;
   requestedCorpus?: "memory" | "wiki" | "all";
   relPath: string;
@@ -141,6 +147,8 @@ async function resolveMemoryReadFailureResult(params: {
 }) {
   if (params.requestedCorpus === "all") {
     const supplement = await getSupplementMemoryReadResult({
+      cfg: params.cfg,
+      agentId: params.agentId,
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
@@ -156,6 +164,8 @@ async function resolveMemoryReadFailureResult(params: {
 }
 
 async function executeMemoryReadResult<T>(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
   read: () => Promise<T>;
   requestedCorpus?: "memory" | "wiki" | "all";
   relPath: string;
@@ -167,6 +177,8 @@ async function executeMemoryReadResult<T>(params: {
     return jsonResult(await params.read());
   } catch (error) {
     return await resolveMemoryReadFailureResult({
+      cfg: params.cfg,
+      agentId: params.agentId,
       error,
       requestedCorpus: params.requestedCorpus,
       relPath: params.relPath,
@@ -287,6 +299,8 @@ export function createMemorySearchTool(options: {
           }
           const supplementResults = shouldQuerySupplements
             ? await searchMemoryCorpusSupplements({
+                cfg,
+                agentId,
                 query,
                 maxResults,
                 agentSessionKey: options.agentSessionKey,
@@ -343,6 +357,8 @@ export function createMemoryGetTool(options: {
         const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
           const supplement = await getSupplementMemoryReadResult({
+            cfg,
+            agentId,
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
@@ -361,6 +377,8 @@ export function createMemoryGetTool(options: {
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         if (resolved.backend === "builtin") {
           return await executeMemoryReadResult({
+            cfg,
+            agentId,
             read: async () =>
               await readAgentMemoryFile({
                 cfg,
@@ -385,6 +403,8 @@ export function createMemoryGetTool(options: {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
         return await executeMemoryReadResult({
+          cfg,
+          agentId,
           read: async () =>
             await memory.manager.readFile({
               relPath,

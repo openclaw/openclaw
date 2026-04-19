@@ -1,6 +1,10 @@
 import os from "node:os";
 import path from "node:path";
-import { buildPluginConfigSchema, z, type OpenClawPluginConfigSchema } from "../api.js";
+import {
+  buildPluginConfigSchema,
+  type OpenClawPluginConfigSchema,
+} from "openclaw/plugin-sdk/plugin-entry";
+import { z } from "openclaw/plugin-sdk/zod";
 
 export const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 export const WIKI_RENDER_MODES = ["native", "obsidian"] as const;

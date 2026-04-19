@@ -154,6 +154,45 @@ function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?:
   return { root, srcFile, distFile };
 }
 
+function createExportedExtensionApiAliasFixture(params?: {
+  srcBody?: string;
+  distBody?: string;
+  srcExtension?: ".ts" | ".mts" | ".js" | ".mjs" | ".cts" | ".cjs";
+}) {
+  const root = makeTempDir();
+  const srcFile = path.join(
+    root,
+    "extensions",
+    "memory-wiki",
+    `api${params?.srcExtension ?? ".ts"}`,
+  );
+  const distFile = path.join(root, "dist", "extensions", "memory-wiki", "api.js");
+  mkdirSafeDir(path.dirname(srcFile));
+  mkdirSafeDir(path.dirname(distFile));
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify(
+      {
+        name: "openclaw",
+        type: "module",
+        bin: { openclaw: "openclaw.mjs" },
+        exports: {
+          "./plugin-sdk": { default: "./dist/plugin-sdk/index.js" },
+          "./cli-entry": { default: "./dist/cli-entry.js" },
+          "./extensions/memory-wiki/api": { default: "./dist/extensions/memory-wiki/api.js" },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+  fs.writeFileSync(srcFile, params?.srcBody ?? "export const memoryWikiApi = true;\n", "utf-8");
+  fs.writeFileSync(distFile, params?.distBody ?? "export const memoryWikiApi = true;\n", "utf-8");
+  return { root, srcFile, distFile };
+}
+
 function createPluginSdkAliasTargetFixture(params?: {
   sourceChannelRuntimeExtension?: ".ts" | ".mts" | ".js" | ".mjs" | ".cts" | ".cjs";
 }) {
@@ -310,6 +349,26 @@ function expectExtensionApiAliasResolution(params: {
     fixture: params.fixture,
     expected: params.expected,
   });
+}
+
+function expectExportedExtensionApiAliasTarget(params: {
+  fixture: { root: string; srcFile: string; distFile: string };
+  modulePath: (root: string) => string;
+  argv1?: (root: string) => string;
+  env?: NodeJS.ProcessEnv;
+  expected: "src" | "dist";
+}) {
+  const aliases = withEnv(params.env ?? {}, () =>
+    buildPluginLoaderAliasMap(
+      params.modulePath(params.fixture.root),
+      params.argv1?.(params.fixture.root),
+    ),
+  );
+  const aliasPath = aliases["openclaw/extensions/memory-wiki/api"];
+  expect(aliasPath).toBeTruthy();
+  expect(fs.realpathSync(aliasPath ?? "")).toBe(
+    fs.realpathSync(params.expected === "dist" ? params.fixture.distFile : params.fixture.srcFile),
+  );
 }
 
 function expectExportedSubpaths(params: {
@@ -475,6 +534,46 @@ describe("plugin sdk alias helpers", () => {
   it("resolves source extension-api aliases through the wider source extension family", () => {
     const fixture = createExtensionApiAliasFixture({ srcExtension: ".mts" });
     expectExtensionApiAliasResolution({
+      fixture,
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      env: { NODE_ENV: undefined },
+      expected: "src",
+    });
+  });
+
+  it.each([
+    {
+      name: "prefers src exported extension api aliases when loader runs from src in non-production",
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+    {
+      name: "prefers dist exported extension api aliases when loader runs from dist",
+      modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
+      expected: "dist" as const,
+    },
+    {
+      name: "resolves exported extension api aliases from package root when loader runs from transpiler cache path",
+      modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
+      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+  ])("$name", ({ modulePath, argv1, env, expected }) => {
+    const fixture = createExportedExtensionApiAliasFixture();
+    expectExportedExtensionApiAliasTarget({
+      fixture,
+      modulePath,
+      argv1,
+      env,
+      expected,
+    });
+  });
+
+  it("resolves source exported extension api aliases through the wider source extension family", () => {
+    const fixture = createExportedExtensionApiAliasFixture({ srcExtension: ".mts" });
+    expectExportedExtensionApiAliasTarget({
       fixture,
       modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
       env: { NODE_ENV: undefined },

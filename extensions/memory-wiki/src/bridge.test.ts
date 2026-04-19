@@ -163,10 +163,10 @@ describe("syncMemoryWikiBridgeSources", () => {
     });
   });
 
-  it("returns a no-op result when bridge mode is enabled without exported memory artifacts", async () => {
-    const workspaceDir = await createBridgeWorkspace("no-memory-core");
-    const { config } = await createVault({
-      rootDir: nextCaseRoot("no-memory-core-vault"),
+  it("falls back to config-derived artifacts when runtime capability is absent", async () => {
+    const workspaceDir = await createBridgeWorkspace("fallback-config");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("fallback-config-vault"),
       config: {
         vaultMode: "bridge",
         bridge: {
@@ -179,6 +179,38 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
 
+    // No registerBridgeArtifacts — runtime capability is absent
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(result.artifactCount).toBe(1);
+    expect(result.importedCount).toBe(1);
+    expect(result.workspaces).toBe(1);
+    expect(result.pagePaths).toHaveLength(1);
+    const page = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
+    expect(page).toContain("sourceType: memory-bridge");
+  });
+
+  it("returns a no-op result when workspace has no memory artifacts and runtime is absent", async () => {
+    const workspaceDir = await createBridgeWorkspace("truly-empty");
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("truly-empty-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+
+    // Empty workspace — no MEMORY.md, no memory/ directory
     const appConfig: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true, workspace: workspaceDir }],

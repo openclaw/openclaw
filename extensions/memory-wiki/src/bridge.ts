@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  listActiveMemoryPublicArtifacts,
-  type MemoryPluginPublicArtifact,
-} from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -14,6 +11,7 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
 } from "./markdown.js";
+import { listBridgeMemoryPublicArtifacts } from "./public-artifacts.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
@@ -221,7 +219,7 @@ export async function syncMemoryWikiBridgeSources(params: {
     };
   }
 
-  const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
+  const publicArtifacts = await listBridgeMemoryPublicArtifacts({ cfg: params.appConfig });
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   let artifactCount = 0;

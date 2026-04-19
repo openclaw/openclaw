@@ -25,6 +25,7 @@
       "@openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
+      "openclaw/extensions/memory-wiki/api": ["./extensions/memory-wiki/api.ts"],
       "@openclaw/*": ["./extensions/*"]
     }
   },
