@@ -11,6 +11,7 @@ import {
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -97,7 +98,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       );
     }
     reservedNames.add(normalizeLowercaseStringOrEmpty(safeToolName));
-    const agentTool = {
+    const agentTool: AnyAgentTool = {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
@@ -111,7 +112,7 @@ export async function materializeBundleMcpToolsForRun(params: {
         });
       },
     };
-    setPluginToolMeta(agentTool as any, {
+    setPluginToolMeta(agentTool, {
       pluginId: "bundle-mcp",
       optional: false,
     });
