@@ -24,6 +24,29 @@ resolve_prep_branch_name() {
   printf '%s\n' "$prep_branch"
 }
 
+print_prepare_init_prereq_guidance() {
+  local pr="$1"
+  local missing=()
+  [ -s .local/pr-meta.env ] || missing+=(".local/pr-meta.env")
+  [ -s .local/review.md ] || missing+=(".local/review.md")
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "prepare-init prerequisites are missing in the PR wrapper worktree:"
+  printf '  - %s\n' "${missing[@]}"
+  cat <<EOF_GUIDE
+prepare-init is not the first maintainer stage. Run the review bootstrap in this same wrapper worktree first:
+  scripts/pr review-init $pr
+  scripts/pr review-artifacts-init $pr
+
+Then complete or import the review artifacts, and rerun:
+  scripts/pr-prepare init $pr
+EOF_GUIDE
+  exit 1
+}
+
 verify_prep_branch_matches_prepared_head() {
   local pr="$1"
   local prepared_head_sha="$2"
@@ -51,8 +74,7 @@ prepare_init() {
   local pr="$1"
   enter_worktree "$pr" true
 
-  require_artifact .local/pr-meta.env
-  require_artifact .local/review.md
+  print_prepare_init_prereq_guidance "$pr"
 
   if [ ! -s .local/review.json ]; then
     echo "WARNING: .local/review.json is missing; structured findings are expected."

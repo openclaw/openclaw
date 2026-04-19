@@ -84,11 +84,40 @@ mainline_drift_requires_sync() {
   return 1
 }
 
+print_merge_prereq_guidance() {
+  local pr="$1"
+  local missing=()
+  local required
+  for required in .local/review.md .local/review.json .local/prep.md .local/prep.env; do
+    [ -s "$required" ] || missing+=("$required")
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "merge prerequisites are missing in the PR wrapper worktree:"
+  printf '  - %s\n' "${missing[@]}"
+  cat <<EOF_GUIDE
+Expected maintainer flow:
+  scripts/pr review-init $pr
+  scripts/pr review-artifacts-init $pr
+  scripts/pr-prepare init $pr
+  scripts/pr-prepare gates $pr
+  scripts/pr-prepare push $pr
+
+If review/prep happened manually in another worktree, the wrapper artifacts were never generated here.
+EOF_GUIDE
+  exit 1
+}
+
 merge_verify() {
   local pr="$1"
   enter_worktree "$pr" false
 
-  require_artifact .local/prep.env
+  if [ ! -s .local/prep.env ]; then
+    print_merge_prereq_guidance "$pr"
+  fi
   # shellcheck disable=SC1091
   source .local/prep.env
   verify_prep_branch_matches_prepared_head "$pr" "$PREP_HEAD_SHA"
@@ -168,10 +197,7 @@ merge_run() {
   local pr="$1"
   enter_worktree "$pr" false
 
-  local required
-  for required in .local/review.md .local/review.json .local/prep.md .local/prep.env; do
-    require_artifact "$required"
-  done
+  print_merge_prereq_guidance "$pr"
 
   merge_verify "$pr"
   # shellcheck disable=SC1091

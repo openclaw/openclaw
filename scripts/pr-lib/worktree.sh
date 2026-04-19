@@ -57,6 +57,7 @@ enter_worktree() {
   fi
 
   mkdir -p .local
+  echo "PR wrapper worktree: $PWD"
 }
 
 pr_meta_json() {
