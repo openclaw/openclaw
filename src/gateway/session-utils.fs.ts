@@ -162,14 +162,7 @@ function listExistingTranscriptVariantsForSessionId(
       .filter((name) => name === `${sessionId}.jsonl` || name.startsWith(`${sessionId}.jsonl.`))
       .filter((name) => !name.endsWith(".lock"))
       .map((name) => path.join(sessionsDir, name))
-      .filter((filePath) => fs.existsSync(filePath))
-      .toSorted((a, b) => {
-        try {
-          return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
-        } catch {
-          return a.localeCompare(b);
-        }
-      });
+      .filter((filePath) => fs.existsSync(filePath));
   } catch {
     return [];
   }
@@ -194,28 +187,6 @@ function resolveMainSessionTranscriptFiles(
     seen.add(normalized);
     files.push(normalized);
   };
-  const resetFiles: string[] = (() => {
-    try {
-      return fs
-        .readdirSync(context.sessionsDir)
-        .filter((name) => name.includes(".jsonl.reset."))
-        .map((name) => path.join(context.sessionsDir, name))
-        .filter((filePath) => fs.existsSync(filePath))
-        .toSorted((a, b) => {
-          try {
-            return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
-          } catch {
-            return a.localeCompare(b);
-          }
-        });
-    } catch {
-      return [];
-    }
-  })();
-  const latestReset = resetFiles[resetFiles.length - 1];
-  if (latestReset) {
-    pushFile(latestReset);
-  }
   const entry = context.entry as Record<string, unknown> | undefined;
   const rawCheckpoints = entry?.compactionCheckpoints;
   const checkpointSessionIds = Array.isArray(rawCheckpoints)
@@ -245,12 +216,27 @@ function resolveMainSessionTranscriptFiles(
   if (files.length === 0) {
     return null;
   }
-  return files.toSorted((a, b) => {
-    try {
-      return fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs;
-    } catch {
-      return a.localeCompare(b);
+  const mtimeCache = new Map<string, number | null>();
+  const getMtime = (filePath: string): number | null => {
+    if (mtimeCache.has(filePath)) {
+      return mtimeCache.get(filePath) ?? null;
     }
+    let value: number | null = null;
+    try {
+      value = fs.statSync(filePath).mtimeMs;
+    } catch {
+      value = null;
+    }
+    mtimeCache.set(filePath, value);
+    return value;
+  };
+  return files.toSorted((a, b) => {
+    const da = getMtime(a);
+    const db = getMtime(b);
+    if (da !== null && db !== null) {
+      return da - db;
+    }
+    return a.localeCompare(b);
   });
 }
 
