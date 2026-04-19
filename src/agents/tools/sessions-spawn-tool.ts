@@ -313,10 +313,9 @@ export function createSessionsSpawnTool(
             });
           }
         }
+        const isAcpFailure = result.status === "error" || result.status === "forbidden";
         return jsonResult(
-          result.status !== "accepted" && requestedAgentId
-            ? { ...result, role: requestedAgentId }
-            : result,
+          isAcpFailure && requestedAgentId ? { ...result, role: requestedAgentId } : result,
         );
       }
 
@@ -355,10 +354,9 @@ export function createSessionsSpawnTool(
         },
       );
 
+      const isSubagentFailure = result.status === "error" || result.status === "forbidden";
       return jsonResult(
-        result.status !== "accepted" && requestedAgentId
-          ? { ...result, role: requestedAgentId }
-          : result,
+        isSubagentFailure && requestedAgentId ? { ...result, role: requestedAgentId } : result,
       );
     },
   };
