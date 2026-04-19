@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import WebSocket from "ws";
 import type { RouterConfig, InstanceConfig } from "./config.js";
+import { stripHorizontalRules } from "../discord/markdown-strip.js";
+import { convertTimesToDiscordTimestamps } from "../discord/timestamps.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
@@ -460,9 +462,11 @@ async function routeDM(params: {
 
       for (const payload of payloads) {
         let text = payload.text?.trim() ?? "";
-        // Convert markdown tables to Discord-friendly code blocks
+        // Apply Discord text formatting pipeline
         if (text) {
           text = convertMarkdownTables(text, "code");
+          text = stripHorizontalRules(text);
+          text = convertTimesToDiscordTimestamps(text);
         }
         if (text) {
           const chunks = chunkText(text, 2000);

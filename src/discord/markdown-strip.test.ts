@@ -3,24 +3,24 @@ import { stripHorizontalRules } from "./markdown-strip.js";
 
 describe("stripHorizontalRules", () => {
   it("strips --- horizontal rules", () => {
-    expect(stripHorizontalRules("before\n---\nafter")).toBe("before\nafter");
+    expect(stripHorizontalRules("before\n---\nafter")).toBe("before\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nafter");
   });
 
   it("strips *** horizontal rules", () => {
-    expect(stripHorizontalRules("before\n***\nafter")).toBe("before\nafter");
+    expect(stripHorizontalRules("before\n***\nafter")).toBe("before\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nafter");
   });
 
   it("strips ___ horizontal rules", () => {
-    expect(stripHorizontalRules("before\n___\nafter")).toBe("before\nafter");
+    expect(stripHorizontalRules("before\n___\nafter")).toBe("before\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nafter");
   });
 
   it("strips rules with spaces between characters", () => {
-    expect(stripHorizontalRules("before\n- - -\nafter")).toBe("before\nafter");
-    expect(stripHorizontalRules("before\n* * *\nafter")).toBe("before\nafter");
+    expect(stripHorizontalRules("before\n- - -\nafter")).toBe("before\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nafter");
+    expect(stripHorizontalRules("before\n* * *\nafter")).toBe("before\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nafter");
   });
 
   it("strips rules with more than 3 characters", () => {
-    expect(stripHorizontalRules("before\n-----\nafter")).toBe("before\nafter");
+    expect(stripHorizontalRules("before\n-----\nafter")).toBe("before\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nafter");
   });
 
   it("does not strip rules inside code blocks", () => {
@@ -38,6 +38,8 @@ describe("stripHorizontalRules", () => {
   });
 
   it("handles multiple rules", () => {
-    expect(stripHorizontalRules("a\n---\nb\n***\nc")).toBe("a\nb\nc");
+    expect(stripHorizontalRules("a\n---\nb\n***\nc")).toBe(
+      "a\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nb\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\nc",
+    );
   });
 });

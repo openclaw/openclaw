@@ -6,9 +6,11 @@ import { parseFenceSpans } from "../markdown/fences.js";
 // instead of horizontal rules, so we strip them.
 const HR_RE = /^[ \t]*([-*_][ \t]*){3,}$/;
 
+const HR_REPLACEMENT = "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯";
+
 /**
- * Strip markdown horizontal rule lines from text. Only strips rules
- * that are outside fenced code blocks.
+ * Replace markdown horizontal rule lines with a unicode horizontal bar.
+ * Only replaces rules that are outside fenced code blocks.
  */
 export function stripHorizontalRules(text: string): string {
   if (!text) {
@@ -32,6 +34,7 @@ export function stripHorizontalRules(text: string): string {
     }
 
     if (HR_RE.test(line)) {
+      out.push(HR_REPLACEMENT);
       continue;
     }
 
