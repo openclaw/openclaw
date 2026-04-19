@@ -195,7 +195,7 @@ function renderChatAgentSelect(state: AppViewState) {
         .value=${currentAgentId}
         title=${selectedLabel}
         aria-label="Chat agent"
-        ?disabled=${!state.connected || agents.length === 0}
+        ?disabled=${!state.connected || (state.agentsList?.agents ?? []).length === 0}
         @change=${(e: Event) => {
           const nextAgentId = (e.target as HTMLSelectElement).value;
           if (normalizeLowercaseStringOrEmpty(nextAgentId) === currentAgentId) {
