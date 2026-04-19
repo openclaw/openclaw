@@ -208,6 +208,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
 - Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
 - Matrix/plugins: keep remaining Matrix event helpers on the canonical `matrix-js-sdk` subpath so build and plugin-load entrypoint checks stay consistent. (#68498) Thanks @masatohoshino.
+- Telegram/commands: preserve user-defined `customCommands` priority when the combined native + custom menu exceeds Telegram's 100-command or 5700-char payload cap, so operator commands are no longer silently dropped from `setMyCommands` on startup. Fixes #68333.
 
 ## 2026.4.15
 
