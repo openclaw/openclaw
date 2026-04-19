@@ -44,6 +44,7 @@ export type MatrixQaScenarioId =
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
+  | "matrix-mxid-prefixed-command-block"
   | "matrix-mention-metadata-spoof-block"
   | "matrix-observer-allowlist-override"
   | "matrix-allowlist-block"
@@ -448,6 +449,14 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "mention-gating",
     timeoutMs: 8_000,
     title: "Matrix room message without mention does not trigger",
+  },
+  {
+    id: "matrix-mxid-prefixed-command-block",
+    timeoutMs: 8_000,
+    title: "Matrix MXID-prefixed control commands stay gated",
+    configOverrides: {
+      groupPolicy: "open",
+    },
   },
   {
     id: "matrix-mention-metadata-spoof-block",

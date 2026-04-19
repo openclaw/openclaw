@@ -1,13 +1,19 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import "./oauth-external-auth-passthrough.test-support.js";
+import "./oauth-file-lock-passthrough.test-support.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
   oauthCred,
+  removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
+  resetOAuthProviderRuntimeMocks,
   storeWith,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
@@ -16,74 +22,21 @@ import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore } from "./types.js";
+
+const {
+  refreshProviderOAuthCredentialWithPluginMock,
+  formatProviderAuthProfileApiKeyWithPluginMock,
+} = getOAuthProviderRuntimeMocks();
 
 // Cross-account-leak defense-in-depth: each adopt site in oauth.ts calls the
 // shared identity copy gate before copying main-store credentials into the
 // sub-agent store. Unit tests cover policy variants; this suite proves each
 // production branch refuses a mismatched accountId.
 
-const {
-  refreshProviderOAuthCredentialWithPluginMock,
-  formatProviderAuthProfileApiKeyWithPluginMock,
-} = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
-  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
-}));
-
-vi.mock("../cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
-  writeCodexCliCredentials: () => true,
-}));
-
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }, { id: "anthropic" }],
-}));
-
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
-    formatProviderAuthProfileApiKeyWithPluginMock() ?? params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
-}));
-
-vi.mock("../../infra/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
-
-vi.mock("../../plugin-sdk/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
-
-vi.mock("./external-auth.js", () => ({
-  overlayExternalAuthProfiles: <T>(store: T) => store,
-  shouldPersistExternalAuthProfile: () => true,
-}));
-
-vi.mock("./doctor.js", () => ({
-  formatAuthDoctorHint: async () => undefined,
-}));
-
-vi.mock("./external-cli-sync.js", () => ({
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
-    credential?.type === "oauth" &&
-    credential.access.trim().length > 0 &&
-    Number.isFinite(credential.expires) &&
-    credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
-  readExternalCliBootstrapCredential: () => null,
-  readManagedExternalCliCredential: () => null,
-  resolveExternalCliAuthProfiles: () => [],
-  shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
 }));
 
 describe("OAuth credential adoption is identity-gated", () => {
@@ -93,23 +46,19 @@ describe("OAuth credential adoption is identity-gated", () => {
   let mainAgentDir = "";
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-adopt-identity-"));
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-adopt-identity-");
   });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    refreshProviderOAuthCredentialWithPluginMock.mockReset();
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
     clearRuntimeAuthProfileStoreSnapshots();
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    mainAgentDir = path.join(caseRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
-    await fs.mkdir(mainAgentDir, { recursive: true });
+    mainAgentDir = await createOAuthMainAgentDir(caseRoot);
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -121,9 +70,7 @@ describe("OAuth credential adoption is identity-gated", () => {
   });
 
   afterAll(async () => {
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("adoptNewerMainOAuthCredential refuses to adopt across accountId mismatch (pre-refresh path)", async () => {

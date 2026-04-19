@@ -1,13 +1,18 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import "./oauth-external-auth-passthrough.test-support.js";
+import "./oauth-file-lock-passthrough.test-support.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
   createExpiredOauthStore,
+  removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
+  resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
@@ -15,69 +20,15 @@ import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
-import type { OAuthCredential } from "./types.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
-} = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
-  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
-}));
-
-vi.mock("../cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
-  writeCodexCliCredentials: () => true,
-}));
+} = getOAuthProviderRuntimeMocks();
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }],
-}));
-
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
-    formatProviderAuthProfileApiKeyWithPluginMock() ?? params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
-}));
-
-vi.mock("../../infra/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
-
-vi.mock("../../plugin-sdk/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
-
-vi.mock("./doctor.js", () => ({
-  formatAuthDoctorHint: async () => undefined,
-}));
-
-vi.mock("./external-auth.js", () => ({
-  overlayExternalAuthProfiles: <T>(store: T) => store,
-  shouldPersistExternalAuthProfile: () => true,
-}));
-
-vi.mock("./external-cli-sync.js", () => ({
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
-    credential?.type === "oauth" &&
-    credential.access.trim().length > 0 &&
-    Number.isFinite(credential.expires) &&
-    credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
-  readExternalCliBootstrapCredential: () => null,
-  readManagedExternalCliCredential: () => null,
-  resolveExternalCliAuthProfiles: () => [],
-  shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
 }));
 
 describe("OAuth refresh in-process queue", () => {
@@ -87,22 +38,18 @@ describe("OAuth refresh in-process queue", () => {
   let caseIndex = 0;
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-queue-"));
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-queue-");
   });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    refreshProviderOAuthCredentialWithPluginMock.mockReset();
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
     clearRuntimeAuthProfileStoreSnapshots();
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    agentDir = path.join(caseRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    await fs.mkdir(agentDir, { recursive: true });
+    agentDir = await createOAuthMainAgentDir(caseRoot);
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -114,7 +61,7 @@ describe("OAuth refresh in-process queue", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("releases the queue even when the refresh throws", async () => {

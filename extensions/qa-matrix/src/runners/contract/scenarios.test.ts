@@ -106,6 +106,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
       "matrix-mention-gating",
+      "matrix-mxid-prefixed-command-block",
       "matrix-mention-metadata-spoof-block",
       "matrix-observer-allowlist-override",
       "matrix-allowlist-block",
@@ -514,6 +515,51 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!room:matrix-qa.test",
     });
+  });
+
+  it("blocks MXID-prefixed Matrix control commands from non-allowlisted observers", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-command-trigger");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => {
+      expect(params.since).toBe("observer-sync-start");
+      return {
+        matched: false,
+        since: "observer-sync-next",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        actorUserId: "@observer:matrix-qa.test",
+        driverEventId: "$observer-command-trigger",
+      },
+    });
+
+    expect(createMatrixQaClient).toHaveBeenCalledWith({
+      accessToken: "observer-token",
+      baseUrl: "http://127.0.0.1:28008/",
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: "@sut:matrix-qa.test /new",
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(waitForOptionalRoomEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
   });
 
   it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {

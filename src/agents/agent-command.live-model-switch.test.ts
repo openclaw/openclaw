@@ -368,24 +368,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       | undefined;
     expect(secondCall?.provider).toBe("openai");
     expect(secondCall?.model).toBe("gpt-5.4");
+
+    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    });
+    expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("propagates non-LiveSessionModelSwitchError errors without retrying", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("some other failure"));
-
-    const agentCommand = await getAgentCommand();
-    await expect(
-      agentCommand({
-        message: "hello",
-        to: "+1234567890",
-        senderIsOwner: true,
-      }),
-    ).rejects.toThrow("some other failure");
-
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("emits lifecycle error event for non-switch errors", async () => {
+  it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider down"));
 
     const agentCommand = await getAgentCommand();
@@ -397,28 +388,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     ).rejects.toThrow("provider down");
 
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+
     const lifecycleErrorCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
       return arg?.stream === "lifecycle" && arg?.data?.phase === "error";
     });
     expect(lifecycleErrorCalls.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("resets lifecycleEnded flag between retry iterations", async () => {
-    setupModelSwitchRetry({
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-
-    await runBasicAgentCommand();
-
-    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
-      const arg = call[0] as { stream?: string; data?: { phase?: string } };
-      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
-    });
-    expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("propagates authProfileId from the switch error to the retried session entry", async () => {

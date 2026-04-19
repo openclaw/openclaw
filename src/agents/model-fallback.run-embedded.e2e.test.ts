@@ -11,6 +11,7 @@ import {
   createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
+import { installEmbeddedRunnerBaseE2eMocks } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -54,20 +55,7 @@ vi.mock("./models-config.js", async () => {
 });
 
 const installRunEmbeddedMocks = () => {
-  vi.doMock("../plugins/hook-runner-global.js", () => ({
-    getGlobalHookRunner: vi.fn(() => undefined),
-  }));
-  vi.doMock("../context-engine/init.js", () => ({
-    ensureContextEnginesInitialized: vi.fn(),
-  }));
-  vi.doMock("../context-engine/registry.js", () => ({
-    resolveContextEngine: vi.fn(async () => ({
-      dispose: async () => undefined,
-    })),
-  }));
-  vi.doMock("./runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: vi.fn(),
-  }));
+  installEmbeddedRunnerBaseE2eMocks();
   vi.doMock("./pi-embedded-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),

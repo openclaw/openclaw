@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { resolveApiKeyForProfile } from "./oauth.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -51,6 +54,47 @@ export function createExpiredOauthStore(params: {
       } satisfies OAuthCredential,
     },
   };
+}
+
+export async function createOAuthTestTempRoot(prefix: string): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+export async function createOAuthMainAgentDir(stateDir: string): Promise<string> {
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.OPENCLAW_AGENT_DIR = agentDir;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  await fs.mkdir(agentDir, { recursive: true });
+  return agentDir;
+}
+
+export async function removeOAuthTestTempRoot(tempRoot: string): Promise<void> {
+  if (tempRoot) {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+type ResettableMock = {
+  mockReset(): unknown;
+};
+
+type ResolvedValueMock = ResettableMock & {
+  mockResolvedValue(value: unknown): unknown;
+};
+
+type ReturnValueMock = ResettableMock & {
+  mockReturnValue(value: unknown): unknown;
+};
+
+export function resetOAuthProviderRuntimeMocks(mocks: {
+  refreshProviderOAuthCredentialWithPluginMock: ResolvedValueMock;
+  formatProviderAuthProfileApiKeyWithPluginMock: ReturnValueMock;
+}): void {
+  mocks.refreshProviderOAuthCredentialWithPluginMock.mockReset();
+  mocks.refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
+  mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
+  mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
 }
 
 export function makeSeededRandom(seed: number): () => number {
