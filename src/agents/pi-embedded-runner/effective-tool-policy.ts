@@ -143,9 +143,9 @@ export function applyFinalEffectiveToolPolicy(
   );
   // Warn if any bundled tools lack plugin metadata (degradation signal)
   for (const tool of ownerFiltered) {
-    if (tool.name.includes("bundle-mcp") && !getPluginToolMeta(tool)) {
+    if (!getPluginToolMeta(tool)) {
       params.warn(
-        `effective tool policy: bundle-mcp tool "${tool.name}" lacks plugin metadata; filtering may be incomplete`,
+        `effective tool policy: bundled tool "${tool.name}" lacks plugin metadata; filtering may be incomplete`,
       );
     }
   }

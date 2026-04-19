@@ -25,7 +25,7 @@ describe("tool-catalog", () => {
     expect(messagingPolicy!.allow).toContain("bundle-mcp");
   });
 
-  it("allows deny list to override and block bundle-mcp tools", () => {
+  it("includes bundle-mcp in coding profile allow list with no deny list by default", () => {
     const codingPolicy = resolveCoreToolProfilePolicy("coding");
     expect(codingPolicy).toBeDefined();
     // Verify bundle-mcp is in allow list

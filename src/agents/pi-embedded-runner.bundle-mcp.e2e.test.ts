@@ -9,6 +9,7 @@ import {
   type EmbeddedPiRunnerTestWorkspace,
   immediateEnqueue,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 
 const E2E_TIMEOUT_MS = 40_000;
 
@@ -52,24 +53,26 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
     }),
     dispose: async () => {},
   }),
-  materializeBundleMcpToolsForRun: async () => ({
-    tools: [
-      {
-        name: "bundleProbe__bundle_probe",
-        label: "bundle_probe",
-        description: "Bundle MCP probe",
-        parameters: { type: "object", properties: {} },
-        execute: async () => ({
-          content: [{ type: "text", text: "FROM-BUNDLE" }],
-          details: {
-            mcpServer: "bundleProbe",
-            mcpTool: "bundle_probe",
-          },
-        }),
-      },
-    ],
-    dispose: async () => {},
-  }),
+  materializeBundleMcpToolsForRun: async () => {
+    const tool = {
+      name: "bundleProbe__bundle_probe",
+      label: "bundle_probe",
+      description: "Bundle MCP probe",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text", text: "FROM-BUNDLE" }],
+        details: {
+          mcpServer: "bundleProbe",
+          mcpTool: "bundle_probe",
+        },
+      }),
+    };
+    setPluginToolMeta(tool as any, { pluginId: "bundle-mcp", optional: false });
+    return {
+      tools: [tool],
+      dispose: async () => {},
+    };
+  },
 }));
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -262,7 +265,7 @@ describe("runEmbeddedPiAgent bundle MCP e2e", () => {
       const sessionFile = path.join(workspaceDir, "session-bundle-mcp-coding-profile.jsonl");
       const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
       cfg.agents = {
-        default: {
+        defaults: {
           toolProfile: "coding",
         },
       };
@@ -296,7 +299,7 @@ describe("runEmbeddedPiAgent bundle MCP e2e", () => {
       const sessionFile = path.join(workspaceDir, "session-bundle-mcp-minimal-profile.jsonl");
       const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
       cfg.agents = {
-        default: {
+        defaults: {
           toolProfile: "minimal",
         },
       };
