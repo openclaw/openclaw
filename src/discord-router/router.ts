@@ -302,6 +302,7 @@ async function routeDM(params: {
         timeoutMs: agentTimeoutMs + 30_000,
         clientName: "cli",
         mode: "backend",
+        skipDeviceAuth: true,
       });
 
       const payloads = result?.result?.payloads ?? [];

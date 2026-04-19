@@ -36,6 +36,9 @@ export type CallGatewayOptions = {
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
+  /** Skip device identity and auth token caching. Use when connecting to
+   *  multiple gateways from the same host (e.g., the discord-router). */
+  skipDeviceAuth?: boolean;
   /**
    * Overrides the config path shown in connection error details.
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
@@ -261,7 +264,7 @@ export async function callGateway<T = Record<string, unknown>>(
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      deviceIdentity: opts.skipDeviceAuth ? undefined : loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async () => {
