@@ -231,6 +231,62 @@ export function clearPluginLoaderCache(): void {
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
+function resolvePluginScopeDebugMemorySlotInScope(params: {
+  onlyPluginIds?: readonly string[];
+  memorySlot: string | null | undefined;
+}): boolean | "memory-slot-unknown" {
+  if (params.memorySlot === null) {
+    return false;
+  }
+  if (typeof params.memorySlot !== "string" || params.memorySlot.length === 0) {
+    return "memory-slot-unknown";
+  }
+  return params.onlyPluginIds === undefined
+    ? true
+    : params.onlyPluginIds.includes(params.memorySlot);
+}
+
+function buildPluginScopeDebugCaller(): string {
+  return (new Error().stack ?? "")
+    .split("\n")
+    .slice(1)
+    .map((frame) => frame.trim())
+    .filter(
+      (frame) =>
+        frame.length > 0 &&
+        !frame.includes("node_modules") &&
+        !frame.includes("buildPluginScopeDebugCaller") &&
+        !frame.includes("emitPluginScopeDebugLog"),
+    )
+    .slice(0, 5)
+    .join(" <- ");
+}
+
+function emitPluginScopeDebugLog(params: {
+  logger: PluginLogger;
+  tag: "plugin-load" | "memory-state-clear";
+  onlyPluginIds?: readonly string[];
+  memorySlot: string | null | undefined;
+  shouldActivate: boolean;
+  cacheKey: string;
+}): void {
+  (
+    params.logger as PluginLogger & {
+      warn: (message: string, meta?: Record<string, unknown>) => void;
+    }
+  ).warn("[plugin-scope-debug]", {
+    tag: params.tag,
+    onlyPluginIds: params.onlyPluginIds ?? "all",
+    memorySlotInScope: resolvePluginScopeDebugMemorySlotInScope({
+      onlyPluginIds: params.onlyPluginIds,
+      memorySlot: params.memorySlot,
+    }),
+    shouldActivate: params.shouldActivate,
+    cacheKey: params.cacheKey,
+    caller: buildPluginScopeDebugCaller(),
+  });
+}
+
 function shouldProfilePluginLoader(): boolean {
   return process.env.OPENCLAW_PLUGIN_LOAD_PROFILE === "1";
 }
@@ -1433,6 +1489,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     runtimeSubagentMode,
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
+  if (process.env.OPENCLAW_DEBUG_PLUGIN_SCOPE === "1") {
+    emitPluginScopeDebugLog({
+      logger,
+      tag: "plugin-load",
+      onlyPluginIds,
+      memorySlot: normalized.slots.memory,
+      shouldActivate,
+      cacheKey,
+    });
+  }
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
   const cacheEnabled = options.cache !== false;
@@ -1472,6 +1538,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearAgentHarnesses();
       clearPluginCommands();
       clearPluginInteractiveHandlers();
+      if (process.env.OPENCLAW_DEBUG_PLUGIN_SCOPE === "1") {
+        emitPluginScopeDebugLog({
+          logger,
+          tag: "memory-state-clear",
+          onlyPluginIds,
+          memorySlot: normalized.slots.memory,
+          shouldActivate,
+          cacheKey,
+        });
+      }
       clearMemoryPluginState();
     }
 
