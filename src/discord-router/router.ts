@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import type { RouterConfig, InstanceConfig } from "./config.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { convertMarkdownTables } from "../markdown/tables.js";
 import { setOnboardingState } from "./config.js";
 import { startOAuthCallbackServer } from "./oauth-callback.js";
 
@@ -458,7 +459,11 @@ async function routeDM(params: {
       }
 
       for (const payload of payloads) {
-        const text = payload.text?.trim();
+        let text = payload.text?.trim() ?? "";
+        // Convert markdown tables to Discord-friendly code blocks
+        if (text) {
+          text = convertMarkdownTables(text, "code");
+        }
         if (text) {
           const chunks = chunkText(text, 2000);
           for (const chunk of chunks) {
