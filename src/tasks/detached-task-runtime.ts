@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedTaskLifecycleRuntime,
   DetachedTaskLifecycleRuntimeRegistration,
@@ -18,6 +19,9 @@ import {
   setDetachedTaskDeliveryStatusByRunId as setDetachedTaskDeliveryStatusByRunIdFromExecutor,
   startTaskRunByRunId as startTaskRunByRunIdFromExecutor,
 } from "./task-executor.js";
+import type { TaskRecord, TaskRuntime } from "./task-registry.types.js";
+
+const log = createSubsystemLogger("tasks/detached-runtime");
 
 export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
@@ -103,4 +107,25 @@ export function cancelDetachedTaskRunById(
   ...args: Parameters<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]> {
   return getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById(...args);
+}
+
+export async function onBeforeMarkLost(params: {
+  taskId: string;
+  runtime: TaskRuntime;
+  task: TaskRecord;
+}): Promise<{ recovered: boolean }> {
+  const hook = getDetachedTaskLifecycleRuntime().onBeforeMarkLost;
+  if (!hook) {
+    return { recovered: false };
+  }
+  try {
+    return await hook(params);
+  } catch (err) {
+    log.warn("onBeforeMarkLost hook threw, proceeding with markTaskLost", {
+      taskId: params.taskId,
+      runtime: params.runtime,
+      error: err,
+    });
+    return { recovered: false };
+  }
 }

@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+  getDetachedTaskLifecycleRuntime,
+} from "./detached-task-runtime.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
@@ -38,6 +43,7 @@ type TaskRegistryMaintenanceRuntime = Parameters<
 afterEach(() => {
   stopTaskRegistryMaintenanceForTests();
   resetTaskRegistryMaintenanceRuntimeForTests();
+  resetDetachedTaskLifecycleRuntimeForTests();
 });
 
 function createTaskRegistryMaintenanceHarness(params: {
@@ -195,6 +201,27 @@ describe("task-registry maintenance issue #60299", () => {
     });
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("skips markTaskLost and counts recovered when onBeforeMarkLost hook recovers a stale task", async () => {
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-recovered",
+      childSessionKey: undefined,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+    });
+
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      onBeforeMarkLost: vi.fn(() => ({ recovered: true })),
+    });
+
+    const result = await runTaskRegistryMaintenance();
+    expect(result).toMatchObject({ reconciled: 0, recovered: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 });

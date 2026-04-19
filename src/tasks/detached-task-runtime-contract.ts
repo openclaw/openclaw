@@ -112,6 +112,11 @@ export type DetachedTaskLifecycleRuntime = {
   cancelDetachedTaskRunById: (
     params: DetachedTaskCancelParams,
   ) => Promise<DetachedTaskCancelResult>;
+  onBeforeMarkLost?: (params: {
+    taskId: string;
+    runtime: TaskRuntime;
+    task: TaskRecord;
+  }) => { recovered: boolean } | Promise<{ recovered: boolean }>;
 };
 
 export type DetachedTaskLifecycleRuntimeRegistration = {
