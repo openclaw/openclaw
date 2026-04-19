@@ -1408,11 +1408,14 @@ export function startHeartbeatRunner(opts: {
       if (!intervalMs) {
         continue;
       }
-      const phaseMs = resolveHeartbeatPhaseMs({
-        schedulerSeed: state.schedulerSeed,
-        agentId: agent.agentId,
-        intervalMs,
-      });
+      const phaseMs =
+        agent.heartbeat?.anchor === "clock"
+          ? 0
+          : resolveHeartbeatPhaseMs({
+              schedulerSeed: state.schedulerSeed,
+              agentId: agent.agentId,
+              intervalMs,
+            });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
       const nextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevState);

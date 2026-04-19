@@ -346,6 +346,35 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("anchors heartbeat ticks to clock boundaries when anchor='clock'", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-01-01T09:37:00.000Z"));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "1h", anchor: "clock" } },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    const firstTickMs = Date.parse("2026-01-01T10:00:00.000Z");
+    await vi.advanceTimersByTimeAsync(firstTickMs - Date.now() - 1);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(Date.now()).toBe(Date.parse("2026-01-01T11:00:00.001Z"));
+
+    runner.stop();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

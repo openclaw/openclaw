@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Image generation: let agents request provider-supported quality and output format hints, and pass OpenAI-specific background, moderation, compression, and user hints through the `image_generate` tool. (#70503) Thanks @ottodeng.
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop.
 - Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default.
+- Heartbeat: add `agents.defaults.heartbeat.anchor="clock"` to align heartbeat ticks to UTC epoch boundaries (for example `every="2h"` + `anchor="clock"` fires at 00:00, 02:00, 04:00 UTC) instead of the seed-derived per-agent phase.
 
 ### Fixes
 

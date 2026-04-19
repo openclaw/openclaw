@@ -332,6 +332,12 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /**
+     * Anchor heartbeat ticks to clock boundaries instead of the seed-derived phase.
+     * - `"clock"`: align phase to UTC epoch (e.g. every 2h → 00:00, 02:00, 04:00 UTC).
+     * - omitted/undefined: default behavior (deterministic per-agent phase).
+     */
+    anchor?: "clock";
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
       /** Start time (24h, HH:MM). Inclusive. */
