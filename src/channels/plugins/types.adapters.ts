@@ -172,6 +172,16 @@ export type ChannelGroupAdapter = {
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
+  /**
+   * Opt out of the channel-health-monitor stale-socket check in
+   * `src/gateway/channel-health-policy.ts`. Set to `true` for channels whose
+   * transport already owns connection liveness — for example Slack Socket Mode
+   * (long-lived WebSocket with internal pings) or Telegram webhook/long-poll —
+   * where the monitor's `lastEventAt` idle heuristic produces spurious "stale"
+   * verdicts and unnecessary channel restarts on otherwise-healthy bots.
+   * Genuine disconnects are still detected via `snapshot.connected === false`,
+   * which short-circuits before the stale-socket branch.
+   */
   skipStaleSocketHealthCheck?: boolean;
   buildChannelSummary?: BivariantCallback<
     (params: {
