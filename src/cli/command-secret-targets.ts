@@ -28,6 +28,8 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
   "agents.list[].tts.providers.*.apiKey",
+  "mcp.servers.*.env.*",
+  "mcp.servers.*.headers.*",
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",

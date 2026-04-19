@@ -435,6 +435,11 @@ OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP ser
 If your MCP server genuinely needs one of the blocked variables, set it on the gateway host process instead of under the stdio server's `env`.
 </Warning>
 
+`env` values may be either plaintext strings or SecretRef inputs. Use
+[Secrets Management](/gateway/secrets) and
+[SecretRef Credential Surface](/reference/secretref-credential-surface) for
+the canonical supported paths and migration flow.
+
 ### SSE / HTTP transport
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
@@ -464,6 +469,11 @@ Example:
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output.
 
+`headers` values may be either plaintext strings or SecretRef inputs. Use
+[Secrets Management](/gateway/secrets) and
+[SecretRef Credential Surface](/reference/secretref-credential-surface) for
+the canonical supported paths and migration flow.
+
 ### Streamable HTTP transport
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
@@ -476,6 +486,8 @@ Sensitive values in `url` (userinfo) and `headers` are redacted in logs and stat
 | `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                         |
 
 OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded Pi consumes directly.
+
+As with SSE, `headers` values may be plaintext strings or SecretRef inputs.
 
 Example:
 

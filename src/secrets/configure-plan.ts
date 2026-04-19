@@ -6,6 +6,10 @@ import {
   type SecretProviderConfig,
   type SecretRef,
 } from "../config/types.secrets.js";
+import {
+  isLikelySensitiveMcpEnvName,
+  isLikelySensitiveMcpHeaderName,
+} from "./mcp-target-sensitivity.js";
 import type { SecretsApplyPlan } from "./plan.js";
 import { isRecord } from "./shared.js";
 import {
@@ -72,6 +76,20 @@ function resolveAuthProfileProvider(
   return provider.length > 0 ? provider : undefined;
 }
 
+function shouldIncludeConfigureCandidate(path: {
+  entry: { id: string };
+  pathSegments: string[];
+}): boolean {
+  const leafSegment = path.pathSegments.at(-1) ?? "";
+  if (path.entry.id === "mcp.servers.*.env.*") {
+    return isLikelySensitiveMcpEnvName(leafSegment);
+  }
+  if (path.entry.id === "mcp.servers.*.headers.*") {
+    return isLikelySensitiveMcpHeaderName(leafSegment);
+  }
+  return true;
+}
+
 export function buildConfigureCandidatesForScope(params: {
   config: OpenClawConfig;
   authoredOpenClawConfig?: OpenClawConfig;
@@ -87,6 +105,7 @@ export function buildConfigureCandidatesForScope(params: {
 
   const openclawCandidates = discoverConfigSecretTargets(params.config)
     .filter((entry) => entry.entry.includeInConfigure)
+    .filter((entry) => shouldIncludeConfigureCandidate(entry))
     .map((entry) => {
       const resolved = resolveSecretInputRef({
         value: entry.value,

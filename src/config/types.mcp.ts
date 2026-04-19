@@ -1,10 +1,12 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type McpServerConfig = {
   /** Stdio transport: command to spawn. */
   command?: string;
   /** Stdio transport: arguments for the command. */
   args?: string[];
   /** Environment variables passed to the server process (stdio only). */
-  env?: Record<string, string | number | boolean>;
+  env?: Record<string, string | number | boolean | SecretInput>;
   /** Working directory for stdio server. */
   cwd?: string;
   /** Alias for cwd. */
@@ -14,7 +16,7 @@ export type McpServerConfig = {
   /** HTTP transport type for remote MCP servers. */
   transport?: "sse" | "streamable-http";
   /** HTTP transport: extra HTTP headers sent with every request. */
-  headers?: Record<string, string | number | boolean>;
+  headers?: Record<string, string | number | boolean | SecretInput>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
   [key: string]: unknown;

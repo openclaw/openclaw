@@ -200,6 +200,47 @@ describe("secrets runtime snapshot core lanes", () => {
     expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
 
+  it("resolves env refs for core mcp server env and headers", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        mcp: {
+          servers: {
+            "mission-control": {
+              command: "node",
+              args: ["scripts/mc-mcp-server.cjs"],
+              env: {
+                MC_API_KEY: { source: "env", provider: "default", id: "MC_API_KEY" },
+              },
+            },
+            remote: {
+              url: "https://example.invalid/mcp",
+              headers: {
+                Authorization: {
+                  source: "env",
+                  provider: "default",
+                  id: "REMOTE_MCP_AUTH",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        MC_API_KEY: "mc-secret-runtime",
+        REMOTE_MCP_AUTH: "Bearer remote-secret-runtime",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map(),
+    });
+
+    expect(snapshot.config.mcp?.servers?.["mission-control"]?.env?.MC_API_KEY).toBe(
+      "mc-secret-runtime",
+    );
+    expect(snapshot.config.mcp?.servers?.remote?.headers?.Authorization).toBe(
+      "Bearer remote-secret-runtime",
+    );
+  });
+
   it("resolves env-backed auth profile SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({}),

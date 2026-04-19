@@ -33,6 +33,8 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: (params?: { includeChannelTargets?: boolean }) =>
     new Set([
       "models.providers.*.apiKey",
+      "mcp.servers.*.env.*",
+      "mcp.servers.*.headers.*",
       ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
     ]),
 }));
@@ -184,6 +186,71 @@ describe("agentCommand runtime config", () => {
 
       const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
       expect(targetIds.has("channels.telegram.botToken")).toBe(true);
+    });
+  });
+
+  it("resolves core mcp server SecretRef values for embedded runtime config", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: { "anthropic/claude-opus-4-6": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+        mcp: {
+          servers: {
+            "mission-control": {
+              command: "node",
+              env: {
+                MC_API_KEY: { source: "env", provider: "default", id: "MC_API_KEY" },
+              },
+              headers: {
+                Authorization: { source: "env", provider: "default", id: "MC_HEADER" },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sourceConfig = structuredClone(loadedConfig);
+      const resolvedConfig = {
+        ...loadedConfig,
+        mcp: {
+          servers: {
+            "mission-control": {
+              command: "node",
+              env: {
+                MC_API_KEY: "resolved-api-key",
+              },
+              headers: {
+                Authorization: "Bearer resolved-header",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      loadConfigMock.mockReturnValue(loadedConfig);
+      readConfigFileSnapshotForWriteMock.mockResolvedValue({
+        snapshot: { valid: true, resolved: sourceConfig },
+        writeOptions: {},
+      });
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig,
+        effectiveConfig: resolvedConfig,
+        diagnostics: [],
+      });
+
+      const prepared = await resolveAgentRuntimeConfig(runtime);
+
+      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      expect(targetIds.has("mcp.servers.*.env.*")).toBe(true);
+      expect(targetIds.has("mcp.servers.*.headers.*")).toBe(true);
+      expect(prepared.cfg).toBe(resolvedConfig);
+      expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
     });
   });
 

@@ -117,6 +117,12 @@ describe("exec SecretRef id parity", () => {
     if (canonicalId.startsWith("gateway.remote.")) {
       return "gateway.remote";
     }
+    if (canonicalId.startsWith("mcp.servers.") && canonicalId.includes(".headers.")) {
+      return "mcp.headers";
+    }
+    if (canonicalId.startsWith("mcp.servers.") && canonicalId.includes(".env.")) {
+      return "mcp.env";
+    }
     if (canonicalId.startsWith("messages.")) {
       return "messages";
     }
