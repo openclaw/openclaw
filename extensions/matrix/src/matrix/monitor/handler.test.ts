@@ -1742,11 +1742,37 @@ describe("matrix monitor handler pairing account scope", () => {
 });
 
 describe("matrix monitor handler live allowlist reload", () => {
-  it("accepts a DM sender added to live dm.allowFrom", async () => {
-    const dispatchReplyFromConfig = vi.fn(async () => ({
+  type MatrixHandler = ReturnType<typeof createMatrixHandlerTestHarness>["handler"];
+
+  const createDispatchReplyFromConfig = () =>
+    vi.fn(async () => ({
       queuedFinal: false,
       counts: { final: 0, block: 0, tool: 0 },
     }));
+
+  const sendLiveAllowlistMessage = async (
+    handler: MatrixHandler,
+    params: {
+      eventId: string;
+      sender: string;
+      body: string;
+      roomId?: string;
+      mentions?: MatrixRawEvent["content"]["m.mentions"];
+    },
+  ) => {
+    await handler(
+      params.roomId ?? "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: params.eventId,
+        sender: params.sender,
+        body: params.body,
+        ...(params.mentions ? { mentions: params.mentions } : {}),
+      }),
+    );
+  };
+
+  it("accepts a DM sender added to live dm.allowFrom", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
       channels: {
         matrix: {
@@ -1763,34 +1789,25 @@ describe("matrix monitor handler live allowlist reload", () => {
       dispatchReplyFromConfig,
     });
 
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$dm-add-before",
-        sender: "@alice:example.org",
-        body: "hello",
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-add-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
     expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dm.allowFrom = ["@alice:example.org"];
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$dm-add-after",
-        sender: "@alice:example.org",
-        body: "hello again",
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-add-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
 
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a DM sender removed from live dm.allowFrom", async () => {
-    const dispatchReplyFromConfig = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { final: 0, block: 0, tool: 0 },
-    }));
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
       channels: {
         matrix: {
@@ -1807,34 +1824,25 @@ describe("matrix monitor handler live allowlist reload", () => {
       dispatchReplyFromConfig,
     });
 
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$dm-remove-before",
-        sender: "@alice:example.org",
-        body: "hello",
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-remove-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$dm-remove-after",
-        sender: "@alice:example.org",
-        body: "hello again",
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-remove-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
 
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("keeps startup-resolved display names only while the raw input remains configured", async () => {
-    const dispatchReplyFromConfig = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { final: 0, block: 0, tool: 0 },
-    }));
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
       channels: {
         matrix: {
@@ -1851,34 +1859,25 @@ describe("matrix monitor handler live allowlist reload", () => {
       dispatchReplyFromConfig,
     });
 
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$dm-name-before",
-        sender: "@alice:example.org",
-        body: "hello",
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-name-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
-    await handler(
-      "!dm:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$dm-name-after",
-        sender: "@alice:example.org",
-        body: "hello again",
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-name-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
 
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a room sender removed from live groupAllowFrom while the group list remains configured", async () => {
-    const dispatchReplyFromConfig = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { final: 0, block: 0, tool: 0 },
-    }));
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
       channels: {
         matrix: {
@@ -1899,27 +1898,23 @@ describe("matrix monitor handler live allowlist reload", () => {
       dispatchReplyFromConfig,
     });
 
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$group-remove-before",
-        sender: "@alice:example.org",
-        body: "@room hello",
-        mentions: { room: true },
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      roomId: "!room:example.org",
+      eventId: "$group-remove-before",
+      sender: "@alice:example.org",
+      body: "@room hello",
+      mentions: { room: true },
+    });
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.groupAllowFrom = ["@bob:example.org"];
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$group-remove-after",
-        sender: "@alice:example.org",
-        body: "@room hello again",
-        mentions: { room: true },
-      }),
-    );
+    await sendLiveAllowlistMessage(handler, {
+      roomId: "!room:example.org",
+      eventId: "$group-remove-after",
+      sender: "@alice:example.org",
+      body: "@room hello again",
+      mentions: { room: true },
+    });
 
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
