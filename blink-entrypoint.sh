@@ -74,14 +74,18 @@ EOF
   mv -f "${TMP_AUTH}" "${AUTH_FILE}"
 fi
 
-# Sanitize models.json: force blink.baseUrl to the canonical value.
-# Upstream v2026.4.15's openai-completions normalization writes ".../api/v1/ai/v1"
-# on first persistence, and preserve-baseUrl (#67893) locks that corrupted value
-# forever. We rewrite unconditionally on every boot so the bug can never persist.
-if [ -f "${MODELS_FILE}" ]; then
-  python3 - "${MODELS_FILE}" "${BLINK_EXPECTED_BASE_URL}" <<'PY' 2>/dev/null || true
-import json, os, sys, tempfile
+# Sanitize models.json helper — writes a corrected file + SIGHUPs the gateway
+# if the blink.baseUrl is not exactly the expected value. Exit status:
+#   0 = file present and checked (either already ok or rewritten)
+#   2 = file not present (caller should retry later)
+#   other = hard error
+# Runs as root; all writes are atomic (tempfile + rename) and mode 600 owned by node.
+sanitize_models_json() {
+  python3 - "${MODELS_FILE}" "${BLINK_EXPECTED_BASE_URL}" <<'PY'
+import json, os, sys, tempfile, subprocess
 path, expected = sys.argv[1], sys.argv[2]
+if not os.path.exists(path):
+    sys.exit(2)
 try:
     with open(path) as f:
         data = json.load(f)
@@ -97,24 +101,54 @@ blink["baseUrl"] = expected
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
 try:
     with os.fdopen(fd, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+        json.dump(data, f, indent=2); f.write("\n")
     os.chmod(tmp, 0o600)
     try:
         import pwd
-        uid = pwd.getpwnam("node").pw_uid
-        gid = pwd.getpwnam("node").pw_gid
-        os.chown(tmp, uid, gid)
+        os.chown(tmp, pwd.getpwnam("node").pw_uid, pwd.getpwnam("node").pw_gid)
     except Exception:
         pass
     os.replace(tmp, path)
-    print(f"[entrypoint] blink baseUrl repaired: {current!r} -> {expected!r}")
 except Exception:
-    if os.path.exists(tmp):
-        os.unlink(tmp)
+    if os.path.exists(tmp): os.unlink(tmp)
     raise
+print(f"[entrypoint] blink baseUrl repaired: {current!r} -> {expected!r}", flush=True)
+# SIGHUP the live gateway if running, so it reloads models.json immediately.
+# openclaw-gateway is 16 chars which exceeds pgrep's 15-char default limit —
+# use ps+awk instead.
+try:
+    out = subprocess.check_output(["ps", "-e", "-o", "pid=,comm="], text=True)
+    for line in out.splitlines():
+        pid, comm = line.strip().split(None, 1)
+        if comm == "openclaw-gateway":
+            os.kill(int(pid), 1)  # SIGHUP
+            print(f"[entrypoint] sent SIGHUP to openclaw-gateway pid {pid}", flush=True)
+            break
+except Exception:
+    pass
 PY
-fi
+}
+
+# (1) Sanitize now — covers the steady-state case where the container restarted
+# and models.json is already on disk (most agents).
+sanitize_models_json 2>/dev/null || true
+
+# (2) Background watcher — covers the FIRST-BOOT case: on a fresh volume
+# models.json does not yet exist when the entrypoint runs. The gateway lazy-
+# writes it during startup with the upstream-corrupted baseUrl (/api/v1/ai/v1).
+# We poll for ~60s and sanitize as soon as the file appears, then exit.
+# Runs disowned so `exec gosu node` below replaces the shell cleanly; the
+# watcher is adopted by init (PID 1) and survives the exec.
+(
+  for _ in $(seq 1 30); do
+    sleep 2
+    if sanitize_models_json 2>/dev/null; then
+      # Exit 0 means file was present and checked. We've done our job.
+      exit 0
+    fi
+  done
+) </dev/null >/dev/null 2>&1 &
+disown 2>/dev/null || true
 
 # Remove legacy secrets.providers.blink exec provider from openclaw.json.
 # The old get-secret.sh exec provider curls blink.new at gateway startup,
