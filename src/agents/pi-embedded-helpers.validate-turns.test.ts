@@ -1,7 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  dropTrailingEmptyAssistantTurns,
   mergeConsecutiveUserTurns,
+  messagesEndWithUserTurn,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
@@ -671,6 +673,60 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(assistantContent).toEqual([{ type: "text", text: "[tool calls omitted]" }]);
   });
 
+  it("drops trailing empty assistant turn left behind by tool_use stripping", () => {
+    // Regression: aborted assistant whose only content was a dangling tool_use
+    // gets emptied by stripDanglingAnthropicToolUses. If that empty turn is
+    // the tail, Anthropic rejects the request because the conversation does
+    // not end with a user turn.
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "toolCall", id: "tool-1", name: "test", arguments: {} }],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Use tool" }],
+    });
+  });
+
+  it("drops trailing assistant turn with only thinking blocks (no outbound text)", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "planning...", thinkingSignature: "sig" }],
+        stopReason: "aborted",
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("user");
+  });
+
+  it("preserves trailing assistant turns that still carry real text content", () => {
+    // Guard must not discard legitimate prior assistant output. If a caller
+    // ever ships this transcript to Anthropic, the stream wrapper / runner
+    // guard is responsible for logging — validateAnthropicTurns should not
+    // silently erase the assistant reply.
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Hello!" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toEqual(msgs);
+  });
+
   it("is replay-safe across repeated validation passes", () => {
     const msgs = makeDualToolAnthropicTurns([
       {
@@ -699,5 +755,103 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(() => validateAnthropicTurns(msgs)).not.toThrow();
     const result = validateAnthropicTurns(msgs);
     expect(result).toHaveLength(3);
+  });
+});
+
+describe("dropTrailingEmptyAssistantTurns", () => {
+  it("returns the input unchanged when the tail is already user-like", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+      { role: "user", content: [{ type: "text", text: "More" }] },
+    ]);
+    expect(dropTrailingEmptyAssistantTurns(msgs)).toBe(msgs);
+  });
+
+  it("drops a single trailing assistant turn with empty content array", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [], stopReason: "aborted" },
+    ]);
+    const result = dropTrailingEmptyAssistantTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("user");
+  });
+
+  it("drops multiple consecutive empty trailing assistant turns", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [], stopReason: "error" },
+      { role: "assistant", content: [{ type: "text", text: "   " }], stopReason: "aborted" },
+    ]);
+    const result = dropTrailingEmptyAssistantTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe("user");
+  });
+
+  it("keeps a non-empty trailing assistant (guard is for empty tails only)", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [{ type: "text", text: "Real reply" }] },
+    ]);
+    expect(dropTrailingEmptyAssistantTurns(msgs)).toBe(msgs);
+  });
+
+  it("does not disturb empty assistant turns in the middle of the transcript", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Hi" }] },
+      { role: "assistant", content: [], stopReason: "aborted" },
+      { role: "user", content: [{ type: "text", text: "Retry" }] },
+    ]);
+    expect(dropTrailingEmptyAssistantTurns(msgs)).toBe(msgs);
+  });
+});
+
+describe("messagesEndWithUserTurn", () => {
+  it("returns true for user, toolResult, and tool tails", () => {
+    expect(messagesEndWithUserTurn(asMessages([{ role: "user", content: "x" }]))).toBe(true);
+    expect(
+      messagesEndWithUserTurn(asMessages([{ role: "toolResult", toolUseId: "t", content: [] }])),
+    ).toBe(true);
+    expect(
+      messagesEndWithUserTurn(asMessages([{ role: "tool", toolCallId: "t", content: [] }])),
+    ).toBe(true);
+  });
+
+  it("returns false when trailing role is assistant", () => {
+    expect(
+      messagesEndWithUserTurn(
+        asMessages([
+          { role: "user", content: "x" },
+          { role: "assistant", content: [{ type: "text", text: "y" }] },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for an empty list", () => {
+    expect(messagesEndWithUserTurn([])).toBe(false);
+  });
+});
+
+describe("heartbeat contamination regression (validateAnthropicTurns)", () => {
+  // Reproduces the case where filterHeartbeatPairs removed the trailing
+  // (user heartbeat, assistant HEARTBEAT_OK) pair but the subsequent tool_use
+  // stripping emptied the prior aborted assistant, leaving nothing sendable
+  // after the initial user turn.
+  it("emits a transcript ending on a user turn after aborted empty assistant at tail", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Original question" }] },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "toolUse", id: "tool-dangling", name: "exec", arguments: {} }],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(1);
+    expect(messagesEndWithUserTurn(result)).toBe(true);
   });
 });

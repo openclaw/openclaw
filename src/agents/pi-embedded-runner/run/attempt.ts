@@ -73,7 +73,9 @@ import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  dropTrailingEmptyAssistantTurns,
   isCloudCodeAssistFormatError,
+  messagesEndWithUserTurn,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
@@ -1505,11 +1507,38 @@ export async function runEmbeddedAttempt(
         // Re-run tool_use/tool_result pairing repair after truncation, since
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
-        const limited = transcriptPolicy.repairToolUseResultPairing
+        const paired = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated, {
               erroredAssistantResultPolicy: "drop",
             })
           : truncated;
+        // Final Anthropic-tail guard: post-processing (heartbeat pair removal,
+        // history truncation, tool_use/tool_result repair) can expose an empty
+        // or aborted trailing assistant turn, which Anthropic rejects because
+        // the conversation no longer ends on a user-role turn. Strip any such
+        // trailing assistants before handing the transcript off to the
+        // provider. See `validateAnthropicTurns` for the initial pass and
+        // `dropTrailingEmptyAssistantTurns` for the helper semantics.
+        const limited = transcriptPolicy.validateAnthropicTurns
+          ? dropTrailingEmptyAssistantTurns(paired)
+          : paired;
+        if (
+          transcriptPolicy.validateAnthropicTurns &&
+          limited.length > 0 &&
+          !messagesEndWithUserTurn(limited)
+        ) {
+          // Upstream should always leave a user-like tail before we send to
+          // Anthropic. Log loudly so the underlying bug (e.g. a heartbeat ack
+          // becoming the only tail, or a missing current user prompt) is
+          // visible. We intentionally do not mutate the history further: the
+          // provider call will surface the misuse instead of silently sending
+          // a degraded transcript.
+          log.warn(
+            `anthropic transcript guard: messages do not end with a user turn (len=${limited.length}, trailingRole=${String(
+              (limited[limited.length - 1] as { role?: unknown })?.role,
+            )}). This usually means heartbeat filtering or post-truncation repair ran without a fresh user prompt at the tail.`,
+          );
+        }
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
           activeSession.agent.state.messages = limited;
