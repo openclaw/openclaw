@@ -308,6 +308,16 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             let content = d.content ?? "";
             const channelId = d.channel_id;
 
+            // Collect attachments (voice messages, images, files)
+            const rawAttachments = (d.attachments ?? []) as Array<{
+              id: string;
+              filename: string;
+              content_type?: string;
+              url: string;
+              size: number;
+            }>;
+            const hasAttachments = rawAttachments.length > 0;
+
             // Include reply context so the agent knows what message is being responded to
             const ref = d.referenced_message;
             if (ref && typeof ref === "object") {
@@ -319,10 +329,10 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             }
 
             runtime.log(
-              `[router] MESSAGE_CREATE: author=${authorId} guild=${guildId ?? "dm"} reply=${!!ref} content=${content.slice(0, 60)}`,
+              `[router] MESSAGE_CREATE: author=${authorId} guild=${guildId ?? "dm"} reply=${!!ref} attachments=${rawAttachments.length} content=${content.slice(0, 60)}`,
             );
 
-            if (!authorId || isBot || guildId || !content.trim()) {
+            if (!authorId || isBot || guildId || (!content.trim() && !hasAttachments)) {
               return;
             }
 
@@ -381,6 +391,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
               discordUserId: authorId,
               channelId,
               messageContent: content,
+              attachments: rawAttachments,
               instance,
               discordToken,
               runtime,
@@ -469,11 +480,20 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
   });
 }
 
+type DiscordAttachment = {
+  id: string;
+  filename: string;
+  content_type?: string;
+  url: string;
+  size: number;
+};
+
 /** Returns true if the agent responded successfully. */
 async function routeDM(params: {
   discordUserId: string;
   channelId: string;
   messageContent: string;
+  attachments?: DiscordAttachment[];
   instance: InstanceConfig;
   discordToken: string;
   runtime: RouterRuntime;
@@ -484,6 +504,7 @@ async function routeDM(params: {
     discordUserId,
     channelId,
     messageContent,
+    attachments,
     instance,
     discordToken,
     runtime,
@@ -510,18 +531,58 @@ async function routeDM(params: {
     void discordTyping(discordToken, channelId);
 
     try {
+      // Download attachments and convert to base64 for the gateway
+      let gatewayAttachments: Array<{
+        type: string;
+        mimeType: string;
+        fileName: string;
+        content: string;
+      }> = [];
+      if (attachments && attachments.length > 0) {
+        const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB
+        for (const att of attachments) {
+          if (att.size > MAX_ATTACHMENT_BYTES) {
+            runtime.log(`[router] skipping large attachment ${att.filename} (${att.size} bytes)`);
+            continue;
+          }
+          try {
+            const resp = await fetch(att.url);
+            if (!resp.ok) continue;
+            const buf = Buffer.from(await resp.arrayBuffer());
+            const mime = att.content_type ?? "application/octet-stream";
+            const kind = mime.startsWith("audio/")
+              ? "audio"
+              : mime.startsWith("image/")
+                ? "image"
+                : "file";
+            gatewayAttachments.push({
+              type: kind,
+              mimeType: mime,
+              fileName: att.filename,
+              content: buf.toString("base64"),
+            });
+            runtime.log(
+              `[router] downloaded attachment ${att.filename} (${mime}, ${buf.length} bytes)`,
+            );
+          } catch (dlErr) {
+            runtime.error(`[router] failed to download attachment ${att.filename}: ${dlErr}`);
+          }
+        }
+      }
+
       const idempotencyKey = randomUUID();
       const result = await callGateway<AgentResult>({
         url: `ws://127.0.0.1:${instance.port}`,
         token: instance.token || undefined,
         method: "agent",
         params: {
-          message: messageContent,
+          message: messageContent || (gatewayAttachments.length > 0 ? "<media>" : ""),
           channel: "webchat",
           deliver: false,
           idempotencyKey,
           sessionKey: `agent:main:discord:default:dm:${discordUserId}`,
           timeout: Math.floor(agentTimeoutMs / 1000),
+          ...(gatewayAttachments.length > 0 ? { attachments: gatewayAttachments } : {}),
         },
         expectFinal: true,
         timeoutMs: agentTimeoutMs + 30_000,
