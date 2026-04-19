@@ -293,9 +293,6 @@ describe("deliverAgentCommandResult", () => {
   });
 
   it("prefixes per-session nested lanes with the same nested log context (#67502)", async () => {
-    // The reliability fix in #67502 routes nested agent runs onto per-target-session
-    // lanes (nested:<sessionKey>). Delivery logging still needs to recognise these
-    // as nested so the [agent:nested] prefix is preserved.
     const runtime = createRuntime();
     await runDelivery({
       runtime,

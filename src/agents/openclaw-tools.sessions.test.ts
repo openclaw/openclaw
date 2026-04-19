@@ -757,8 +757,6 @@ describe("sessions tools", () => {
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
-      // #67502: nested lanes are now scoped per-target-session. Accept either
-      // the unscoped `nested` lane or a scoped `nested:<sessionKey>` lane.
       expect(call.params).toMatchObject({
         lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
@@ -939,8 +937,6 @@ describe("sessions tools", () => {
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
-      // #67502: nested lanes are now scoped per-target-session. Accept either
-      // the unscoped `nested` lane or a scoped `nested:<sessionKey>` lane.
       expect(call.params).toMatchObject({
         lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",

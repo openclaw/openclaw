@@ -36,8 +36,6 @@ describe("resolveNestedAgentLaneForSession (#67502)", () => {
   });
 
   it("produces distinct lanes for distinct target sessions", () => {
-    // This is the reliability invariant behind #67502: a long ACP run on
-    // session A must not queue nested work for session B onto the same lane.
     const laneA = resolveNestedAgentLaneForSession("agent:ebao-next:discord:channel:1");
     const laneB = resolveNestedAgentLaneForSession("agent:ebao-vue:discord:channel:2");
     expect(laneA).not.toBe(laneB);
@@ -73,8 +71,6 @@ describe("isNestedAgentLane", () => {
   });
 
   it("returns false for lanes that merely contain 'nested' as a substring", () => {
-    // Guard against lane names that happen to include the token but are
-    // neither the unscoped lane nor a scoped nested:* lane.
     expect(isNestedAgentLane("deeply-nested-lane")).toBe(false);
     expect(isNestedAgentLane("session:nested")).toBe(false);
     expect(isNestedAgentLane("nestedfoo")).toBe(false);
