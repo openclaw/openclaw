@@ -175,7 +175,19 @@ describe("resolveCorsForRequest", () => {
     expect(decision!.allowOrigin).toBe("https://a.example");
     expect(decision!.isPreflight).toBe(false);
     expect(decision!.allowCredentials).toBe(false);
-    expect(decision!.allowMethods).toBe("GET, POST, OPTIONS");
+    expect(decision!.allowMethods).toBe("POST, OPTIONS");
+  });
+
+  it("GET /v1/models reports GET-only Allow-Methods", () => {
+    const decision = resolveCorsForRequest({
+      method: "GET",
+      origin: "https://a.example",
+      accessControlRequestMethod: undefined,
+      endpointKey: "models",
+      config: enabledConfig,
+    });
+    expect(decision).not.toBeNull();
+    expect(decision!.allowMethods).toBe("GET, OPTIONS");
   });
 
   it("wildcard returns * as allowOrigin", () => {
@@ -329,7 +341,7 @@ describe("applyCorsHeaders", () => {
   const baseDecision: CorsDecision = {
     allowOrigin: "https://a.example",
     allowCredentials: false,
-    allowMethods: "GET, POST, OPTIONS",
+    allowMethods: "POST, OPTIONS",
     allowHeaders: "Authorization, Content-Type, X-Request-ID",
     exposeHeaders: undefined,
     maxAge: 600,
@@ -351,10 +363,7 @@ describe("applyCorsHeaders", () => {
   it("sets Access-Control-Allow-Methods on preflight", () => {
     const res = createMockRes();
     applyCorsHeaders(res, { ...baseDecision, isPreflight: true });
-    expect(res.setHeader).toHaveBeenCalledWith(
-      "Access-Control-Allow-Methods",
-      "GET, POST, OPTIONS",
-    );
+    expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Methods", "POST, OPTIONS");
   });
 
   it("sets Allow-Credentials when true", () => {

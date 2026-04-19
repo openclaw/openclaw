@@ -105,7 +105,7 @@ describe("gateway CORS HTTP integration", () => {
         expect(res.statusCode).toBe(204);
         expect(end).toHaveBeenCalled();
         expect(findHeader(setHeader, "Access-Control-Allow-Origin")).toBe("https://a.example");
-        expect(findHeader(setHeader, "Access-Control-Allow-Methods")).toBe("GET, POST, OPTIONS");
+        expect(findHeader(setHeader, "Access-Control-Allow-Methods")).toBe("POST, OPTIONS");
         expect(findHeader(setHeader, "Access-Control-Allow-Headers")).toContain("Authorization");
         expect(findHeader(setHeader, "Access-Control-Max-Age")).toBe("600");
         expect(findHeader(setHeader, "Vary")).toBe("Origin");

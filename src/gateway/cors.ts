@@ -19,8 +19,15 @@ export type CorsDecision = {
 };
 
 const DEFAULT_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-Request-ID"];
-const ALLOWED_METHODS = "GET, POST, OPTIONS";
 const DEFAULT_MAX_AGE = 600;
+
+const ALLOWED_METHODS_BY_ENDPOINT: Record<CorsCoveredEndpoint, string> = {
+  chatCompletions: "POST, OPTIONS",
+  responses: "POST, OPTIONS",
+  embeddings: "POST, OPTIONS",
+  toolsInvoke: "POST, OPTIONS",
+  models: "GET, OPTIONS",
+};
 
 /**
  * Classify a request path + method into a CORS-covered endpoint key, or null
@@ -100,7 +107,7 @@ export function resolveCorsForRequest(params: {
   return {
     allowOrigin: isWildcard && !allowCredentials ? "*" : origin,
     allowCredentials,
-    allowMethods: ALLOWED_METHODS,
+    allowMethods: ALLOWED_METHODS_BY_ENDPOINT[endpointKey],
     allowHeaders: allHeaders.join(", "),
     exposeHeaders,
     maxAge,
