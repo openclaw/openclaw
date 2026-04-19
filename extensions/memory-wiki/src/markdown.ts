@@ -62,6 +62,9 @@ export type WikiPageSummary = {
 const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n---\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
+const FENCED_CODE_PATTERN = /^(`{3,})[^\n]*\n[\s\S]*?\n\1\s*$/gm;
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+const IMAGE_LINK_PATTERN = /!\[[^\]]*\]\([^)]+\)/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
@@ -214,7 +217,11 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
 }
 
 export function extractWikiLinks(markdown: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = markdown
+    .replace(RELATED_BLOCK_PATTERN, "")
+    .replace(FENCED_CODE_PATTERN, "")
+    .replace(HTML_COMMENT_PATTERN, "")
+    .replace(IMAGE_LINK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();
