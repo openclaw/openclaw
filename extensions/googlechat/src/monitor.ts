@@ -262,9 +262,12 @@ async function processMessageWithPipeline(params: {
   // A flag to indicate if the fallback message has been sent.
   let deferredResponseExpired = false;
 
-  // The final response delivery function needs to be mutable so the timeout
-  // handler can replace it with a no-op if the timer expires.
+  // The delivery function is mutable because it's defined later (line ~330)
+  // after the reply pipeline is constructed.
   let onDeliver: (payload: DeliverPayload) => Promise<void> = async () => {};
+
+  const typingIndicator = account.config.typingIndicator;
+  let typingMessageName: string | undefined;
 
   // Start typing indicator and timeout race
   if (typingIndicator === "message") {
@@ -285,19 +288,13 @@ async function processMessageWithPipeline(params: {
       // If we successfully sent a typing message, start the 25-second timer.
       if (typingMessageName) {
         deferredResponseTimeout = setTimeout(() => {
-          // Flag that the timeout has occurred.
+          // Flag that the timeout has occurred. deliverGoogleChatReply already
+          // routes through the new-message path when isDeferredResponseExpired
+          // is true (see lines ~493–540) — do NOT replace onDeliver here, or
+          // the agent's eventual response is silently discarded.
           deferredResponseExpired = true;
 
-          // Prevent the original onDeliver from running.
-          onDeliver = async () => {
-            logVerbose(
-              core,
-              runtime,
-              "Deferred response expired, onDeliver was suppressed. The full response will be sent in a new message.",
-            );
-          };
-
-          // Send a new message to the thread to inform the user.
+          // Send a "still working" message so the user isn't left in the dark.
           // This does not use the deferred response mechanism.
           sendGoogleChatMessage({
             account,
@@ -308,10 +305,19 @@ async function processMessageWithPipeline(params: {
             runtime.error?.(`Failed to send 'still working' fallback message: ${String(err)}`);
           });
 
-          // Since we are abandoning the deferred response, delete the "typing..." message.
-          deleteGoogleChatMessage({ account, messageName: typingMessageName! }).catch((err) => {
-            runtime.error?.(`Failed to clean up 'typing...' message after timeout: ${String(err)}`);
-          });
+          // The deferred slot is gone; delete the "typing..." message and clear
+          // typingMessageName so the final delivery won't try to update it.
+          if (typingMessageName) {
+            const expiredTypingMessageName = typingMessageName;
+            typingMessageName = undefined;
+            deleteGoogleChatMessage({ account, messageName: expiredTypingMessageName }).catch(
+              (err) => {
+                runtime.error?.(
+                  `Failed to clean up 'typing...' message after timeout: ${String(err)}`,
+                );
+              },
+            );
+          }
         }, 25000); // 25 seconds, leaving a 5-second buffer.
       }
     } catch (err) {
@@ -328,8 +334,9 @@ async function processMessageWithPipeline(params: {
 
   // Define the delivery function that will be called when the agent has a response.
   onDeliver = async (payload) => {
-    // If the timeout fired, this function was replaced with a no-op, so this
-    // code will not run. We also clear the timer here.
+    // Clear the pending timeout on first delivery. If the timer already fired,
+    // deferredResponseExpired is true and deliverGoogleChatReply will route
+    // through the new-message path rather than the deferred-update path.
     if (deferredResponseTimeout) {
       clearTimeout(deferredResponseTimeout);
       deferredResponseTimeout = undefined;
@@ -357,7 +364,6 @@ async function processMessageWithPipeline(params: {
     dispatcherOptions: {
       ...replyPipeline,
       deliver: async (payload) => {
-        // This will call either the original onDeliver or the no-op if the timer expired.
         await onDeliver(payload);
       },
       onError: (err, info) => {
