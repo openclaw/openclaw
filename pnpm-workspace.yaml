@@ -28,6 +28,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "@aws-sdk/*"
 
 onlyBuiltDependencies:
   - "@discordjs/opus"

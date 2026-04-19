@@ -36,6 +36,7 @@ import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
+import { downloadVideoTool } from "./tools/download-video.js";
 
 type OpenClawToolsDeps = {
   callGateway: typeof callGateway;
