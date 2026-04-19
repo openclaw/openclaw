@@ -1997,7 +1997,7 @@ export async function runEmbeddedPiAgent(
                   ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
                   data: planEventData,
                 });
-                void params.onAgentEvent?.({
+                params.onAgentEvent?.({
                   stream: "plan",
                   data: planEventData,
                 });

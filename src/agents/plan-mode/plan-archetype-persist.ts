@@ -9,7 +9,6 @@
  * cycle. Telegram/channel delivery is layered on top by
  * `plan-archetype-bridge.ts`.
  */
-import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -89,19 +88,33 @@ export async function persistPlanArchetypeMarkdown(
   const baseName = buildPlanFilename(input.title, input.now);
   // baseName ends with `.md`. For a 2nd-write of the same date+slug,
   // produce `<base>-2.md`; for the 3rd, `<base>-3.md`; etc.
+  //
+  // Copilot review #68939 (2026-04-19): atomic create with `wx`
+  // (exclusive) flag instead of `existsSync` + `writeFile`. The
+  // existsSync check was a TOCTOU race window — a parallel agent
+  // call writing the same date+slug could land between the existence
+  // check and our write, silently overwriting their plan. `wx` opens
+  // with `O_CREAT | O_EXCL`, so the OS rejects the open with EEXIST
+  // when the file already exists. We catch EEXIST and try the next
+  // suffix in the same loop. All other errors propagate.
   let candidateName = baseName;
   let n = 1;
-  while (n <= MAX_COLLISION_SUFFIX && fs.existsSync(path.join(dir, candidateName))) {
-    n += 1;
-    candidateName = baseName.replace(/\.md$/, `-${n}.md`);
+  let absPath = path.join(dir, candidateName);
+  while (n <= MAX_COLLISION_SUFFIX) {
+    try {
+      await fsp.writeFile(absPath, input.markdown, { encoding: "utf8", flag: "wx" });
+      return { absPath, filename: candidateName };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "EEXIST") {
+        throw err;
+      }
+      n += 1;
+      candidateName = baseName.replace(/\.md$/, `-${n}.md`);
+      absPath = path.join(dir, candidateName);
+    }
   }
-  if (n > MAX_COLLISION_SUFFIX) {
-    throw new Error(
-      `persistPlanArchetypeMarkdown: collision-suffix cap reached (${MAX_COLLISION_SUFFIX}) for ${baseName}`,
-    );
-  }
-
-  const absPath = path.join(dir, candidateName);
-  await fsp.writeFile(absPath, input.markdown, "utf8");
-  return { absPath, filename: candidateName };
+  throw new Error(
+    `persistPlanArchetypeMarkdown: collision-suffix cap reached (${MAX_COLLISION_SUFFIX}) for ${baseName}`,
+  );
 }

@@ -171,13 +171,26 @@ function readPlanSteps(params: Record<string, unknown>): UpdatePlanStep[] {
           "before marking the step completed.",
       );
     }
-    return {
-      step,
-      status: status as PlanStepStatus,
-      ...(activeForm ? { activeForm } : {}),
-      ...(acceptanceCriteria ? { acceptanceCriteria } : {}),
-      ...(verifiedCriteria ? { verifiedCriteria } : {}),
-    };
+    // oxc no-map-spread: build the step record with conditional
+    // assignment instead of conditional spread to avoid per-iteration
+    // object allocations from `...(cond ? { … } : {})`.
+    const stepRecord: {
+      step: string;
+      status: PlanStepStatus;
+      activeForm?: string;
+      acceptanceCriteria?: string[];
+      verifiedCriteria?: string[];
+    } = { step, status: status as PlanStepStatus };
+    if (activeForm) {
+      stepRecord.activeForm = activeForm;
+    }
+    if (acceptanceCriteria) {
+      stepRecord.acceptanceCriteria = acceptanceCriteria;
+    }
+    if (verifiedCriteria) {
+      stepRecord.verifiedCriteria = verifiedCriteria;
+    }
+    return stepRecord;
   });
 
   const inProgressCount = steps.filter((entry) => entry.status === "in_progress").length;

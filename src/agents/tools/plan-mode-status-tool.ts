@@ -44,7 +44,12 @@ import {
 } from "../tool-description-presets.js";
 import { type AnyAgentTool } from "./common.js";
 
-const PlanModeStatusToolSchema = Type.Object({});
+// Copilot review #68939 (2026-04-19): explicitly forbid additional
+// properties — the tool ignores args entirely, so accepting any
+// payload is unnecessary and complicates downstream validation /
+// telemetry. `additionalProperties: false` makes the rejection
+// explicit at schema-validation time.
+const PlanModeStatusToolSchema = Type.Object({}, { additionalProperties: false });
 
 export interface CreatePlanModeStatusToolOptions {
   /** Stable run identifier used to look up the in-memory AgentRunContext for openSubagentRunIds. */

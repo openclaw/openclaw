@@ -385,6 +385,11 @@
         "plan.0.step"
       ]
     },
+    "plan_mode_status": {
+      "emoji": "🔍",
+      "title": "Plan Mode Status",
+      "detailKeys": []
+    },
     "ask_user_question": {
       "emoji": "❓",
       "title": "Ask User",
