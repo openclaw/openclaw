@@ -1,15 +1,43 @@
 ---
-plan_version: 1.0.0
-author: ce:plan (compound-engineering planner)
-commit_tip: a29deacd4c
+plan_version: 1.1.0
+author: ce:plan (compound-engineering planner), Task 6 refresh by ce:work
+commit_tip: f0dca1c7b7
 branch: fix/discord-thread-bind-prefix
 generated: 2026-04-18
+refreshed: 2026-04-19 (Task 6)
 status: DRAFT - awaits James review before execution
 ---
 
 # Discord Surface Overhaul — E2E Verification Plan
 
 > Uncommitted working artifact. Do NOT commit until James signs the "READY FOR EXECUTION" checkpoint at the bottom.
+
+## Strict helper semantics (required for every live scenario)
+
+As of Task 2 (`d24e766254`), Task 3 (`45941cb3b0`), and Task 5 (`f0dca1c7b7`),
+every scenario below that exercises a live harness run MUST use the strict
+acceptance rules:
+
+1. **`assertVisibleInThread` strict defaults:** `requireWebhookAuthor: true`,
+   `allowDiagnosticFallback: false`. A bot/user-authored echo of the marker
+   NEVER counts as a pass; only a webhook-authored message matching the
+   marker does.
+2. **Request message exclusion:** every `assertVisibleInThread`,
+   `assertNoForbiddenChatter`, and `assertNoLeaksInThread` call that is
+   part of a live scenario MUST pass `excludeMessageIds: [requestMessageId]`
+   so the harness's own prompt echo cannot contaminate the assertion.
+3. **`authorship: "webhook-only"`** on red-team scans when the prompt embeds
+   forbidden phrases or leak strings. This measures only the assistant
+   reply path rather than the request message.
+4. **Harness isolation:** `withLiveHarness` sets `HOME=<tempRoot>`, copies
+   `.claude`/`.codex` auth, and pins the ACP child CWD to the repo root.
+   Scenarios that previously hung at `agent.wait` should re-run cleanly
+   against the isolated harness.
+
+Evidence requirements updated: every scenario's PASS criteria must include
+the **webhook message id** (not just a raw visible message id). Scenarios
+whose older `PASS` row recorded only a request-message id shall be rerun
+under the strict helper before the merge gate closes.
 
 ---
 
@@ -87,6 +115,16 @@ Every scenario carries a `VERIFY_<PHASE>_<SCENARIO>_20260418` token embedded in 
 ## 2. Scenario catalog
 
 Scenarios use IDs of the form `V-<LogicalUnit>-<Variant>-<NNN>`. Each scenario follows the same schema: **Token / Precondition / Action / Expected evidence / PASS criteria / FAIL mode / Time / James-action? / Dependencies**.
+
+### 2.0 Harness-driven scenarios (request-message exclusion mandatory)
+
+Any scenario in §2 whose **Action** uses the `src/infra/outbound/discord-e2e-helpers.ts` helpers (i.e. the Phase 7 harness: `spawnAcpWithMarker`, `spawnAcpWithLeakyPrompt`, `followUpInBoundThread`, `waitForMarkerInNewThread`) MUST — per Task 2 + Task 3 — treat the helper's `requestMessageId` as excluded from every marker / leak / chatter scan:
+
+- `assertVisibleInThread` is called with `excludeMessageIds: [requestMessageId]` AND the strict defaults (`requireWebhookAuthor: true`, `allowDiagnosticFallback: false`).
+- `assertNoForbiddenChatter` is called with either `excludeMessageIds: [requestMessageId]` or `authorship: "webhook-only"` (use `webhook-only` when the prompt embeds forbidden phrases verbatim).
+- `assertNoLeaksInThread` follows the same rule — `excludeMessageIds: [requestMessageId]` or `authorship: "webhook-only"`.
+
+Scenarios driven by James manually posting into Discord (no helper involvement) are exempt from the exclusion rule because there is no harness-authored request to exclude. Those scenarios still require webhook-authored evidence for the assistant reply.
 
 ### 2.1 Phase 1 — MessageClass + DeliveryPolicy foundation
 
@@ -345,6 +383,22 @@ Scenarios use IDs of the form `V-<LogicalUnit>-<Variant>-<NNN>`. Each scenario f
 - **Time:** ~2 min (just recording).
 - **James-action:** NO.
 - **Dependencies:** None.
+
+#### V-P7-SMOKE-STRICT-001 — live E2E smoke (strict helper) — new after Task 5
+
+- **Token:** `VERIFY_P7_SMOKE_STRICT_20260419`
+- **Precondition:** Tasks 2+3+5 landed (`d24e766254`, `45941cb3b0`, `f0dca1c7b7`). Live env vars set: `OPENCLAW_LIVE_DISCORD=1`, `OPENCLAW_LIVE_DISCORD_BOT_TOKEN`, `OPENCLAW_LIVE_DISCORD_GUILD_ID`, `OPENCLAW_LIVE_DISCORD_PARENT_CHANNEL_ID`. Test bot invited to the test channel.
+- **Action (Richard, autonomous):** Run `LIVE=1 pnpm test:e2e:discord -t "smoke"` (do NOT run the full 14-scenario suite — the verification ladder from Task 5 Step 5 says smoke → one red-team → one matrix scenario → full only after all three pass).
+- **Evidence:**
+  - `assertVisibleInThread` returned a message with non-null `webhook_id` (strict-default webhook-authored acceptance).
+  - The returned message id is NOT the `requestMessageId` (exclusion rule).
+  - The returned message's `author.username` matches `/⚙ claude/i`.
+  - `assertNoForbiddenChatter` returned clean when scoped to `authorship: "webhook-only"` or with the request message excluded.
+- **PASS:** All four bullets pass + the run exits zero.
+- **FAIL mode:** Helper throws "not seen in thread" (→ the child never emitted a webhook reply — fall back to diagnostic mode ONLY for triage, not as proof). Alternative: identity mismatch (webhook absent).
+- **Time:** ~4 min under normal conditions; up to `LIVE_TIMEOUT_MS` (240s) if `agent.wait` path is slow.
+- **James-action:** NO (autonomous), unless the run hangs at `agent.wait` in which case escalate per §8.
+- **Dependencies:** Tasks 2/3/5 landed. Ops precondition list in MERGE_NOTES.md "Live-verification checklist" section satisfied or explicitly SKIPPED.
 
 ### 2.15 Phase 8 — DX
 
@@ -677,13 +731,13 @@ If live verification goes green but a regression surfaces AFTER §7's merge cher
 
 The following contracts cannot be live-verified in this pass and must be covered by unit tests or follow-up work:
 
-| Contract                                                                                  | Reason                                                              | Mitigation                                                                                                    |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Phase 7 full E2E suite                                                                    | Harness isolation bug (lesson-e2e-harness-isolation-gap-2026-04-18) | V-P7-SKIP-001 records WARN; thread-level smoke covered by V-P3_5-DELIVERY-001 + V-G-BANNER-001 + V-P11-A-001. |
-| `acp_receipts` via RPC                                                                    | No RPC wrapper (MERGE_NOTES.md known issue #5)                      | V-P9-TOOLS-001 uses agent-callable path instead.                                                              |
-| Phase 3.6 `/etc`/`/opt`/`/mnt`/`/srv`/Windows-drive leak patterns in LIVE progress stream | Unlikely to occur naturally in a Linux-only test env                | 20 unit tests already green; V-P3.6-SANIT-001 covers the 7 most common vectors.                               |
-| Phase 6 30s loopback timeout fix                                                          | Under investigation per MERGE_NOTES.md #1                           | Scenario records as WARN, not FAIL; root-cause work tracked as separate item.                                 |
-| "Session ended" banner identity                                                           | Out of scope per MERGE_NOTES.md #2                                  | Tracked in `project_discord_thread_ux_gap.md`; not this plan.                                                 |
+| Contract                                                                                  | Reason                                                                                                                                                                                                                   | Mitigation                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Phase 7 full E2E suite                                                                    | Was: harness isolation bug (lesson-e2e-harness-isolation-gap-2026-04-18). Now: Task 5 (`f0dca1c7b7`) closes the isolation gap; remaining gate is the ops precondition list (allowBots / test guild / paused production). | V-P7-SKIP-001 records WARN for historical runs; new V-P7-SMOKE-STRICT-001 is now callable once ops prereqs are satisfied. Full 14-scenario matrix should still run smoke → 1 red-team → 1 Phase-11 BEFORE the full pass. |
+| `acp_receipts` via RPC                                                                    | No RPC wrapper (MERGE_NOTES.md known issue #5)                                                                                                                                                                           | V-P9-TOOLS-001 uses agent-callable path instead.                                                                                                                                                                         |
+| Phase 3.6 `/etc`/`/opt`/`/mnt`/`/srv`/Windows-drive leak patterns in LIVE progress stream | Unlikely to occur naturally in a Linux-only test env                                                                                                                                                                     | 20 unit tests already green; V-P3.6-SANIT-001 covers the 7 most common vectors.                                                                                                                                          |
+| Phase 6 30s loopback timeout fix                                                          | Under investigation per MERGE_NOTES.md #1                                                                                                                                                                                | Scenario records as WARN, not FAIL; root-cause work tracked as separate item.                                                                                                                                            |
+| "Session ended" banner identity                                                           | Out of scope per MERGE_NOTES.md #2                                                                                                                                                                                       | Tracked in `project_discord_thread_ux_gap.md`; not this plan.                                                                                                                                                            |
 
 ---
 

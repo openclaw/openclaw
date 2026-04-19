@@ -1,8 +1,8 @@
-# Discord Surface Overhaul — Merge Notes (2026-04-18)
+# Discord Surface Overhaul — Merge Notes (2026-04-18, refreshed 2026-04-19)
 
 **Branch:** `fix/discord-thread-bind-prefix`
-**Commit tip:** `f26506ea1c`
-**Scope:** 27 commits constituting the Discord Surface Overhaul + 22 prior Discord/ACP fixes + Option C TaskFlow migration (48 total commits ahead of `richardclawbot/main`)
+**Commit tip:** `f0dca1c7b7` (Task 5 live-harness isolation)
+**Scope:** 27 commits constituting the Discord Surface Overhaul + 22 prior Discord/ACP fixes + Option C TaskFlow migration + acceptance-truthfulness follow-ups (Tasks 2+3+a29deacd4c-cleanup+Task-5) landed on `fix/discord-thread-bind-prefix`
 
 ---
 
@@ -31,6 +31,19 @@
 | Harness     | `9a4a06cdd5`, `c88e1dec87`, `522f94b940`, `3463c0f00b`, `7b023bb62b` | Phase 7 harness iteration                                            |
 | Docs        | `f26506ea1c`                                                         | CUSTOMIZATIONS.md                                                    |
 
+### Acceptance-truthfulness + harness isolation follow-ups (Packets A + B)
+
+These landed after the initial 27-commit sweep and harden the E2E helpers so
+the live verification ladder no longer lies:
+
+| Task                                  | Commit       | What                                                                                                                                            | Status                   |
+| ------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Task 2 (strict visibility)            | `d24e766254` | `assertVisibleInThread` defaults to `requireWebhookAuthor:true`, `allowDiagnosticFallback:false`; adds `excludeMessageIds` for request messages | COMPLETE (unit + helper) |
+| `a29deacd4c` review fixes             | `ac6ceb06d0` | Addresses review findings for long-reply delivery path                                                                                          | COMPLETE                 |
+| Task 3 (decontaminated scans)         | `45941cb3b0` | `assertNoForbiddenChatter` / `assertNoLeaksInThread` accept `excludeMessageIds` and `authorship:webhook-only`                                   | COMPLETE (unit)          |
+| Task 5 (harness isolation)            | `f0dca1c7b7` | `withLiveHarness` sets `HOME=<tempRoot>`, copies `.claude`/`.codex` auth, pins ACP CWD to repo root                                             | COMPLETE (unit + helper) |
+| Task 4 (main-thread persona adoption) | —            | SKIPPED per Scenario 7 diagnostic: no strict repro possible → no grounded evidence a main-thread persona bug exists; code audit hypothesis only | SKIPPED (recorded below) |
+
 ---
 
 ## Verification evidence
@@ -41,16 +54,59 @@
 - **Phase 11 A** worker-thread ACP routing: production log 2026-04-18 06:00:41 — `PHASE11_A_OK` delivered via `sendPath: "webhook"`, `personaUsername: "⚙ codex"`, `bindingAccountId: "main"`, thread `1494903202053886004`
 - **Phase 4 rework** origin-respect routing: gateway full restart 2026-04-18 11:45:45 produced zero boot/cron announces on `#e2e-tests` or `#e2e-tests-secondary` or any user surface
 
-### Unit-test coverage (no live proof yet)
+### Unit-test coverage (no live proof yet) — distinguished by status
 
-- Phase 11 B (@-mention escape hatch) — code-reviewed, unit-tested, NOT live-verified (harness + gateway-state blockers)
-- Phase 11 C (stale respawn) — code-reviewed, unit-tested, NOT live-verified
-- Phase 6 delivery stability — Phase 6's headline claim (zero 120s loopback timeouts) PASSES live; adjacent 30s timeout signal is under investigation (see open issues)
-- Phase 3.6 sanitizer — 20 unit tests green, no live injection verification
-- Phase 9 agent tools — unit coverage only, no RPC callability gap
-- Phase 5 rename — type-checked
-- Phase 7 P1/P2/P3 harness — harness infrastructure works for thread creation + binding, but child doesn't reply in harness env (documented as follow-up)
-- Phase 8 DX — error message improvements, no live exercise
+Each entry is classified as:
+
+- **product-fixed**: the production code path is live-proven elsewhere; unit tests guard regressions.
+- **harness-blocked**: the live harness used to accept non-webhook request messages as proof; Task 5 (`f0dca1c7b7`) closes the harness-isolation gap, and Tasks 2+3 (`d24e766254`, `45941cb3b0`) close the acceptance-truthfulness gap. These must now be re-verified live under the strict helper.
+- **ops-blocked**: depends on a James-owned ops action (allowBots flip, test guild, production pause) before live re-verification can run.
+
+| Item                                | Status          | Notes                                                                                                                                                                                                          |
+| ----------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 11 B (@-mention escape hatch) | harness-blocked | Unit-tested only. Strict helper defaults + harness isolation reopen this for live re-verification; needs one run after ops prereqs.                                                                            |
+| Phase 11 C (stale respawn)          | harness-blocked | Unit-tested only. Same: re-run under strict helper + isolated harness before claiming live-proven.                                                                                                             |
+| Phase 6 delivery stability          | product-fixed   | Headline claim (zero 120s loopback timeouts) PASSES live. Adjacent 30s timeout is a gateway back-pressure signal, not a Phase 6 regression (see open issues).                                                  |
+| Phase 3.6 sanitizer                 | product-fixed   | 20 unit tests green. Live injection verification would require explicit leak-shaped prompts; Task 3 strict scans support this on the red-team path.                                                            |
+| Phase 9 agent tools                 | harness-blocked | Unit coverage only; RPC callability gap means `acp_receipts` cannot be driven from outside the child session. See open issue #5.                                                                               |
+| Phase 5 rename                      | product-fixed   | Type-checked, no runtime behavior change.                                                                                                                                                                      |
+| Phase 7 P1/P2/P3 harness            | harness-blocked | Harness infra creates threads + bindings, but child used to no-op. Task 5 (`f0dca1c7b7`) closes HOME/CWD isolation; live smoke + one red-team + one Phase-11 scenario still need a re-run under strict helper. |
+| Phase 8 DX                          | product-fixed   | Error message improvements; no runtime contract.                                                                                                                                                               |
+
+---
+
+## Live-verification checklist (Task 6)
+
+Before cherry-picking into a merge branch, record PASS/FAIL for each of the
+following against the strict helper semantics introduced in Tasks 2+3+5:
+
+- [ ] **Smoke gate (strict)** — `pnpm test:e2e:discord -t "smoke"` passes under
+      `LIVE=1`. Evidence must include: thread id, webhook-authored message id,
+      webhook id, marker string, commit SHA at run time. - Strict helper rules apply: `assertVisibleInThread` runs with
+      `requireWebhookAuthor:true` + `allowDiagnosticFallback:false` by
+      default, and the harness request id is excluded.
+- [ ] **One red-team (strict)** — either the "operational chatter" or
+      "final_reply negative control" scenario passes with
+      `assertNoForbiddenChatter` / `assertNoLeaksInThread` running against
+      webhook-authored messages only OR with the harness request excluded.
+- [ ] **Phase 11 B identity truthfulness** — a main-mention reply in a bound
+      worker thread delivers as the REQUESTER identity (richardbots / main
+      account), NOT the bound-child webhook persona. Record message id +
+      author username + webhook-id presence.
+- [ ] **Ops precondition: `allowBots`** — record whether
+      `channels.discord.accounts.main.allowBots` is `true` or `false` at the
+      time of the live run. The harness toggles this inside its temp config,
+      but production value should remain `false` unless James explicitly flips
+      it for a test session.
+- [ ] **Ops precondition: test guild** — record whether the live run used the
+      shared production guild or a dedicated test guild. Shared-guild runs
+      must note whether the production bot was temporarily paused and for how
+      long.
+
+All five items must be recorded (PASS / FAIL / SKIPPED-with-reason) before the
+§6 evidence table is considered complete. SKIPPED is only acceptable when the
+precondition is explicitly out of this merge's scope and tracked in the open
+issues list below.
 
 ---
 
@@ -61,8 +117,8 @@
    - **User-visible path preserved:** `runSubagentAnnounceDispatch` falls back to queue delivery on direct-announce failure, so end-user replies are not dropped.
    - **NOT a merge blocker.** Follow-up: (a) widen defaults to 45-60s per-attempt / 120-150s budget, (b) fix gateway loopback back-pressure (fairness vs long polls), (c) reclassify `AnnounceRetryBudgetExhaustedError` to WARN so operators notice.
 2. **"Session ended" banner identity regression** — bot-authored, not webhook. Documented in memory `project_discord_thread_ux_gap.md`. Not in current overhaul scope.
-3. **E2E harness env divergence** — mini-gateway's ACP child no-ops because CWD/HOME/auth aren't properly isolated. Lesson written to `~/repos/shared-memory/main/lesson-e2e-harness-isolation-gap-2026-04-18.md`.
-4. **`channels.discord.accounts.main.allowBots` is off** — blocks future test-bot-based live-verification rounds. Harness needs this set to exercise inbound native-origin flows.
+3. **E2E harness env divergence** — partially resolved by Task 5 (`f0dca1c7b7`): `withLiveHarness` now sets `HOME=<tempRoot>`, copies `.claude` / `.codex` auth into the temp HOME, and pins the ACP child CWD to the repo root (or a prepared fallback workspace). Remaining ops-level concerns (dual-gateway races, separate test guild, `allowBots` production default) are tracked as issue #4 below. Lesson: `~/repos/shared-memory/main/lesson-e2e-harness-isolation-gap-2026-04-18.md`.
+4. **`channels.discord.accounts.main.allowBots` is off** (ops-blocked) — the harness toggles `allowBots: true` inside its in-test config only; production default remains off. Inbound native-origin live verification still needs either (a) James temporarily flipping the production account's `allowBots`, (b) a dedicated test guild where the production bot is not a member, or (c) a paused-production window. These are manual calls — the harness does NOT mutate `~/.openclaw/openclaw.json`.
 5. **`acp_receipts` has no RPC callability** — agent-callable only. Either add a gateway RPC wrapper OR verify via scripted child session in follow-up.
 
 ---
@@ -80,7 +136,7 @@
 - [ ] Run `/less-permission-prompts` to tighten Claude Code allowlist
 - [ ] Root-cause the 30s loopback announce timeout
 - [ ] Fix "Session ended" banner identity
-- [ ] Rewrite E2E harness with proper HOME/CWD isolation + separate test guild
+- [x] Rewrite E2E harness with proper HOME/CWD isolation (landed as Task 5 `f0dca1c7b7`; separate test guild remains an ops prereq)
 - [ ] Offer top-5 upstream PR candidates back to `openclaw/openclaw`
 - [ ] Sync `richardclawbot` with upstream (2226 commits behind) per `CUSTOMIZATIONS.md` §D2 strategy
 
