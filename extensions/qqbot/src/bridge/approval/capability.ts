@@ -30,6 +30,7 @@ import {
   isQQBotExecApprovalApprover,
   resolveQQBotExecApprovalConfig,
 } from "../../exec-approvals.js";
+import { ensurePlatformAdapter } from "../bootstrap.js";
 import { resolveQQBotAccount } from "../config.js";
 import { getBridgeLogger } from "../logger.js";
 
@@ -216,9 +217,15 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
         );
         return result;
       },
-      load: async () =>
-        (await import("./handler-runtime.js"))
-          .qqbotApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+      load: async () => {
+        // Ensure PlatformAdapter is registered before handler-runtime uses
+        // getPlatformAdapter(). When the framework spawns the approval handler
+        // outside the qqbot gateway startAccount context, channel.ts's
+        // side-effect `import "./bridge/bootstrap.js"` may not have run yet.
+        ensurePlatformAdapter();
+        return (await import("./handler-runtime.js"))
+          .qqbotApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter;
+      },
     }),
   });
 }

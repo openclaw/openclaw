@@ -15,7 +15,7 @@ import {
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { registerPlatformAdapter, type PlatformAdapter } from "../engine/adapter/index.js";
+import { registerPlatformAdapter, hasPlatformAdapter, type PlatformAdapter } from "../engine/adapter/index.js";
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
@@ -90,4 +90,19 @@ const builtinAdapter: PlatformAdapter = {
   },
 };
 
-registerPlatformAdapter(builtinAdapter);
+/**
+ * Ensure the built-in PlatformAdapter is registered.
+ *
+ * Safe to call multiple times — only registers on the first invocation.
+ * Exported so that code paths outside the normal channel.ts startup
+ * (e.g. the framework-spawned approval handler) can guarantee the
+ * adapter is available before calling `getPlatformAdapter()`.
+ */
+export function ensurePlatformAdapter(): void {
+  if (!hasPlatformAdapter()) {
+    registerPlatformAdapter(builtinAdapter);
+  }
+}
+
+// Side-effect registration for the normal startup path (imported by channel.ts).
+ensurePlatformAdapter();

@@ -23,6 +23,7 @@ import {
 } from "../../engine/approval/index.js";
 import { getMessageApi, accountToCreds } from "../../engine/messaging/sender.js";
 import type { ChatScope, InlineKeyboard, MessageResponse } from "../../engine/types.js";
+import { ensurePlatformAdapter } from "../bootstrap.js";
 import {
   matchesQQBotApprovalAccount,
   resolveQQBotExecApprovalConfig,
@@ -159,6 +160,9 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
     },
 
     deliverPending: async ({ cfg, accountId, preparedTarget, pendingPayload }) => {
+      // Ensure the PlatformAdapter is registered — resolveQQBotAccount below
+      // calls getPlatformAdapter() to resolve secret inputs.
+      ensurePlatformAdapter();
       const account = resolveQQBotAccount(cfg, accountId ?? undefined);
       const creds = accountToCreds(account);
       const messageApi = getMessageApi(account.appId);
