@@ -1516,7 +1516,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(closeArg).toBe("```ts\ncode\n```");
   });
 
-  it("preserves raw partial text and only strips inline reply tags at final delivery", async () => {
+  it("strips directive tags at render time while preserving raw streamText for final delivery", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       allowReasoningPreview: false,
@@ -1528,9 +1528,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "[[reply_to_current]] hello final" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
-    // Render-only partials strip a leading reply directive while preserving the
-    // underlying raw streamText for final delivery bookkeeping.
-    expect(streamingInstances[0].update).toHaveBeenCalledWith("hello", {
+    // Render-only copy strips the directive tag (no `\s*` padding, so the
+    // single space after `]]` survives) while leaving the underlying raw
+    // streamText intact for final delivery bookkeeping.
+    expect(streamingInstances[0].update).toHaveBeenCalledWith(" hello", {
       replace: true,
     });
     // Final delivery still strips directive tags before sending.
@@ -1541,6 +1542,50 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         dropThinkingPanel: true,
       }),
     );
+  });
+
+  it("strips inline directive tags anywhere in partial text and preserves markdown table rows", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: false,
+    });
+
+    const partial = [
+      "| col | val |",
+      "|---|---|",
+      "| a | 1 [[audio_as_voice]] |",
+      "| b | 2 |",
+    ].join("\n");
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: partial });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    // The audio_as_voice tag mid-cell is removed, but the newline separating
+    // table rows is preserved — markdown rows must not collapse.
+    const expected = ["| col | val |", "|---|---|", "| a | 1  |", "| b | 2 |"].join("\n");
+    expect(streamingInstances[0].update).toHaveBeenCalledWith(expected, {
+      replace: true,
+    });
+  });
+
+  it("strips [[audio_as_voice]] from partial render when it leads the text", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: false,
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "[[audio_as_voice]]\n\nhi" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    // Directive tag is removed from the rendered card without eating the
+    // surrounding newlines, so downstream markdown rendering stays intact.
+    expect(streamingInstances[0].update).toHaveBeenCalledWith("\n\nhi", {
+      replace: true,
+    });
   });
 
   it("deduplicates final text by raw answer payload, not combined card text", async () => {

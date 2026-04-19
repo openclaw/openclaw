@@ -780,12 +780,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return text.substring(0, lastAtIdx);
   };
 
-  /** Strip a leading [[reply_to_current]] / [[reply_to:<id>]] directive tag
-   *  for render-only display. Only touches the prefix and its surrounding
-   *  whitespace — markdown structure in the middle of the body is preserved.
+  /** Strip inline directive tags ([[reply_to_current]] / [[reply_to:<id>]] /
+   *  [[audio_as_voice]]) for render-only display so they don't flash in the
+   *  streaming card. Uses the Display-variant regex (no `\s*` padding) so
+   *  markdown newlines/tables adjacent to directive tags are preserved.
    *  streamText itself is left untouched; this runs on the render-time copy. */
-  const stripLeadingReplyDirectiveForRender = (text: string): string =>
-    text.replace(/^\s*\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*/i, "");
+  const stripDirectiveTagsForRender = (text: string): string =>
+    stripInlineDirectiveTagsForDisplay(text).text;
 
   /** Queue an update to the main content element only. */
   const queueStreamingRender = () => {
@@ -797,7 +798,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
       const safeRendered = stripIncompleteAtTag(streamText);
-      const displayRendered = stripLeadingReplyDirectiveForRender(safeRendered);
+      const displayRendered = stripDirectiveTagsForRender(safeRendered);
       const renderedForCard = normalizeMentionTagsForCard(displayRendered);
       if (!renderedForCard || renderedForCard === lastRenderedStreamContent) {
         return;
@@ -1480,12 +1481,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-            // Pass raw cumulative text through — directive tag stripping is
-            // deferred to final delivery (L1154) so streaming partials preserve
-            // all whitespace/newlines in markdown tables, lists, and fences.
-            // The `INLINE_DIRECTIVE_TAG_WITH_PADDING_RE` regex used by
-            // stripInlineDirectiveTagsForDelivery has `\s*` padding that eats
-            // newlines around directive tags, which collapses markdown rows.
+            // Pass raw cumulative text through into streamText so mergeStreamingText
+            // sees consistent cumulative snapshots. Directive tags are stripped at
+            // render time by queueStreamingRender (via the Display-variant strip,
+            // which preserves newlines/tables) and again at final delivery (L959 /
+            // L1169) via the Delivery variant.
             const cleanedText = payload.text ?? "";
             if (!cleanedText) {
               return;
