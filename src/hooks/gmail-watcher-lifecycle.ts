@@ -29,7 +29,11 @@ export async function startGmailWatcherWithLogs(params: {
       gmailResult.reason !== "hooks not enabled" &&
       gmailResult.reason !== "no gmail account configured"
     ) {
-      params.log.warn(`gmail watcher not started: ${gmailResult.reason}`);
+      params.log.warn(
+        `gmail watcher not started: ${gmailResult.reason}. ` +
+          `Note: If using external webhook (e.g. gog + Pub/Sub), this is expected. ` +
+          `Ensure your configured Gmail hook endpoint is reachable.`,
+      );
     }
   } catch (err) {
     params.log.error(`gmail watcher failed to start: ${String(err)}`);

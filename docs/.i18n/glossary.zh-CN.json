@@ -374,5 +374,13 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "LLM Task",
+    "target": "LLM 任务"
+  },
+  {
+    "source": "Exec Approval Limitations",
+    "target": "执行审批限制"
   }
 ]
