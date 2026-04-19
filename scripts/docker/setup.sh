@@ -524,7 +524,7 @@ try:
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     if old_p not in content:
-        raise SystemExit(0)
+        sys.exit(0)
     updated = content.replace(old_p, new_p)
     json.loads(updated)
     with open(path, "w", encoding="utf-8") as f:
