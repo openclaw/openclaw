@@ -154,6 +154,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
                   agentTimeoutMs,
                   inflight,
                   oauth.requestAuth,
+                  pendingGoogleAuth,
                 ),
               10_000,
             );
@@ -494,6 +495,7 @@ async function onboardNewUsers(
     authUrl: string;
     waitForCode: () => Promise<string>;
   },
+  pendingGoogleAuth?: Map<string, { channelId: string; oauthRequestAuth: typeof oauthRequestAuth }>,
 ): Promise<void> {
   for (const [userId, instance] of instances) {
     if (instance.onboarded) continue;
