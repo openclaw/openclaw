@@ -1181,12 +1181,13 @@ export function resolveSessionModelIdentityRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride" | "modelIsFromFallback">,
   agentId?: string,
   fallbackModelRef?: string,
 ): { provider?: string; model: string } {
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
+  const isFromFallback = entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback;
+  const runtimeModel = isFromFallback ? undefined : entry?.model?.trim();
+  const runtimeProvider = isFromFallback ? undefined : entry?.modelProvider?.trim();
   if (runtimeModel) {
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
