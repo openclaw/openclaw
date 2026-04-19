@@ -14,7 +14,7 @@
  * @see https://github.com/openclaw/openclaw/issues/40020
  */
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { collapseStructuredRepeatedPrefixPattern } from "./repeated-visible-suffix.js";
+import { collapseRepeatedVisibleSuffixAfterDelimiter } from "./repeated-visible-suffix.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
@@ -55,7 +55,8 @@ export function stripModelSpecialTokens(text: string): string {
     }
   }
   if (lastChannelDelimiterEnd !== null) {
-    return collapseStructuredRepeatedPrefixPattern(
+    return collapseRepeatedVisibleSuffixAfterDelimiter(
+      text.slice(0, lastChannelDelimiterEnd),
       stripModelSpecialTokens(text.slice(lastChannelDelimiterEnd)),
     );
   }

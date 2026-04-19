@@ -3,6 +3,14 @@ const MIN_STRUCTURED_REPEAT_UNIT_LENGTH = 8;
 const VISIBLE_SUFFIX_BOUNDARY_RE = /[.!?:;)\]}>`'"]$/;
 const INTERNAL_PREAMBLE_HINT_RE =
   /\b(?:the user|instruction|output content|reply with|reply to|final response|general instruction|i will|i must|internal planning|plan:)\b/i;
+const SINGLE_ANSWER_INTENT_RE =
+  /\b(?:exactly|nothing else|one word(?: only)?|one short sentence(?: only)?|single answer)\b/i;
+
+type RepeatedPatternMatch = {
+  unit: string;
+  fullRepeats: number;
+  tail: string;
+};
 
 function looksStructuredRepeatedUnit(unit: string): boolean {
   return unit.length >= MIN_STRUCTURED_REPEAT_UNIT_LENGTH || STRUCTURED_REPEAT_HINT_RE.test(unit);
@@ -32,9 +40,9 @@ function looksLikeInternalPreamble(prefix: string): boolean {
   return lines.length >= 2 || sentenceCount >= 3;
 }
 
-export function collapseStructuredRepeatedPrefixPattern(text: string): string {
+function matchStructuredRepeatedPrefixPattern(text: string): RepeatedPatternMatch | null {
   if (!text) {
-    return text;
+    return null;
   }
 
   for (let unitLength = 1; unitLength <= Math.floor(text.length / 2); unitLength += 1) {
@@ -55,18 +63,40 @@ export function collapseStructuredRepeatedPrefixPattern(text: string): string {
 
     const tail = text.slice(cursor);
     if (!tail || unit.startsWith(tail)) {
-      return unit;
+      return { unit, fullRepeats, tail };
     }
   }
 
-  return text;
+  return null;
+}
+
+function shouldCollapseRepeatedSuffix(params: {
+  prefix: string;
+  match: RepeatedPatternMatch;
+  context: "delimiter" | "no-delimiter";
+}): boolean {
+  const { prefix, match, context } = params;
+
+  if (match.tail.length > 0 || match.fullRepeats >= 3) {
+    return context === "delimiter" || looksLikeInternalPreamble(prefix);
+  }
+
+  return looksLikeInternalPreamble(prefix) && SINGLE_ANSWER_INTENT_RE.test(prefix);
+}
+
+export function collapseRepeatedVisibleSuffixAfterDelimiter(
+  prefix: string,
+  suffix: string,
+): string {
+  const match = matchStructuredRepeatedPrefixPattern(suffix);
+  if (!match || !shouldCollapseRepeatedSuffix({ prefix, match, context: "delimiter" })) {
+    return suffix;
+  }
+
+  return match.unit;
 }
 
 export function extractStructuredRepeatedVisibleSuffix(text: string): string {
-  const collapsedWholeText = collapseStructuredRepeatedPrefixPattern(text);
-  if (collapsedWholeText !== text) {
-    return collapsedWholeText;
-  }
   if (!text) {
     return text;
   }
@@ -100,7 +130,11 @@ export function extractStructuredRepeatedVisibleSuffix(text: string): string {
       if (
         fullRepeats < 2 ||
         !endsAtVisibleSuffixBoundary(prefix) ||
-        !looksLikeInternalPreamble(prefix)
+        !shouldCollapseRepeatedSuffix({
+          prefix,
+          match: { unit, fullRepeats, tail },
+          context: "no-delimiter",
+        })
       ) {
         continue;
       }

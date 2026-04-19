@@ -567,6 +567,15 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("does not collapse intentionally repeated structured suffixes after a delimiter without single-answer intent", () => {
+    expect(sanitizeAssistantVisibleText("internal planning<channel|>abc-123abc-123")).toBe(
+      "abc-123abc-123",
+    );
+    expect(sanitizeAssistantVisibleText("internal planning<channel|>2024-04-202024-04-20")).toBe(
+      "2024-04-202024-04-20",
+    );
+  });
+
   it("does not collapse short unstructured repeated prose after a control delimiter", () => {
     const input = "Internal planning<channel|>hahaha";
 
