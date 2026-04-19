@@ -33,24 +33,6 @@ static gboolean control_sessions_fetch_in_flight = FALSE;
 static gint64 control_last_fetch_us = 0;
 static guint control_generation = 1;
 
-typedef struct {
-    guint generation;
-} ControlRequestContext;
-
-static ControlRequestContext* control_request_context_new(void) {
-    ControlRequestContext *ctx = g_new0(ControlRequestContext, 1);
-    ctx->generation = control_generation;
-    return ctx;
-}
-
-static gboolean control_request_context_is_stale(const ControlRequestContext *ctx) {
-    return !ctx || ctx->generation != control_generation;
-}
-
-static void control_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 static void control_request_snapshot(void);
 
 static void control_set_count_label(GtkWidget *label, const gchar *prefix, gint count) {
@@ -125,12 +107,10 @@ static void control_nodes_clear(void) {
 }
 
 static void on_control_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    ControlRequestContext *ctx = (ControlRequestContext *)user_data;
-    if (control_request_context_is_stale(ctx)) {
-        control_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != control_generation) {
         return;
     }
-    control_request_context_free(ctx);
 
     if (!control_status_label) return;
     gtk_label_set_text(GTK_LABEL(control_status_label),
@@ -161,12 +141,10 @@ static void on_refresh_snapshot_clicked(GtkButton *button, gpointer user_data) {
 }
 
 static void on_control_agents_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ControlRequestContext *ctx = (ControlRequestContext *)user_data;
-    if (control_request_context_is_stale(ctx)) {
-        control_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != control_generation) {
         return;
     }
-    control_request_context_free(ctx);
 
     control_agents_fetch_in_flight = FALSE;
 
@@ -184,12 +162,10 @@ static void on_control_agents_response(const GatewayRpcResponse *response, gpoin
 }
 
 static void on_control_sessions_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ControlRequestContext *ctx = (ControlRequestContext *)user_data;
-    if (control_request_context_is_stale(ctx)) {
-        control_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != control_generation) {
         return;
     }
-    control_request_context_free(ctx);
 
     control_sessions_fetch_in_flight = FALSE;
 
@@ -227,10 +203,9 @@ static void on_run_cron_clicked(GtkButton *button, gpointer user_data) {
         return;
     }
 
-    ControlRequestContext *ctx = control_request_context_new();
-    g_autofree gchar *rid = mutation_cron_run(job_id, on_control_mutation_done, ctx);
+    guint current_gen = control_generation;
+    g_autofree gchar *rid = mutation_cron_run(job_id, on_control_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!rid && control_status_label) {
-        control_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(control_status_label), "Cron run request failed");
     }
 }
@@ -259,23 +234,20 @@ static void on_abort_session_clicked(GtkButton *button, gpointer user_data) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    ControlRequestContext *ctx = control_request_context_new();
+    guint current_gen = control_generation;
     g_autofree gchar *rid = gateway_rpc_request("chat.abort", params, 0,
-                                                on_control_mutation_done, ctx);
+                                                on_control_mutation_done, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        control_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(control_status_label), "Abort request failed");
     }
 }
 
 static void on_control_nodes_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ControlRequestContext *ctx = (ControlRequestContext *)user_data;
-    if (control_request_context_is_stale(ctx)) {
-        control_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != control_generation) {
         return;
     }
-    control_request_context_free(ctx);
 
     control_nodes_fetch_in_flight = FALSE;
 
@@ -344,33 +316,30 @@ static void control_request_snapshot(void) {
 
     if (!control_nodes_fetch_in_flight) {
         control_nodes_fetch_in_flight = TRUE;
-        ControlRequestContext *nodes_ctx = control_request_context_new();
+        guint current_gen = control_generation;
         g_autofree gchar *rid_nodes = gateway_rpc_request("node.list", NULL, 0,
-                                                          on_control_nodes_response, nodes_ctx);
+                                                          on_control_nodes_response, GUINT_TO_POINTER(current_gen));
         if (!rid_nodes) {
-            control_request_context_free(nodes_ctx);
             control_nodes_fetch_in_flight = FALSE;
         }
     }
 
     if (!control_agents_fetch_in_flight) {
         control_agents_fetch_in_flight = TRUE;
-        ControlRequestContext *agents_ctx = control_request_context_new();
+        guint current_gen = control_generation;
         g_autofree gchar *rid_agents = gateway_rpc_request("agents.list", NULL, 0,
-                                                           on_control_agents_response, agents_ctx);
+                                                           on_control_agents_response, GUINT_TO_POINTER(current_gen));
         if (!rid_agents) {
-            control_request_context_free(agents_ctx);
             control_agents_fetch_in_flight = FALSE;
         }
     }
 
     if (!control_sessions_fetch_in_flight) {
         control_sessions_fetch_in_flight = TRUE;
-        ControlRequestContext *sessions_ctx = control_request_context_new();
+        guint current_gen = control_generation;
         g_autofree gchar *rid_sessions = gateway_rpc_request("sessions.list", NULL, 0,
-                                                             on_control_sessions_response, sessions_ctx);
+                                                             on_control_sessions_response, GUINT_TO_POINTER(current_gen));
         if (!rid_sessions) {
-            control_request_context_free(sessions_ctx);
             control_sessions_fetch_in_flight = FALSE;
         }
     }

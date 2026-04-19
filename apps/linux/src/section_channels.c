@@ -38,24 +38,6 @@ typedef struct {
     gchar *channel_id;
 } ChannelsIdContext;
 
-typedef struct {
-    guint generation;
-} ChannelsRequestContext;
-
-static ChannelsRequestContext* channels_request_context_new(void) {
-    ChannelsRequestContext *ctx = g_new0(ChannelsRequestContext, 1);
-    ctx->generation = channels_generation;
-    return ctx;
-}
-
-static gboolean channels_request_context_is_stale(const ChannelsRequestContext *ctx) {
-    return !ctx || ctx->generation != channels_generation;
-}
-
-static void channels_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 static ChannelsIdContext* channels_id_context_new(const gchar *channel_id) {
     ChannelsIdContext *ctx = g_new0(ChannelsIdContext, 1);
     ctx->generation = channels_generation;
@@ -81,12 +63,10 @@ static void channels_force_refresh(void);
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    ChannelsRequestContext *ctx = (ChannelsRequestContext *)user_data;
-    if (channels_request_context_is_stale(ctx)) {
-        channels_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != channels_generation) {
         return;
     }
-    channels_request_context_free(ctx);
 
     if (!channels_status_label) return;
 
@@ -109,10 +89,9 @@ static void on_refresh_all_channels(GtkButton *btn, gpointer user_data) {
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Refreshing all channels…");
     }
 
-    ChannelsRequestContext *ctx = channels_request_context_new();
-    g_autofree gchar *req = mutation_channels_status(TRUE, on_mutation_done, ctx);
+    guint current_gen = channels_generation;
+    g_autofree gchar *req = mutation_channels_status(TRUE, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req) {
-        channels_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (channels_status_label)
             gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send refresh request");
@@ -452,12 +431,10 @@ static void on_edit_config(GtkButton *btn, gpointer user_data) {
 /* ── Web Login / QR Flow ─────────────────────────────────────────── */
 
 static void on_web_login_wait_done(const GatewayRpcResponse *response, gpointer user_data) {
-    ChannelsRequestContext *ctx = (ChannelsRequestContext *)user_data;
-    if (channels_request_context_is_stale(ctx)) {
-        channels_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != channels_generation) {
         return;
     }
-    channels_request_context_free(ctx);
     
     /* STRICT GUARDS: Check response state before any payload access */
     if (!response || !response->ok) {
@@ -599,10 +576,9 @@ static void on_web_login_start_done(const GatewayRpcResponse *response, gpointer
 
     /* Begin waiting for the actual login resolution */
     /* 120s timeout, null account_id since we are linking a primary account */
-    ChannelsRequestContext *wait_ctx = channels_request_context_new();
-    g_autofree gchar *req = mutation_web_login_wait(120000, NULL, on_web_login_wait_done, wait_ctx);
+    guint current_gen = channels_generation;
+    g_autofree gchar *req = mutation_web_login_wait(120000, NULL, on_web_login_wait_done, GUINT_TO_POINTER(current_gen));
     if (!req && channels_status_label) {
-        channels_request_context_free(wait_ctx);
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send wait request");
     }
     
@@ -640,10 +616,9 @@ static void on_logout_dialog_response(GObject *source, GAsyncResult *result, gpo
     if (channels_status_label)
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Logging out\u2026");
 
-    ChannelsRequestContext *ctx = channels_request_context_new();
-    g_autofree gchar *req = mutation_channels_logout(channel_id, account_id, on_mutation_done, ctx);
+    guint current_gen = channels_generation;
+    g_autofree gchar *req = mutation_channels_logout(channel_id, account_id, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req && channels_status_label) {
-        channels_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send request");
     }
 }
@@ -855,12 +830,10 @@ static void channels_rebuild_list(void) {
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_channels_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChannelsRequestContext *ctx = (ChannelsRequestContext *)user_data;
-    if (channels_request_context_is_stale(ctx)) {
-        channels_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != channels_generation) {
         return;
     }
-    channels_request_context_free(ctx);
 
     channels_fetch_in_flight = FALSE;
 
@@ -908,11 +881,10 @@ static void channels_force_refresh(void) {
     if (!gateway_rpc_is_ready()) return;
 
     channels_fetch_in_flight = TRUE;
-    ChannelsRequestContext *ctx = channels_request_context_new();
+    guint current_gen = channels_generation;
     g_autofree gchar *req_id = gateway_rpc_request(
-        "channels.status", NULL, 0, on_channels_rpc_response, ctx);
+        "channels.status", NULL, 0, on_channels_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id) {
-        channels_request_context_free(ctx);
         channels_fetch_in_flight = FALSE;
     }
 }
@@ -985,11 +957,10 @@ static void channels_refresh(void) {
     }
 
     channels_fetch_in_flight = TRUE;
-    ChannelsRequestContext *ctx = channels_request_context_new();
+    guint current_gen = channels_generation;
     g_autofree gchar *req_id = gateway_rpc_request(
-        "channels.status", NULL, 0, on_channels_rpc_response, ctx);
+        "channels.status", NULL, 0, on_channels_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id) {
-        channels_request_context_free(ctx);
         channels_fetch_in_flight = FALSE;
         if (channels_status_label)
             gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send request");

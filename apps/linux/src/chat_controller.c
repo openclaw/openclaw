@@ -176,24 +176,6 @@ static ChatController *g_ctl = NULL;
 #define chat_generation                (g_ctl->generation)
 #define chat_gate_info                 (g_ctl->gate_info)
 
-typedef struct {
-    guint generation;
-} ChatRequestContext;
-
-static ChatRequestContext* chat_request_context_new(void) {
-    ChatRequestContext *ctx = g_new0(ChatRequestContext, 1);
-    ctx->generation = chat_generation;
-    return ctx;
-}
-
-static gboolean chat_request_context_is_stale(const ChatRequestContext *ctx) {
-    return !ctx || ctx->generation != chat_generation;
-}
-
-static void chat_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 static void chat_agent_choice_free(ChatAgentChoice *a) {
     if (!a) return;
     g_free(a->id);
@@ -751,12 +733,10 @@ static void chat_rebuild_session_dropdown(void) {
 }
 
 static void on_chat_history_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
-    if (chat_request_context_is_stale(ctx)) {
-        chat_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != chat_generation) {
         return;
     }
-    chat_request_context_free(ctx);
 
     if (!chat_status_label) {
         return;
@@ -812,11 +792,10 @@ static void chat_request_history_for_selected(void) {
     g_object_unref(b);
 
     chat_history_in_flight = TRUE;
-    ChatRequestContext *ctx = chat_request_context_new();
-    g_autofree gchar *rid = gateway_rpc_request("chat.history", params, 0, on_chat_history_response, ctx);
+    guint current_gen = chat_generation;
+    g_autofree gchar *rid = gateway_rpc_request("chat.history", params, 0, on_chat_history_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        chat_request_context_free(ctx);
         chat_history_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Gateway not connected");
         chat_rebuild_messages_ui();
@@ -824,12 +803,10 @@ static void chat_request_history_for_selected(void) {
 }
 
 static void on_chat_sessions_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
-    if (chat_request_context_is_stale(ctx)) {
-        chat_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != chat_generation) {
         return;
     }
-    chat_request_context_free(ctx);
 
     if (!chat_status_label) {
         return;
@@ -900,23 +877,20 @@ static void chat_request_sessions_for_selected_agent(void) {
     g_object_unref(b);
 
     chat_sessions_in_flight = TRUE;
-    ChatRequestContext *ctx = chat_request_context_new();
-    g_autofree gchar *rid = gateway_rpc_request("sessions.list", params, 0, on_chat_sessions_response, ctx);
+    guint current_gen = chat_generation;
+    g_autofree gchar *rid = gateway_rpc_request("sessions.list", params, 0, on_chat_sessions_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        chat_request_context_free(ctx);
         chat_sessions_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to request sessions.list");
     }
 }
 
 static void on_models_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
-    if (chat_request_context_is_stale(ctx)) {
-        chat_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != chat_generation) {
         return;
     }
-    chat_request_context_free(ctx);
 
     g_autoptr(GPtrArray) parsed_models =
         g_ptr_array_new_with_free_func((GDestroyNotify)chat_model_choice_free);
@@ -1002,12 +976,10 @@ static void on_models_response(const GatewayRpcResponse *response, gpointer user
 }
 
 static void on_agents_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
-    if (chat_request_context_is_stale(ctx)) {
-        chat_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != chat_generation) {
         return;
     }
-    chat_request_context_free(ctx);
 
     g_autoptr(GPtrArray) parsed_agents =
         g_ptr_array_new_with_free_func((GDestroyNotify)chat_agent_choice_free);
@@ -1082,12 +1054,10 @@ static void on_agents_response(const GatewayRpcResponse *response, gpointer user
 }
 
 static void on_chat_send_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
-    if (chat_request_context_is_stale(ctx)) {
-        chat_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != chat_generation) {
         return;
     }
-    chat_request_context_free(ctx);
 
     if (!chat_status_label) {
         return;
@@ -1148,11 +1118,10 @@ static void chat_send_current_message(void) {
                 chat_pending_run_id ? chat_pending_run_id : "(none)",
                 strlen(text));
 
-    ChatRequestContext *ctx = chat_request_context_new();
-    g_autofree gchar *rid = gateway_rpc_request("chat.send", params, 0, on_chat_send_response, ctx);
+    guint current_gen = chat_generation;
+    g_autofree gchar *rid = gateway_rpc_request("chat.send", params, 0, on_chat_send_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        chat_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Unable to send while disconnected");
         chat_clear_pending_state();
         chat_rebuild_messages_ui();
@@ -1329,12 +1298,10 @@ static void on_chat_session_changed(GtkDropDown *dropdown, GParamSpec *pspec, gp
 }
 
 static void on_chat_model_patch_response(const GatewayRpcResponse *response, gpointer user_data) {
-    ChatRequestContext *ctx = (ChatRequestContext *)user_data;
-    if (chat_request_context_is_stale(ctx)) {
-        chat_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != chat_generation) {
         return;
     }
-    chat_request_context_free(ctx);
 
     if (!chat_status_label) {
         return;
@@ -1373,12 +1340,11 @@ static void on_chat_model_changed(GtkDropDown *dropdown, GParamSpec *pspec, gpoi
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    ChatRequestContext *ctx = chat_request_context_new();
+    guint current_gen = chat_generation;
     g_autofree gchar *rid = gateway_rpc_request("sessions.patch", params, 0,
-                                                on_chat_model_patch_response, ctx);
+                                                on_chat_model_patch_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        chat_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to send sessions.patch");
     }
 }
@@ -1549,15 +1515,12 @@ static void chat_refresh(void) {
 
     chat_fetch_in_flight = TRUE;
     chat_dependencies_pending = 0;
-    ChatRequestContext *agents_ctx = chat_request_context_new();
-    g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0, on_agents_response, agents_ctx);
+    guint current_gen = chat_generation;
+    g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0, on_agents_response, GUINT_TO_POINTER(current_gen));
     if (agents_rid) chat_dependencies_pending++;
-    else chat_request_context_free(agents_ctx);
 
-    ChatRequestContext *models_ctx = chat_request_context_new();
-    g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0, on_models_response, models_ctx);
+    g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0, on_models_response, GUINT_TO_POINTER(current_gen));
     if (models_rid) chat_dependencies_pending++;
-    else chat_request_context_free(models_ctx);
 
     if (!agents_rid || !models_rid) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "Failed to request chat dependencies");

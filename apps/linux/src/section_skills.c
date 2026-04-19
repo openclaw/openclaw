@@ -30,24 +30,6 @@ static gint64 skills_last_fetch_us = 0;
 static gint current_filter = 0; /* 0: All, 1: Ready, 2: Needs Setup, 3: Disabled */
 static guint skills_generation = 1;
 
-typedef struct {
-    guint generation;
-} SkillsRequestContext;
-
-static SkillsRequestContext* skills_request_context_new(void) {
-    SkillsRequestContext *ctx = g_new0(SkillsRequestContext, 1);
-    ctx->generation = skills_generation;
-    return ctx;
-}
-
-static gboolean skills_request_context_is_stale(const SkillsRequestContext *ctx) {
-    return !ctx || ctx->generation != skills_generation;
-}
-
-static void skills_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 /* Forward declarations */
 static void skills_rebuild_list(void);
 static void skills_force_refresh(void);
@@ -55,12 +37,10 @@ static void skills_force_refresh(void);
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    SkillsRequestContext *ctx = (SkillsRequestContext *)user_data;
-    if (skills_request_context_is_stale(ctx)) {
-        skills_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != skills_generation) {
         return;
     }
-    skills_request_context_free(ctx);
 
     if (!skills_status_label) return;
 
@@ -84,10 +64,9 @@ static void on_toggle_enable(GtkButton *btn, gpointer user_data) {
     if (!key) return;
 
     gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
-    SkillsRequestContext *ctx = skills_request_context_new();
-    g_autofree gchar *req = mutation_skills_enable(key, !currently_enabled, on_mutation_done, ctx);
+    guint current_gen = skills_generation;
+    g_autofree gchar *req = mutation_skills_enable(key, !currently_enabled, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req) {
-        skills_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send request");
@@ -105,10 +84,9 @@ static void on_install(GtkButton *btn, gpointer user_data) {
     if (skills_status_label)
         gtk_label_set_text(GTK_LABEL(skills_status_label), "Installing\u2026");
 
-    SkillsRequestContext *ctx = skills_request_context_new();
-    g_autofree gchar *req = mutation_skills_install(name, install_id, on_mutation_done, ctx);
+    guint current_gen = skills_generation;
+    g_autofree gchar *req = mutation_skills_install(name, install_id, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req) {
-        skills_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send install request");
@@ -124,10 +102,9 @@ static void on_update(GtkButton *btn, gpointer user_data) {
     if (skills_status_label)
         gtk_label_set_text(GTK_LABEL(skills_status_label), "Updating\u2026");
 
-    SkillsRequestContext *ctx = skills_request_context_new();
-    g_autofree gchar *req = mutation_skills_update(key, on_mutation_done, ctx);
+    guint current_gen = skills_generation;
+    g_autofree gchar *req = mutation_skills_update(key, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req) {
-        skills_request_context_free(ctx);
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send update request");
@@ -160,14 +137,11 @@ static void on_env_dialog_response(GObject *source, GAsyncResult *result, gpoint
         gtk_label_set_text(GTK_LABEL(skills_status_label), is_api_key ? "Setting API key\u2026" : "Setting environment\u2026");
 
     g_autofree gchar *req = NULL;
+    guint current_gen = skills_generation;
     if (is_api_key) {
-        SkillsRequestContext *ctx = skills_request_context_new();
-        req = mutation_skills_update_api_key(key, value, on_mutation_done, ctx);
-        if (!req) skills_request_context_free(ctx);
+        req = mutation_skills_update_api_key(key, value, on_mutation_done, GUINT_TO_POINTER(current_gen));
     } else {
-        SkillsRequestContext *ctx = skills_request_context_new();
-        req = mutation_skills_update_env(key, env_name, value, on_mutation_done, ctx);
-        if (!req) skills_request_context_free(ctx);
+        req = mutation_skills_update_env(key, env_name, value, on_mutation_done, GUINT_TO_POINTER(current_gen));
     }
     
     if (!req && skills_status_label) {
@@ -470,12 +444,10 @@ static void skills_rebuild_list(void) {
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_skills_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    SkillsRequestContext *ctx = (SkillsRequestContext *)user_data;
-    if (skills_request_context_is_stale(ctx)) {
-        skills_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != skills_generation) {
         return;
     }
-    skills_request_context_free(ctx);
 
     skills_fetch_in_flight = FALSE;
 
@@ -524,11 +496,10 @@ static void skills_force_refresh(void) {
     if (!gateway_rpc_is_ready()) return;
 
     skills_fetch_in_flight = TRUE;
-    SkillsRequestContext *ctx = skills_request_context_new();
+    guint current_gen = skills_generation;
     g_autofree gchar *req_id = gateway_rpc_request(
-        "skills.status", NULL, 0, on_skills_rpc_response, ctx);
+        "skills.status", NULL, 0, on_skills_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id) {
-        skills_request_context_free(ctx);
         skills_fetch_in_flight = FALSE;
     }
 }
@@ -602,11 +573,10 @@ static void skills_refresh(void) {
     if (!section_is_stale(&skills_last_fetch_us)) return;
 
     skills_fetch_in_flight = TRUE;
-    SkillsRequestContext *ctx = skills_request_context_new();
+    guint current_gen = skills_generation;
     g_autofree gchar *req_id = gateway_rpc_request(
-        "skills.status", NULL, 0, on_skills_rpc_response, ctx);
+        "skills.status", NULL, 0, on_skills_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id) {
-        skills_request_context_free(ctx);
         skills_fetch_in_flight = FALSE;
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Failed to send request");
