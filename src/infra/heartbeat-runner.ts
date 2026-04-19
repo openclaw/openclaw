@@ -86,6 +86,7 @@ import {
   areHeartbeatsEnabled,
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
+  type HeartbeatWakeRequest,
   requestHeartbeatNow,
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
@@ -1409,6 +1410,7 @@ export function startHeartbeatRunner(opts: {
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
+    const requestedHeartbeat = params?.heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1428,7 +1430,7 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: targetAgent.heartbeat,
+            heartbeat: requestedHeartbeat ?? targetAgent.heartbeat,
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
@@ -1496,11 +1498,12 @@ export function startHeartbeatRunner(opts: {
     }
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params) =>
+  const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>
     run({
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      heartbeat: params.heartbeat,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
