@@ -1,6 +1,57 @@
 import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 
 /**
+ * Live-test iteration 2 Bug A: distilled "what's the live planMode mode?"
+ * lookup — encodes the SEMANTIC that an absent `planMode` object on
+ * disk means the session is in NORMAL mode (because `sessions-patch.ts`
+ * DELETES planMode entirely on `approve`/`edit` when no `autoApprove`
+ * flag is preserved). Returns:
+ *
+ * - `"plan"` when `liveEntry.planMode.mode === "plan"`
+ * - `"normal"` when `liveEntry.planMode.mode === "normal"` OR when
+ *   the entry exists but planMode is missing (deletion = normal mode)
+ * - `undefined` ONLY when we have no live entry to inspect (missing
+ *   storePath/sessionKey, disk error, or sessionKey not in store)
+ *
+ * This `undefined` semantic is critical: callers that fall back to a
+ * cached snapshot (`getLatestPlanMode() ?? cached`) MUST treat
+ * undefined as "couldn't read disk, prefer cache" — NOT as "planMode
+ * was deleted." Returning `"normal"` on deletion makes the caller use
+ * the FRESH disk fact instead of falling back to a stale "plan"
+ * snapshot, which was the root cause of mutation-gate-blocks-after-
+ * approval and ack-only-fires-after-approval (Bug A iter-2).
+ */
+export type LivePlanMode = "plan" | "normal";
+
+export function resolveLatestPlanModeFromDisk(params: {
+  storePath?: string;
+  sessionKey?: string;
+}): LivePlanMode | undefined {
+  const { storePath, sessionKey } = params;
+  if (!storePath || !sessionKey) {
+    return undefined;
+  }
+  try {
+    const liveStore = loadSessionStore(storePath, { skipCache: true });
+    const liveEntry = liveStore?.[sessionKey];
+    if (!liveEntry) {
+      return undefined;
+    }
+    const mode = liveEntry.planMode?.mode;
+    if (mode === "plan") {
+      return "plan";
+    }
+    // mode === "normal" OR planMode object deleted (post-approval).
+    // Per the deletion-as-normal contract documented above, both
+    // collapse to "normal" so consumers don't false-positive on a
+    // stale "plan" cached snapshot.
+    return "normal";
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Bug 3+4 v3 helper: read the LATEST persisted SessionEntry for a
  * given sessionKey, bypassing the in-memory session-store cache.
  *

@@ -260,19 +260,24 @@ export async function runBeforeToolCallHook(args: {
   // and BEFORE the plugin hookRunner (so plugins can't bypass the gate
   // by handling the call earlier in the pipeline).
   //
-  // Bug 3+4 fix: read the LATEST planMode from the in-memory
-  // SessionEntry on every tool call (via `getLatestPlanMode` callback
-  // wired in agent-runner-execution.ts) instead of trusting the
-  // cached `args.ctx.planMode` snapshot from run start. After the user
-  // approves a plan via `sessions.patch { planApproval: { action:
-  // "approve" } }`, the SessionEntry flips mode → "normal" but the
-  // cached `args.ctx.planMode === "plan"` would otherwise stay stale
-  // for the rest of the current run, blocking mutations indefinitely
-  // until the next agent run starts. The callback is O(1) (in-memory
-  // map lookup) so per-tool-call overhead is nanoseconds.
-  // Falls back to cached value if the callback is missing (test
-  // contexts) or returns undefined (no live entry).
-  const latestPlanMode = args.ctx?.getLatestPlanMode?.() ?? args.ctx?.planMode;
+  // Bug 3+4 + iter-2 Bug A fix: read the LATEST planMode for every
+  // tool call. `getLatestPlanMode` (wired in
+  // agent-runner-execution.ts) does a TRUE fresh disk read with the
+  // deletion-as-normal semantic — `undefined` ONLY when the disk
+  // can't be read (missing path/key, error, no entry). When the
+  // callback is wired and returned a value, USE IT — do NOT fall
+  // back to the stale cached snapshot. The fallback to
+  // `args.ctx.planMode` is reserved for environments without the
+  // callback (test contexts) or when the disk is unreadable.
+  //
+  // Iter-2 Bug A root cause was the previous `??` fallback chain:
+  // `getLatestPlanMode() ?? planMode`. When approval deleted
+  // planMode on disk, the helper returned undefined → fell back to
+  // the stale "plan" snapshot → mutation gate kept blocking
+  // post-approval. Now the helper returns "normal" on deletion AND
+  // the fallback is an explicit "no live data" branch.
+  const liveMode = args.ctx?.getLatestPlanMode?.();
+  const latestPlanMode = liveMode !== undefined ? liveMode : args.ctx?.planMode;
   if (latestPlanMode === "plan") {
     let execCommand: string | undefined;
     if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {

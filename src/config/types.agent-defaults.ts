@@ -367,6 +367,23 @@ export type AgentDefaultsConfig = {
      * field will activate automatically.
      */
     approvalTimeoutSeconds?: number;
+    /**
+     * Live-test iteration 2 Bug D: opt-in debug log toggle. When true,
+     * enables detailed plan-mode lifecycle logging at every state
+     * transition / gate decision / tool call / synthetic injection /
+     * approval event. Off by default (zero perf impact when unset).
+     *
+     * Equivalent to setting `OPENCLAW_DEBUG_PLAN_MODE=1` in the env,
+     * but doesn't depend on launchd / process-tree env propagation
+     * (which is unreliable on macOS when the gateway is supervised
+     * by the OpenClaw Mac app rather than launched directly by
+     * launchd). Either signal turns logging on; the env var wins
+     * if both are set.
+     *
+     * Stream the log with:
+     *   tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'
+     */
+    debug?: boolean;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

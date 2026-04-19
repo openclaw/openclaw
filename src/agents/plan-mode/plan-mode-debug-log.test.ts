@@ -1,17 +1,22 @@
 /**
  * Plan-mode debug log helper — opt-in gate + structured event coverage.
  *
- * Two contracts under test:
+ * Three contracts under test:
  * 1. The env-var gate (`OPENCLAW_DEBUG_PLAN_MODE=1`) is honored on
  *    every call — no global cache, so late-set/late-cleared env vars
  *    take effect immediately.
- * 2. Each event `kind` serializes with the expected metadata fields
+ * 2. The config-flag gate (`agents.defaults.planMode.debug: true`) is
+ *    also honored — added in iter-2 Bug D because the env-var path
+ *    doesn't reliably propagate to gateway processes supervised by
+ *    the OpenClaw Mac app.
+ * 3. Each event `kind` serializes with the expected metadata fields
  *    so future grep'ing on `[plan-mode/<kind>]` lines yields stable
  *    structured data.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const debugMock = vi.fn();
+const loadConfigMock = vi.fn(() => ({}) as Record<string, unknown>);
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
@@ -26,6 +31,10 @@ vi.mock("../../logging/subsystem.js", () => ({
     raw: vi.fn(),
     child: vi.fn(),
   })),
+}));
+
+vi.mock("../../config/io.js", () => ({
+  loadConfig: () => loadConfigMock(),
 }));
 
 const { logPlanModeDebug } = await import("./plan-mode-debug-log.js");
@@ -94,6 +103,96 @@ describe("logPlanModeDebug — env-var gate", () => {
       tool: "edit",
       allowed: false,
       planMode: "plan",
+    });
+    expect(debugMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Live-test iter-2 Bug D: config-flag activation. Env-var path is
+ * unreliable on macOS when the gateway is supervised by the Mac app
+ * (launchd setenv only affects future launchd-spawned processes).
+ * The config-flag path reads `agents.defaults.planMode.debug` from
+ * disk on every call so the user can toggle it via
+ * `openclaw config set agents.defaults.planMode.debug true` and a
+ * gateway restart picks it up reliably.
+ */
+describe("logPlanModeDebug — config-flag gate (Bug D iter-2)", () => {
+  beforeEach(() => {
+    debugMock.mockReset();
+    loadConfigMock.mockReset();
+    // Default: env unset so config flag is the only signal.
+    vi.stubEnv("OPENCLAW_DEBUG_PLAN_MODE", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("emits when agents.defaults.planMode.debug=true", () => {
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { planMode: { debug: true } } },
+    });
+    logPlanModeDebug({
+      kind: "approval_event",
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
+    });
+    expect(debugMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("no-op when agents.defaults.planMode.debug=false", () => {
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { planMode: { debug: false } } },
+    });
+    logPlanModeDebug({
+      kind: "approval_event",
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
+    });
+    expect(debugMock).not.toHaveBeenCalled();
+  });
+
+  it("no-op when planMode config block is missing", () => {
+    loadConfigMock.mockReturnValue({});
+    logPlanModeDebug({
+      kind: "approval_event",
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
+    });
+    expect(debugMock).not.toHaveBeenCalled();
+  });
+
+  it("no-op when loadConfig throws (fail-closed)", () => {
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("config corrupt");
+    });
+    logPlanModeDebug({
+      kind: "approval_event",
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
+    });
+    expect(debugMock).not.toHaveBeenCalled();
+  });
+
+  it("env var WINS over config flag (env=1, config=false → emit)", () => {
+    vi.stubEnv("OPENCLAW_DEBUG_PLAN_MODE", "1");
+    loadConfigMock.mockReturnValue({
+      agents: { defaults: { planMode: { debug: false } } },
+    });
+    logPlanModeDebug({
+      kind: "approval_event",
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
     });
     expect(debugMock).toHaveBeenCalledTimes(1);
   });

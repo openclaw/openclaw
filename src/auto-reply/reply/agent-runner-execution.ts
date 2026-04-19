@@ -40,7 +40,6 @@ import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
-  loadSessionStore,
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -83,7 +82,10 @@ import {
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { readLatestSessionEntryFresh } from "./fresh-session-entry.js";
+import {
+  readLatestSessionEntryFresh,
+  resolveLatestPlanModeFromDisk,
+} from "./fresh-session-entry.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
@@ -726,41 +728,23 @@ export async function runAgentTurnWithFallback(params: {
       ...(activeSessionEntry?.pendingAgentInjection !== undefined
         ? { pendingAgentInjection: activeSessionEntry.pendingAgentInjection }
         : {}),
-      // Bug 3+4 fix v2: TRUE fresh read from disk on every call.
+      // Bug 3+4 v2 + iter-2 Bug A: TRUE fresh read from disk on every
+      // call, with the deletion-as-normal semantic so consumers don't
+      // false-positive on a stale "plan" cached snapshot when planMode
+      // is deleted post-approval. See `fresh-session-entry.ts` —
+      // `resolveLatestPlanModeFromDisk` for the full rationale.
       //
-      // Adversarial review caught: `params.getActiveSessionEntry()` is
-      // a CLOSURE over a captured `activeSessionEntry` variable in
-      // `agent-runner.ts:1207` — that variable is only reassigned at
-      // specific lifecycle points (preflight compaction / memory
-      // flush / explicit refresh), NOT mid-turn. So a `sessions.patch`
-      // approval that flips `planMode` between two tool calls in the
-      // SAME run leaves the captured ref stale and the cached
-      // `inPlanMode/planApproval` mirrors stale.
-      //
-      // Use `loadSessionStore(storePath, { skipCache: true })` to
-      // bypass the cache and read the latest persisted state on every
-      // call. Disk I/O is acceptable here because (a) the file is
-      // small (<10 KB typical), (b) the OS page cache makes repeated
-      // reads ~microseconds, and (c) tool calls are spaced by LLM
-      // turns (1-5 seconds) so per-call overhead is negligible.
-      // Fail-safe: returns undefined on any error so the caller falls
-      // back to the cached `args.ctx.planMode` snapshot.
-      getLatestPlanMode: () => {
-        if (!params.storePath || !params.sessionKey) {
-          return undefined;
-        }
-        try {
-          const liveStore = loadSessionStore(params.storePath, { skipCache: true });
-          const liveEntry = liveStore?.[params.sessionKey];
-          const mode = liveEntry?.planMode?.mode;
-          if (mode === "plan" || mode === "normal") {
-            return mode;
-          }
-          return undefined;
-        } catch {
-          return undefined;
-        }
-      },
+      // The previous implementation returned `undefined` when the
+      // entry's planMode object was deleted, which made consumers
+      // fall back to `ctx.planMode` (the stale snapshot from
+      // run-start) and treat the session as still in plan mode for
+      // the rest of the run — breaking the mutation gate AND the
+      // ack-only detector (Bug A iter-2 root cause).
+      getLatestPlanMode: () =>
+        resolveLatestPlanModeFromDisk({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        }),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -1223,29 +1207,18 @@ export async function runAgentTurnWithFallback(params: {
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 ...(sessionPlanModeMode === "plan" ? { planMode: "plan" as const } : {}),
-                // Bug 3+4 fix v2: TRUE fresh disk read so the mutation
-                // gate can re-check planMode after mid-turn approval.
-                // See the matching callback in `registerAgentRunContext`
-                // above (~50 LoC up) for the full rationale —
-                // `params.getActiveSessionEntry()` is a closure over a
-                // captured ref that doesn't refresh mid-turn, so we
-                // bypass it with `loadSessionStore(skipCache: true)`.
-                getLatestPlanMode: () => {
-                  if (!params.storePath || !params.sessionKey) {
-                    return undefined;
-                  }
-                  try {
-                    const liveStore = loadSessionStore(params.storePath, { skipCache: true });
-                    const liveEntry = liveStore?.[params.sessionKey];
-                    const mode = liveEntry?.planMode?.mode;
-                    if (mode === "plan" || mode === "normal") {
-                      return mode;
-                    }
-                    return undefined;
-                  } catch {
-                    return undefined;
-                  }
-                },
+                // Bug 3+4 v2 + iter-2 Bug A: fresh disk read for
+                // mid-turn refreshes by the mutation gate + ack-only
+                // detector. Uses `resolveLatestPlanModeFromDisk`
+                // which returns "normal" when planMode is deleted on
+                // disk (post-approval) — see fresh-session-entry.ts
+                // for the deletion-as-normal contract that prevents
+                // stale-cache false positives.
+                getLatestPlanMode: () =>
+                  resolveLatestPlanModeFromDisk({
+                    storePath: params.storePath,
+                    sessionKey: params.sessionKey,
+                  }),
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   normalizeOptionalString(params.sessionCtx.GroupChannel) ??

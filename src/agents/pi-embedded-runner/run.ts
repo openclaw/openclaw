@@ -2008,19 +2008,31 @@ export async function runEmbeddedPiAgent(
           // clean stop. Reuses the planningOnlyRetryInstruction
           // injection slot (already wired into prompt-additions, also
           // reused by auto-continue at line ~1850 — established pattern).
-          // Bug 4 fix: read the LATEST planMode from the in-memory
-          // SessionEntry on every ACK-retry decision. The cached
-          // `params.planMode` is stale after the user approves the
-          // plan (mode flips to "normal" but the runtime still has
-          // "plan" cached for the rest of the current run). ACK retry
+          // Bug 4 + iter-2 Bug A fix: read the LATEST planMode from
+          // the in-memory SessionEntry on every ACK-retry decision.
+          // The cached `params.planMode` is stale after the user
+          // approves the plan (mode flips to "normal", or planMode
+          // is DELETED entirely, while the runtime still has "plan"
+          // cached for the rest of the current run). ACK retry
           // should fire ONLY when the agent is genuinely still
           // planning, NOT when it's executing post-approval — otherwise
           // we pressure the agent to call exit_plan_mode again on
           // every status update during execution.
+          //
+          // Iter-2 Bug A: the previous `??` chain false-positived when
+          // planMode was deleted on disk (helper returned undefined,
+          // fallback was the stale "plan" snapshot). Now the helper
+          // returns "normal" on deletion AND we explicitly prefer
+          // its return value over the cached snapshot whenever the
+          // helper provided one.
           const ackRetryAckCtx = getAgentRunContext(params.runId);
+          const liveAckMode = ackRetryAckCtx?.getLatestPlanMode?.();
           const ackRetryLatestPlanMode =
-            ackRetryAckCtx?.getLatestPlanMode?.() ??
-            (params.planMode === "plan" ? "plan" : "normal");
+            liveAckMode !== undefined
+              ? liveAckMode
+              : params.planMode === "plan"
+                ? "plan"
+                : "normal";
           const planModeAckOnlyInstruction = resolvePlanModeAckOnlyRetryInstruction({
             planModeActive: ackRetryLatestPlanMode === "plan",
             aborted,

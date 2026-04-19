@@ -122,9 +122,12 @@ function sanitizeFeedbackForInjection(raw: string): string {
 }
 
 /**
- * Builds the structured context injection for a plan decision.
- * This is injected into the agent's next turn context, not as a
- * system message but as a structured block the runner can parse.
+ * Builds the synthetic-message injection for a plan decision
+ * (rejected / expired / timed_out). Matches the one-line `[PLAN_*]: `
+ * tag format used by every other plan-mode synthetic message in the
+ * codebase ([PLAN_DECISION]: approved/edited from sessions-patch.ts,
+ * [QUESTION_ANSWER]:, [PLAN_COMPLETE]:, [PLAN_ACK_ONLY]:, [PLAN_YIELD]:,
+ * [PLAN_NUDGE]:, [PLANNING_RETRY]:).
  *
  * PR-D review fix (Copilot #3105045307): the `decision` parameter
  * accepts `"timed_out"` as the canonical name (matching
@@ -132,13 +135,21 @@ function sanitizeFeedbackForInjection(raw: string): string {
  * compat with any callers that haven't been updated. Both render the
  * same text. Prefer `"timed_out"` in new code so downstream parsers
  * map state names consistently across the codebase.
+ *
+ * Live-test iteration 2 Bug E: previous implementation returned a
+ * multi-line `[PLAN_DECISION]\ndecision: ...\n[/PLAN_DECISION]` block
+ * that was inconsistent with the one-line `[PLAN_DECISION]: approved`
+ * format from sessions-patch.ts. Agents got both shapes in the same
+ * session depending on outcome (approve = one-line; reject = block).
+ * Now both paths use one-line opener so a future regex (e.g. "hide
+ * PLAN_* in user-visible chat") matches uniformly.
  */
 export function buildPlanDecisionInjection(
   decision: "rejected" | "expired" | "timed_out",
   feedback?: string,
   rejectionCount?: number,
 ): string {
-  const lines = ["[PLAN_DECISION]", `decision: ${decision}`];
+  const lines: string[] = [`[PLAN_DECISION]: ${decision}`];
   if (feedback) {
     lines.push(`feedback: ${JSON.stringify(sanitizeFeedbackForInjection(feedback))}`);
   }
@@ -154,6 +165,5 @@ export function buildPlanDecisionInjection(
       "Your plan proposal timed out. The user has not responded. You remain in plan mode. You may re-propose when the user returns.",
     );
   }
-  lines.push("[/PLAN_DECISION]");
   return lines.join("\n");
 }

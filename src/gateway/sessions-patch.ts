@@ -9,6 +9,13 @@ import {
 import { resolvePlanApproval } from "../agents/plan-mode/index.js";
 import { logPlanModeDebug } from "../agents/plan-mode/plan-mode-debug-log.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+// Live-test iter-2 Bug C: always-on logger so the approval-side
+// subagent gate decision is visible in the gateway log even when
+// the env-gated plan-mode debug log is OFF. Lets operators verify
+// "did the gate fire?" without flipping the config flag.
+const planApprovalGateLog = createSubsystemLogger("gateway/plan-approval-gate");
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -622,10 +629,16 @@ export async function applySessionsPatchToStore(params: {
         if (approvalRunId) {
           const parentCtx = getAgentRunContext(approvalRunId);
           const open = parentCtx?.openSubagentRunIds;
+          // Live-test iter-2 Bug C: always-on diagnostic of the gate
+          // decision. Lets operators verify the gate fired without
+          // having the env-gated plan-mode debug log on.
+          planApprovalGateLog.info(
+            `gate decision: action=${action} sessionKey=${storeKey} approvalRunId=${approvalRunId} openSubagents=${open?.size ?? 0} result=${open && open.size > 0 ? "blocked" : "allowed"}`,
+          );
           if (open && open.size > 0) {
-            // Live-test iteration 1 Bug 4: log the gate rejection so
-            // debug tail can correlate UI toast firings with server
-            // gate decisions.
+            // Live-test iteration 1 Bug 4: also emit the structured
+            // plan-mode debug event so debug tail can correlate UI
+            // toast firings with server gate decisions.
             logPlanModeDebug({
               kind: "approval_event",
               sessionKey: storeKey,
@@ -644,6 +657,13 @@ export async function applySessionsPatchToStore(params: {
               { openSubagentRunIds: [...open] },
             );
           }
+        } else {
+          // Diagnostic: gate can't fire because approvalRunId wasn't
+          // persisted (Bug 2 wiring failure or legacy session). Log
+          // so we know the gate is silently disabled for this approval.
+          planApprovalGateLog.warn(
+            `gate disabled: action=${action} sessionKey=${storeKey} reason=approvalRunId-not-persisted (Bug 2 wiring may be missing for this session — plans submitted before iter-1 fix landed have no approvalRunId)`,
+          );
         }
       }
       const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;

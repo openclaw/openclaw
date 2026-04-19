@@ -18,7 +18,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readLatestSessionEntryFresh } from "./fresh-session-entry.js";
+import {
+  readLatestSessionEntryFresh,
+  resolveLatestPlanModeFromDisk,
+} from "./fresh-session-entry.js";
 
 describe("readLatestSessionEntryFresh — Bug 3+4 v3 closure bypass", () => {
   let tmpDir: string;
@@ -178,5 +181,127 @@ describe("readLatestSessionEntryFresh — Bug 3+4 v3 closure bypass", () => {
     expect(result?.planMode?.mode).toBe("plan");
     expect(result?.recentlyApprovedAt).toBe(12345);
     expect(result?.pendingAgentInjection).toBe("[QUESTION_ANSWER]: yes");
+  });
+});
+
+/**
+ * Live-test iteration 2 Bug A regression coverage:
+ * `resolveLatestPlanModeFromDisk` MUST treat a deleted `planMode`
+ * object as `"normal"` (not undefined). The previous helper returned
+ * undefined in that case, which made downstream consumers
+ * (mutation gate, ack-only detector) fall back to a stale "plan"
+ * cached snapshot — keeping the gate active long after approval and
+ * triggering false-positive ack-only retries that exhausted into
+ * incomplete-turn errors.
+ *
+ * If any of these tests start failing, the deletion-as-normal
+ * contract is broken — do NOT silence the test, find the regression
+ * in `resolveLatestPlanModeFromDisk` or in `sessions-patch.ts`'s
+ * approval-side planMode delete path.
+ */
+describe("resolveLatestPlanModeFromDisk — Bug A iter-2 deletion-as-normal", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "resolve-plan-mode-"));
+    storePath = join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeStore(entries: Record<string, SessionEntry>): void {
+    writeFileSync(storePath, JSON.stringify(entries, null, 2));
+  }
+
+  type PlanMode = NonNullable<SessionEntry["planMode"]>;
+  function planMode(mode: "plan" | "normal", overrides: Partial<PlanMode> = {}): PlanMode {
+    return {
+      mode,
+      approval: "none",
+      rejectionCount: 0,
+      ...overrides,
+    } as PlanMode;
+  }
+  function makeEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+    return {
+      sessionId: "session-1",
+      agentId: "agent-1",
+      updatedAt: 1_000,
+      ...overrides,
+    } as SessionEntry;
+  }
+
+  it("returns 'plan' when planMode.mode === 'plan' on disk", () => {
+    writeStore({
+      "test-key": makeEntry({ planMode: planMode("plan") }),
+    });
+    const result = resolveLatestPlanModeFromDisk({ storePath, sessionKey: "test-key" });
+    expect(result).toBe("plan");
+  });
+
+  it("returns 'normal' when planMode.mode === 'normal' on disk", () => {
+    writeStore({
+      "test-key": makeEntry({ planMode: planMode("normal") }),
+    });
+    const result = resolveLatestPlanModeFromDisk({ storePath, sessionKey: "test-key" });
+    expect(result).toBe("normal");
+  });
+
+  it("returns 'normal' when entry exists but planMode is DELETED (Bug A core fix)", () => {
+    // The exact post-approval state: sessions-patch.ts deletes
+    // SessionEntry.planMode entirely on approve/edit when there's
+    // no autoApprove flag to preserve. The disk shows an entry but
+    // no planMode object. Pre-fix: helper returned undefined →
+    // consumers fell back to stale "plan" snapshot → false positive.
+    writeStore({
+      "test-key": makeEntry({}), // no planMode at all
+    });
+    const result = resolveLatestPlanModeFromDisk({ storePath, sessionKey: "test-key" });
+    expect(result).toBe("normal");
+  });
+
+  it("returns undefined when storePath is missing", () => {
+    const result = resolveLatestPlanModeFromDisk({ sessionKey: "test-key" });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when sessionKey is missing", () => {
+    writeStore({ "test-key": makeEntry({ planMode: planMode("plan") }) });
+    const result = resolveLatestPlanModeFromDisk({ storePath });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when sessionKey not in store (entry truly missing)", () => {
+    writeStore({
+      "other-key": makeEntry({ planMode: planMode("plan") }),
+    });
+    const result = resolveLatestPlanModeFromDisk({
+      storePath,
+      sessionKey: "missing-key",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when loadSessionStore throws (corrupt JSON)", () => {
+    writeFileSync(storePath, "{ this is not valid json");
+    const result = resolveLatestPlanModeFromDisk({ storePath, sessionKey: "test-key" });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns 'normal' even when planMode.mode is corrupt/unrecognized", () => {
+    // Defensive: if the disk has corrupt mode value, treat as
+    // "normal" rather than undefined — fail-closed against false
+    // "plan" cached snapshots. Better to wrongly let a tool through
+    // than to wrongly block one indefinitely.
+    writeStore({
+      "test-key": makeEntry({
+        planMode: { ...planMode("plan"), mode: "garbage" as never },
+      }),
+    });
+    const result = resolveLatestPlanModeFromDisk({ storePath, sessionKey: "test-key" });
+    expect(result).toBe("normal");
   });
 });

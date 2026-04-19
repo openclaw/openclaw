@@ -9,15 +9,22 @@
  * UI toasts). Live debugging today means piecing together evidence from
  * sparse `[gateway]` / `[agent/embedded]` / `[plugins]` log lines plus
  * grep-by-runId across multiple files. This helper centralizes
- * plan-mode-specific events behind a single env-var gate so a debugger
- * (human or agent) can stream the entire plan-mode lifecycle by tailing
- * one file.
+ * plan-mode-specific events behind a single gate so a debugger (human
+ * or agent) can stream the entire plan-mode lifecycle by tailing one
+ * file.
  *
- * # Activation
+ * # Activation (two equivalent paths — either turns logging on)
  *
- * Set `OPENCLAW_DEBUG_PLAN_MODE=1` before launching the gateway. Off by
- * default — the helper short-circuits at the first line so there is
- * zero perf impact when disabled. To stream:
+ * Path A (env var, terminal-launched runs):
+ *   OPENCLAW_DEBUG_PLAN_MODE=1 ./openclaw gateway run …
+ *
+ * Path B (config flag, persistent — recommended for menubar app /
+ * launchd-supervised gateway where env-var propagation is unreliable):
+ *   openclaw config set agents.defaults.planMode.debug true
+ *   # then restart the gateway
+ *
+ * Off by default — the helper short-circuits at the first line so there
+ * is zero perf impact when disabled. To stream:
  *
  *     tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'
  *
@@ -28,6 +35,7 @@
  * emission. The `kind` discriminator on the event union is the
  * canonical taxonomy of "things that affect plan-mode behavior."
  */
+import { loadConfig } from "../../config/io.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const logger = createSubsystemLogger("plan-mode");
@@ -96,10 +104,29 @@ export type PlanModeDebugEvent =
 /**
  * Resolve "is debug enabled?" on every call so the gate respects late
  * env-var changes (e.g. tests setting the var via `vi.stubEnv`). Cheap:
- * a single `process.env` lookup + string compare.
+ * env-var path is single string compare; config-flag path lazy-loads
+ * and short-circuits on any error.
+ *
+ * Live-test iter-2 Bug D: env-var-only activation (`OPENCLAW_DEBUG_PLAN_MODE=1`)
+ * doesn't reliably propagate to the gateway process when supervised
+ * by the OpenClaw Mac app (launchd `setenv` only affects future
+ * launchd-spawned processes, not running children of the app). The
+ * config-flag path (`agents.defaults.planMode.debug: true`) is
+ * always reliable because it's read from disk on every call.
+ *
+ * Order: env-var wins (allows ad-hoc terminal-launched runs); config
+ * flag is the persistent path. Either signal turns it on.
  */
 function isDebugEnabled(): boolean {
-  return process.env.OPENCLAW_DEBUG_PLAN_MODE === "1";
+  if (process.env.OPENCLAW_DEBUG_PLAN_MODE === "1") {
+    return true;
+  }
+  try {
+    const cfg = loadConfig();
+    return cfg?.agents?.defaults?.planMode?.debug === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
