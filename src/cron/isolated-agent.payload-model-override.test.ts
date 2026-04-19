@@ -52,7 +52,6 @@ async function runCronWithModel(
     kind: "agentTurn",
     message: "test message",
     model: payloadModel,
-    deliver: false,
   };
 
   const res = await runCronIsolatedAgentTurn({
