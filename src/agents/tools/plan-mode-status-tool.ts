@@ -102,6 +102,15 @@ export function createPlanModeStatusTool(options?: CreatePlanModeStatusToolOptio
           sessionStoreReadOk = false;
           sessionStoreReadError = err instanceof Error ? err.message : String(err);
         }
+      } else {
+        // Copilot review #68939 (round-1): when storePath or
+        // sessionKey is missing, the disk read can't even be
+        // attempted — treat that as "unknown state", not "not in
+        // plan mode". Pre-fix, the read was skipped silently and
+        // the human summary defaulted to "Not in plan mode…",
+        // misleading operators about what happened.
+        sessionStoreReadOk = false;
+        sessionStoreReadError = `missing ${!storePath ? "storePath" : ""}${!storePath && !sessionKey ? "/" : ""}${!sessionKey ? "sessionKey" : ""}`;
       }
 
       // openSubagentRunIds lives in-memory on the AgentRunContext —

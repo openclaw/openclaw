@@ -459,6 +459,16 @@ async function persistSnapshot(params: {
         } completed. Post a brief summary of what was done and stop. The plan has been auto-closed; the user can start a new plan cycle if needed.`
       : undefined;
 
+  // Codex P1 review #68939 (post-nuclear-fix-stack round-1):
+  // capture the locked auto-close decision OUT of the callback so
+  // the post-write side effects (clearInPlanModeForSession +
+  // [PLAN_COMPLETE] injection) use the SAME boolean as the actual
+  // write. Pre-fix, the post-write branch keyed off the stale
+  // preflight `allowAutoClose`, so under contention the in-memory
+  // state could clear / `[PLAN_COMPLETE]` could enqueue without
+  // planMode being closed (or skip when it was) — inconsistent
+  // gating/notification across concurrent plan cycles.
+  let appliedAllowAutoClose = allowAutoClose;
   await updateSessionStore(target.storePath, async (store) => {
     // Codex P1 review #68939 (post-nuclear-fix-stack):
     // re-evaluate `allowAutoClose` INSIDE the write lock against
@@ -501,6 +511,8 @@ async function persistSnapshot(params: {
         );
       }
     }
+    // Surface the locked decision to the post-write branch.
+    appliedAllowAutoClose = lockedAllowAutoClose;
     return await applySessionsPatchToStore({
       cfg,
       store,
@@ -543,7 +555,7 @@ async function persistSnapshot(params: {
       },
     });
   });
-  if (params.closeOnComplete && allowAutoClose) {
+  if (params.closeOnComplete && appliedAllowAutoClose) {
     // PR-9 Wave A2: mirror the session-state flip into in-memory run
     // context so concurrent / subsequent `sessions_spawn` calls in this
     // session see the cleared state immediately (no session-store

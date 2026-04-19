@@ -1,4 +1,12 @@
 import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+// Copilot review #68939 (round-1): use the structured subsystem
+// logger instead of console.warn so operators can route/filter the
+// "unknown planMode.mode" diagnostic uniformly with every other
+// fresh-disk-read warning. Lives at module scope so the helper
+// function below doesn't have to construct a new logger per call.
+const log = createSubsystemLogger("auto-reply/fresh-session-entry");
 
 /**
  * Live-test iteration 2 Bug A: distilled "what's the live planMode mode?"
@@ -68,8 +76,11 @@ export function resolveLatestPlanModeFromDisk(params: {
     // manually correct the corrupt entry. The previous test
     // contract (fresh-session-entry.test.ts:294-306) is updated
     // alongside this change.
-    console.warn(
-      `resolveLatestPlanModeFromDisk: unknown planMode.mode value ${JSON.stringify(mode)} for sessionKey=${sessionKey}; returning undefined so caller falls back to cached snapshot (safer than fail-open-to-normal)`,
+    // Copilot review #68939 (round-1): switched from console.warn
+    // to the subsystem logger so the diagnostic threads through the
+    // standard log routing/filter pipeline with structured fields.
+    log.warn(
+      `resolveLatestPlanModeFromDisk: unknown planMode.mode value=${JSON.stringify(mode)} sessionKey=${sessionKey} (returning undefined so caller falls back to cached snapshot — safer than fail-open-to-normal)`,
     );
     return undefined;
   } catch {

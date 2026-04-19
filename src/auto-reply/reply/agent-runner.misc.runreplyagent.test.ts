@@ -1469,13 +1469,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
     // for the deletion-as-normal contract. Those calls fire
     // regardless of verbose level — the original "reload-when-
     // verbose" gate this test was written for is a different code
-    // path. Removed the spurious assertion; the
-    // `result.text === "Normal reply"` assertion below still
-    // validates the normal-reply path end-to-end. If a future
-    // change re-introduces a verbose-only reload distinction, add
-    // a more specific assertion that disambiguates from the plan-
-    // mode freshness call sites.
-    expect(loadSessionStoreSpy).toBeDefined();
+    // path.
+    //
+    // Copilot review #68939 (round-1): assert the documented
+    // skip-cache load actually happens so this test keeps
+    // meaningful regression coverage instead of just
+    // `toBeDefined()` (which is effectively a no-op). If the
+    // freshness path stops invoking `loadSessionStore(storePath,
+    // { skipCache: true })`, this assertion catches it.
+    expect(loadSessionStoreSpy).toHaveBeenCalledWith(storePath, {
+      skipCache: true,
+    });
     expect(result).toMatchObject({ text: "Normal reply" });
   });
 });

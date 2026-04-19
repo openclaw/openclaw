@@ -265,8 +265,9 @@ export function createSessionsSpawnTool(
         (spawnParentCtx.openSubagentRunIds?.size ?? 0) >= MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE
       ) {
         throw new ToolInputError(
-          `Plan mode allows only ${MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE} concurrent research subagent. ` +
-            "Wait for the current child to return before spawning another.",
+          `Plan mode allows only ${MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE} concurrent research ${
+            MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE === 1 ? "subagent" : "subagents"
+          }. Wait for the current child to return before spawning another.`,
         );
       }
 
@@ -300,6 +301,15 @@ export function createSessionsSpawnTool(
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
             agentGroupId: opts?.agentGroupId ?? undefined,
+            // Copilot review #68939 (round-1): forward the
+            // group-scoped context fields the WIP-strip in commit 4
+            // (b6b2783ba3) inadvertently dropped. Without these,
+            // spawned sessions in group channels (Discord/Slack
+            // role-aware allowlists) lose downstream policy /
+            // permission resolution. Re-added to mirror the parent
+            // session's context.
+            agentGroupSpace: opts?.agentGroupSpace,
+            agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
           },
         );
@@ -426,6 +436,12 @@ export function createSessionsSpawnTool(
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
+          // Copilot review #68939 (round-1): forward
+          // `agentMemberRoleIds` (Discord/Slack role-aware
+          // allowlist policy resolution). The subagent spawn path
+          // already had `agentGroupSpace`; missing
+          // `agentMemberRoleIds` was the WIP-strip artifact.
+          agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
         },
