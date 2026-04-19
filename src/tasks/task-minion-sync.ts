@@ -1,6 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { MinionStore } from "../minions/store.js";
-import type { MinionJobRow } from "../minions/types.js";
 import { taskStatusToMinionStatus } from "./task-status-minion-map.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -8,7 +7,6 @@ const log = createSubsystemLogger("tasks/minion-sync");
 
 let minionStore: MinionStore | null = null;
 let storeInitAttempted = false;
-const taskToMinionId = new Map<string, number>();
 
 function getStore(): MinionStore | null {
   if (minionStore) {
@@ -30,6 +28,11 @@ function getStore(): MinionStore | null {
   }
 }
 
+/**
+ * Shadow-write a TaskRecord into minion_jobs. Uses the taskId as
+ * idempotency_key so restarts don't create duplicates (the partial unique
+ * index on idempotency_key deduplicates across process lifetimes).
+ */
 export function syncTaskToMinions(task: TaskRecord): void {
   const store = getStore();
   if (!store) {
@@ -38,9 +41,15 @@ export function syncTaskToMinions(task: TaskRecord): void {
 
   try {
     const minionStatus = taskStatusToMinionStatus(task.status);
-    const existingId = taskToMinionId.get(task.taskId);
+    const now = Date.now();
+    const idempotencyKey = `task:${task.taskId}`;
 
-    if (existingId != null) {
+    const existing = store.db
+      .prepare("SELECT id FROM minion_jobs WHERE idempotency_key = ?")
+      .get(idempotencyKey) as { id: number | bigint } | undefined;
+
+    if (existing) {
+      const existingId = typeof existing.id === "bigint" ? Number(existing.id) : existing.id;
       store.db
         .prepare(
           `UPDATE minion_jobs SET
@@ -54,18 +63,17 @@ export function syncTaskToMinions(task: TaskRecord): void {
           task.progressSummary ?? null,
           task.startedAt ?? null,
           task.endedAt ?? null,
-          Date.now(),
+          now,
           existingId,
         );
     } else {
-      const now = Date.now();
-      const result = store.db
+      store.db
         .prepare(
           `INSERT INTO minion_jobs (
             name, queue, status, data,
             created_at, updated_at, started_at, finished_at,
-            error_text, progress
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            error_text, progress, idempotency_key
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           `task.${task.runtime}`,
@@ -87,12 +95,8 @@ export function syncTaskToMinions(task: TaskRecord): void {
           task.endedAt ?? null,
           task.error ?? null,
           task.progressSummary ?? null,
+          idempotencyKey,
         );
-      const insertedId =
-        typeof result.lastInsertRowid === "bigint"
-          ? Number(result.lastInsertRowid)
-          : result.lastInsertRowid;
-      taskToMinionId.set(task.taskId, insertedId);
     }
   } catch (err) {
     log.debug("Minion shadow-sync failed for task", {
@@ -109,11 +113,9 @@ export function syncTaskDeleteToMinions(taskId: string): void {
   }
 
   try {
-    const minionId = taskToMinionId.get(taskId);
-    if (minionId != null) {
-      store.db.prepare("DELETE FROM minion_jobs WHERE id = ?").run(minionId);
-      taskToMinionId.delete(taskId);
-    }
+    store.db
+      .prepare("DELETE FROM minion_jobs WHERE idempotency_key = ?")
+      .run(`task:${taskId}`);
   } catch (err) {
     log.debug("Minion shadow-delete failed for task", {
       taskId,
@@ -123,7 +125,6 @@ export function syncTaskDeleteToMinions(taskId: string): void {
 }
 
 export function resetMinionSyncForTests(): void {
-  taskToMinionId.clear();
   minionStore = null;
   storeInitAttempted = false;
 }

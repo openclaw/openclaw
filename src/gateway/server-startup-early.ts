@@ -75,6 +75,9 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     startTaskRegistryMaintenance();
+    import("../minions/gateway-startup.js")
+      .then((m) => m.maybeStartMinionWorker())
+      .catch(() => {});
   }
 
   const skillsChangeUnsub = params.minimalTestGateway
