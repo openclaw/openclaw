@@ -88,9 +88,10 @@ export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
+// After reserving the actual marker length, split most of the remaining budget.
 const BOOTSTRAP_HEAD_RATIO = 0.75;
 const BOOTSTRAP_TAIL_RATIO = 0.24;
-/** ~1% reserved for the truncation marker inserted between head and tail. */
+const BOOTSTRAP_JOIN_SEPARATOR_CHARS = 2;
 
 type TrimBootstrapResult = {
   content: string;
@@ -140,17 +141,35 @@ function trimBootstrapContent(
     };
   }
 
-  const headChars = Math.floor(maxChars * BOOTSTRAP_HEAD_RATIO);
-  const tailChars = Math.floor(maxChars * BOOTSTRAP_TAIL_RATIO);
+  const markerTemplate = (headChars: number, tailChars: number) =>
+    [
+      "",
+      `[...truncated, read ${fileName} for full content...]`,
+      `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
+      "",
+    ].join("\n");
+  let headChars = 0;
+  let tailChars = 0;
+  let marker = markerTemplate(headChars, tailChars);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const contentBudget = Math.max(0, maxChars - marker.length - BOOTSTRAP_JOIN_SEPARATOR_CHARS);
+    const nextHeadChars = Math.floor(contentBudget * BOOTSTRAP_HEAD_RATIO);
+    const nextTailChars = Math.floor(contentBudget * BOOTSTRAP_TAIL_RATIO);
+    const nextMarker = markerTemplate(nextHeadChars, nextTailChars);
+    if (
+      nextHeadChars === headChars &&
+      nextTailChars === tailChars &&
+      nextMarker.length === marker.length
+    ) {
+      break;
+    }
+    headChars = nextHeadChars;
+    tailChars = nextTailChars;
+    marker = nextMarker;
+  }
   const head = trimmed.slice(0, headChars);
-  const tail = trimmed.slice(-tailChars);
+  const tail = tailChars > 0 ? trimmed.slice(-tailChars) : "";
 
-  const marker = [
-    "",
-    `[...truncated, read ${fileName} for full content...]`,
-    `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
-    "",
-  ].join("\n");
   const contentWithMarker = [head, marker, tail].join("\n");
   return {
     content: contentWithMarker,
