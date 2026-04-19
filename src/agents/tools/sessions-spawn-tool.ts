@@ -53,6 +53,16 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function addRoleToFailureResult<T extends { status: string }>(
+  result: T,
+  role: string | undefined,
+): T | (T & { role: string }) {
+  if (!role || (result.status !== "error" && result.status !== "forbidden")) {
+    return result;
+  }
+  return { ...result, role };
+}
+
 function resolveTrackedSpawnMode(params: {
   requestedMode?: "run" | "session";
   threadRequested: boolean;
@@ -313,10 +323,7 @@ export function createSessionsSpawnTool(
             });
           }
         }
-        const isAcpFailure = result.status === "error" || result.status === "forbidden";
-        return jsonResult(
-          isAcpFailure && requestedAgentId ? { ...result, role: requestedAgentId } : result,
-        );
+        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
       const result = await spawnSubagentDirect(
@@ -354,10 +361,7 @@ export function createSessionsSpawnTool(
         },
       );
 
-      const isSubagentFailure = result.status === "error" || result.status === "forbidden";
-      return jsonResult(
-        isSubagentFailure && requestedAgentId ? { ...result, role: requestedAgentId } : result,
-      );
+      return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };
 }

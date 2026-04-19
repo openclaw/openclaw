@@ -73,17 +73,7 @@ export function withSubagentOutcomeTiming(
     startedAt?: number;
     endedAt?: number;
   },
-): SubagentRunOutcome;
-export function withSubagentOutcomeTiming(
-  outcome: SubagentRunOutcome | undefined,
-  timing: {
-    startedAt?: number;
-    endedAt?: number;
-  },
-): SubagentRunOutcome | undefined {
-  if (!outcome) {
-    return undefined;
-  }
+): SubagentRunOutcome {
   const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
   const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
   const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
@@ -343,15 +333,15 @@ export function applySubagentWaitOutcome(params: {
     next.endedAt = params.wait.endedAt;
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  let outcome = next.outcome;
   if (params.wait?.status === "timeout") {
-    next.outcome = withSubagentOutcomeTiming({ status: "timeout" }, next);
+    outcome = { status: "timeout" };
   } else if (params.wait?.status === "error") {
-    next.outcome = withSubagentOutcomeTiming({ status: "error", error: waitError }, next);
+    outcome = { status: "error", error: waitError };
   } else if (params.wait?.status === "ok") {
-    next.outcome = withSubagentOutcomeTiming({ status: "ok" }, next);
-  } else {
-    next.outcome = withSubagentOutcomeTiming(next.outcome, next);
+    outcome = { status: "ok" };
   }
+  next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;
 }
 
