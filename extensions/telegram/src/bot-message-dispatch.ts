@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   logAckFailure,
   logTypingFailure,
@@ -687,6 +688,7 @@ export const dispatchTelegramMessage = async ({
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
+          humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload, info) => {
             if (isDispatchSuperseded()) {
               return;
