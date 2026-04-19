@@ -244,6 +244,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
   });
 }
 
+/** Returns true if the agent responded successfully. */
 async function routeDM(params: {
   discordUserId: string;
   channelId: string;
@@ -324,6 +325,7 @@ async function routeDM(params: {
       }
 
       runtime.log(`[router] delivered ${payloads.length} payload(s) to ${discordUserId}`);
+      return true;
     } finally {
       clearInterval(typingInterval);
     }
@@ -331,10 +333,13 @@ async function routeDM(params: {
     const errMsg = formatErrorMessage(err);
     runtime.error(`[router] error for ${discordUserId}: ${errMsg}`);
 
-    // Give specific error messages instead of generic "something went wrong"
     const isConnectionRefused =
       errMsg.includes("ECONNREFUSED") || errMsg.includes("connect ECONNREFUSED");
     const isTimeout = errMsg.includes("timeout") || errMsg.includes("ETIMEDOUT");
+    const isAuthError =
+      errMsg.includes("unauthorized") ||
+      errMsg.includes("token_mismatch") ||
+      errMsg.includes("pairing");
 
     if (isConnectionRefused) {
       await discordSend(
@@ -342,6 +347,9 @@ async function routeDM(params: {
         channelId,
         "*Your agent is not running. Please contact the admin to start your instance.*",
       ).catch(() => {});
+    } else if (isAuthError) {
+      // Don't send error to user for auth issues — admin problem
+      runtime.error(`[router] auth error for ${discordUserId}, container may need restart`);
     } else if (isTimeout) {
       await discordSend(
         discordToken,
@@ -355,6 +363,7 @@ async function routeDM(params: {
         "*Something went wrong processing your message. Please try again.*",
       ).catch(() => {});
     }
+    return false;
   } finally {
     inflight.delete(discordUserId);
   }
@@ -475,14 +484,13 @@ async function onboardNewUsers(
       runtime,
       agentTimeoutMs,
       inflight,
-    })
-      .then(() => {
-        // Mark as onboarded only after agent successfully responds
+    }).then((success) => {
+      if (success) {
         markOnboarded(instance);
         runtime.log(`[router] onboarding complete for ${userId}`);
-      })
-      .catch(() => {
+      } else {
         runtime.log(`[router] onboarding failed for ${userId}, will retry on next restart`);
-      });
+      }
+    });
   }
 }
