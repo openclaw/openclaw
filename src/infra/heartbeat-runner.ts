@@ -1411,6 +1411,8 @@ export function startHeartbeatRunner(opts: {
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
+    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
+      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1430,7 +1432,7 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: requestedHeartbeat ?? targetAgent.heartbeat,
+            heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
