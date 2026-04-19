@@ -146,6 +146,44 @@ describe("getCachedPluginJitiLoader", () => {
     );
   });
 
+  it("shares one JITI instance across callers with different modulePaths but identical configs and no jitiFilename", async () => {
+    const createJiti = vi.fn((filename: string, options: Record<string, unknown>) =>
+      Object.assign(vi.fn(), {
+        filename,
+        options,
+      }),
+    );
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+
+    const { getCachedPluginJitiLoader } = await importFreshModule<
+      typeof import("./jiti-loader-cache.js")
+    >(import.meta.url, "./jiti-loader-cache.js?scope=no-filename-sharing");
+
+    const cache = new Map();
+    const first = getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/plugin-a/index.js",
+      importerUrl: "file:///repo/src/plugins/setup-registry.ts",
+      argvEntry: "/repo/openclaw.mjs",
+    });
+    const second = getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/plugin-b/index.js",
+      importerUrl: "file:///repo/src/plugins/setup-registry.ts",
+      argvEntry: "/repo/openclaw.mjs",
+    });
+
+    expect(second).toBe(first);
+    expect(createJiti).toHaveBeenCalledTimes(1);
+    expect(createJiti).toHaveBeenCalledWith(
+      "/repo/dist/extensions/plugin-a/index.js",
+      expect.objectContaining({ interopDefault: true }),
+    );
+    expect(cache.size).toBe(1);
+  });
+
   it("lets callers intentionally share loaders behind a custom cache scope key", async () => {
     const createJiti = vi.fn((filename: string, options: Record<string, unknown>) =>
       Object.assign(vi.fn(), {
