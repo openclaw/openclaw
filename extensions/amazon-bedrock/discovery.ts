@@ -53,7 +53,6 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic.claude-sonnet-4-20250514-v1:0": 200_000,
   "anthropic.claude-opus-4-5-20251101-v1:0": 200_000,
   "anthropic.claude-opus-4-1-20250805-v1:0": 200_000,
-  "anthropic.claude-opus-4-20250514-v1:0": 200_000,
   "anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
   "anthropic.claude-3-5-haiku-20241022-v1:0": 200_000,
   "anthropic.claude-3-haiku-20240307-v1:0": 200_000,
@@ -63,7 +62,14 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "amazon.nova-lite-v1:0": 300_000,
   "amazon.nova-micro-v1:0": 128_000,
   "amazon.nova-2-lite-v1:0": 300_000,
-  // Meta Llama
+  // MiniMax
+  "minimax.minimax-m2.5": 1_000_000,
+  "minimax.minimax-m2.1": 1_000_000,
+  "minimax.minimax-m2": 1_000_000,
+  // Meta Llama 4
+  "meta.llama4-maverick-17b-instruct-v1:0": 1_000_000,
+  "meta.llama4-scout-17b-instruct-v1:0": 512_000,
+  // Meta Llama 3
   "meta.llama3-3-70b-instruct-v1:0": 128_000,
   "meta.llama3-2-90b-instruct-v1:0": 128_000,
   "meta.llama3-2-11b-instruct-v1:0": 128_000,
@@ -72,12 +78,17 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "meta.llama3-1-405b-instruct-v1:0": 128_000,
   "meta.llama3-1-70b-instruct-v1:0": 128_000,
   "meta.llama3-1-8b-instruct-v1:0": 128_000,
+  // NVIDIA Nemotron
+  "nvidia.nemotron-super-3-120b": 128_000,
+  "nvidia.nemotron-nano-3-30b": 128_000,
+  "nvidia.nemotron-nano-12b-v2": 128_000,
+  "nvidia.nemotron-nano-9b-v2": 128_000,
   // Mistral
+  "mistral.mistral-large-3-675b-instruct": 128_000,
   "mistral.mistral-large-2407-v1:0": 128_000,
   "mistral.mistral-small-2402-v1:0": 32_000,
   // DeepSeek
   "deepseek.r1-v1:0": 128_000,
-  "deepseek.v3-v1:0": 128_000,
   "deepseek.v3.2": 128_000,
   // Cohere
   "cohere.command-r-plus-v1:0": 128_000,
@@ -89,6 +100,15 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "google.gemma-3-27b-it": 128_000,
   "google.gemma-3-12b-it": 128_000,
   "google.gemma-3-4b-it": 128_000,
+  // GLM
+  "zai.glm-5": 128_000,
+  "zai.glm-4.7": 128_000,
+  "zai.glm-4.7-flash": 128_000,
+  // Qwen
+  "qwen.qwen3-coder-next": 256_000,
+  "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
+  "qwen.qwen3-32b-v1:0": 128_000,
+  "qwen.qwen3-vl-235b-a22b": 128_000,
 };
 
 /**
