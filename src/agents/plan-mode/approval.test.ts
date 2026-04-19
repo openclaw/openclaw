@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolvePlanApproval, buildApprovedPlanInjection } from "./approval.js";
+import {
+  buildAcceptEditsPlanInjection,
+  buildApprovedPlanInjection,
+  resolvePlanApproval,
+} from "./approval.js";
 import { buildPlanDecisionInjection, newPlanApprovalId } from "./types.js";
 import type { PlanModeSessionState } from "./types.js";
 
@@ -113,6 +117,68 @@ describe("buildApprovedPlanInjection", () => {
   it("includes instruction to mark cancelled if blocked", () => {
     const result = buildApprovedPlanInjection(["Step 1"]);
     expect(result).toContain("mark it cancelled");
+  });
+
+  // Wave-4 regression: prompt-cache byte stability. The injection text
+  // is prepended to the runner prompt; any non-determinism here would
+  // break the cache prefix across otherwise-identical turns. Same-
+  // input / byte-identical-output is a hard contract.
+  it("is byte-identical across invocations for the same input (wave-4)", () => {
+    const steps = ["Grep for callers", "Add null check", "Run tests"];
+    const a = buildApprovedPlanInjection(steps);
+    const b = buildApprovedPlanInjection(steps);
+    expect(a).toBe(b);
+    // Also stable across fresh arrays with identical content.
+    const c = buildApprovedPlanInjection([...steps]);
+    expect(c).toBe(a);
+  });
+
+  it("pins the canonical prefix and numbering (wave-4)", () => {
+    const result = buildApprovedPlanInjection(["first", "second"]);
+    // Exact byte-level assertion keeps the prompt-cache prefix stable
+    // and catches accidental rewording of the leading text.
+    expect(result).toBe(
+      "[PLAN_DECISION]: approved\n\n" +
+        "The user has approved the following plan. Execute it now without re-planning. " +
+        "If a step is no longer viable, mark it cancelled and add a revised step.\n\n" +
+        "1. first\n2. second",
+    );
+  });
+});
+
+describe("buildAcceptEditsPlanInjection", () => {
+  it("is byte-identical across invocations for the same input (wave-4)", () => {
+    const steps = ["Audit callers", "Refactor shared helper", "Ship"];
+    const a = buildAcceptEditsPlanInjection(steps);
+    const b = buildAcceptEditsPlanInjection(steps);
+    expect(a).toBe(b);
+  });
+
+  it("carries the canonical [PLAN_DECISION]: edited tag", () => {
+    const result = buildAcceptEditsPlanInjection(["x"]);
+    expect(result.startsWith("[PLAN_DECISION]: edited\n\n")).toBe(true);
+  });
+
+  it("teaches the >=95% confidence rule", () => {
+    const result = buildAcceptEditsPlanInjection(["x"]);
+    expect(result).toContain("≥95%");
+    expect(result).toMatch(/confidence/i);
+  });
+
+  it("teaches all three hard constraints", () => {
+    const result = buildAcceptEditsPlanInjection(["x"]);
+    // These three categories must be explicit so the prompt layer
+    // teaches the agent to ask the user when the gate could trip.
+    expect(result).toMatch(/destructive/i);
+    expect(result).toMatch(/self-restart/i);
+    expect(result).toMatch(/configuration change|config/i);
+  });
+
+  it("includes the approved plan at the tail", () => {
+    const result = buildAcceptEditsPlanInjection(["first step", "second step"]);
+    expect(result).toContain("1. first step");
+    expect(result).toContain("2. second step");
+    expect(result.lastIndexOf("1. first step")).toBeGreaterThan(result.indexOf("Hard constraints"));
   });
 });
 
