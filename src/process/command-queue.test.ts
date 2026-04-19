@@ -25,6 +25,7 @@ let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
 let CommandLaneTimeoutError: CommandQueueModule["CommandLaneTimeoutError"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
+let CommandLaneCircuitBreakerError: CommandQueueModule["CommandLaneCircuitBreakerError"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
@@ -64,6 +65,7 @@ describe("command queue", () => {
       CommandLaneTimeoutError,
       enqueueCommand,
       enqueueCommandInLane,
+      CommandLaneCircuitBreakerError,
       GatewayDrainingError,
       getActiveTaskCount,
       getQueueSize,
@@ -534,5 +536,77 @@ describe("command queue", () => {
       release();
       commandQueueA.resetAllLanes();
     }
+  });
+  it("rejects new enqueues with CommandLaneCircuitBreakerError when depth threshold is met (AGE-2494)", async () => {
+    const lane = `cb-depth-${Date.now()}`;
+    // Fill lane to depth 2 (1 active + 1 queued)
+    let release1!: () => void;
+    const blocker1 = new Promise<void>((res) => {
+      release1 = res;
+    });
+    void enqueueCommandInLane(lane, () => blocker1, { circuitBreakerDepth: 2 });
+    void enqueueCommandInLane(lane, () => Promise.resolve(), { circuitBreakerDepth: 2 });
+    // Third enqueue should trip the breaker (depth >= 2)
+    await expect(
+      enqueueCommandInLane(lane, () => Promise.resolve(), { circuitBreakerDepth: 2 }),
+    ).rejects.toBeInstanceOf(CommandLaneCircuitBreakerError);
+    expect(diagnosticMocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[circuit-breaker]"),
+    );
+    release1();
+  });
+
+  it("does not trip circuit breaker below depth threshold (AGE-2494)", async () => {
+    const lane = `cb-nodepth-${Date.now()}`;
+    let release1!: () => void;
+    const blocker1 = new Promise<void>((res) => {
+      release1 = res;
+    });
+    const task1 = enqueueCommandInLane(lane, () => blocker1, { circuitBreakerDepth: 5 });
+    // Second enqueue is at depth 2 — well below threshold of 5
+    const task2 = enqueueCommandInLane(lane, () => Promise.resolve("ok"), {
+      circuitBreakerDepth: 5,
+    });
+    release1();
+    await task1;
+    await expect(task2).resolves.toBe("ok");
+  });
+
+  it("CommandLaneCircuitBreakerError includes retryAfterMs (AGE-2494)", async () => {
+    const lane = `cb-retry-${Date.now()}`;
+    let release1!: () => void;
+    const blocker1 = new Promise<void>((res) => {
+      release1 = res;
+    });
+    void enqueueCommandInLane(lane, () => blocker1, { circuitBreakerDepth: 1 });
+    let err: unknown;
+    try {
+      await enqueueCommandInLane(lane, () => Promise.resolve(), { circuitBreakerDepth: 1 });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(CommandLaneCircuitBreakerError);
+    expect(
+      (err as InstanceType<typeof CommandLaneCircuitBreakerError>).retryAfterMs,
+    ).toBeGreaterThan(0);
+    release1();
+  });
+
+  it("enqueueCommand (main lane) has circuit breaker enabled by default (AGE-2494)", async () => {
+    // Fill main lane to depth >= 9 then verify the next enqueue trips the breaker
+    const releasers: Array<() => void> = [];
+    for (let i = 0; i < 9; i++) {
+      const blocker = new Promise<void>((res) => {
+        releasers.push(res);
+      });
+      void enqueueCommand(() => blocker);
+    }
+    await expect(enqueueCommand(() => Promise.resolve())).rejects.toBeInstanceOf(
+      CommandLaneCircuitBreakerError,
+    );
+    for (const release of releasers) {
+      release();
+    }
+    resetCommandQueueStateForTest();
   });
 });

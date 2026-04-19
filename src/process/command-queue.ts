@@ -29,6 +29,27 @@ export class GatewayDrainingError extends Error {
 }
 
 /**
+ * Dedicated error type thrown when a new command is rejected because the lane
+ * circuit breaker is open — the lane is saturated (depth threshold or oldest
+ * entry wait threshold exceeded). Callers should back off and retry after
+ * `retryAfterMs` milliseconds.
+ *
+ * Introduced in AGE-2494 to fail fast when queueAhead > 8 or the oldest
+ * queued entry has waited > 600 seconds, preventing cascading queue buildup
+ * during LLM provider degradation events.
+ */
+export class CommandLaneCircuitBreakerError extends Error {
+  readonly retryAfterMs: number;
+  constructor(lane: string, retryAfterMs: number) {
+    super(
+      `Command lane "${lane}" circuit breaker open: lane is saturated. Retry after ${retryAfterMs}ms.`,
+    );
+    this.name = "CommandLaneCircuitBreakerError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/**
  * Dedicated error type thrown when a queued command exceeds its per-task
  * execution budget (`maxExecutionMs`). The lane slot is freed immediately so
  * queued work behind it is not blocked.
@@ -297,6 +318,19 @@ export function enqueueCommandInLane<T>(
      */
     maxExecutionMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    /** Optional priority for queue ordering. Higher values run first. Default: 0. */
+    priority?: number;
+    /**
+     * Maximum number of tasks (queued + active) allowed in the lane before the
+     * circuit breaker trips and new enqueues are rejected with
+     * `CommandLaneCircuitBreakerError`. Omit to disable depth-based tripping.
+     */
+    circuitBreakerDepth?: number;
+    /**
+     * Maximum milliseconds the oldest queued entry may have waited before the
+     * circuit breaker trips. Omit to disable wait-time-based tripping.
+     */
+    circuitBreakerWaitMs?: number;
   },
 ): Promise<T> {
   const queueState = getQueueState();
@@ -306,6 +340,27 @@ export function enqueueCommandInLane<T>(
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+  // Circuit breaker: fail fast when the lane is saturated to prevent
+  // cascading queue buildup during LLM provider degradation. (AGE-2494)
+  const cbDepth = opts?.circuitBreakerDepth;
+  const cbWaitMs = opts?.circuitBreakerWaitMs;
+  if (cbDepth != null || cbWaitMs != null) {
+    const depth = getLaneDepth(state);
+    const depthTripped = cbDepth != null && depth >= cbDepth;
+    let waitTripped = false;
+    if (cbWaitMs != null && state.queue.length > 0) {
+      const oldestWait = Date.now() - Math.min(...state.queue.map((e) => e.enqueuedAt));
+      waitTripped = oldestWait >= cbWaitMs;
+    }
+    if (depthTripped || waitTripped) {
+      // Estimate retry-after: 30s per task ahead, capped at 5 minutes.
+      const retryAfterMs = Math.min(depth * 30_000, 300_000);
+      diag.warn(
+        `[circuit-breaker] lane ${cleaned} open: depth=${depth} depthTripped=${depthTripped} waitTripped=${waitTripped} retryAfterMs=${retryAfterMs}`,
+      );
+      return Promise.reject(new CommandLaneCircuitBreakerError(cleaned, retryAfterMs));
+    }
+  }
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
       task: () => task(),
@@ -328,7 +383,14 @@ export function enqueueCommand<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
-  return enqueueCommandInLane(CommandLane.Main, task, opts);
+  // Enable circuit breaker for the main run lane (AGE-2494): fail fast when
+  // queueAhead > 8 or the oldest queued run has waited > 10 minutes, to
+  // prevent cascading queue buildup during LLM provider degradation events.
+  return enqueueCommandInLane(CommandLane.Main, task, {
+    ...opts,
+    circuitBreakerDepth: 9,
+    circuitBreakerWaitMs: 600_000,
+  });
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {
