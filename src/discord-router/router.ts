@@ -242,6 +242,9 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             const botUser = d.user;
             runtime.log(`[router] logged in as ${botUser?.id ?? "unknown"} (${botUser?.username})`);
 
+            // Send "Back online." to all onboarded users
+            void sendLifecycleToAll(discordToken, instances, "*Back online.*", runtime);
+
             // Proactively onboard users who haven't been onboarded yet.
             // Delay to let containers finish starting before connecting.
             setTimeout(
@@ -384,12 +387,13 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
 
   // Keep running until process exit
   await new Promise<void>((resolve) => {
-    const shutdown = () => {
+    const shutdown = async () => {
       shuttingDown = true;
+      await sendLifecycleToAll(discordToken, instances, "*Shutting down...*", runtime);
       resolve();
     };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
+    process.once("SIGINT", () => void shutdown());
+    process.once("SIGTERM", () => void shutdown());
   });
 }
 
@@ -565,6 +569,26 @@ async function discordTyping(token: string, channelId: string): Promise<void> {
     method: "POST",
     headers: { Authorization: `Bot ${token}` },
   }).catch(() => {});
+}
+
+/** Send a lifecycle message (Back online / Shutting down) to all onboarded users. */
+async function sendLifecycleToAll(
+  discordToken: string,
+  instances: Map<string, InstanceConfig>,
+  message: string,
+  runtime: RouterRuntime,
+): Promise<void> {
+  for (const [userId, instance] of instances) {
+    if (instance.onboardingState !== "complete") continue;
+    try {
+      const channelId = await openDMChannel(discordToken, userId);
+      if (channelId) {
+        await discordSend(discordToken, channelId, message);
+      }
+    } catch {
+      runtime.log(`[router] failed to send lifecycle DM to ${userId}`);
+    }
+  }
 }
 
 /** Open a DM channel with a user and return the channel ID. */
