@@ -17,6 +17,7 @@ import { findCodeRegions, isInsideCode } from "./code-regions.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
+const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
 
 function overlapsCodeRegion(
   start: number,
@@ -35,12 +36,27 @@ export function stripModelSpecialTokens(text: string): string {
     return text;
   }
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
-  if (!MODEL_SPECIAL_TOKEN_RE.test(text)) {
+  CHANNEL_DELIMITER_RE.lastIndex = 0;
+  if (!MODEL_SPECIAL_TOKEN_RE.test(text) && !CHANNEL_DELIMITER_RE.test(text)) {
     return text;
   }
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
+  CHANNEL_DELIMITER_RE.lastIndex = 0;
 
   const codeRegions = findCodeRegions(text);
+  let lastChannelDelimiterEnd: number | null = null;
+  for (const match of text.matchAll(CHANNEL_DELIMITER_RE)) {
+    const matched = match[0];
+    const start = match.index ?? 0;
+    const end = start + matched.length;
+    if (!isInsideCode(start, codeRegions) && !overlapsCodeRegion(start, end, codeRegions)) {
+      lastChannelDelimiterEnd = end;
+    }
+  }
+  if (lastChannelDelimiterEnd !== null && lastChannelDelimiterEnd < text.length) {
+    return stripModelSpecialTokens(text.slice(lastChannelDelimiterEnd));
+  }
+
   let out = "";
   let cursor = 0;
   for (const match of text.matchAll(MODEL_SPECIAL_TOKEN_RE)) {

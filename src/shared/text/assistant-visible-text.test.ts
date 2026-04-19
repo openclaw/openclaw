@@ -399,6 +399,14 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText("<｜begin▁of▁sentence｜>Hello world", "Hello world");
     });
 
+    it("keeps the visible suffix after a channel delimiter token", () => {
+      expectVisibleText("internal planning<channel|>Visible answer", "Visible answer");
+    });
+
+    it("strips later model control tokens after a channel delimiter token", () => {
+      expectVisibleText("internal planning<channel|><|assistant|>Visible answer", "Visible answer");
+    });
+
     it("strips special tokens mixed with normal text", () => {
       expectVisibleText(
         "Start <|tool_call_result_begin|>middle<|tool_call_result_end|> end",
@@ -462,6 +470,11 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("preserves channel delimiter tokens inside fenced code blocks", () => {
+      const input = ["```text", "<channel|>Visible answer", "```", "", "Outside"].join("\n");
+      expectVisibleText(input, input);
+    });
+
     it("preserves malformed tokens that end inside inline code spans", () => {
       expectVisibleText("Before <|token `code|>` after", "Before <|token `code|>` after");
     });
@@ -501,6 +514,12 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("preserves indentation for a leading fenced block while trimming surrounding blank lines", () => {
+    const input = "\n\n  ```js\n  const x = 1;\n  ```\n";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("  ```js\n  const x = 1;\n  ```");
   });
 });
 

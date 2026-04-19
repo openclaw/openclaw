@@ -264,6 +264,24 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Done."]);
   });
 
+  it("sanitizes leaked channel delimiters before emitting a text_end block reply", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: "Internal planning about the instruction and output formatting.<channel|>gemma-visible-ok",
+      id: "item_legacy",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("gemma-visible-ok");
+    expect(subscription.assistantTexts).toEqual(["gemma-visible-ok"]);
+  });
+
   it("emits the final answer at message_end when commentary was streamed first", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
