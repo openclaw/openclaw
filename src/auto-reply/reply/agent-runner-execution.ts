@@ -83,6 +83,7 @@ import {
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { readLatestSessionEntryFresh } from "./fresh-session-entry.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
@@ -689,31 +690,17 @@ export async function runAgentTurnWithFallback(params: {
     // detectors (yield-after-approval) can read them without a
     // session-store round-trip.
     //
-    // Bug 3+4 v3 fix: TRUE fresh disk read at registration time. The
-    // `params.getActiveSessionEntry()` callback in `agent-runner.ts:1207`
-    // is a CLOSURE over a `let activeSessionEntry` captured at run-start
-    // (line 921) that only refreshes at compaction / memory flush /
-    // error-recovery — NOT mid-turn. A `sessions.patch` write (UI
-    // approval) that fires between turn-start and this point would
-    // otherwise leave all 4 mirrors below (inPlanMode, planApproval,
-    // recentlyApprovedAt, pendingAgentInjection) stale.
-    //
-    // Use `loadSessionStore(storePath, { skipCache: true })` to bypass
-    // the cache and read the latest persisted state. Disk I/O is
-    // negligible: small file, OS page cache, runs once per
-    // registerAgentRunContext call (turn-start, not mid-turn).
-    let activeSessionEntry = params.getActiveSessionEntry();
-    if (params.storePath && params.sessionKey) {
-      try {
-        const liveStore = loadSessionStore(params.storePath, { skipCache: true });
-        const liveEntry = liveStore?.[params.sessionKey];
-        if (liveEntry) {
-          activeSessionEntry = liveEntry;
-        }
-      } catch {
-        // Fall back to closure value — no worse than pre-fix behavior.
-      }
-    }
+    // Bug 3+4 v3 fix: TRUE fresh disk read at registration time so all
+    // 4 mirrors below (inPlanMode, planApproval, recentlyApprovedAt,
+    // pendingAgentInjection) reflect any mid-flight `sessions.patch`
+    // write (e.g. UI plan approval). The `params.getActiveSessionEntry()`
+    // callback is a closure over a captured ref that doesn't refresh
+    // mid-turn — see `fresh-session-entry.ts` for the full rationale.
+    const activeSessionEntry = readLatestSessionEntryFresh({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      fallbackEntry: params.getActiveSessionEntry(),
+    });
     const planModeEntry = activeSessionEntry?.planMode;
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
@@ -1195,32 +1182,21 @@ export async function runAgentTurnWithFallback(params: {
               // an `exit_plan_mode` approval — defeating the entire
               // purpose of plan mode.
               //
-              // Bug 3+4 v3 fix: TRUE fresh disk read for the INITIAL
-              // planMode flag passed to the runner. Mid-turn drift is
-              // covered by the `getLatestPlanMode` callback below, but
-              // this initial flag still matters for the first tool
-              // call's gate check before the callback fires. The
-              // closure `params.getActiveSessionEntry()` is stale
-              // between turn-start and this point if a sessions.patch
-              // (UI approval) raced — see the matching fix in
-              // `registerAgentRunContext` (~430 LoC up).
-              const sessionPlanModeMode: "plan" | "normal" | undefined = (() => {
-                if (!params.storePath || !params.sessionKey) {
-                  const fallback = params.getActiveSessionEntry()?.planMode?.mode;
-                  return fallback === "plan" || fallback === "normal" ? fallback : undefined;
-                }
-                try {
-                  const liveStore = loadSessionStore(params.storePath, { skipCache: true });
-                  const liveMode = liveStore?.[params.sessionKey]?.planMode?.mode;
-                  if (liveMode === "plan" || liveMode === "normal") {
-                    return liveMode;
-                  }
-                } catch {
-                  // Fall through to closure fallback.
-                }
-                const fallback = params.getActiveSessionEntry()?.planMode?.mode;
-                return fallback === "plan" || fallback === "normal" ? fallback : undefined;
-              })();
+              // Bug 3+4 v3 fix: fresh disk read for the INITIAL planMode
+              // flag. Mid-turn drift is covered by `getLatestPlanMode`
+              // below, but the first tool call's gate check fires
+              // before that callback, so the initial flag must be
+              // fresh too. See `fresh-session-entry.ts` for rationale.
+              const freshSessionEntry = readLatestSessionEntryFresh({
+                storePath: params.storePath,
+                sessionKey: params.sessionKey,
+                fallbackEntry: params.getActiveSessionEntry(),
+              });
+              const freshSessionPlanModeMode = freshSessionEntry?.planMode?.mode;
+              const sessionPlanModeMode: "plan" | "normal" | undefined =
+                freshSessionPlanModeMode === "plan" || freshSessionPlanModeMode === "normal"
+                  ? freshSessionPlanModeMode
+                  : undefined;
               // PR-15: consume any pending agent injection
               // (`[QUESTION_ANSWER]: ...` / `[PLAN_DECISION]: ...`)
               // BEFORE calling the runner. The consumer atomically
