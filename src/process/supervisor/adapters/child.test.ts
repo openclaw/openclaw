@@ -202,6 +202,20 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it("appends .cmd for claude on Windows child spawns", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 7777,
+      argv: ["claude", "--version"],
+    });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+    };
+    expect(spawnArgs.argv?.[0]).toBe("claude.cmd");
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
