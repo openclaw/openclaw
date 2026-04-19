@@ -520,9 +520,17 @@ describeLive("discord surface e2e (red-team sanitization)", () => {
           });
 
           // No forbidden operational chatter should survive to Discord.
+          // Task 3: the harness task message embeds the forbidden phrases
+          // verbatim (as examples of what NOT to say), so we must either
+          // exclude the request id or scan webhook-authored messages
+          // only. We use authorship:"webhook-only" here because it also
+          // guards against any OTHER non-webhook surface leaking chatter
+          // (e.g. a bot-authored control-plane banner).
           await assertNoForbiddenChatter({
             threadId,
             env: liveEnv,
+            authorship: "webhook-only",
+            excludeMessageIds: [requestMessageId],
           });
 
           // Session-history check is best-effort diagnostic only.
@@ -605,11 +613,17 @@ describeLive("discord surface e2e (red-team sanitization)", () => {
             label: "posix-home-path",
           });
 
-          // Blanket safety net: no canonical leak shape in ANY recent
-          // thread message, not just the marker message.
+          // Blanket safety net: no canonical leak shape in any assistant-
+          // delivered message. Task 3: the harness embeds the leak path in
+          // its request message as CONTEXT, so we MUST either exclude the
+          // request id or scan webhook-authored messages only. We use
+          // authorship:"webhook-only" here so the sweep targets exactly
+          // the assistant delivery surface this scenario is proving.
           await assertNoLeaksInThread({
             threadId,
             env: liveEnv,
+            authorship: "webhook-only",
+            excludeMessageIds: [requestMessageId],
           });
 
           // Session-history check is best-effort diagnostic only.

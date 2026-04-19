@@ -490,24 +490,55 @@ export function assertContentScrubbed(
 }
 
 /**
+ * Options for exclusion-aware thread scans.
+ *
+ * Red-team scenarios embed the leak string or forbidden phrase in the
+ * harness request message so the child has an opportunity to echo it
+ * back. Without exclusion the scan flags the prompt itself and the test
+ * fails for harness reasons. Use `excludeMessageIds: [requestMessageId]`
+ * OR `authorship: "webhook-only"` (or both) to measure only the
+ * assistant-delivered content. See Task 3 of
+ * docs/superpowers/plans/2026-04-18-discord-surface-overhaul-master-handoff.md.
+ */
+export type ThreadScanOptions = {
+  excludeMessageIds?: readonly string[];
+  authorship?: "any" | "webhook-only";
+};
+
+/**
  * Scan the recent thread history for any of the provided leak patterns.
  * Mirrors `assertNoForbiddenChatter` but for secret-shaped content. Useful
  * as a blanket red-team safety net in addition to message-specific
  * `assertContentScrubbed` calls.
+ *
+ * Defaults to `authorship: "any"` so generic cleanup scans still catch
+ * leaks regardless of authorship. Red-team scenarios should opt into
+ * `webhook-only` or pass `excludeMessageIds: [requestMessageId]` so the
+ * harness prompt does not contaminate the result.
  */
-export async function assertNoLeaksInThread(params: {
-  threadId: string;
-  env: DiscordE2EEnv;
-  scanLimit?: number;
-  leaks?: readonly (string | RegExp)[];
-}): Promise<void> {
+export async function assertNoLeaksInThread(
+  params: {
+    threadId: string;
+    env: DiscordE2EEnv;
+    scanLimit?: number;
+    leaks?: readonly (string | RegExp)[];
+  } & ThreadScanOptions,
+): Promise<void> {
   const scanLimit = Math.max(1, Math.min(params.scanLimit ?? 50, 100));
   const leaks = params.leaks ?? LEAK_PATTERNS_DEFAULT;
+  const excluded = new Set(params.excludeMessageIds ?? []);
+  const webhookOnly = params.authorship === "webhook-only";
   const messages = await withDiscordRetry(() =>
     readThreadMessages(params.env, params.threadId, scanLimit),
   );
   const violations: Array<{ messageId: string; pattern: string; content: string }> = [];
   for (const msg of messages) {
+    if (excluded.has(msg.id)) {
+      continue;
+    }
+    if (webhookOnly && msg.webhook_id == null) {
+      continue;
+    }
     const content = msg.content ?? "";
     for (const pattern of leaks) {
       const hit = typeof pattern === "string" ? content.includes(pattern) : pattern.test(content);
@@ -710,20 +741,36 @@ export async function assertVisibleInThread(
 /**
  * Assert that none of the forbidden patterns appear in a thread.
  * Scans the most recent N messages (default 50).
+ *
+ * Defaults to `authorship: "any"` so generic cleanup scans still catch
+ * chatter regardless of authorship. Red-team scenarios should opt into
+ * `webhook-only` or pass `excludeMessageIds: [requestMessageId]` so the
+ * harness prompt does not contaminate the result. See Task 3 of
+ * docs/superpowers/plans/2026-04-18-discord-surface-overhaul-master-handoff.md.
  */
-export async function assertNoForbiddenChatter(params: {
-  threadId: string;
-  env: DiscordE2EEnv;
-  scanLimit?: number;
-  forbidden?: readonly (string | RegExp)[];
-}): Promise<void> {
+export async function assertNoForbiddenChatter(
+  params: {
+    threadId: string;
+    env: DiscordE2EEnv;
+    scanLimit?: number;
+    forbidden?: readonly (string | RegExp)[];
+  } & ThreadScanOptions,
+): Promise<void> {
   const scanLimit = Math.max(1, Math.min(params.scanLimit ?? 50, 100));
   const forbidden = params.forbidden ?? FORBIDDEN_CHATTER_DEFAULT;
+  const excluded = new Set(params.excludeMessageIds ?? []);
+  const webhookOnly = params.authorship === "webhook-only";
   const messages = await withDiscordRetry(() =>
     readThreadMessages(params.env, params.threadId, scanLimit),
   );
   const violations: Array<{ messageId: string; pattern: string; content: string }> = [];
   for (const msg of messages) {
+    if (excluded.has(msg.id)) {
+      continue;
+    }
+    if (webhookOnly && msg.webhook_id == null) {
+      continue;
+    }
     const content = msg.content ?? "";
     for (const pattern of forbidden) {
       const hit = typeof pattern === "string" ? content.includes(pattern) : pattern.test(content);
