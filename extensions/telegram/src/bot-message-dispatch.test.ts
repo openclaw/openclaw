@@ -486,6 +486,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("passes humanDelay config to the block dispatcher", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      cfg: {
+        agents: {
+          defaults: {
+            humanDelay: { mode: "custom", minMs: 800, maxMs: 2500 },
+          },
+        },
+      },
+      telegramCfg: { streaming: { block: { enabled: true } } },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          humanDelay: { mode: "custom", minMs: 800, maxMs: 2500 },
+        }),
+      }),
+    );
+  });
+
   it("sends error replies silently when silentErrorReplies is enabled", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
