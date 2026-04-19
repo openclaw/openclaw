@@ -85,8 +85,17 @@ export function startGatewayEventSubscriptions(params: {
   // the runtime until the user manually refreshes.
   // Consolidation pass note: removed the `params.minimalTestGateway`
   // conditional from PR-11 because the param was renamed/dropped in
-  // upstream's restructure. Always starting the persister; tests
-  // that need to suppress it can pass a noop emitSessionsChanged.
+  // upstream's restructure. This module now always wires a concrete
+  // `emitSessionsChanged`; tests that need to suppress broadcasts
+  // should use `sessionEventSubscribers` with no conn ids (so
+  // `getAll()` returns an empty set and the early-return at line
+  // 89 below short-circuits the broadcast) or otherwise provide
+  // no-op broadcast plumbing in the test harness — there's no
+  // injected emitter param to override here.
+  // Copilot review #68939 (post-nuclear-fix-stack): comment
+  // updated to reflect the actual suppression mechanism (the
+  // earlier "pass a noop emitSessionsChanged" wording implied a
+  // param that doesn't exist).
   const planSnapshotUnsub = startPlanSnapshotPersister({
     emitSessionsChanged: ({ sessionKey, reason }) => {
       const connIds = params.sessionEventSubscribers.getAll();

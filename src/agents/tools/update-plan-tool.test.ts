@@ -56,7 +56,11 @@ describe("update_plan tool", () => {
       ],
     });
 
-    expect(Array.isArray(result.content) && result.content.length > 0).toBe(true);
+    // Copilot review #68939 (post-nuclear-fix-stack): split combined
+    // assertion for diagnostic clarity (matches the same fix applied
+    // to the test above this one).
+    expect(result.content).toBeInstanceOf(Array);
+    expect(result.content.length).toBeGreaterThan(0);
     expect(result.details).toEqual({
       status: "updated",
       plan: [

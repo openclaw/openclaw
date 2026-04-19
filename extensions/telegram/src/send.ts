@@ -1618,6 +1618,29 @@ export async function sendDocumentTelegram(
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
 
+  // Copilot review #68939 (post-nuclear-fix-stack): stat() the
+  // file BEFORE allocating the read buffer so an oversized file
+  // doesn't trigger a multi-MB allocation just to be rejected on
+  // the size check below. Pre-fix, a caller pointing at a 50+ MiB
+  // file would allocate the full buffer and THEN reject — risking
+  // OOM in the gateway process under malicious or accidental
+  // misuse. The grammy SDK doesn't expose stream uploads cleanly
+  // (deferred to a future refactor), but stat-first is a cheap
+  // bounded-allocation guard.
+  let fileStat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    fileStat = await fs.stat(filePath);
+  } catch (err) {
+    throw new Error(
+      `sendDocumentTelegram: failed to stat ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  if (fileStat.size > TELEGRAM_DOCUMENT_MAX_BYTES) {
+    throw new Error(
+      `sendDocumentTelegram: file too large for Telegram (${fileStat.size} bytes > ${TELEGRAM_DOCUMENT_MAX_BYTES} byte cap)`,
+    );
+  }
   let buffer: Buffer;
   try {
     buffer = await fs.readFile(filePath);
@@ -1625,11 +1648,6 @@ export async function sendDocumentTelegram(
     throw new Error(
       `sendDocumentTelegram: failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
       { cause: err },
-    );
-  }
-  if (buffer.byteLength > TELEGRAM_DOCUMENT_MAX_BYTES) {
-    throw new Error(
-      `sendDocumentTelegram: file too large for Telegram (${buffer.byteLength} bytes > ${TELEGRAM_DOCUMENT_MAX_BYTES} byte cap)`,
     );
   }
 

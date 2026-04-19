@@ -1023,6 +1023,18 @@ export async function applySessionsPatchToStore(params: {
         ...(s.verifiedCriteria !== undefined ? { verifiedCriteria: s.verifiedCriteria } : {}),
       })),
       lastPlanUpdatedAt: now,
+      // Codex P2 review #68939 (post-nuclear-fix-stack): also bump
+      // `updatedAt` so heartbeat plan-nudge gates don't false-
+      // positive as "idle" while the agent is actively writing
+      // plan steps. Pre-fix, only `lastPlanUpdatedAt` advanced on
+      // snapshot writes; the heartbeat-runner uses `planMode.
+      // updatedAt` as its idle threshold check (see
+      // `src/infra/heartbeat-runner.ts buildActivePlanNudge`), so
+      // an active agent issuing `update_plan` calls every few
+      // seconds still appeared idle past the threshold and got
+      // unnecessary nudges injected. Aligning the activity signal
+      // with real plan progress avoids the spurious nudges.
+      updatedAt: now,
     };
   }
 

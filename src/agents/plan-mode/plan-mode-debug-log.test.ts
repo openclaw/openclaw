@@ -37,7 +37,8 @@ vi.mock("../../config/io.js", () => ({
   loadConfig: () => loadConfigMock(),
 }));
 
-const { logPlanModeDebug } = await import("./plan-mode-debug-log.js");
+const { logPlanModeDebug, _resetIsPlanModeDebugEnabledCacheForTests } =
+  await import("./plan-mode-debug-log.js");
 
 describe("logPlanModeDebug — env-var gate", () => {
   beforeEach(() => {
@@ -123,6 +124,11 @@ describe("logPlanModeDebug — config-flag gate (Bug D iter-2)", () => {
     loadConfigMock.mockReset();
     // Default: env unset so config flag is the only signal.
     vi.stubEnv("OPENCLAW_DEBUG_PLAN_MODE", "");
+    // Reset the 30s TTL cache (post-nuclear-fix-stack perf fix at
+    // plan-mode-debug-log.ts:160) so tests that mock different
+    // config values aren't blocked by a stale cached value from a
+    // prior test in the same suite.
+    _resetIsPlanModeDebugEnabledCacheForTests();
   });
   afterEach(() => {
     vi.unstubAllEnvs();

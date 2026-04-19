@@ -139,17 +139,48 @@ function isDebugEnabled(): boolean {
  * the process env OR `agents.defaults.planMode.debug === true` in
  * the loaded config. Errors loading config are swallowed (returns
  * false), matching the previous local helper's behavior.
+ *
+ * Copilot review #68939 (post-nuclear-fix-stack): added a 30-second
+ * TTL cache on the config-flag read path. Pre-fix, every
+ * `logPlanModeDebug()` call invoked `loadConfig()` (file I/O +
+ * parse) even when the env var was unset and debug logging was
+ * effectively off — significant overhead in hot paths that emit
+ * many debug events per turn. The 30s TTL is short enough that an
+ * operator flipping the config flag sees the change within half a
+ * minute, while bounding the file-I/O overhead at ~2 reads per
+ * minute even under load.
  */
+let cachedDebugFlag: { value: boolean; expiresAt: number } | undefined;
+const DEBUG_FLAG_CACHE_TTL_MS = 30_000;
+
+/**
+ * Test-only: reset the debug-flag cache. Call from `beforeEach` so
+ * test cases that mock different config-flag values aren't blocked
+ * by a stale cached value from a prior test in the same suite.
+ * Production code should never call this — the TTL handles
+ * invalidation under normal usage.
+ */
+export function _resetIsPlanModeDebugEnabledCacheForTests(): void {
+  cachedDebugFlag = undefined;
+}
+
 export function isPlanModeDebugEnabled(): boolean {
   if (process.env.OPENCLAW_DEBUG_PLAN_MODE === "1") {
     return true;
   }
+  const now = Date.now();
+  if (cachedDebugFlag && cachedDebugFlag.expiresAt > now) {
+    return cachedDebugFlag.value;
+  }
+  let value = false;
   try {
     const cfg = loadConfig();
-    return cfg?.agents?.defaults?.planMode?.debug === true;
+    value = cfg?.agents?.defaults?.planMode?.debug === true;
   } catch {
-    return false;
+    value = false;
   }
+  cachedDebugFlag = { value, expiresAt: now + DEBUG_FLAG_CACHE_TTL_MS };
+  return value;
 }
 
 /**

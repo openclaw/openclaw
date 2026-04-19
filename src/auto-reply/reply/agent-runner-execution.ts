@@ -966,6 +966,25 @@ export async function runAgentTurnWithFallback(params: {
         : undefined;
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
+      // Codex P1 review #68939 (post-nuclear-fix-stack): consume the
+      // pending agent injection ONCE, BEFORE entering the
+      // runWithModelFallback loop. Pre-fix, the consume call lived
+      // inside the `run:` callback below — every fallback retry
+      // re-invoked the callback, but the queue had already been
+      // drained by the first attempt, so retries on a different
+      // model/provider lost the [PLAN_DECISION] / [QUESTION_ANSWER]
+      // context. Hoisting it here means every retry sees the same
+      // composed prompt; the queue is consumed exactly once across
+      // all fallback attempts. Aligns with the queue's once-per-turn
+      // drain contract from cherry-pick of 70a6e4b23a (typed
+      // injection queue).
+      const hoistedPendingInjection = params.sessionKey
+        ? (await consumePendingAgentInjection(params.sessionKey)).text
+        : undefined;
+      const hoistedComposedPrompt = composePromptWithPendingInjection(
+        hoistedPendingInjection,
+        params.commandBody,
+      );
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
@@ -1192,27 +1211,22 @@ export async function runAgentTurnWithFallback(params: {
                 freshSessionPlanModeMode === "plan" || freshSessionPlanModeMode === "normal"
                   ? freshSessionPlanModeMode
                   : undefined;
-              // PR-15: consume any pending agent injection
+              // PR-15: pending agent injection
               // (`[QUESTION_ANSWER]: ...` / `[PLAN_DECISION]: ...`)
-              // BEFORE calling the runner. The consumer atomically
-              // reads + clears the SessionEntry field so the
-              // injection only fires once. This is the gateway-side
-              // single-source-of-truth pattern: every channel's
-              // `/plan answer` / `/plan accept` writes the same
-              // pendingAgentInjection field via sessions.patch, and
-              // this consumer turns it into a synthetic prepended
-              // user message. Webchat's legacy direct-injection path
+              // is consumed once BEFORE the runWithModelFallback
+              // callback runs (see hoistedPendingInjection above)
+              // so all fallback retries see the same composed
+              // prompt. The single-source-of-truth pattern stands:
+              // every channel's `/plan answer` / `/plan accept`
+              // writes the same pendingAgentInjections queue via
+              // sessions.patch, and this consumer drains it into a
+              // synthetic prepended user message exactly once per
+              // turn. Webchat's legacy direct-injection path
               // (`ui/src/ui/app.ts:1118`) continues to work for
               // backwards-compat — when the gateway-side field is
               // populated AND the direct injection also fires, the
               // gateway path wins (it ran first).
-              const pendingInjection = params.sessionKey
-                ? (await consumePendingAgentInjection(params.sessionKey)).text
-                : undefined;
-              const composedPrompt = composePromptWithPendingInjection(
-                pendingInjection,
-                params.commandBody,
-              );
+              const composedPrompt = hoistedComposedPrompt;
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
