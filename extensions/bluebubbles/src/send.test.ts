@@ -1041,21 +1041,60 @@ describe("send", () => {
         }
       });
 
-      it("does not refresh when no reply or effect is requested", async () => {
-        // Cache expired but no Private API features needed — skip refresh
+      // Plain-text sends also need the cache populated so `isMacOS26OrHigher`
+      // can read `os_version` from the same `serverInfoCache`. Without a
+      // refresh on cold/expired cache, macOS 26 detection would silently
+      // miss and force-route would fall back to broken AppleScript.
+      // (Greptile/Codex PR #69070)
+      it("refreshes cache for plain-text sends when status is unknown", async () => {
+        // First call returns null (cache cold/expired). The refresh path
+        // fetches server info; plain-text send still uses AppleScript when
+        // Private API is disabled on the server — but the refresh ran.
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
         mockResolvedHandleTarget();
-        mockSendResponse({ data: { guid: "msg-plain" } });
+        mockSendResponse({ data: { guid: "msg-plain-refreshed" } });
 
         const result = await sendMessageBlueBubbles("+15551234567", "Plain message", {
           serverUrl: "http://localhost:1234",
           password: "test",
         });
 
-        expect(result.messageId).toBe("msg-plain");
-        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+        expect(result.messageId).toBe("msg-plain-refreshed");
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
         const sendCall = mockFetch.mock.calls[1];
         const body = JSON.parse(sendCall[1].body);
         expect(body.method).toBe("apple-script");
+      });
+
+      // Cold cache + macOS 26 + Private API enabled on refresh — the
+      // refresh populates the cache, `isMacOS26OrHigher` returns true, and
+      // plain-text routes through Private API instead of broken AppleScript.
+      // (Greptile/Codex PR #69070)
+      it("force-routes macOS 26 plain-text through Private API after cold-cache refresh", async () => {
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+        fetchServerInfoMock.mockResolvedValueOnce({
+          private_api: true,
+          os_version: "26.0",
+        });
+        isMacOS26OrHigherMock.mockReturnValue(true);
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-macos26-refreshed" } });
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Plain message", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          });
+
+          expect(result.messageId).toBe("msg-macos26-refreshed");
+          expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+          const sendCall = mockFetch.mock.calls[1];
+          const body = JSON.parse(sendCall[1].body);
+          expect(body.method).toBe("private-api");
+        } finally {
+          isMacOS26OrHigherMock.mockReturnValue(false);
+        }
       });
 
       it("degrades gracefully when refresh returns null (server unreachable)", async () => {

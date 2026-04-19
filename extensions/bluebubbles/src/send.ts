@@ -482,10 +482,14 @@ export async function sendMessageBlueBubbles(
   const wantsReplyThread = normalizeOptionalString(opts.replyToMessageGuid) !== undefined;
   const wantsEffect = Boolean(effectId);
 
-  // Lazy refresh: when the cache has expired and Private API features are needed,
-  // fetch server info before making the decision. This prevents silent degradation
-  // of reply threading and effects after the 10-minute cache TTL expires. (#43764)
-  if (privateApiStatus === null && (wantsReplyThread || wantsEffect)) {
+  // Lazy refresh: when the cache has expired, fetch server info before
+  // making the decision. Originally scoped to reply/effect features (#43764)
+  // to avoid silent degradation after the 10-minute cache TTL expires. Now
+  // always fires on null status, because `isMacOS26OrHigher()` reads from
+  // the same cache and plain-text sends on macOS 26 need Private API too —
+  // without this, `forceOnMacOS26` silently falls back to broken AppleScript
+  // after TTL expiry or on a cold cache. (#64480, Greptile/Codex PR #69070)
+  if (privateApiStatus === null) {
     try {
       await fetchBlueBubblesServerInfo({
         baseUrl,
