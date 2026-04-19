@@ -13,6 +13,7 @@ import {
   waitForAgentRunsToDrain,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./run-wait.js";
+import { TOOL_RESULT_SUMMARY_KIND, TOOL_SUMMARY_KIND } from "./subagent-tool-persist.js";
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
@@ -72,6 +73,68 @@ describe("readLatestAssistantReply", () => {
 
     expect(result.text).toBe("new output");
     expect(result.fingerprint).toContain('"timestamp":42');
+  });
+});
+
+describe("readLatestAssistantReply with persisted tool fragments", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+    __testing.setDepsForTest({
+      callGateway: async (opts) => await callGatewayMock(opts),
+    });
+  });
+
+  it("ignores tool_summary fragment messages and returns previous real assistant text", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older real reply" }],
+          timestamp: 10,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: '[tool: Bash] {"command":"date"}' }],
+          timestamp: 11,
+          __openclaw: { kind: TOOL_SUMMARY_KIND, toolName: "Bash" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "[result] ok" }],
+          timestamp: 12,
+          __openclaw: { kind: TOOL_RESULT_SUMMARY_KIND, toolName: "Bash" },
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBe("older real reply");
+  });
+
+  it("returns undefined when only tool fragments exist", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: '[tool: Bash] {"command":"date"}' }],
+          timestamp: 21,
+          __openclaw: { kind: TOOL_SUMMARY_KIND, toolName: "Bash" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "[result] ok" }],
+          timestamp: 22,
+          __openclaw: { kind: TOOL_RESULT_SUMMARY_KIND, toolName: "Bash" },
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReplySnapshot({ sessionKey: "agent:main:child" });
+
+    expect(result).toEqual({});
+    expect(result.text).toBeUndefined();
+    expect(result.fingerprint).toBeUndefined();
   });
 });
 

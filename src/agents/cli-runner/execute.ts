@@ -21,6 +21,7 @@ import {
   getBootstrapProfileConfig,
   isContextOverflowError,
 } from "../pi-embedded-helpers.js";
+import { persistSubagentToolResult, persistSubagentToolUse } from "../subagent-tool-persist.js";
 import { ENABLE_SEMANTIC_PROMPT_LOADER } from "./flags.js";
 import {
   appendImagePathsToPrompt,
@@ -782,6 +783,15 @@ export async function executeWithOverflowProtection(
                     cliBackendLog.info(
                       `cli tool start: ${name}${toolUseId ? ` (${toolUseId})` : ""}`,
                     );
+                    // Persist a redacted tool_use fragment so that chat.history /
+                    // subagent fallbacks can surface activity even when the final
+                    // turn was pure tool calls (no assistant text).
+                    persistSubagentToolUse({
+                      sessionFile: params.sessionFile,
+                      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                      toolName: name,
+                      input,
+                    });
                   }
                   if (
                     ENABLE_SEMANTIC_PROMPT_LOADER &&
@@ -892,6 +902,13 @@ export async function executeWithOverflowProtection(
                   cliBackendLog.info(
                     `cli tool result${toolUseId ? ` (${toolUseId})` : ""}: ${formatCliLogValue(text)}`,
                   );
+                  // Persist a redacted tool_result fragment to the transcript.
+                  persistSubagentToolResult({
+                    sessionFile: params.sessionFile,
+                    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                    ...(text ? { text } : {}),
+                    ...(isError ? { isError: true } : {}),
+                  });
                   if (
                     ENABLE_SEMANTIC_PROMPT_LOADER &&
                     mustVerifyPromptFileRead &&

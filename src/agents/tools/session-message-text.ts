@@ -6,6 +6,7 @@ import {
   stripModelSpecialTokens,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
+import { isPersistedSubagentToolFragment } from "../subagent-tool-persist.js";
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
@@ -13,7 +14,13 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
       return true;
     }
     const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult" && role !== "tool";
+    if (role === "toolResult" || role === "tool") {
+      return false;
+    }
+    if (isPersistedSubagentToolFragment(msg)) {
+      return false;
+    }
+    return true;
   });
 }
 
@@ -28,6 +35,9 @@ export function sanitizeTextContent(text: string): string {
 
 export function extractAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  if (isPersistedSubagentToolFragment(message)) {
     return undefined;
   }
   if ((message as { role?: unknown }).role !== "assistant") {

@@ -28,6 +28,7 @@ vi.mock("../config/config.js", async () => {
 });
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
+import { TOOL_RESULT_SUMMARY_KIND, TOOL_SUMMARY_KIND } from "./subagent-tool-persist.js";
 import { __testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -323,6 +324,60 @@ describe("sessions tools", () => {
     });
     const withToolsDetails = withTools.details as { messages?: unknown[] };
     expect(withToolsDetails.messages).toHaveLength(2);
+  });
+
+  it("sessions_history filters persisted subagent tool fragments by default but exposes them with includeTools=true", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "real reply" }],
+              timestamp: 1,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: '[tool: Bash] {"command":"date"}' }],
+              timestamp: 2,
+              __openclaw: { kind: TOOL_SUMMARY_KIND, toolName: "Bash" },
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "[result] ok" }],
+              timestamp: 3,
+              __openclaw: { kind: TOOL_RESULT_SUMMARY_KIND, toolName: "Bash" },
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const defaultResult = await tool.execute("call-fragments-default", { sessionKey: "main" });
+    const defaultDetails = defaultResult.details as {
+      messages?: Array<{
+        role?: string;
+        content?: Array<{ text?: string }>;
+      }>;
+    };
+    expect(defaultDetails.messages).toHaveLength(1);
+    expect(defaultDetails.messages?.[0]?.role).toBe("assistant");
+    expect(defaultDetails.messages?.[0]?.content?.[0]?.text).toBe("real reply");
+
+    const withTools = await tool.execute("call-fragments-include", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const withToolsDetails = withTools.details as { messages?: unknown[] };
+    expect(withToolsDetails.messages).toHaveLength(3);
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {

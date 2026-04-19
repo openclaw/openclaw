@@ -7,6 +7,11 @@ import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import {
+  TOOL_RESULT_SUMMARY_KIND,
+  TOOL_SUMMARY_KIND,
+  type ToolFragmentKind,
+} from "./subagent-tool-persist.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
@@ -34,13 +39,50 @@ type ToolResultMessage = {
   content?: unknown;
 };
 
+export type SubagentToolFragment = {
+  kind: ToolFragmentKind;
+  text: string;
+  toolName?: string;
+};
+
 type SubagentOutputSnapshot = {
   latestAssistantText?: string;
   latestSilentText?: string;
   latestRawText?: string;
   assistantFragments: string[];
   toolCallCount: number;
+  toolFragments: SubagentToolFragment[];
 };
+
+const TOOL_FRAGMENT_FALLBACK_PREFIX = "[Subagent completed with tool calls only]";
+const TOOL_FRAGMENT_FALLBACK_MAX = 5;
+
+function resolveToolFragmentKind(message: unknown): ToolFragmentKind | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  if (!meta || typeof meta !== "object") {
+    return undefined;
+  }
+  const kind = (meta as { kind?: unknown }).kind;
+  if (kind === TOOL_SUMMARY_KIND || kind === TOOL_RESULT_SUMMARY_KIND) {
+    return kind;
+  }
+  return undefined;
+}
+
+function resolveToolFragmentToolName(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  if (!meta || typeof meta !== "object") {
+    return undefined;
+  }
+  const toolName = (meta as { toolName?: unknown }).toolName;
+  return typeof toolName === "string" && toolName.trim() ? toolName.trim() : undefined;
+}
 
 export type AgentWaitResult = {
   status?: string;
@@ -170,6 +212,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   const snapshot: SubagentOutputSnapshot = {
     assistantFragments: [],
     toolCallCount: 0,
+    toolFragments: [],
   };
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -177,6 +220,21 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     }
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
+      const fragmentKind = resolveToolFragmentKind(message);
+      if (fragmentKind) {
+        const fragText = extractSubagentOutputText(message).trim();
+        if (fragText) {
+          const toolName = resolveToolFragmentToolName(message);
+          snapshot.toolFragments.push({
+            kind: fragmentKind,
+            text: fragText,
+            ...(toolName ? { toolName } : {}),
+          });
+        }
+        // Do not let tool fragments leak into the assistant text channel –
+        // they are observability breadcrumbs, not the final visible reply.
+        continue;
+      }
       snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
       const text = extractSubagentOutputText(message).trim();
       if (!text) {
@@ -199,6 +257,15 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     }
   }
   return snapshot;
+}
+
+function formatSubagentToolFragmentsFallback(snapshot: SubagentOutputSnapshot): string | undefined {
+  if (snapshot.toolFragments.length === 0) {
+    return undefined;
+  }
+  const tail = snapshot.toolFragments.slice(-TOOL_FRAGMENT_FALLBACK_MAX);
+  const lines = tail.map((fragment) => `- ${fragment.text}`);
+  return [TOOL_FRAGMENT_FALLBACK_PREFIX, ...lines].join("\n");
 }
 
 function formatSubagentPartialProgress(
@@ -238,8 +305,18 @@ function selectSubagentOutputText(
   if (partialProgress) {
     return partialProgress;
   }
+  const toolFragmentsFallback = formatSubagentToolFragmentsFallback(snapshot);
+  if (toolFragmentsFallback) {
+    return toolFragmentsFallback;
+  }
   return snapshot.latestRawText;
 }
+
+export const __testingSubagentAnnounceOutput = {
+  summarizeSubagentOutputHistory,
+  selectSubagentOutputText,
+  TOOL_FRAGMENT_FALLBACK_PREFIX,
+};
 
 export async function readSubagentOutput(
   sessionKey: string,
