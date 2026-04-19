@@ -219,7 +219,7 @@ export function registerCronEditCommand(cron: Command) {
               payload.toolsAllow = null;
             } else if (typeof opts.tools === "string" && opts.tools.trim()) {
               payload.toolsAllow = opts.tools
-                .split(",")
+                .split(/[,\s]+/)
                 .map((t: string) => t.trim())
                 .filter(Boolean);
             }

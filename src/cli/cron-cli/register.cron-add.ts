@@ -153,7 +153,7 @@ export function registerCronAddCommand(cron: Command) {
               toolsAllow:
                 typeof opts.tools === "string" && opts.tools.trim()
                   ? opts.tools
-                      .split(",")
+                      .split(/[,\s]+/)
                       .map((t: string) => normalizeOptionalString(t))
                       .filter((t): t is string => Boolean(t))
                   : undefined,
