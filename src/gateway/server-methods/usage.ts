@@ -48,6 +48,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const MAX_COST_USAGE_CACHE_ENTRIES = 128;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -62,6 +63,24 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+
+function pruneCostUsageCache(now = Date.now()) {
+  for (const [cacheKey, entry] of costUsageCache) {
+    const isFresh = Boolean(
+      entry.updatedAt && now - entry.updatedAt < COST_USAGE_CACHE_TTL_MS,
+    );
+    if (!entry.inFlight && !isFresh) {
+      costUsageCache.delete(cacheKey);
+    }
+  }
+  while (costUsageCache.size > MAX_COST_USAGE_CACHE_ENTRIES) {
+    const oldestKey = costUsageCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    costUsageCache.delete(oldestKey);
+  }
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -305,7 +324,12 @@ async function loadCostUsageSummaryCached(params: {
 }): Promise<CostUsageSummary> {
   const cacheKey = `${params.startMs}-${params.endMs}`;
   const now = Date.now();
+  pruneCostUsageCache(now);
   const cached = costUsageCache.get(cacheKey);
+  if (cached) {
+    costUsageCache.delete(cacheKey);
+    costUsageCache.set(cacheKey, cached);
+  }
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
@@ -325,6 +349,7 @@ async function loadCostUsageSummaryCached(params: {
   })
     .then((summary) => {
       costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      pruneCostUsageCache(Date.now());
       return summary;
     })
     .catch((err) => {
@@ -361,6 +386,7 @@ export const __test = {
   parseDateRange,
   discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
+  pruneCostUsageCache,
   costUsageCache,
 };
 

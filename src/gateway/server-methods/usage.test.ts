@@ -158,4 +158,52 @@ describe("gateway usage helpers", () => {
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
   });
+
+  it("prunes stale cached cost summaries when loading a new range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    const config = {} as OpenClawConfig;
+    await __test.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(__test.costUsageCache.size).toBe(1);
+
+    vi.advanceTimersByTime(30_001);
+    await __test.loadCostUsageSummaryCached({ startMs: 3, endMs: 4, config });
+
+    expect(__test.costUsageCache.size).toBe(1);
+    expect(__test.costUsageCache.has("1-2")).toBe(false);
+    expect(__test.costUsageCache.has("3-4")).toBe(true);
+  });
+
+  it("caps cached cost summaries to the newest 128 ranges", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    for (let index = 0; index < 130; index += 1) {
+      __test.costUsageCache.set(`${index}-${index}`, {
+        summary: {
+          updatedAt: Date.now(),
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          daily: [],
+          totals: {
+            totalTokens: index,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalCost: 0,
+          },
+        },
+        updatedAt: Date.now(),
+      });
+    }
+
+    __test.pruneCostUsageCache(Date.now());
+
+    expect(__test.costUsageCache.size).toBe(128);
+    expect(__test.costUsageCache.has("0-0")).toBe(false);
+    expect(__test.costUsageCache.has("1-1")).toBe(false);
+    expect(__test.costUsageCache.has("129-129")).toBe(true);
+  });
 });
