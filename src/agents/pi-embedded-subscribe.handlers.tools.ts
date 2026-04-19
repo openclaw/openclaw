@@ -367,22 +367,17 @@ async function schedulePlanNudgesAndPersist(params: {
   sessionKey: string;
   log?: { warn?: (msg: string) => void; info?: (msg: string) => void };
 }): Promise<void> {
+  let createdJobIds: string[] = [];
   try {
     const { schedulePlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
-    const scheduled = await schedulePlanNudges({
-      sessionKey: params.sessionKey,
-      log: params.log,
-    });
-    if (scheduled.length === 0) {
-      return;
-    }
-    const jobIds = scheduled.map((n) => n.jobId);
     const [
+      { readSessionStoreReadOnly },
       { updateSessionStoreEntry },
       { loadConfig },
       { resolveStorePath },
       { parseAgentSessionKey },
     ] = await Promise.all([
+      loadSessionStoreRead(),
       loadSessionStoreRuntime(),
       loadConfigModule(),
       loadSessionPaths(),
@@ -394,6 +389,20 @@ async function schedulePlanNudgesAndPersist(params: {
       cfg.session?.store,
       parsed?.agentId ? { agentId: parsed.agentId } : {},
     );
+    const currentEntry = readSessionStoreReadOnly(storePath)[params.sessionKey];
+    const planCycleId =
+      currentEntry?.planMode?.mode === "plan" ? currentEntry.planMode.cycleId : undefined;
+    const scheduled = await schedulePlanNudges({
+      sessionKey: params.sessionKey,
+      planCycleId,
+      log: params.log,
+    });
+    if (scheduled.length === 0) {
+      return;
+    }
+    const jobIds = scheduled.map((n) => n.jobId);
+    createdJobIds = jobIds;
+    let persisted = false;
     await updateSessionStoreEntry({
       storePath,
       sessionKey: params.sessionKey,
@@ -404,6 +413,10 @@ async function schedulePlanNudgesAndPersist(params: {
           // (or there's nothing to clean up).
           return null;
         }
+        if (planCycleId && entry.planMode.cycleId !== planCycleId) {
+          return null;
+        }
+        persisted = true;
         return {
           planMode: {
             ...entry.planMode,
@@ -412,7 +425,19 @@ async function schedulePlanNudgesAndPersist(params: {
         };
       },
     });
+    if (!persisted) {
+      const { cleanupPlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
+      await cleanupPlanNudges({ jobIds, log: params.log });
+    }
   } catch (err) {
+    if (createdJobIds.length > 0) {
+      try {
+        const { cleanupPlanNudges } = await import("./plan-mode/plan-nudge-crons.js");
+        await cleanupPlanNudges({ jobIds: createdJobIds, log: params.log });
+      } catch {
+        // best-effort cleanup
+      }
+    }
     params.log?.warn?.(`schedulePlanNudgesAndPersist failed: ${String(err)}`);
   }
 }

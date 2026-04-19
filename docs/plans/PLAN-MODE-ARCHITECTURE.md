@@ -162,7 +162,7 @@ The `parseTelegramThreadId` helper is preserved as commented-out code in `plan-a
 - **PR-14 Telegram visibility re-wire** — `plan-archetype-bridge.ts` needs to call into the new `extensions/telegram/` SDK location once the upstream restructure is mapped
 - **Bug B** — stale approval card UI auto-dismiss + `PLAN_APPROVAL_EXPIRED` error code (deferred since iter-2)
 - **R1/R2/R3/R4/R5** — robustness fixes (subagent cleanup on crash, cron-nudge suppression, plan title XSS audit, disk-full graceful, multi-channel approval dedup) (deferred since iter-3)
-- **D5** — `/plan self-test` slash command (deferred since iter-3)
+- **D5** — replaced by `plan_mode_status` + targeted lifecycle tests in the stacked follow-up to #68939
 
 These do NOT block the umbrella PR landing. They land as follow-on commits on `feat/plan-channel-parity` after #68939 merges.
 
@@ -196,13 +196,13 @@ Iter-3 closes the meta-gap surfaced by the user: "will plan mode work reliably f
 
 ### Phase 1 — Self-discovery (commit `c262bffcbf`)
 
-| #   | Surface                            | What changed                                                                                                                                                                                                                                                                                                         |
-| --- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | In-mode bootstrap reference card   | New `src/agents/plan-mode/reference-card.ts` injected on every plan-mode turn alongside `PLAN_ARCHETYPE_PROMPT`. ASCII state diagram + tool contract + `[PLAN_*]:` tag taxonomy + `/plan` slash commands + pitfalls + debug tips. Eliminates the iter-2 "2-turn learning curve"                                      |
-| D2  | One-shot first-time intro          | `[PLAN_MODE_INTRO]:` synthetic injection on the very first `enter_plan_mode` per session (gated by new `SessionEntry.planModeIntroDeliveredAt` marker at root level). Agent's NEXT turn opens with quick lifecycle overview + pointer to `/plan self-test`. Composes with existing `pendingAgentInjection` consumers |
-| D3  | Tool-description discovery pointer | All 3 plan-mode tool descriptions (`enter_plan_mode`, `update_plan`, `exit_plan_mode`) end with: "see the bootstrap-injected reference card OR run `/plan self-test`."                                                                                                                                               |
-| D4  | User-facing concept doc            | New `docs/concepts/plan-mode.md` — when to use, lifecycle, slash commands, multi-channel, persistence, auto-mode, subagent gating, troubleshooting                                                                                                                                                                   |
-| D7  | `plan-mode-101` skill              | New `skills/plan-mode-101/SKILL.md` — same content as the in-mode reference card, available on-demand in normal mode via trigger phrases ("explain plan mode", "what does [PLAN_DECISION] mean", etc.)                                                                                                               |
+| #   | Surface                            | What changed                                                                                                                                                                                                                                                                                                                                    |
+| --- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | In-mode bootstrap reference card   | New `src/agents/plan-mode/reference-card.ts` injected on every plan-mode turn alongside `PLAN_ARCHETYPE_PROMPT`. ASCII state diagram + tool contract + `[PLAN_*]:` tag taxonomy + `/plan` slash commands + pitfalls + debug tips. Eliminates the iter-2 "2-turn learning curve"                                                                 |
+| D2  | One-shot first-time intro          | `[PLAN_MODE_INTRO]:` synthetic injection on the very first `enter_plan_mode` per session (gated by new `SessionEntry.planModeIntroDeliveredAt` marker at root level). Agent's NEXT turn opens with quick lifecycle overview + pointer to `plan_mode_status` for runtime introspection. Composes with existing `pendingAgentInjection` consumers |
+| D3  | Tool-description discovery pointer | All 3 plan-mode tool descriptions (`enter_plan_mode`, `update_plan`, `exit_plan_mode`) end with: "see the bootstrap-injected reference card and call `plan_mode_status` when debugging live state."                                                                                                                                             |
+| D4  | User-facing concept doc            | New `docs/concepts/plan-mode.md` — when to use, lifecycle, slash commands, multi-channel, persistence, auto-mode, subagent gating, troubleshooting                                                                                                                                                                                              |
+| D7  | `plan-mode-101` skill              | New `skills/plan-mode-101/SKILL.md` — same content as the in-mode reference card, available on-demand in normal mode via trigger phrases ("explain plan mode", "what does [PLAN_DECISION] mean", etc.)                                                                                                                                          |
 
 ### Phase 2/3 — R6 subagent gate hardening + D6 introspection tool (commit pending)
 
@@ -225,7 +225,7 @@ tail -F ~/.openclaw/logs/gateway.err.log | grep -E '\[plan-mode/|plan-approval-g
 
 ### Deferred to iter-3 commit 3 (next focused commit)
 
-- **D5 — `/plan self-test` slash command** (synthetic plan-mode flow + pass/fail report)
+- **D5 — dropped.** The runtime now uses `plan_mode_status`, focused regression suites, and session-state rehydration coverage instead of a synthetic self-test command.
 - **R1 — Subagent cleanup on crash/timeout** (drain `openSubagentRunIds` on error paths)
 - **R2 — Cron-nudge suppression when approval pending** (heartbeat path already does this via `buildActivePlanNudge:742`; cron-fire path needs same check)
 - **R3 — Plan title XSS sanitization audit + test**

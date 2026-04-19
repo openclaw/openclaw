@@ -30,6 +30,42 @@ import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const log = createSubsystemLogger("gateway/plan-snapshot-persister");
 
+export async function persistPlanModeSubagentGateState(params: {
+  sessionKey?: string;
+  mutate: (planMode: {
+    blockingSubagentRunIds?: string[];
+    lastSubagentSettledAt?: number;
+    updatedAt?: number;
+    mode?: string;
+  }) => void;
+}): Promise<void> {
+  if (!params.sessionKey) {
+    return;
+  }
+  const cfg = loadConfig();
+  const target = resolveGatewaySessionStoreTarget({ cfg, key: params.sessionKey });
+  await updateSessionStore(target.storePath, async (store) => {
+    const entry = store[params.sessionKey!];
+    if (!entry?.planMode || entry.planMode.mode !== "plan") {
+      return { ok: false as const };
+    }
+    const nextPlanMode = {
+      ...entry.planMode,
+      blockingSubagentRunIds: [...(entry.planMode.blockingSubagentRunIds ?? [])],
+    };
+    params.mutate(nextPlanMode);
+    store[params.sessionKey!] = {
+      ...entry,
+      planMode: {
+        ...nextPlanMode,
+        updatedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    };
+    return { ok: true as const };
+  });
+}
+
 export function startPlanSnapshotPersister(params: {
   emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
 }): () => void {
@@ -140,6 +176,10 @@ export function startPlanSnapshotPersister(params: {
         : [];
       const persistedAllowFreetext =
         typeof questionData?.allowFreetext === "boolean" ? questionData.allowFreetext : false;
+      const persistedQuestionId =
+        typeof questionData?.questionId === "string" ? questionData.questionId : undefined;
+      const questionPrompt = typeof questionData?.prompt === "string" ? questionData.prompt : "";
+      const titleText = typeof data.title === "string" ? data.title : "Agent has a question";
       logPlanModeDebug({
         kind: "tool_call",
         sessionKey,
@@ -154,6 +194,9 @@ export function startPlanSnapshotPersister(params: {
       void persistPendingQuestionApprovalId({
         sessionKey,
         approvalId,
+        questionId: persistedQuestionId,
+        title: titleText,
+        prompt: questionPrompt,
         options: persistedOptions,
         allowFreetext: persistedAllowFreetext,
         emitSessionsChanged: params.emitSessionsChanged,
@@ -285,6 +328,18 @@ async function persistApprovalMetadata(params: {
         ...(params.approvalId ? { approvalId: params.approvalId } : {}),
         updatedAt: Date.now(),
       },
+      ...(params.approvalId
+        ? {
+            pendingInteraction: {
+              kind: "plan" as const,
+              approvalId: params.approvalId,
+              title: params.title,
+              createdAt: Date.now(),
+              status: "pending" as const,
+              ...(entry.planMode.cycleId ? { cycleId: entry.planMode.cycleId } : {}),
+            },
+          }
+        : {}),
       updatedAt: Date.now(),
     };
     store[params.sessionKey] = nextEntry;
@@ -313,6 +368,9 @@ async function persistApprovalMetadata(params: {
 async function persistPendingQuestionApprovalId(params: {
   sessionKey: string;
   approvalId: string;
+  questionId?: string;
+  title: string;
+  prompt: string;
   // Codex P2 review #68939 (2026-04-19): also persist options +
   // allowFreetext so the gateway's answer branch can enforce option-
   // membership validation when freetext is disabled.
@@ -327,11 +385,21 @@ async function persistPendingQuestionApprovalId(params: {
     if (!entry) {
       return { ok: false as const };
     }
+    const cycleId = entry.planMode?.cycleId;
     const nextEntry: SessionEntry = {
       ...entry,
-      pendingQuestionApprovalId: params.approvalId,
-      pendingQuestionOptions: params.options,
-      pendingQuestionAllowFreetext: params.allowFreetext,
+      pendingInteraction: {
+        kind: "question",
+        approvalId: params.approvalId,
+        ...(params.questionId ? { questionId: params.questionId } : {}),
+        title: params.title,
+        prompt: params.prompt,
+        options: params.options,
+        allowFreetext: params.allowFreetext,
+        createdAt: Date.now(),
+        status: "pending",
+        ...(cycleId ? { cycleId } : {}),
+      },
       updatedAt: Date.now(),
     };
     store[params.sessionKey] = nextEntry;
@@ -395,7 +463,12 @@ async function persistSnapshot(params: {
     }
     const planMode = existing?.planMode as Record<string, unknown> | undefined;
     const approval = planMode?.approval;
+    const cycleId = typeof planMode?.cycleId === "string" ? planMode.cycleId : undefined;
     const recentlyApprovedAt = existing?.recentlyApprovedAt;
+    const recentlyApprovedCycleId =
+      typeof existing?.recentlyApprovedCycleId === "string"
+        ? existing.recentlyApprovedCycleId
+        : undefined;
     const isRecentlyApproved =
       typeof recentlyApprovedAt === "number" && Date.now() - recentlyApprovedAt < 5 * 60_000;
     // Bug 5 fix: explicit pending guard. Without this, when a prior
@@ -428,7 +501,12 @@ async function persistSnapshot(params: {
     } else if (approval === "approved" || approval === "edited") {
       // Explicit approval signal — close is the right next step.
       allowAutoClose = true;
-    } else if (approval === undefined && isRecentlyApproved) {
+    } else if (
+      approval === undefined &&
+      isRecentlyApproved &&
+      recentlyApprovedCycleId &&
+      !cycleId
+    ) {
       // Post-deletion grace window: planMode is entirely missing
       // (prior close deleted it) but `recentlyApprovedAt` survives
       // at root for the 5-minute window. The runtime emitted a
@@ -487,7 +565,13 @@ async function persistSnapshot(params: {
       const lockedEntry = store[params.sessionKey] as Record<string, unknown> | undefined;
       const lockedPlanMode = lockedEntry?.planMode as Record<string, unknown> | undefined;
       const lockedApproval = lockedPlanMode?.approval;
+      const lockedCycleId =
+        typeof lockedPlanMode?.cycleId === "string" ? lockedPlanMode.cycleId : undefined;
       const lockedRecentlyApprovedAt = lockedEntry?.recentlyApprovedAt;
+      const lockedRecentlyApprovedCycleId =
+        typeof lockedEntry?.recentlyApprovedCycleId === "string"
+          ? lockedEntry.recentlyApprovedCycleId
+          : undefined;
       const lockedIsRecentlyApproved =
         typeof lockedRecentlyApprovedAt === "number" &&
         Date.now() - lockedRecentlyApprovedAt < 5 * 60_000;
@@ -498,7 +582,12 @@ async function persistSnapshot(params: {
         lockedAllowAutoClose = false;
       } else if (lockedApproval === "approved" || lockedApproval === "edited") {
         lockedAllowAutoClose = true;
-      } else if (lockedApproval === undefined && lockedIsRecentlyApproved) {
+      } else if (
+        lockedApproval === undefined &&
+        lockedIsRecentlyApproved &&
+        lockedRecentlyApprovedCycleId &&
+        !lockedCycleId
+      ) {
         lockedAllowAutoClose = true;
       } else {
         lockedAllowAutoClose = false;

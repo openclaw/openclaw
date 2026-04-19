@@ -502,6 +502,11 @@ export type PlanApprovalRequest = {
 
 type PlanApprovalHost = ToolStreamHost & {
   planApprovalRequest: PlanApprovalRequest | null;
+  planApprovalReviseOpen?: boolean;
+  planApprovalReviseDraft?: string;
+  planApprovalQuestionOtherOpen?: boolean;
+  planApprovalQuestionOtherDraft?: string;
+  planApprovalError?: string | null;
   /**
    * Optional auto-open hook — when the runtime emits a fresh plan
    * approval, also pop the full plan into the right sidebar so the
@@ -516,6 +521,35 @@ type PlanApprovalHost = ToolStreamHost & {
    */
   refreshLivePlanSidebar?: (plan: PlanApprovalRequest["plan"], summary?: string) => void;
 };
+
+function setPlanApprovalRequest(host: PlanApprovalHost, next: PlanApprovalRequest | null): void {
+  const previous = host.planApprovalRequest;
+  const previousQuestionId = previous?.question?.questionId;
+  const nextQuestionId = next?.question?.questionId;
+  const changedInteraction =
+    previous?.approvalId !== next?.approvalId ||
+    previousQuestionId !== nextQuestionId ||
+    Boolean(previous?.question) !== Boolean(next?.question);
+  host.planApprovalRequest = next;
+  if (!changedInteraction) {
+    return;
+  }
+  if ("planApprovalReviseOpen" in host) {
+    host.planApprovalReviseOpen = false;
+  }
+  if ("planApprovalReviseDraft" in host) {
+    host.planApprovalReviseDraft = "";
+  }
+  if ("planApprovalQuestionOtherOpen" in host) {
+    host.planApprovalQuestionOtherOpen = false;
+  }
+  if ("planApprovalQuestionOtherDraft" in host) {
+    host.planApprovalQuestionOtherDraft = "";
+  }
+  if ("planApprovalError" in host) {
+    host.planApprovalError = null;
+  }
+}
 
 /**
  * Detect update_plan tool calls in the live tool-event stream and
@@ -750,7 +784,7 @@ function handlePlanApprovalEvent(host: PlanApprovalHost, payload: AgentEventPayl
     ...(references ? { references } : {}),
     ...(question ? { question } : {}),
   };
-  host.planApprovalRequest = next;
+  setPlanApprovalRequest(host, next);
   // Auto-open the full plan in the right sidebar so the user can read
   // it without clicking "Open plan" first. The card itself surfaces
   // Accept/Edit/Reject; the sidebar shows the full markdown.

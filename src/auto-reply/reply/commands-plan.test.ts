@@ -228,6 +228,66 @@ describe("/plan handler — parser dispatch", () => {
     expect(result?.reply?.text).toContain("Usage: /plan revise <feedback>");
   });
 
+  it("/plan answer threads approvalId and questionId from pendingInteraction", async () => {
+    callGatewayMock.mockResolvedValueOnce({});
+    const result = await handlePlanCommand(
+      makeParams({
+        body: "/plan answer Option A",
+        sessionEntry: {
+          planMode: {
+            mode: "plan",
+            approval: "none",
+            rejectionCount: 0,
+            updatedAt: 1,
+          },
+          pendingInteraction: {
+            kind: "question",
+            approvalId: "q-approval-1",
+            questionId: "q-1",
+            title: "Agent has a question",
+            prompt: "Pick one",
+            options: ["Option A", "Option B"],
+            allowFreetext: false,
+            createdAt: 1,
+            status: "pending",
+          },
+        } as unknown as SessionEntry,
+      }),
+      true,
+    );
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock.mock.calls[0][0].params).toMatchObject({
+      key: "agent:main:main",
+      planApproval: {
+        action: "answer",
+        answer: "Option A",
+        approvalId: "q-approval-1",
+        questionId: "q-1",
+      },
+    });
+    expect(result?.shouldContinue).toBe(true);
+  });
+
+  it("/plan answer without a pending question bails with a friendly error", async () => {
+    const result = await handlePlanCommand(
+      makeParams({
+        body: "/plan answer Option A",
+        sessionEntry: {
+          planMode: {
+            mode: "plan",
+            approval: "none",
+            rejectionCount: 0,
+            updatedAt: 1,
+          },
+        } as unknown as SessionEntry,
+      }),
+      true,
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("No pending ask_user_question");
+  });
+
   it("/plan auto with no arg defaults to autoEnabled=true", async () => {
     callGatewayMock.mockResolvedValueOnce({});
     await handlePlanCommand(makeParams({ body: "/plan auto" }), true);
@@ -417,6 +477,28 @@ describe("/plan handler — parser dispatch", () => {
     expect(result?.reply?.text).toContain("Plan was already resolved");
   });
 
+  it("maps the fail-closed subagent gate-unavailable error to a friendly retry message", async () => {
+    callGatewayMock.mockRejectedValueOnce(
+      new Error("PLAN_APPROVAL_GATE_STATE_UNAVAILABLE: gate state unavailable"),
+    );
+    const result = await handlePlanCommand(
+      makeParams({
+        body: "/plan accept",
+        sessionEntry: {
+          planMode: {
+            mode: "plan",
+            approval: "pending",
+            approvalId: "approval-1",
+            rejectionCount: 0,
+            updatedAt: 1,
+          },
+        } as unknown as SessionEntry,
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toContain("Refresh the session");
+  });
+
   it("/plan revise neutralizes @-mention bombs in the feedback echo (deep-dive M8)", async () => {
     callGatewayMock.mockResolvedValueOnce({});
     const result = await handlePlanCommand(
@@ -480,6 +562,38 @@ describe("/plan handler — parser dispatch", () => {
     // to "more step(s)" since we now truncate by step count rather
     // than slicing the rendered string.
     expect(result?.reply?.text).toContain("more step");
+  });
+
+  it("/plan restate truncates a single oversized step in place when dropping steps is impossible", async () => {
+    const result = await handlePlanCommand(
+      makeParams({
+        body: "/plan restate",
+        channel: "telegram",
+        sessionEntry: {
+          planMode: {
+            mode: "plan",
+            approval: "none",
+            rejectionCount: 0,
+            updatedAt: 1,
+            lastPlanSteps: [
+              {
+                step: "A".repeat(5000),
+                status: "pending",
+                activeForm: "B".repeat(500),
+                acceptanceCriteria: ["criterion-1"],
+                verifiedCriteria: ["criterion-1"],
+              },
+            ],
+          },
+        } as unknown as SessionEntry,
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toBeDefined();
+    expect(result!.reply!.text!.length).toBeLessThanOrEqual(4096);
+    expect(result?.reply?.text).toContain("more step");
+    expect(result?.reply?.text).not.toContain("criterion-1");
   });
 
   it("plaintext format applies to extended SMS-like channels (review M4)", async () => {

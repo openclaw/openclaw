@@ -1443,9 +1443,12 @@ export function renderChat(props: ChatProps) {
             </button>
           `
         : nothing}
-      ${props.planApprovalRequest && props.onPlanApprovalDecision
+      ${props.planApprovalRequest &&
+      props.planApprovalRequest.sessionKey === activeSession?.key &&
+      props.onPlanApprovalDecision
         ? renderInlinePlanApproval({
             request: props.planApprovalRequest,
+            connected: props.connected,
             busy: props.planApprovalBusy ?? false,
             error: props.planApprovalError ?? null,
             reviseOpen: props.planApprovalReviseOpen ?? false,
@@ -1473,7 +1476,11 @@ export function renderChat(props: ChatProps) {
               void props.onPlanApprovalDecision!("reject", draft);
             },
             onOpenPlan: () => {
-              if (props.planApprovalRequest && props.onOpenPlanInSidebar) {
+              if (
+                props.planApprovalRequest &&
+                props.planApprovalRequest.sessionKey === activeSession?.key &&
+                props.onOpenPlanInSidebar
+              ) {
                 props.onOpenPlanInSidebar(props.planApprovalRequest);
               }
             },
@@ -1506,7 +1513,9 @@ export function renderChat(props: ChatProps) {
         decision handler isn't wired, leave the input visible so the
         user can still chat.
       -->
-      ${props.planApprovalRequest && props.onPlanApprovalDecision
+      ${props.planApprovalRequest &&
+      props.planApprovalRequest.sessionKey === activeSession?.key &&
+      props.onPlanApprovalDecision
         ? nothing
         : html`
             <!-- Input bar -->

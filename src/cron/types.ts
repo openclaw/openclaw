@@ -115,6 +115,8 @@ export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgen
 
 type CronAgentTurnPayloadFields = {
   message: string;
+  /** Optional plan-mode cycle token for state-aware cron wake-ups. */
+  planCycleId?: string;
   /** Optional model override (provider/model or alias). */
   model?: string;
   /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */

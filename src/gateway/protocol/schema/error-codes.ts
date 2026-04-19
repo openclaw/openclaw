@@ -35,6 +35,16 @@ export const ErrorCodes = {
    * always reject a plan regardless of subagent settle state.
    */
   PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE: "PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE",
+  /**
+   * Returned by `sessions.patch { planApproval: { action: "approve" |
+   * "edit" } }` when the server cannot safely evaluate the approval-
+   * side subagent gate for the current plan cycle because both the
+   * runtime context and the persisted gate snapshot are unavailable.
+   *
+   * This fails closed for modern plan-mode sessions so restart / ctx
+   * cleanup does not silently bypass the gate.
+   */
+  PLAN_APPROVAL_GATE_STATE_UNAVAILABLE: "PLAN_APPROVAL_GATE_STATE_UNAVAILABLE",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

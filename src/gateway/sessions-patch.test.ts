@@ -713,20 +713,58 @@ describe("PR-10 plan auto-mode patch routing", () => {
     expect(planned.planMode?.autoApprove).toBeUndefined();
   });
 
-  test("accepts answer action with valid approvalId; clears pendingQuestionApprovalId", async () => {
-    // Codex P1 review #68939 (2026-04-19): the answer branch now
-    // requires a `pendingQuestionApprovalId` on the SessionEntry +
-    // a matching `approvalId` in the patch. Pre-fix, ANY non-empty
-    // answer text would silently overwrite `pendingAgentInjection`.
+  test("fresh /plan on clears stale approval grace and pending interaction", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: planModeEnabledCfg(),
+        store: {
+          [MAIN_SESSION_KEY]: {
+            sessionId: "sess-1",
+            updatedAt: 1,
+            recentlyApprovedAt: Date.now(),
+            recentlyApprovedCycleId: "old-cycle",
+            pendingInteraction: {
+              kind: "plan",
+              approvalId: "old-approval",
+              title: "Old plan",
+              createdAt: 1,
+              status: "pending",
+              cycleId: "old-cycle",
+            },
+          } as SessionEntry,
+        },
+        patch: { key: MAIN_SESSION_KEY, planMode: "plan" },
+      }),
+    );
+    expect(entry.planMode?.mode).toBe("plan");
+    expect(entry.planMode?.cycleId).toBeTruthy();
+    expect(entry.recentlyApprovedAt).toBeUndefined();
+    expect(entry.recentlyApprovedCycleId).toBeUndefined();
+    expect(entry.pendingInteraction).toBeUndefined();
+  });
+
+  test("accepts answer action with matching pendingInteraction ids", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: {
         planMode: {
           mode: "plan",
           approval: "none",
           rejectionCount: 0,
+          cycleId: "cycle-1",
           updatedAt: 1,
         },
-        pendingQuestionApprovalId: "q-toolcall-123",
+        pendingInteraction: {
+          kind: "question",
+          approvalId: "q-toolcall-123",
+          questionId: "q-123",
+          title: "Agent has a question",
+          prompt: "Pick one",
+          options: ["Option A", "Option B"],
+          allowFreetext: false,
+          createdAt: 1,
+          status: "pending",
+          cycleId: "cycle-1",
+        },
       } as unknown as SessionEntry,
     };
     const entry = expectPatchOk(
@@ -735,7 +773,12 @@ describe("PR-10 plan auto-mode patch routing", () => {
         store,
         patch: {
           key: MAIN_SESSION_KEY,
-          planApproval: { action: "answer", answer: "Option A", approvalId: "q-toolcall-123" },
+          planApproval: {
+            action: "answer",
+            answer: "Option A",
+            approvalId: "q-toolcall-123",
+            questionId: "q-123",
+          },
         },
       }),
     );
@@ -758,10 +801,50 @@ describe("PR-10 plan auto-mode patch routing", () => {
       id: "question-answer-q-toolcall-123",
       text: "[QUESTION_ANSWER]: Option A",
     });
-    // The pending-question marker was cleared (one question, one answer).
+    expect(entry.pendingInteraction).toBeUndefined();
     expect(entry.pendingQuestionApprovalId).toBeUndefined();
     expect(entry.pendingQuestionOptions).toBeUndefined();
     expect(entry.pendingQuestionAllowFreetext).toBeUndefined();
+  });
+
+  test("rejects answer action with questionId mismatch", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        planMode: {
+          mode: "plan",
+          approval: "none",
+          rejectionCount: 0,
+          cycleId: "cycle-1",
+          updatedAt: 1,
+        },
+        pendingInteraction: {
+          kind: "question",
+          approvalId: "q-toolcall-123",
+          questionId: "q-123",
+          title: "Agent has a question",
+          prompt: "Pick one",
+          options: ["Option A", "Option B"],
+          allowFreetext: false,
+          createdAt: 1,
+          status: "pending",
+          cycleId: "cycle-1",
+        },
+      } as unknown as SessionEntry,
+    };
+    const result = await runPatch({
+      cfg: planModeEnabledCfg(),
+      store,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        planApproval: {
+          action: "answer",
+          answer: "Option A",
+          approvalId: "q-toolcall-123",
+          questionId: "q-stale",
+        },
+      },
+    });
+    expectPatchError(result, "questionId mismatch");
   });
 
   test("rejects answer action with no pending question (Codex P1 review #68939)", async () => {

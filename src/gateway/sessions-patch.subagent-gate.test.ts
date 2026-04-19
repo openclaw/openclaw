@@ -35,14 +35,24 @@ function makePendingPlanModeStore(overrides?: Partial<SessionEntry>): Record<str
     [SESSION_KEY]: {
       sessionId: "session-1",
       updatedAt: 1_000,
+      pendingInteraction: {
+        kind: "plan",
+        approvalId: "plan-approval-1",
+        title: "Test plan",
+        createdAt: 1_000,
+        status: "pending",
+        cycleId: "cycle-1",
+      },
       ...overrides,
       planMode: {
         mode: "plan",
         approval: "pending",
+        cycleId: "cycle-1",
         rejectionCount: 0,
         approvalId: "plan-approval-1",
         approvalRunId: APPROVAL_RUN_ID,
         title: "Test plan",
+        blockingSubagentRunIds: [],
         ...overrides?.planMode,
       },
     },
@@ -135,12 +145,14 @@ describe("sessions.patch planApproval — subagent gate (Bug 3)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("approval gate falls through when approvalRunId is not stored (legacy path)", async () => {
-    // No approvalRunId on planMode → gate can't look up subagents → falls
-    // through. Prevents legacy plans (created before Bug 3 wiring landed)
-    // from being permanently un-approvable.
+  it("approval gate still allows legacy sessions without approvalRunId", async () => {
     const store = makePendingPlanModeStore();
     delete (store[SESSION_KEY].planMode as { approvalRunId?: string }).approvalRunId;
+    delete (store[SESSION_KEY].planMode as { cycleId?: string }).cycleId;
+    delete (store[SESSION_KEY].planMode as { blockingSubagentRunIds?: string[] })
+      .blockingSubagentRunIds;
+    delete (store[SESSION_KEY] as { pendingInteraction?: SessionEntry["pendingInteraction"] })
+      .pendingInteraction;
     const result = await applySessionsPatchToStore({
       cfg: PLAN_MODE_CFG,
       store,
@@ -153,19 +165,46 @@ describe("sessions.patch planApproval — subagent gate (Bug 3)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("approval gate falls through when ctx is not registered (run already ended)", async () => {
-    // approvalRunId points to a run whose context was cleaned up — gate
-    // falls through (no ctx → no openSubagentRunIds → can't gate).
+  it("approval gate fails closed when modern session loses both ctx and persisted gate state", async () => {
+    const store = makePendingPlanModeStore();
+    delete (store[SESSION_KEY].planMode as { blockingSubagentRunIds?: string[] })
+      .blockingSubagentRunIds;
     const result = await applySessionsPatchToStore({
       cfg: PLAN_MODE_CFG,
-      store: makePendingPlanModeStore(),
+      store,
       storeKey: SESSION_KEY,
       patch: {
         key: SESSION_KEY,
         planApproval: { action: "approve", approvalId: "plan-approval-1" },
       },
     });
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_GATE_STATE_UNAVAILABLE);
+  });
+
+  it("approval gate uses persisted blocking subagents when ctx is missing", async () => {
+    const store = makePendingPlanModeStore({
+      planMode: {
+        blockingSubagentRunIds: ["child-run-persisted"],
+      } as SessionEntry["planMode"],
+    });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS);
   });
 
   it("error message lists up to 5 subagents + 'and N more' suffix", async () => {

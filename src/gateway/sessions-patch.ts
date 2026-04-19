@@ -122,6 +122,61 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
+function resolvePendingQuestionState(entry: SessionEntry): {
+  approvalId?: string;
+  questionId?: string;
+  prompt?: string;
+  options: string[];
+  allowFreetext: boolean;
+  cycleId?: string;
+  source: "pendingInteraction" | "legacy" | "none";
+} {
+  const pending = entry.pendingInteraction;
+  if (pending?.kind === "question" && pending.status === "pending") {
+    return {
+      approvalId: pending.approvalId,
+      questionId: pending.questionId,
+      prompt: pending.prompt,
+      options: pending.options,
+      allowFreetext: pending.allowFreetext,
+      cycleId: pending.cycleId,
+      source: "pendingInteraction",
+    };
+  }
+  if (typeof entry.pendingQuestionApprovalId === "string" && entry.pendingQuestionApprovalId) {
+    return {
+      approvalId: entry.pendingQuestionApprovalId,
+      options: entry.pendingQuestionOptions ?? [],
+      allowFreetext: entry.pendingQuestionAllowFreetext === true,
+      source: "legacy",
+    };
+  }
+  return { options: [], allowFreetext: false, source: "none" };
+}
+
+function clearPendingQuestionState(entry: SessionEntry): void {
+  delete entry.pendingQuestionApprovalId;
+  delete entry.pendingQuestionOptions;
+  delete entry.pendingQuestionAllowFreetext;
+  if (entry.pendingInteraction?.kind === "question") {
+    delete entry.pendingInteraction;
+  }
+}
+
+function clearResolvedPlanInteraction(entry: SessionEntry, approvalId?: string): void {
+  if (
+    entry.pendingInteraction?.kind === "plan" &&
+    entry.pendingInteraction.status === "pending" &&
+    (!approvalId || entry.pendingInteraction.approvalId === approvalId)
+  ) {
+    delete entry.pendingInteraction;
+  }
+}
+
+function isModernPlanCycleState(entry: SessionEntry): boolean {
+  return typeof entry.planMode?.cycleId === "string" || entry.pendingInteraction !== undefined;
+}
+
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -483,6 +538,11 @@ export async function applySessionsPatchToStore(params: {
       } else {
         delete next.planMode;
       }
+      clearPendingQuestionState(next);
+      clearResolvedPlanInteraction(next);
+      if (next.postApprovalPermissions !== undefined) {
+        next.postApprovalPermissions = undefined;
+      }
     } else if (raw === "plan") {
       if (!planModeEnabled) {
         return invalid(
@@ -528,7 +588,7 @@ export async function applySessionsPatchToStore(params: {
             "  3. Wait for the user's Approve/Edit/Reject decision (arrives as [PLAN_DECISION]: ... in your next turn).",
             "  4. After approval, mutating tools (write, edit, exec, bash) UNLOCK; execute the plan. Use update_plan to mark steps completed.",
             "Hard rules: do NOT post chat after exit_plan_mode in the same turn; wait for ALL spawned subagents BEFORE exit_plan_mode; update_plan does NOT submit (only exit_plan_mode does).",
-            "Full reference: see the bootstrap-injected plan-mode reference card above (state diagram + tag taxonomy + slash commands + debugging tips).",
+            "Full reference: see the bootstrap-injected plan-mode reference card above (state diagram + tag taxonomy + slash commands + debugging tips). Use `plan_mode_status` to inspect live state when debugging.",
           ].join("\n");
           appendToInjectionQueue(next, {
             id: `plan-intro-${storeKey}-${planNow}`,
@@ -540,9 +600,11 @@ export async function applySessionsPatchToStore(params: {
         next.planMode = {
           mode: "plan",
           approval: "none",
+          cycleId: randomUUID(),
           enteredAt: planNow,
           updatedAt: planNow,
           rejectionCount: 0,
+          blockingSubagentRunIds: [],
           ...(carryAutoApprove ? { autoApprove: true } : {}),
         };
         // Clear acceptEdits permission on any new plan-mode cycle.
@@ -552,6 +614,10 @@ export async function applySessionsPatchToStore(params: {
         if (next.postApprovalPermissions !== undefined) {
           next.postApprovalPermissions = undefined;
         }
+        delete next.recentlyApprovedAt;
+        delete next.recentlyApprovedCycleId;
+        clearPendingQuestionState(next);
+        clearResolvedPlanInteraction(next);
       }
     } else if (raw !== undefined) {
       return invalid('invalid planMode (use "plan"|"normal" or null)');
@@ -594,7 +660,13 @@ export async function applySessionsPatchToStore(params: {
       // accepted; mismatched/missing IDs return a friendly error.
       const incomingApprovalId =
         normalizeOptionalString(patch.planApproval.approvalId) || undefined;
-      const pendingQuestionApprovalId = next.pendingQuestionApprovalId;
+      const incomingQuestionId =
+        "questionId" in patch.planApproval
+          ? normalizeOptionalString((patch.planApproval as { questionId?: unknown }).questionId) ||
+            undefined
+          : undefined;
+      const pendingQuestion = resolvePendingQuestionState(next);
+      const pendingQuestionApprovalId = pendingQuestion.approvalId;
       if (!pendingQuestionApprovalId) {
         return invalid(
           'planApproval action="answer" rejected: no pending ask_user_question for this session',
@@ -610,6 +682,18 @@ export async function applySessionsPatchToStore(params: {
           `planApproval action="answer" rejected: approvalId mismatch (a newer or different question is pending)`,
         );
       }
+      if (pendingQuestion.questionId) {
+        if (!incomingQuestionId) {
+          return invalid(
+            'planApproval action="answer" requires `questionId` for the active pending question',
+          );
+        }
+        if (incomingQuestionId !== pendingQuestion.questionId) {
+          return invalid(
+            `planApproval action="answer" rejected: questionId mismatch (a newer or different question is pending)`,
+          );
+        }
+      }
       // Codex P2 review #68939 (2026-04-19): when the agent offered
       // a fixed option set with `allowFreetext: false`, the answer
       // text MUST match one of those options exactly. Pre-fix, a
@@ -618,9 +702,9 @@ export async function applySessionsPatchToStore(params: {
       // agent turn with unintended free-text. The persister stores
       // the original options + allowFreetext alongside the
       // approvalId so we can enforce membership here.
-      const allowFreetext = next.pendingQuestionAllowFreetext === true;
+      const allowFreetext = pendingQuestion.allowFreetext;
       if (!allowFreetext) {
-        const offeredOptions = next.pendingQuestionOptions ?? [];
+        const offeredOptions = pendingQuestion.options;
         if (offeredOptions.length > 0 && !offeredOptions.includes(answer)) {
           return invalid(
             `planApproval action="answer" rejected: answer "${answer}" not in offered options [${offeredOptions
@@ -665,12 +749,7 @@ export async function applySessionsPatchToStore(params: {
         text: `[QUESTION_ANSWER]: ${safeAnswer}`,
         createdAt: now,
       });
-      // Clear the pending-question markers — one question, one
-      // answer. A re-ask requires a fresh `ask_user_question` call
-      // which will re-populate the trio.
-      delete next.pendingQuestionApprovalId;
-      delete next.pendingQuestionOptions;
-      delete next.pendingQuestionAllowFreetext;
+      clearPendingQuestionState(next);
     } else if (action === "auto") {
       // PR-10 auto-mode toggle. Sets the session's autoApprove flag
       // without resolving any specific approval. When enabled, future
@@ -739,64 +818,71 @@ export async function applySessionsPatchToStore(params: {
       // persisted on `planMode.approvalRunId`.
       if (action === "approve" || action === "edit") {
         const approvalRunId = (next.planMode as { approvalRunId?: string }).approvalRunId;
-        if (approvalRunId) {
-          const parentCtx = getAgentRunContext(approvalRunId);
-          const open = parentCtx?.openSubagentRunIds;
-          // Live-test iter-2 Bug C: always-on diagnostic of the gate
-          // decision. Lets operators verify the gate fired without
-          // having the env-gated plan-mode debug log on.
-          planApprovalGateLog.info(
-            `gate decision: action=${action} sessionKey=${storeKey} approvalRunId=${approvalRunId} openSubagents=${open?.size ?? 0} result=${open && open.size > 0 ? "blocked" : "allowed"}`,
+        const parentCtx = approvalRunId ? getAgentRunContext(approvalRunId) : undefined;
+        const persistedOpenIds = Array.isArray(next.planMode.blockingSubagentRunIds)
+          ? next.planMode.blockingSubagentRunIds.filter(
+              (id): id is string => typeof id === "string" && id.length > 0,
+            )
+          : undefined;
+        const combinedOpen = new Set<string>([
+          ...(parentCtx?.openSubagentRunIds ? [...parentCtx.openSubagentRunIds] : []),
+          ...(persistedOpenIds ?? []),
+        ]);
+        const settledAtCandidates = [
+          parentCtx?.lastSubagentSettledAt,
+          next.planMode.lastSubagentSettledAt,
+        ].filter((value): value is number => typeof value === "number");
+        const settledAt =
+          settledAtCandidates.length > 0 ? Math.max(...settledAtCandidates) : undefined;
+        const hasPersistedGateState = Array.isArray(next.planMode.blockingSubagentRunIds);
+        if (isModernPlanCycleState(next) && !parentCtx && !hasPersistedGateState) {
+          return invalid(
+            `Cannot ${action} plan safely: subagent gate state for this plan cycle is unavailable. ` +
+              "Refresh the session or resubmit the plan so approval gating can be re-established.",
+            ErrorCodes.PLAN_APPROVAL_GATE_STATE_UNAVAILABLE,
           );
-          if (open && open.size > 0) {
-            // Live-test iteration 1 Bug 4: also emit the structured
-            // plan-mode debug event so debug tail can correlate UI
-            // toast firings with server gate decisions.
-            logPlanModeDebug({
-              kind: "approval_event",
-              sessionKey: storeKey,
-              action,
-              openSubagentCount: open.size,
-              result: "rejected_by_subagent_gate",
-            });
-            const ids = [...open].slice(0, 5).join(", ");
-            const more = open.size > 5 ? ` and ${open.size - 5} more` : "";
+        }
+        planApprovalGateLog.info(
+          `gate decision: action=${action} sessionKey=${storeKey} approvalRunId=${approvalRunId ?? "(missing)"} openSubagents=${combinedOpen.size} result=${combinedOpen.size > 0 ? "blocked" : "allowed"}`,
+        );
+        if (combinedOpen.size > 0) {
+          logPlanModeDebug({
+            kind: "approval_event",
+            sessionKey: storeKey,
+            action,
+            openSubagentCount: combinedOpen.size,
+            result: "rejected_by_subagent_gate",
+          });
+          const ids = [...combinedOpen].slice(0, 5).join(", ");
+          const more = combinedOpen.size > 5 ? ` and ${combinedOpen.size - 5} more` : "";
+          return invalid(
+            `Cannot ${action} plan: ${combinedOpen.size} subagent(s) you spawned during this ` +
+              `plan-mode cycle are still running (${ids}${more}). Wait for their ` +
+              `results to return before approving so the agent can incorporate them ` +
+              `before executing.`,
+            "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS",
+            { openSubagentRunIds: [...combinedOpen] },
+          );
+        }
+        if (typeof settledAt === "number") {
+          const sinceSettled = Date.now() - settledAt;
+          if (sinceSettled < SUBAGENT_SETTLE_GRACE_MS) {
+            const retryAfterMs = SUBAGENT_SETTLE_GRACE_MS - sinceSettled;
+            const remainSec = Math.ceil(retryAfterMs / 1000);
             return invalid(
-              `Cannot ${action} plan: ${open.size} subagent(s) you spawned during this ` +
-                `plan-mode cycle are still running (${ids}${more}). Wait for their ` +
-                `results to return before approving so the agent can incorporate them ` +
-                `before executing.`,
-              "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS",
-              { openSubagentRunIds: [...open] },
+              `Subagent recently settled. Wait ${remainSec}s for state to stabilize before approving.`,
+              "PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE",
+              { retryAfterMs },
             );
           }
-          // Subagent grace window. Even when no subagents are open,
-          // if the last one settled recently there's a risk that a
-          // parent announce-turn is in flight and will collide with
-          // the approval-resume turn. Only gates approve/edit;
-          // reject is intentionally always allowed (users can
-          // always reject).
-          if (action === "approve" || action === "edit") {
-            const settledAt = parentCtx?.lastSubagentSettledAt;
-            if (typeof settledAt === "number") {
-              const sinceSettled = Date.now() - settledAt;
-              if (sinceSettled < SUBAGENT_SETTLE_GRACE_MS) {
-                const retryAfterMs = SUBAGENT_SETTLE_GRACE_MS - sinceSettled;
-                const remainSec = Math.ceil(retryAfterMs / 1000);
-                return invalid(
-                  `Subagent recently settled. Wait ${remainSec}s for state to stabilize before approving.`,
-                  "PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE",
-                  { retryAfterMs },
-                );
-              }
-            }
-          }
-        } else {
-          // Diagnostic: gate can't fire because approvalRunId wasn't
-          // persisted (Bug 2 wiring failure or legacy session). Log
-          // so we know the gate is silently disabled for this approval.
+        }
+        if (!approvalRunId && !isModernPlanCycleState(next)) {
           planApprovalGateLog.warn(
-            `gate disabled: action=${action} sessionKey=${storeKey} reason=approvalRunId-not-persisted (Bug 2 wiring may be missing for this session — plans submitted before iter-1 fix landed have no approvalRunId)`,
+            `gate disabled: action=${action} sessionKey=${storeKey} reason=approvalRunId-not-persisted`,
+          );
+        } else {
+          planApprovalGateLog.info(
+            `gate state source: action=${action} sessionKey=${storeKey} approvalRunId=${approvalRunId ?? "(missing)"} runtimeCtx=${parentCtx ? "present" : "missing"} persistedState=${hasPersistedGateState ? "present" : "missing"}`,
           );
         }
       }
@@ -844,6 +930,7 @@ export async function applySessionsPatchToStore(params: {
       // runtime consumer.
       if (action === "approve" || action === "edit") {
         next.recentlyApprovedAt = now;
+        next.recentlyApprovedCycleId = next.planMode.cycleId;
         // acceptEdits permission: scoped to this approvalId, cleared
         // on new plan cycle / close-on-complete. Only set on the
         // "edit" action; "approve" explicitly does NOT grant
@@ -905,6 +992,7 @@ export async function applySessionsPatchToStore(params: {
           tag: "[PLAN_DECISION]",
           preview: action === "approve" ? "approved" : "edited",
         });
+        clearResolvedPlanInteraction(next, approvalId);
       } else if (action === "reject") {
         // On reject, agent stays in plan mode and revises.
         const safeFeedback = (feedback ?? "")
@@ -924,6 +1012,7 @@ export async function applySessionsPatchToStore(params: {
           text: rejectText,
           createdAt: now,
         });
+        clearResolvedPlanInteraction(next, rejectApprovalId);
       }
       // Approve / edit transition the mode to "normal" — the approval
       // resolution unlocks mutations. Clear the per-session planMode entry
