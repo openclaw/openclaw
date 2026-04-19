@@ -6,7 +6,7 @@
  * Adapted from chatbot-web's chat-web-socket.ts for Node.js server-side use.
  */
 
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { msgBodyDesensitization } from "../../business/utils/utils.js";
 import { getPluginVersion, getOpenclawVersion, getOperationSystem } from "../../infra/env.js";
@@ -129,7 +129,7 @@ const HEARTBEAT_TIMEOUT_THRESHOLD = 2;
 // --- Helpers ---
 
 function generateMsgId(): string {
-  return uuidv4().replace(/-/g, "");
+  return randomUUID().replace(/-/g, "");
 }
 
 /** Outbound business commands */
@@ -729,7 +729,7 @@ export class YuanbaoWsClient {
    * Fires the onReady callback on auth success.
    */
   private onAuthBindResponse(head: PBConnMsg["head"], data: Uint8Array): void {
-    const rsp = decodePB<PBAuthBindRsp>(PB_MSG_TYPES.AuthBindRsp, data);
+    const rsp = decodePB(PB_MSG_TYPES.AuthBindRsp, data) as PBAuthBindRsp | null;
 
     // Check head.status non-zero (transport layer failure)
     if (head.status && head.status !== 0) {
@@ -776,7 +776,9 @@ export class YuanbaoWsClient {
 
       // Transient server error — reconnect via scheduleReconnect
       if (rsp?.code && AUTH_RETRYABLE_CODES.has(rsp.code)) {
-        this.log.warn?.(`auth retryable error (code=${rsp.code}), reconnecting via scheduleReconnect`);
+        this.log.warn?.(
+          `auth retryable error (code=${rsp.code}), reconnecting via scheduleReconnect`,
+        );
         this.closeCurrentWs();
         this.scheduleReconnect();
         return;
@@ -874,7 +876,7 @@ export class YuanbaoWsClient {
     this.heartbeatTimeoutCount = 0;
     const latency = Date.now() - this.lastHeartbeatAt;
 
-    const rsp = decodePB<PBPingRsp>(PB_MSG_TYPES.PingRsp, data);
+    const rsp = decodePB(PB_MSG_TYPES.PingRsp, data) as PBPingRsp | null;
     if (rsp?.heartInterval && rsp.heartInterval > 1) {
       this.heartbeatIntervalS = rsp.heartInterval;
       this.log.debug(`heartbeat ACK: latency=${latency}ms, next interval=${rsp.heartInterval}s`);
@@ -906,7 +908,7 @@ export class YuanbaoWsClient {
 
     // Kickout handling
     if (head.cmd === CMD.Kickout) {
-      const kickout = decodePB<PBKickoutMsg>(PB_MSG_TYPES.KickoutMsg, data);
+      const kickout = decodePB(PB_MSG_TYPES.KickoutMsg, data) as PBKickoutMsg | null;
       this.log.warn("kicked out", { kickout });
       this.callbacks.onKickout?.({
         status: kickout?.status || 0,
@@ -917,7 +919,7 @@ export class YuanbaoWsClient {
     }
 
     // Try PushMsg first (more precise structure, less likely to false-match)
-    const pushMsg = decodePB<PBPushMsg>(PB_MSG_TYPES.PushMsg, data);
+    const pushMsg = decodePB(PB_MSG_TYPES.PushMsg, data) as PBPushMsg | null;
     if (pushMsg && (pushMsg.cmd || pushMsg.module)) {
       const rawData = pushMsg.data;
       const pushEvent: WsPushEvent = {
@@ -932,7 +934,7 @@ export class YuanbaoWsClient {
     }
 
     // Then try DirectedPush
-    const directed = decodePB<PBDirectedPush>(PB_MSG_TYPES.DirectedPush, data);
+    const directed = decodePB(PB_MSG_TYPES.DirectedPush, data) as PBDirectedPush | null;
     if (directed && (directed.type || directed.content)) {
       const pushEvent: WsPushEvent = {
         type: directed.type,

@@ -136,11 +136,11 @@ export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8A
 /**
  * Decode a business-layer protobuf message.
  */
-export function decodeBizPB<T>(key: string, data: Uint8Array | ArrayBuffer): T | null {
+export function decodeBizPB(key: string, data: Uint8Array | ArrayBuffer): unknown {
   try {
     const buf = data instanceof Uint8Array ? data : new Uint8Array(data);
     const type = getRoot().lookupType(key);
-    return type.decode(buf) as unknown as T;
+    return type.decode(buf);
   } catch {
     // protobuf decode failure is expected (data may not match the message type), silently return null
     return null;
@@ -176,7 +176,9 @@ export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): Record<string
 /**
  * Convert protobuf format message body back to TS MsgBodyElement[].
  */
-export function fromProtoMsgBody(elements: Array<Record<string, unknown>>): YuanbaoMsgBodyElement[] {
+export function fromProtoMsgBody(
+  elements: Array<Record<string, unknown>>,
+): YuanbaoMsgBodyElement[] {
   if (!elements || !Array.isArray(elements)) {
     return [];
   }
@@ -313,7 +315,7 @@ export function encodeSendGroupHeartbeatReq(data: WsSendGroupHeartbeatData): Uin
  * Decode inbound message proto bytes into YuanbaoInboundMessage.
  */
 export function decodeInboundMessage(data: Uint8Array | ArrayBuffer): YuanbaoInboundMessage | null {
-  const decoded = decodeBizPB<PBInboundMessage>(BIZ_MSG_TYPES.InboundMessagePush, data);
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.InboundMessagePush, data) as PBInboundMessage | null;
   if (!decoded) {
     return null;
   }
@@ -363,7 +365,7 @@ export function decodeSendC2CMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSendMessageResponse | null {
-  const decoded = decodeBizPB<PBCodeMessageRsp>(BIZ_MSG_TYPES.SendC2CMessageRsp, data);
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendC2CMessageRsp, data) as PBCodeMessageRsp | null;
   if (!decoded) {
     return null;
   }
@@ -382,7 +384,7 @@ export function decodeSendGroupMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSendMessageResponse | null {
-  const decoded = decodeBizPB<PBCodeMessageRsp>(BIZ_MSG_TYPES.SendGroupMessageRsp, data);
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendGroupMessageRsp, data) as PBCodeMessageRsp | null;
   if (!decoded) {
     return null;
   }
@@ -421,7 +423,7 @@ export function decodeQueryGroupInfoRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsQueryGroupInfoResponse | null {
-  const decoded = decodeBizPB<PBQueryGroupInfoRsp>(BIZ_MSG_TYPES.QueryGroupInfoRsp, data);
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.QueryGroupInfoRsp, data) as PBQueryGroupInfoRsp | null;
   if (!decoded) {
     return null;
   }
@@ -459,7 +461,10 @@ export function decodeGetGroupMemberListRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsGetGroupMemberListResponse | null {
-  const decoded = decodeBizPB<PBGetGroupMemberListRsp>(BIZ_MSG_TYPES.GetGroupMemberListRsp, data);
+  const decoded = decodeBizPB(
+    BIZ_MSG_TYPES.GetGroupMemberListRsp,
+    data,
+  ) as PBGetGroupMemberListRsp | null;
   if (!decoded) {
     return null;
   }
@@ -490,7 +495,7 @@ export function decodeSendPrivateHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsHeartbeatResponse | null {
-  const decoded = decodeBizPB<PBCodeMsgRsp>(BIZ_MSG_TYPES.SendPrivateHeartbeatRsp, data);
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendPrivateHeartbeatRsp, data) as PBCodeMsgRsp | null;
   if (!decoded) {
     return null;
   }
@@ -512,7 +517,7 @@ export function decodeSendGroupHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsHeartbeatResponse | null {
-  const decoded = decodeBizPB<PBCodeMsgRsp>(BIZ_MSG_TYPES.SendGroupHeartbeatRsp, data);
+  const decoded = decodeBizPB(BIZ_MSG_TYPES.SendGroupHeartbeatRsp, data) as PBCodeMsgRsp | null;
   if (!decoded) {
     return null;
   }
@@ -543,7 +548,10 @@ export function decodeSyncInformationRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSyncInformationResponse | null {
-  const decoded = decodeBizPB<PBSyncInformationRsp>(BIZ_MSG_TYPES.SyncInformationRsp, data);
+  const decoded = decodeBizPB(
+    BIZ_MSG_TYPES.SyncInformationRsp,
+    data,
+  ) as PBSyncInformationRsp | null;
   if (!decoded) {
     return null;
   }

@@ -125,7 +125,7 @@ describe("textSimilarity", () => {
         name: "CJK similar texts share tokens",
         left: "今天我们讨论了项目进展",
         right: "今天我们讨论了会议安排",
-        // Shared unigrams: 7; shared bigrams: 6; total shared tokens: 13.
+        // Shared unigrams: 今,天,我,们,讨,论,了 (7) + shared bigrams: 今天,天我,我们,们讨,讨论,论了 (6) = 13 shared
         // Total unique tokens > 13, so similarity > 0 and < 1
         expected: -1, // placeholder — just check > 0
       },

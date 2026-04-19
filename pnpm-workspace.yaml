@@ -7,6 +7,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "@aws-sdk/*"
   - "acpx"
   - "axios"
   - "basic-ftp"

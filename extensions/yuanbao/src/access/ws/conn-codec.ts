@@ -39,10 +39,10 @@ export function encodePB(key: string, value: Record<string, unknown>): Uint8Arra
 /**
  * Decode a protobuf message.
  */
-export function decodePB<T>(key: string, data: Uint8Array | ArrayBuffer): T | null {
+export function decodePB(key: string, data: Uint8Array | ArrayBuffer): unknown {
   try {
     const type = getRoot().lookupType(key);
-    return type.decode(data instanceof Uint8Array ? data : new Uint8Array(data)) as unknown as T;
+    return type.decode(data instanceof Uint8Array ? data : new Uint8Array(data));
   } catch {
     // Decode failure is expected when data doesn't match the message type; silently return null.
     return null;

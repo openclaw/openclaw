@@ -305,6 +305,7 @@ export async function performUpgrade(
   void accountId;
 
   // Only validate version format for specified-version scenario
+  const isTargetVersionSpecified = targetVersion !== undefined;
   if (isTargetVersionSpecified) {
     const requestedVersion = targetVersion;
     if (!isValidVersion(requestedVersion)) {

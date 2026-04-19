@@ -41,8 +41,9 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
  * Extracts alphanumeric tokens, CJK-family characters (unigrams),
  * and consecutive CJK character pairs (bigrams).
  *
- * Bigrams are only created from adjacent characters in the original text, so
- * CJK characters separated by Latin text do not produce a cross-gap bigram.
+ * Bigrams are only created from characters that are adjacent in the
+ * original text, so mixed content like "我喜欢hello你好" will NOT
+ * produce the spurious bigram "欢你".
  */
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
