@@ -1833,7 +1833,9 @@ export async function runEmbeddedAttempt(
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
           messages: activeSession.messages,
-          availableTools: toolsRaw.map((tool) => tool.name),
+          // Use effectiveTools (includes bundled MCP/LSP tools) so plugins
+          // see the complete tool surface when making classification decisions.
+          availableTools: effectiveTools.map((tool) => tool.name),
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
@@ -1877,8 +1879,12 @@ export async function runEmbeddedAttempt(
             const originalLength = effectiveTools.length;
             const allowSet = new Set(hookResult.toolsAllow);
             effectiveTools = effectiveTools.filter((t) => allowSet.has(t.name));
+            // Update the session's active tools so the model actually sees the
+            // narrowed set. Without this, the session retains the full tool list
+            // captured at createAgentSession time and the filtering is a no-op.
+            activeSession.setActiveToolsByName(hookResult.toolsAllow);
             log.debug(
-              `hooks: toolsAllow narrowed tools ${originalLength} → ${effectiveTools.length}`,
+              `hooks: toolsAllow narrowed tools ${originalLength} → ${effectiveTools.length} (session tools updated)`,
             );
           }
         }
