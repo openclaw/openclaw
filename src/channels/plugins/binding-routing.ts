@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
@@ -83,9 +84,29 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
+const BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
+
 export async function ensureConfiguredBindingRouteReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  return await ensureConfiguredBindingTargetReady(params);
+  const readyP = ensureConfiguredBindingTargetReady(params);
+  const token = Symbol("binding-route-ready-timeout");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutP = new Promise<typeof token>((resolve) => {
+    timer = setTimeout(() => resolve(token), BINDING_ROUTE_READY_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    const result = await Promise.race([readyP, timeoutP]);
+    if (result === token) {
+      logVerbose(
+        `acp: ensureConfiguredBindingRouteReady timed out after ${BINDING_ROUTE_READY_TIMEOUT_MS / 1_000}s`,
+      );
+      return { ok: false, error: "Configured ACP binding route ready check timed out" };
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
 }
