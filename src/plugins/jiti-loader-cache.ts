@@ -46,7 +46,12 @@ export function getCachedPluginJitiLoader(params: {
     tryNative,
     aliasMap,
   });
-  const scopedCacheKey = `${params.jitiFilename ?? params.modulePath}::${params.cacheScopeKey ?? cacheKey}`;
+  // Only scope by filename when the caller explicitly provides jitiFilename (an
+  // intentional override). Without it, scope by config content only so plugins
+  // with identical alias maps share one JITI instance and trigger normalizeAliases once.
+  const scopedCacheKey = params.jitiFilename
+    ? `${params.jitiFilename}::${params.cacheScopeKey ?? cacheKey}`
+    : (params.cacheScopeKey ?? cacheKey);
   const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;
