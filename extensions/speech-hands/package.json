@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/speech-hands-provider",
+  "version": "2026.4.19-beta.1",
+  "private": true,
+  "description": "Speech-Hands media-understanding provider — self-reflection ASR that fuses an internal omni-LLM with an external ASR (via a user-hosted inference server).",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

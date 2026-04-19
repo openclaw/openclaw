@@ -1,0 +1,15 @@
+{
+  "id": "speech-hands",
+  "enabledByDefault": false,
+  "providerAuthEnvVars": {
+    "speech-hands": ["SPEECH_HANDS_API_KEY"]
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["speech-hands"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

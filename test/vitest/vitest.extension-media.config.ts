@@ -8,6 +8,7 @@ export default createScopedVitestConfig(
     "fal/**/*.test.ts",
     "image-generation-core/**/*.test.ts",
     "runway/**/*.test.ts",
+    "speech-hands/**/*.test.ts",
     "talk-voice/**/*.test.ts",
     "video-generation-core/**/*.test.ts",
     "vydra/**/*.test.ts",
