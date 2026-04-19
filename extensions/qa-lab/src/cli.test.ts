@@ -188,6 +188,7 @@ describe("qa cli registration", () => {
       primaryModel: undefined,
       alternateModel: undefined,
       fastMode: false,
+      allowFailures: false,
       scenarioIds: [],
       sutAccountId: "sut",
       credentialSource: undefined,

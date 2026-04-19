@@ -121,6 +121,50 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   return Math.floor(value);
 }
 
+function countQaFailedScenarios(
+  scenarios: ReadonlyArray<{
+    status?: string;
+  }>,
+) {
+  let failed = 0;
+  for (const scenario of scenarios) {
+    if (scenario.status === "fail") {
+      failed += 1;
+    }
+  }
+  return failed;
+}
+
+async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(summaryPath, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`QA summary at ${summaryPath} must be a JSON object.`);
+  }
+  const summary = payload as {
+    counts?: {
+      failed?: unknown;
+    };
+    scenarios?: Array<{ status?: string }>;
+  };
+  if (typeof summary.counts?.failed === "number" && Number.isFinite(summary.counts.failed)) {
+    return Math.max(0, Math.floor(summary.counts.failed));
+  }
+  if (Array.isArray(summary.scenarios)) {
+    return countQaFailedScenarios(summary.scenarios);
+  }
+  throw new Error(
+    `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
+  );
+}
+
 function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) {
@@ -329,6 +373,7 @@ export async function runQaSuiteCommand(opts: {
   parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
+  allowFailures?: boolean;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -341,6 +386,7 @@ export async function runQaSuiteCommand(opts: {
     parityPack: opts.parityPack,
     scenarioIds: opts.scenarioIds,
   });
+  const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -367,6 +413,7 @@ export async function runQaSuiteCommand(opts: {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
+      allowFailures: true,
       scenarioIds,
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
@@ -381,6 +428,12 @@ export async function runQaSuiteCommand(opts: {
     process.stdout.write(`QA Multipass summary: ${result.summaryPath}\n`);
     process.stdout.write(`QA Multipass host log: ${result.hostLogPath}\n`);
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
+    if (!allowFailures) {
+      const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
+      if (failedScenarioCount > 0) {
+        process.exitCode = 1;
+      }
+    }
     return;
   }
   const result = await runQaSuiteFromRuntime({
@@ -400,6 +453,9 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+  if (!allowFailures && countQaFailedScenarios(result.scenarios) > 0) {
+    process.exitCode = 1;
+  }
 }
 
 export async function runQaParityReportCommand(opts: {

@@ -84,6 +84,35 @@ export type QaSuiteRunParams = {
   controlUiEnabled?: boolean;
 };
 
+function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return undefined;
+}
+
+function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
+  const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
+  if (override !== undefined) {
+    return override;
+  }
+  return parseQaSuiteBooleanEnv(env.CI) === true;
+}
+
+function writeQaSuiteProgress(enabled: boolean, message: string) {
+  if (!enabled) {
+    return;
+  }
+  process.stderr.write(`[qa-suite] ${message}\n`);
+}
+
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
   if (startLab) {
     return startLab;
@@ -359,6 +388,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     selectedCatalogScenarios.length,
     defaultQaSuiteConcurrencyForTransport(transportId),
   );
+  const progressEnabled = shouldLogQaSuiteProgress();
+  writeQaSuiteProgress(
+    progressEnabled,
+    `run start: scenarios=${selectedCatalogScenarios.length} concurrency=${concurrency} transport=${transportId}`,
+  );
 
   if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
     const ownsLab = !params?.lab;
@@ -396,6 +430,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         selectedCatalogScenarios,
         concurrency,
         async (scenario, index): Promise<QaSuiteScenarioResult> => {
+          writeQaSuiteProgress(
+            progressEnabled,
+            `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+          );
           liveScenarioOutcomes[index] = {
             id: scenario.id,
             name: scenario.title,
@@ -447,6 +485,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               finishedAt: new Date().toISOString(),
             };
             updateScenarioRun();
+            writeQaSuiteProgress(
+              progressEnabled,
+              `scenario ${scenarioResult.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+            );
             return scenarioResult;
           } catch (error) {
             const details = formatErrorMessage(error);
@@ -472,11 +514,16 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               finishedAt: new Date().toISOString(),
             };
             updateScenarioRun();
+            writeQaSuiteProgress(
+              progressEnabled,
+              `scenario fail (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+            );
             return scenarioResult;
           }
         },
       );
       const finishedAt = new Date();
+      const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
       lab.setScenarioRun({
         kind: "suite",
         status: "completed",
@@ -511,6 +558,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         markdown: report,
         generatedAt: finishedAt.toISOString(),
       } satisfies QaLabLatestReport);
+      writeQaSuiteProgress(
+        progressEnabled,
+        `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+      );
       return {
         outputDir,
         reportPath,
@@ -607,6 +658,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     });
 
     for (const [index, scenario] of selectedCatalogScenarios.entries()) {
+      writeQaSuiteProgress(
+        progressEnabled,
+        `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+      );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
         name: scenario.title,
@@ -622,6 +677,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
       const result = await runScenarioDefinition(env, scenario);
       scenarios.push(result);
+      writeQaSuiteProgress(
+        progressEnabled,
+        `scenario ${result.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+      );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
         name: scenario.title,
@@ -640,6 +699,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     }
 
     const finishedAt = new Date();
+    const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     if (scenarios.some((scenario) => scenario.status === "fail")) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
@@ -674,6 +734,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       generatedAt: finishedAt.toISOString(),
     } satisfies QaLabLatestReport;
     lab.setLatestReport(latestReport);
+    writeQaSuiteProgress(
+      progressEnabled,
+      `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+    );
 
     return {
       outputDir,
