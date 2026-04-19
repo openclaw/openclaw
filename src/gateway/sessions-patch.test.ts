@@ -740,13 +740,28 @@ describe("PR-10 plan auto-mode patch routing", () => {
       }),
     );
     // No planMode state change — the runtime injects [QUESTION_ANSWER]
-    // separately via pendingAgentInjection (asserted below).
+    // separately via pendingAgentInjections (asserted below).
     expect(entry.planMode?.mode).toBe("plan");
     expect(entry.planMode?.approval).toBe("none");
-    // The synthetic injection landed.
-    expect(entry.pendingAgentInjection).toBe("[QUESTION_ANSWER]: Option A");
+    // Nuclear-fix-stack integration (cherry-pick of 11d72adf9b): the
+    // answer branch now enqueues into the typed
+    // `pendingAgentInjections` queue (with id-dedup via
+    // `appendToInjectionQueue`) instead of writing the legacy scalar
+    // `pendingAgentInjection`. Assert the queue entry has the right
+    // shape: kind=question_answer, approvalId matches, text carries
+    // the [QUESTION_ANSWER]: marker.
+    const queue = entry.pendingAgentInjections ?? [];
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({
+      kind: "question_answer",
+      approvalId: "q-toolcall-123",
+      id: "question-answer-q-toolcall-123",
+      text: "[QUESTION_ANSWER]: Option A",
+    });
     // The pending-question marker was cleared (one question, one answer).
     expect(entry.pendingQuestionApprovalId).toBeUndefined();
+    expect(entry.pendingQuestionOptions).toBeUndefined();
+    expect(entry.pendingQuestionAllowFreetext).toBeUndefined();
   });
 
   test("rejects answer action with no pending question (Codex P1 review #68939)", async () => {

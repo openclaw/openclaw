@@ -438,7 +438,13 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
+    // PR-9 Tier 1: iteration-budget floor was bumped 32→500 (see
+    // src/agents/pi-embedded-runner/run/helpers.ts:78
+    // MIN_RUN_RETRY_ITERATIONS). Pre-existing test asserted the
+    // pre-bump value; updated to match the new floor. Counted by
+    // running the test and observing the actual cap, since the
+    // failure scenario exhausts to retry_limit either way.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(500);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("retry_limit");
     expect(result.meta.livenessState).toBe("blocked");
