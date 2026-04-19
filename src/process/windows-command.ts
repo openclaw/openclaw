@@ -23,7 +23,9 @@ export function resolveWindowsCommandShim(params: {
 
 function findCmdShimOnPath(name: string, pathEnv: string): string | null {
   for (const dir of pathEnv.split(path.delimiter)) {
-    if (!dir) continue;
+    if (!dir) {
+      continue;
+    }
     const candidate = path.join(dir, name);
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -41,7 +43,9 @@ export function resolveWindowsCmdShimArgv(
     return result;
   }
   const first = result[0];
-  if (!first) return result;
+  if (!first) {
+    return result;
+  }
   const hasSeparator = first.includes("\\") || first.includes("/");
   const ext = normalizeLowercaseStringOrEmpty(path.extname(first));
   let shimPath: string;
@@ -50,12 +54,16 @@ export function resolveWindowsCmdShimArgv(
       shimPath = first;
     } else {
       const resolved = findCmdShimOnPath(first, options?.pathEnv ?? process.env.PATH ?? "");
-      if (!resolved) return result;
+      if (!resolved) {
+        return result;
+      }
       shimPath = resolved;
     }
   } else if (!ext && !hasSeparator) {
     const resolved = findCmdShimOnPath(`${first}.cmd`, options?.pathEnv ?? process.env.PATH ?? "");
-    if (!resolved) return result;
+    if (!resolved) {
+      return result;
+    }
     shimPath = resolved;
   } else {
     return result;

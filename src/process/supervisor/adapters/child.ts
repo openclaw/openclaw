@@ -15,6 +15,17 @@ function resolveCommand(command: string): string {
   });
 }
 
+function resolveEffectivePathEnv(env: NodeJS.ProcessEnv | undefined): string {
+  if (env) {
+    for (const [key, value] of Object.entries(env)) {
+      if (key.toUpperCase() === "PATH" && typeof value === "string") {
+        return value;
+      }
+    }
+  }
+  return process.env.PATH ?? "";
+}
+
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 function isServiceManagedRuntime(): boolean {
@@ -31,7 +42,9 @@ export async function createChildAdapter(params: {
 }): Promise<ChildAdapter> {
   const withResolvedShim = [...params.argv];
   withResolvedShim[0] = resolveCommand(withResolvedShim[0] ?? "");
-  const resolvedArgv = resolveWindowsCmdShimArgv(withResolvedShim);
+  const resolvedArgv = resolveWindowsCmdShimArgv(withResolvedShim, {
+    pathEnv: resolveEffectivePathEnv(params.env),
+  });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
