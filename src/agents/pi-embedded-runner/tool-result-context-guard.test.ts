@@ -69,6 +69,24 @@ function makeToolResultWithDetails(id: string, text: string, detailText: string)
   });
 }
 
+function makeToolResultWithAggregatedDetails(
+  id: string,
+  text: string,
+  aggregated: string,
+): AgentMessage {
+  return castAgentMessage({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    details: {
+      aggregated,
+    },
+    isError: false,
+    timestamp: Date.now(),
+  });
+}
+
 function getToolResultText(msg: AgentMessage): string {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -190,6 +208,18 @@ describe("installToolResultContextGuard", () => {
     expectPiStyleTruncation(newResultText);
     expect(result.details).toBeUndefined();
     expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
+  });
+
+  it("does not count large tool-result details toward preemptive overflow estimation", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("u".repeat(3_000)),
+      makeToolResultWithAggregatedDetails("call_ok", "small output", "d".repeat(80_000)),
+    ];
+
+    const transformed = await applyGuardToContext(agent, contextForNextCall);
+
+    expect(transformed).toBe(contextForNextCall);
   });
 
   it("throws a preemptive overflow when total context still exceeds the high-water mark", async () => {

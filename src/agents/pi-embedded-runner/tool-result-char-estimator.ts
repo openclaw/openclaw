@@ -121,9 +121,7 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (isToolResultMessage(msg)) {
     const content = getToolResultContent(msg);
-    let chars = estimateContentBlockChars(content);
-    const details = (msg as { details?: unknown }).details;
-    chars += estimateUnknownChars(details);
+    const chars = estimateContentBlockChars(content);
     const weightedChars = Math.ceil(
       chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
     );

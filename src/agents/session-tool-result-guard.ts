@@ -10,6 +10,7 @@ import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/tool-re
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
+  truncateToolResultText,
 } from "./pi-embedded-runner/tool-result-truncation.js";
 import {
   getRawSessionAppendMessage,
@@ -24,14 +25,61 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
  * Returns the original message if under the limit, or a new message with
  * truncated text blocks otherwise.
  */
+const TOOL_RESULT_DETAIL_TEXT_FIELDS = ["aggregated", "stdout", "stderr", "output"] as const;
+
+function capToolResultDetails(details: unknown, maxChars: number): unknown {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return details;
+  }
+
+  const detailsRecord = details as Record<string, unknown>;
+  let changedDetails: Record<string, unknown> | null = null;
+
+  for (const field of TOOL_RESULT_DETAIL_TEXT_FIELDS) {
+    const value = detailsRecord[field];
+    if (typeof value !== "string" || value.length <= maxChars) {
+      continue;
+    }
+
+    const nextText = truncateToolResultText(value, maxChars, {
+      suffix: (truncatedChars) => formatContextLimitTruncationNotice(truncatedChars),
+      minKeepChars: 0,
+    });
+
+    if (!changedDetails) {
+      changedDetails = { ...detailsRecord };
+    }
+    changedDetails[field] = nextText;
+  }
+
+  return changedDetails ?? details;
+}
+
 function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
   if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  return truncateToolResultMessage(msg, maxChars, {
+
+  const truncated = truncateToolResultMessage(msg, maxChars, {
     suffix: (truncatedChars) => formatContextLimitTruncationNotice(truncatedChars),
     minKeepChars: 2_000,
   });
+  const cappedDetails = capToolResultDetails(
+    (truncated as { details?: unknown }).details,
+    maxChars,
+  );
+
+  if (truncated === msg && cappedDetails === (truncated as { details?: unknown }).details) {
+    return msg;
+  }
+  if (cappedDetails === (truncated as { details?: unknown }).details) {
+    return truncated;
+  }
+
+  return {
+    ...(truncated as unknown as Record<string, unknown>),
+    details: cappedDetails,
+  } as AgentMessage;
 }
 
 function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
