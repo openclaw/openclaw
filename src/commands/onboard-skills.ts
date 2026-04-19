@@ -108,8 +108,9 @@ export async function setupSkills(
       .map((name) => installable.find((s) => s.name === name))
       .filter((item): item is (typeof installable)[number] => Boolean(item));
 
+    const supportsBrewInstallPrompt = process.platform === "darwin" || process.platform === "linux";
     const needsBrewPrompt =
-      process.platform !== "win32" &&
+      supportsBrewInstallPrompt &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
       !(await detectBinary("brew"));
 
