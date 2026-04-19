@@ -50,11 +50,11 @@ describe("detached-task-runtime", () => {
     const fakeRuntime = {
       createQueuedTaskRun: vi.fn(() => queuedTask),
       createRunningTaskRun: vi.fn(() => runningTask),
-      startTaskRunByRunId: vi.fn(() => undefined),
-      recordTaskRunProgressByRunId: vi.fn(() => undefined),
-      completeTaskRunByRunId: vi.fn(() => undefined),
-      failTaskRunByRunId: vi.fn(() => undefined),
-      setDetachedTaskDeliveryStatusByRunId: vi.fn(() => undefined),
+      startTaskRunByRunId: vi.fn(() => []),
+      recordTaskRunProgressByRunId: vi.fn(() => []),
+      completeTaskRunByRunId: vi.fn(() => []),
+      failTaskRunByRunId: vi.fn(() => []),
+      setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
     };
 
     setDetachedTaskLifecycleRuntime(fakeRuntime);
