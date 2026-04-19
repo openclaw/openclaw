@@ -7,8 +7,6 @@ import {
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -18,6 +16,12 @@ import {
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
+
+// Local generic wrapper to defer union resolution. Works around a single-file-mode limitation
+// in the type-aware lint where imported plugin-sdk barrel types are treated as `error` and trip
+// `no-redundant-type-constituents` on otherwise-valid unions.
+type Maybe<T> = T | undefined;
+type ApprovalRequest = Parameters<typeof resolveApprovalRequestChannelAccountId>[0]["request"];
 
 function normalizeApproverId(value: string | number): string {
   return normalizeOptionalString(String(value)) ?? "";
@@ -35,7 +39,7 @@ function normalizeTelegramDirectApproverId(value: string | number): string | und
 export function resolveTelegramExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): TelegramExecApprovalConfig | undefined {
+}): Maybe<ReturnType<typeof resolveTelegramAccount>["config"]["execApprovals"]> {
   const account = resolveTelegramAccount(params);
   const config = account.config.execApprovals;
   if (!config) {
@@ -80,7 +84,7 @@ export function isTelegramExecApprovalTargetRecipient(params: {
 
 function countTelegramExecApprovalEligibleAccounts(params: {
   cfg: OpenClawConfig;
-  request: ExecApprovalRequest | PluginApprovalRequest;
+  request: ApprovalRequest;
 }): number {
   return listTelegramAccountIds(params.cfg).filter((accountId) => {
     const account = resolveTelegramAccount({ cfg: params.cfg, accountId });
@@ -109,7 +113,7 @@ function countTelegramExecApprovalEligibleAccounts(params: {
 function matchesTelegramRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  request: ExecApprovalRequest | PluginApprovalRequest;
+  request: ApprovalRequest;
 }): boolean {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(
     params.request.request.turnSourceChannel,
@@ -146,8 +150,9 @@ const telegramExecApprovalProfile = createChannelExecApprovalProfile({
 
 export const isTelegramExecApprovalClientEnabled = telegramExecApprovalProfile.isClientEnabled;
 export const isTelegramExecApprovalApprover = telegramExecApprovalProfile.isApprover;
-export const isTelegramExecApprovalAuthorizedSender =
-  telegramExecApprovalProfile.isAuthorizedSender;
+// Exec forwarding targets control delivery only; resolving approvals still requires an
+// explicit Telegram approver so notification recipients do not gain approval authority.
+export const isTelegramExecApprovalAuthorizedSender = telegramExecApprovalProfile.isApprover;
 export const resolveTelegramExecApprovalTarget = telegramExecApprovalProfile.resolveTarget;
 export const shouldHandleTelegramExecApprovalRequest =
   telegramExecApprovalProfile.shouldHandleRequest;

@@ -548,7 +548,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-error");
   });
 
-  it("allows exec approval callbacks from target-only Telegram recipients", async () => {
+  it("blocks exec approval callbacks from target-only Telegram recipients", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -591,32 +591,18 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        approvals: expect.objectContaining({
-          exec: expect.objectContaining({
-            enabled: true,
-            mode: "targets",
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: false,
-      senderId: "9",
-    });
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
 
-  it("keeps legacy plugin fallback approval failures retryable for target-only recipients", async () => {
+  it("blocks legacy plugin fallback approval attempts from target-only recipients", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
     resolveExecApprovalSpy.mockClear();
     replySpy.mockClear();
     sendMessageSpy.mockClear();
-    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("unknown or expired approval id"));
 
     loadConfig.mockReturnValue({
       approvals: {
@@ -639,38 +625,23 @@ describe("createTelegramBot", () => {
     ) => Promise<void>;
     expect(callbackHandler).toBeDefined();
 
-    await expect(
-      callbackHandler({
-        callbackQuery: {
-          id: "cbq-legacy-plugin-fallback-blocked",
-          data: "/approve 138e9b8c allow-once",
-          from: { id: 9, first_name: "Ada", username: "ada_bot" },
-          message: {
-            chat: { id: 1234, type: "private" },
-            date: 1736380800,
-            message_id: 25,
-            text: "Legacy plugin approval required.",
-          },
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-legacy-plugin-fallback-blocked",
+        data: "/approve 138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+          text: "Legacy plugin approval required.",
         },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      }),
-    ).rejects.toThrow("unknown or expired approval id");
-
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        approvals: expect.objectContaining({
-          exec: expect.objectContaining({
-            enabled: true,
-            mode: "targets",
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: false,
-      senderId: "9",
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
+
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();

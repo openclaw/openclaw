@@ -9,7 +9,6 @@ import {
   createChannelNativeOriginTargetResolver,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,16 +17,14 @@ import { listTelegramAccountIds } from "./accounts.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
-  isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
-  isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = Parameters<typeof shouldHandleTelegramExecApprovalRequest>[0]["request"];
 type TelegramOriginTarget = { to: string; threadId?: number };
 
 function resolveTurnSourceTelegramOriginTarget(
@@ -102,7 +99,7 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
   hasApprovers: ({ cfg, accountId }) =>
     getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
   isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
+    isTelegramExecApprovalApprover({ cfg, accountId, senderId }),
   isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
     isTelegramExecApprovalApprover({ cfg, accountId, senderId }),
   isNativeDeliveryEnabled: ({ cfg, accountId }) =>
@@ -140,20 +137,11 @@ const resolveTelegramApproveCommandBehavior: NonNullable<
 > = (
   params: Parameters<NonNullable<ChannelApprovalCapability["resolveApproveCommandBehavior"]>>[0],
 ) => {
-  const { cfg, accountId, senderId, approvalKind } = params;
+  const { cfg, accountId, approvalKind } = params;
   if (approvalKind !== "exec") {
     return undefined;
   }
   if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-    return undefined;
-  }
-  if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
-    return undefined;
-  }
-  if (
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
-    !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
-  ) {
     return undefined;
   }
   return {

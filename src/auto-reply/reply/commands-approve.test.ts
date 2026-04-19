@@ -215,33 +215,6 @@ function getTelegramExecApprovalApprovers(params: {
   });
 }
 
-function isTelegramExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
-  senderId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  const senderId = params.senderId?.trim();
-  const execApprovals = params.cfg.approvals?.exec;
-  if (
-    !senderId ||
-    execApprovals?.enabled !== true ||
-    (execApprovals.mode !== "targets" && execApprovals.mode !== "both")
-  ) {
-    return false;
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  return (execApprovals.targets ?? []).some((target) => {
-    if (target.channel?.trim().toLowerCase() !== "telegram") {
-      return false;
-    }
-    if (accountId && target.accountId && normalizeAccountId(target.accountId) !== accountId) {
-      return false;
-    }
-    const to = target.to ? normalizeTelegramDirectApproverId(target.to) : undefined;
-    return Boolean(to && to === senderId);
-  });
-}
-
 function isTelegramExecApprovalAuthorizedSender(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -251,10 +224,7 @@ function isTelegramExecApprovalAuthorizedSender(params: {
   if (!senderId) {
     return false;
   }
-  return (
-    getTelegramExecApprovalApprovers(params).includes(senderId) ||
-    isTelegramExecApprovalTargetRecipient(params)
-  );
+  return getTelegramExecApprovalApprovers(params).includes(senderId);
 }
 
 function isTelegramExecApprovalClientEnabled(params: {
@@ -317,20 +287,11 @@ const telegramApproveTestPlugin: ChannelPlugin = {
   approvalCapability: {
     authorizeActorAction: telegramNativeApprovalAdapter.auth.authorizeActorAction,
     getActionAvailabilityState: telegramNativeApprovalAdapter.auth.getActionAvailabilityState,
-    resolveApproveCommandBehavior: ({ cfg, accountId, senderId, approvalKind }) => {
+    resolveApproveCommandBehavior: ({ cfg, accountId, approvalKind }) => {
       if (approvalKind !== "exec") {
         return undefined;
       }
       if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-        return undefined;
-      }
-      if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
-        return undefined;
-      }
-      if (
-        isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
-        !getTelegramExecApprovalApprovers({ cfg, accountId }).includes(senderId?.trim() ?? "")
-      ) {
         return undefined;
       }
       return {
@@ -700,7 +661,7 @@ describe("handleApproveCommand", () => {
     );
   });
 
-  it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {
+  it("rejects Telegram /approve from exec target recipients when native approvals are disabled", async () => {
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
       {
@@ -729,13 +690,8 @@ describe("handleApproveCommand", () => {
 
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expect(result?.reply?.text).toContain("Telegram exec approvals are not enabled");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {

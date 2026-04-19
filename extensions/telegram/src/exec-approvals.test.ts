@@ -472,7 +472,7 @@ describe("telegram exec approvals", () => {
       expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
     });
 
-    it("accepts active forwarded DM targets", () => {
+    it("rejects active forwarded DM targets that are not explicit approvers", () => {
       const cfg = {
         channels: { telegram: { botToken: "tok" } },
         approvals: {
@@ -483,7 +483,7 @@ describe("telegram exec approvals", () => {
           },
         },
       } as OpenClawConfig;
-      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "12345" })).toBe(true);
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "12345" })).toBe(false);
     });
   });
 });
