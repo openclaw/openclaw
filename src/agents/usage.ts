@@ -28,6 +28,8 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
+  // MiniMax uses prompt_cache_hit_tokens for cache read count.
+  prompt_cache_hit_tokens?: number;
 };
 
 export type NormalizedUsage = {
@@ -88,6 +90,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
+      raw.prompt_cache_hit_tokens ??
       raw.cached_tokens ??
       raw.input_tokens_details?.cached_tokens ??
       raw.prompt_tokens_details?.cached_tokens,
@@ -99,7 +102,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const usesOpenAIStylePromptTotals =
     raw.cached_tokens !== undefined ||
     raw.input_tokens_details?.cached_tokens !== undefined ||
-    raw.prompt_tokens_details?.cached_tokens !== undefined;
+    raw.prompt_tokens_details?.cached_tokens !== undefined ||
+    raw.prompt_cache_hit_tokens !== undefined;
 
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
