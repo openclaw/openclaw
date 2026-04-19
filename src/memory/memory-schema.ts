@@ -88,7 +88,7 @@ function ensureColumn(
   column: string,
   definition: string,
 ): void {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  const rows = (db.prepare(`PRAGMA table_info(${table})`).all() ?? []) as Array<{ name: string }>;
   if (rows.some((row) => row.name === column)) {
     return;
   }
