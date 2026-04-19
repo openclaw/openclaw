@@ -27,6 +27,8 @@ export function taskStatusToMinionStatus(status: TaskStatus): MinionJobStatus {
       return "cancelled";
     case "lost":
       return "dead";
+    default:
+      return "waiting";
   }
 }
 
@@ -54,6 +56,8 @@ export function minionStatusToTaskStatus(status: MinionJobStatus): TaskStatus {
       return "running";
     case "cancelling":
       return "running";
+    default:
+      return "queued";
   }
 }
 

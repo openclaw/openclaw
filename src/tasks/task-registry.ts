@@ -230,7 +230,7 @@ function persistTaskUpsert(task: TaskRecord) {
       deliveryStates: taskDeliveryStates,
     });
   }
-  syncTaskToMinions(task);
+  void syncTaskToMinions(task);
 }
 
 function persistTaskDelete(taskId: string) {
@@ -245,7 +245,7 @@ function persistTaskDelete(taskId: string) {
       deliveryStates: taskDeliveryStates,
     });
   }
-  syncTaskDeleteToMinions(taskId);
+  void syncTaskDeleteToMinions(taskId);
 }
 
 function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {

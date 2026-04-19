@@ -115,7 +115,10 @@ describe("Bench: Durability (SIGKILL rescue)", () => {
 
     const startP = worker.start();
     const deadline = Date.now() + 10000;
-    while (Date.now() < deadline && completed < N) {
+    while (Date.now() < deadline) {
+      if (completed >= N) {
+        break;
+      }
       await sleep(50);
     }
 
@@ -566,8 +569,6 @@ describe("Bench: Autopilot multi-task (lint + backlinks + embed)", () => {
     for (const task of taskNames) {
       queue.add(task, { parentTask: task }, { parentJobId: parent.id });
     }
-
-    const results: Record<string, unknown> = {};
 
     const worker = new MinionWorker(store, {
       concurrency: 3,

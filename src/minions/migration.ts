@@ -2,8 +2,6 @@ import { existsSync, renameSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveTaskRegistrySqlitePath } from "../tasks/task-registry.paths.js";
-import { taskStatusToMinionStatus } from "../tasks/task-status-minion-map.js";
-import type { TaskStatus } from "../tasks/task-registry.types.js";
 import { MinionStore } from "./store.js";
 
 export type MigrationResult = {

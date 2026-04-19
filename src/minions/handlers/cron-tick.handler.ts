@@ -7,7 +7,7 @@ export const cronTickHandler: MinionHandler = async (job: MinionJobContext) => {
     throw new UnrecoverableError("cron.tick handler requires cronId in job.data");
   }
 
-  // TODO(minions): Wire to actual cron tick execution.
+  // Stub: wire to actual cron tick execution.
   return {
     cronId,
     expression,

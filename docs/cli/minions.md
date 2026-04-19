@@ -21,6 +21,7 @@ openclaw minions list --name subagent.spawn --limit 50
 ```
 
 Options:
+
 - `--status <status>` — Filter: waiting, active, completed, failed, dead, cancelled
 - `--queue <queue>` — Filter by queue name (default: "default")
 - `--name <name>` — Filter by job name

@@ -244,7 +244,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
-async function runMinionsMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+async function runMinionsMigrationHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
   try {
     const store = MinionStore.openDefault();
     const result = migrateLegacyTasks(store);

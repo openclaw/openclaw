@@ -7,7 +7,7 @@ export const acpSpawnHandler: MinionHandler = async (job: MinionJobContext) => {
     throw new UnrecoverableError("acp.spawn handler requires sessionKey in job.data");
   }
 
-  // TODO(minions): Wire to actual ACP spawn internals.
+  // Stub: wire to actual ACP spawn internals.
   return {
     sessionKey,
     status: "stub",

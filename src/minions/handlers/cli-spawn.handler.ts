@@ -7,7 +7,7 @@ export const cliSpawnHandler: MinionHandler = async (job: MinionJobContext) => {
     throw new UnrecoverableError("cli.spawn handler requires runId in job.data");
   }
 
-  // TODO(minions): Wire to actual CLI runner spawn internals.
+  // Stub: wire to actual CLI runner spawn internals.
   return {
     runId,
     status: "stub",

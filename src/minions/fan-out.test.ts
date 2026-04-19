@@ -75,7 +75,7 @@ describe("submitFanOut", () => {
       { name: "task", data: { idx: 1 } },
     ]);
 
-    for (const child of result.children) {
+    for (const _child of result.children) {
       const claimed = queue.claim("tok", 30000, "default", ["task"])!;
       queue.completeJob(claimed.id, "tok", claimed.attemptsMade, { done: true });
     }
