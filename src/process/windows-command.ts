@@ -22,10 +22,8 @@ export function resolveWindowsCommandShim(params: {
 }
 
 export function resolveWindowsPathEnv(env: NodeJS.ProcessEnv | undefined): string {
-  if (env === undefined) {
-    return process.env.PATH ?? "";
-  }
-  for (const [key, value] of Object.entries(env)) {
+  const source = env ?? process.env;
+  for (const [key, value] of Object.entries(source)) {
     if (key.toUpperCase() === "PATH" && typeof value === "string") {
       return value;
     }
