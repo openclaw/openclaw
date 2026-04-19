@@ -369,4 +369,37 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
   });
+
+  test("documents operatorTransportMismatch bypass for Tailscale operator connections", () => {
+    // The operatorTransportMismatch guard in message-handler.ts returns early
+    // (before scope clearing and decision checks) when role=operator, authOk=true,
+    // authMethod is tailscale/trusted-proxy, sharedAuthOk=false, and no device.
+    // This allows Tailscale operators to connect with preserved scopes despite
+    // evaluateMissingDeviceIdentity returning reject-device-required.
+    const nonControlUi = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: undefined,
+      deviceRaw: null,
+    });
+
+    // evaluateMissingDeviceIdentity returns reject-device-required for this case
+    // (operator + no device + sharedAuthOk=false + tailscale auth).
+    // The operatorTransportMismatch guard overrides this to allow.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: false,
+        controlUiAuthPolicy: nonControlUi,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-device-required");
+
+    // With operatorTransportMismatch=true, the caller returns early before
+    // reaching this decision check, preserving scopes and allowing the connection.
+  });
 });

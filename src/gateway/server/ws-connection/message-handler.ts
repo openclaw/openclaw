@@ -602,6 +602,22 @@ export function attachGatewayWsMessageHandler(params: {
           // Shared token/password auth can bypass pairing for trusted operators.
           // Device-less clients only keep self-declared scopes on the explicit
           // allow path, including trusted token-authenticated backend operators.
+          // Operators authenticated via Tailscale or trusted-proxy can have
+          // sharedAuthOk=false because the shared auth probe disables these
+          // transport-specific methods (allowTailscale=false). This causes
+          // evaluateMissingDeviceIdentity to return reject-device-required
+          // and scopes to be cleared — even though the operator's identity
+          // was verified through an encrypted transport. Override the decision
+          // to "allow" for this specific mismatch so the connection proceeds
+          // with preserved scopes. Fixes #51396, #57331, #46997, #48229.
+          const operatorTransportMismatch =
+            role === "operator" &&
+            authOk &&
+            (authMethod === "tailscale" || authMethod === "trusted-proxy") &&
+            !sharedAuthOk;
+          if (operatorTransportMismatch && !device) {
+            return true;
+          }
           if (
             !device &&
             shouldClearUnboundScopesForMissingDeviceIdentity({
