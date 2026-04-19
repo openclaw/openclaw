@@ -13,6 +13,7 @@ import {
   projectOutboundPayloadPlanForJson,
   projectOutboundPayloadPlanForMirror,
   projectOutboundPayloadPlanForOutbound,
+  summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
 import { registerPendingSpawnedChildrenQuery } from "./pending-spawn-query.js";
 
@@ -684,5 +685,48 @@ describe("formatOutboundPayloadLog", () => {
         mediaUrls: [...input.mediaUrls],
       }),
     ).toBe(expected);
+  });
+});
+
+describe("summarizeOutboundPayloadForTransport", () => {
+  it("returns the rendered text and no hookContent when the payload has visible text", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      text: "hello",
+      spokenText: "fallback",
+    });
+    expect(summary.text).toBe("hello");
+    expect(summary.hookContent).toBeUndefined();
+  });
+
+  it("keeps summary.text empty for audio-only payloads and exposes spokenText only via hookContent", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      spokenText: "Hi Ivy! 早上好。",
+    });
+    // summary.text must stay empty so channel delivery (captions) never picks up the transcript.
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBe("Hi Ivy! 早上好。");
+    expect(summary.audioAsVoice).toBe(true);
+    expect(summary.mediaUrls).toEqual(["/tmp/reply.opus"]);
+  });
+
+  it("leaves text and hookContent unset when neither visible text nor spokenText is present", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+    });
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBeUndefined();
+  });
+
+  it("ignores whitespace-only spokenText", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      spokenText: "   ",
+    });
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBeUndefined();
   });
 });

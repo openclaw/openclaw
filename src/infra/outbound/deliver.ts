@@ -590,7 +590,7 @@ async function applyMessageSendingHook(params: {
     const sendingResult = await params.hookRunner!.runMessageSending(
       {
         to: params.to,
-        content: params.payloadSummary.text,
+        content: params.payloadSummary.hookContent ?? params.payloadSummary.text,
         replyToId: params.payload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
         metadata: {
@@ -629,6 +629,7 @@ async function applyMessageSendingHook(params: {
       payloadSummary: {
         ...params.payloadSummary,
         text: sendingResult.content,
+        hookContent: undefined,
       },
     };
   } catch {
@@ -891,7 +892,7 @@ async function deliverOutboundPayloadsCore(
         });
         emitMessageSent({
           success: true,
-          content: payloadSummary.text,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId: delivery.messageId,
         });
         continue;
@@ -914,7 +915,7 @@ async function deliverOutboundPayloadsCore(
         });
         emitMessageSent({
           success: results.length > beforeCount,
-          content: payloadSummary.text,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
         continue;
@@ -948,7 +949,7 @@ async function deliverOutboundPayloadsCore(
         });
         emitMessageSent({
           success: results.length > beforeCount,
-          content: payloadSummary.text,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
         continue;
@@ -986,13 +987,13 @@ async function deliverOutboundPayloadsCore(
       });
       emitMessageSent({
         success: true,
-        content: payloadSummary.text,
+        content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });
     } catch (err) {
       emitMessageSent({
         success: false,
-        content: payloadSummary.text,
+        content: payloadSummary.hookContent ?? payloadSummary.text,
         error: formatErrorMessage(err),
       });
       if (!params.bestEffort) {

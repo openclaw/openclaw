@@ -27,6 +27,11 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Original text that was synthesized into this media (TTS audio). Surfaced to
+   *  hook consumers (conversation archive, analytics) as the message content when
+   *  the payload has no visible text, so voice replies preserve a searchable
+   *  transcript. Never rendered to the channel. */
+  spokenText?: string;
   isError?: boolean;
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */

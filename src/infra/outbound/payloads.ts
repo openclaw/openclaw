@@ -31,6 +31,10 @@ export type NormalizedOutboundPayload = {
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  /** Text to surface to hook consumers (e.g. conversation archive) when the
+   *  rendered payload has no visible text — populated from ReplyPayload.spokenText.
+   *  MUST NOT be used for channel delivery (captions, message bodies). */
+  hookContent?: string;
 };
 
 export type OutboundPayloadJson = {
@@ -333,6 +337,11 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
+  // Keep summary.text strictly the rendered text so channel delivery paths
+  // (captions, message bodies) never surface the spokenText transcript.
+  // Hook emitters read payloadSummary.hookContent to pick up the transcript
+  // for audio-only payloads.
+  const trimmedSpoken = payload.spokenText?.trim() ? payload.spokenText : undefined;
   return {
     text: parts.text,
     mediaUrls: parts.mediaUrls,
@@ -341,6 +350,7 @@ export function summarizeOutboundPayloadForTransport(
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
+    ...(parts.text || !trimmedSpoken ? {} : { hookContent: trimmedSpoken }),
   };
 }
 
