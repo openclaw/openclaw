@@ -36,6 +36,7 @@ import {
   assertVisibleInThread,
   cleanupBinding,
   followUpInBoundThread,
+  installHarnessIsolation,
   isDiscordE2EEnabled,
   nudgeBoundSession,
   readMessagesInThread,
@@ -147,6 +148,37 @@ async function connectGatewayClient(params: {
  * config/state dir, starts a local gateway, and returns the pieces needed to
  * spawn children and clean up. Extracted so red-team scenarios do not
  * duplicate the 90-line boilerplate from the smoke test.
+ *
+ * ---------------------------------------------------------------------------
+ * OPS PREREQUISITES (Task 5 — James-owned, NOT touched by the harness code)
+ * ---------------------------------------------------------------------------
+ * Required before any live run:
+ *   - `OPENCLAW_LIVE_DISCORD=1`
+ *   - `OPENCLAW_LIVE_DISCORD_BOT_TOKEN=<test-bot-token>` (distinct from
+ *     production `DISCORD_BOT_TOKEN`)
+ *   - `OPENCLAW_LIVE_DISCORD_GUILD_ID=<guild-id>`
+ *   - `OPENCLAW_LIVE_DISCORD_PARENT_CHANNEL_ID=<channel-id>`
+ *   - The test bot invited to the test channel with the usual permissions
+ *     (send messages, create public threads, manage webhooks)
+ *
+ * Optional prerequisites for advanced / multi-run scenarios:
+ *   - A SEPARATE test guild where the production bot is NOT a member. This
+ *     eliminates dual-gateway `MessageCreate` races that otherwise surface as
+ *     silent no-ops on the spawned child.
+ *   - `channels.discord.accounts.main.allowBots: true` in
+ *     `~/.openclaw/openclaw.json` IF you want the production harness to
+ *     accept bot-authored prompts from a second account.
+ *   - Temporarily pausing the production Discord account (the `richardbots`
+ *     account on the shared guild) for the duration of a live run.
+ *
+ * All three optional items are ops-only decisions for James. This harness
+ * code performs only in-process isolation (temp HOME, sane CWD, auth copy,
+ * `OPENCLAW_STATE_DIR` redirect). It does NOT change guild membership, pause
+ * production accounts, or mutate `~/.openclaw/openclaw.json`. Source of
+ * this scoping rule: Task 5 Step 4 in
+ * `docs/superpowers/plans/2026-04-18-discord-surface-overhaul-master-handoff.md`
+ * and `~/repos/shared-memory/main/lesson-e2e-harness-isolation-gap-2026-04-18.md`.
+ * ---------------------------------------------------------------------------
  */
 async function withLiveHarness<T>(
   fn: (ctx: {
@@ -154,6 +186,7 @@ async function withLiveHarness<T>(
     liveEnv: ReturnType<typeof resolveDiscordE2EEnv>;
     port: number;
     token: string;
+    agentCwd: string;
   }) => Promise<T>,
 ): Promise<T> {
   const previous = {
@@ -170,6 +203,11 @@ async function withLiveHarness<T>(
   const port = await getFreeGatewayPort();
   const token = `test-${randomUUID()}`;
 
+  // HOME isolation + auth copy + sane ACP child CWD. See the helper's
+  // docstring for the failure mode this closes ("child no-ops because
+  // HOME/CWD/auth differ from production").
+  const isolation = installHarnessIsolation({ tempRoot });
+
   clearRuntimeConfigSnapshot();
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
   process.env.OPENCLAW_GATEWAY_TOKEN = token;
@@ -185,6 +223,19 @@ async function withLiveHarness<T>(
       mode: "local",
       bind: "loopback",
       port,
+    },
+    // Point every spawned ACP agent at the repo root (or the prepared
+    // fallback workspace) so Claude Code / Codex CLI land in a CWD that
+    // actually has `package.json` + `CLAUDE.md` / source files to anchor
+    // against. Without this the child silently no-ops and the assistant
+    // reply never reaches the thread — the exact failure documented in
+    // `lesson-e2e-harness-isolation-gap-2026-04-18.md`.
+    agents: {
+      ...baseCfg.agents,
+      defaults: {
+        ...baseCfg.agents?.defaults,
+        workspace: isolation.agentCwd,
+      },
     },
     acp: {
       ...baseCfg.acp,
@@ -242,12 +293,15 @@ async function withLiveHarness<T>(
   });
 
   try {
-    return await fn({ client, liveEnv, port, token });
+    return await fn({ client, liveEnv, port, token, agentCwd: isolation.agentCwd });
   } finally {
     clearRuntimeConfigSnapshot();
     await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
     await server.close();
     await fs.rm(tempRoot, { recursive: true, force: true });
+    // Restore the original HOME before the per-env restore loop so any
+    // subsequent tests see a clean environment.
+    isolation.restore();
     for (const [k, v] of Object.entries(previous)) {
       const envKey =
         k === "configPath"
@@ -287,6 +341,10 @@ describeLive("discord surface e2e (smoke)", () => {
       const token = `test-${randomUUID()}`;
       const marker = `DISCORD-E2E-${randomBytes(6).toString("hex").toUpperCase()}`;
 
+      // Task 5: HOME isolation + auth copy + sane ACP child CWD. See
+      // `withLiveHarness` above for the full ops-prerequisite block.
+      const isolation = installHarnessIsolation({ tempRoot });
+
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
@@ -303,6 +361,17 @@ describeLive("discord surface e2e (smoke)", () => {
           mode: "local",
           bind: "loopback",
           port,
+        },
+        // Point every spawned ACP agent at the repo root (or fallback
+        // workspace) so the child sees a real CWD with `package.json` +
+        // `CLAUDE.md` — without this the child silently no-ops in Task 5's
+        // isolation lesson.
+        agents: {
+          ...baseCfg.agents,
+          defaults: {
+            ...baseCfg.agents?.defaults,
+            workspace: isolation.agentCwd,
+          },
         },
         acp: {
           ...baseCfg.acp,
@@ -426,6 +495,7 @@ describeLive("discord surface e2e (smoke)", () => {
         await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
         await server.close();
         await fs.rm(tempRoot, { recursive: true, force: true });
+        isolation.restore();
         for (const [k, v] of Object.entries(previous)) {
           const envKey =
             k === "configPath"

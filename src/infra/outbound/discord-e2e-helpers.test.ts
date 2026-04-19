@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock @buape/carbon's RequestClient so REST calls resolve without network I/O.
@@ -43,6 +46,8 @@ vi.mock("@buape/carbon", () => {
 
 import {
   FORBIDDEN_CHATTER_DEFAULT,
+  HARNESS_AUTH_DIRS,
+  HARNESS_AUTH_FILES,
   LEAK_PATTERNS_DEFAULT,
   archiveThreadDiscord,
   assertAuthorIdentity,
@@ -50,12 +55,15 @@ import {
   assertNoForbiddenChatter,
   assertNoLeaksInThread,
   assertVisibleInThread,
+  copyHarnessAuthDirs,
+  installHarnessIsolation,
   isDiscordE2EEnabled,
   listActiveThreadsInParent,
   nudgeBoundSession,
   readMessagesInThread,
   rebindParentToNewThread,
   resolveDiscordE2EEnv,
+  resolveHarnessAgentCwd,
   waitForMarkerInNewThread,
   withDiscordRetry,
 } from "./discord-e2e-helpers.js";
@@ -1428,6 +1436,294 @@ describe("assertVisibleInThread", () => {
       excludeMessageIds: ["req-1"],
     });
     expect(msg.id).toBe("bot-reply");
+  });
+});
+
+// --- Harness isolation (Task 5) ---------------------------------------------
+//
+// These tests exercise the temp-HOME + auth-copy + sane-CWD setup that
+// `withLiveHarness` calls before spawning any ACP child. They are pure unit
+// tests (real filesystem scratch dirs, no network) because the whole point is
+// to prove the harness no longer lets child spawns write into the real
+// production ACP session dirs under `~/.openclaw/agents/*/sessions/`.
+//
+// The contract under test:
+//   - HOME (and USERPROFILE) point at the tempRoot during a run.
+//   - `.claude` / `.codex` auth trees are copied when the real HOME has them.
+//   - Missing auth dirs are silently skipped (dev boxes that lack codex auth
+//     must still be able to run the unit tier).
+//   - `restore()` puts the original HOME back, including when it was unset
+//     at the outset.
+//   - CWD resolution prefers the repo root and falls back to a prepared
+//     minimal workspace with `package.json` + `CLAUDE.md`.
+
+describe("copyHarnessAuthDirs", () => {
+  let fakeRealHome: string;
+  let fakeTempHome: string;
+
+  beforeEach(() => {
+    fakeRealHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-home-"));
+    fakeTempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-temp-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(fakeRealHome, { recursive: true, force: true });
+    fs.rmSync(fakeTempHome, { recursive: true, force: true });
+  });
+
+  it("mirrors the canonical auth dir list from LIVE_EXTERNAL_AUTH_DIRS", () => {
+    expect([...HARNESS_AUTH_DIRS]).toEqual([".claude", ".codex"]);
+    expect([...HARNESS_AUTH_FILES]).toEqual([".claude.json"]);
+  });
+
+  it("copies only the auth directories that actually exist in realHome", () => {
+    // Prepare: a `.claude` dir with a file, no `.codex` dir at all.
+    fs.mkdirSync(path.join(fakeRealHome, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(fakeRealHome, ".claude", "session.json"), "{}");
+    const result = copyHarnessAuthDirs({ realHome: fakeRealHome, tempHome: fakeTempHome });
+    expect(result.copiedDirs).toContain(".claude");
+    expect(result.copiedDirs).not.toContain(".codex");
+    expect(fs.existsSync(path.join(fakeTempHome, ".claude", "session.json"))).toBe(true);
+    expect(fs.existsSync(path.join(fakeTempHome, ".codex"))).toBe(false);
+  });
+
+  it("recursively copies nested auth content (not just top-level files)", () => {
+    const nested = path.join(fakeRealHome, ".claude", "projects", "demo");
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, "memory.json"), '{"k":1}');
+    copyHarnessAuthDirs({ realHome: fakeRealHome, tempHome: fakeTempHome });
+    const copied = path.join(fakeTempHome, ".claude", "projects", "demo", "memory.json");
+    expect(fs.existsSync(copied)).toBe(true);
+    expect(fs.readFileSync(copied, "utf8")).toBe('{"k":1}');
+  });
+
+  it("copies optional auth files like .claude.json", () => {
+    fs.writeFileSync(path.join(fakeRealHome, ".claude.json"), '{"profile":"test"}');
+    const result = copyHarnessAuthDirs({ realHome: fakeRealHome, tempHome: fakeTempHome });
+    expect(result.copiedFiles).toContain(".claude.json");
+    expect(fs.readFileSync(path.join(fakeTempHome, ".claude.json"), "utf8")).toBe(
+      '{"profile":"test"}',
+    );
+  });
+
+  it("does nothing when realHome is empty / has no auth state", () => {
+    const result = copyHarnessAuthDirs({ realHome: fakeRealHome, tempHome: fakeTempHome });
+    expect(result.copiedDirs).toEqual([]);
+    expect(result.copiedFiles).toEqual([]);
+    expect(fs.readdirSync(fakeTempHome)).toEqual([]);
+  });
+
+  it("accepts a custom auth dir override", () => {
+    fs.mkdirSync(path.join(fakeRealHome, ".my-auth"), { recursive: true });
+    fs.writeFileSync(path.join(fakeRealHome, ".my-auth", "cred"), "secret");
+    const result = copyHarnessAuthDirs({
+      realHome: fakeRealHome,
+      tempHome: fakeTempHome,
+      authDirs: [".my-auth"],
+      authFiles: [],
+    });
+    expect(result.copiedDirs).toEqual([".my-auth"]);
+    expect(fs.readFileSync(path.join(fakeTempHome, ".my-auth", "cred"), "utf8")).toBe("secret");
+  });
+});
+
+describe("resolveHarnessAgentCwd", () => {
+  let fakeTempRoot: string;
+
+  beforeEach(() => {
+    fakeTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-cwd-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(fakeTempRoot, { recursive: true, force: true });
+  });
+
+  it("returns the repo root when it exists and looks like a real workspace", () => {
+    // Simulate a repo root: a directory with package.json in it.
+    const fakeRepo = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-repo-"));
+    try {
+      fs.writeFileSync(path.join(fakeRepo, "package.json"), '{"name":"openclaw-fake"}');
+      const resolved = resolveHarnessAgentCwd({ tempRoot: fakeTempRoot, repoRoot: fakeRepo });
+      expect(resolved).toBe(fakeRepo);
+    } finally {
+      fs.rmSync(fakeRepo, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a prepared workspace when the repo root does not exist", () => {
+    const resolved = resolveHarnessAgentCwd({
+      tempRoot: fakeTempRoot,
+      repoRoot: "/nonexistent-path-that-should-not-exist-abcdef",
+    });
+    expect(resolved.startsWith(fakeTempRoot)).toBe(true);
+    // Fallback workspace must contain a package.json + CLAUDE.md so Claude
+    // Code / Codex CLI do not silently no-op on empty dir.
+    expect(fs.existsSync(path.join(resolved, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(resolved, "CLAUDE.md"))).toBe(true);
+  });
+
+  it("falls back when the repo root exists but lacks any marker files", () => {
+    // A bare directory with no package.json / CLAUDE.md / .git should NOT be
+    // treated as a valid repo root; we prefer the prepared fallback.
+    const bareDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-bare-"));
+    try {
+      const resolved = resolveHarnessAgentCwd({ tempRoot: fakeTempRoot, repoRoot: bareDir });
+      expect(resolved.startsWith(fakeTempRoot)).toBe(true);
+    } finally {
+      fs.rmSync(bareDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses an existing fallback workspace on repeat calls (idempotent)", () => {
+    const first = resolveHarnessAgentCwd({
+      tempRoot: fakeTempRoot,
+      repoRoot: "/nonexistent-abcdef",
+    });
+    // Mutate the package.json to detect accidental overwrite.
+    fs.writeFileSync(path.join(first, "package.json"), '{"name":"custom"}');
+    const second = resolveHarnessAgentCwd({
+      tempRoot: fakeTempRoot,
+      repoRoot: "/nonexistent-abcdef",
+    });
+    expect(second).toBe(first);
+    expect(fs.readFileSync(path.join(second, "package.json"), "utf8")).toBe('{"name":"custom"}');
+  });
+});
+
+describe("installHarnessIsolation", () => {
+  const originalHome = process.env.HOME;
+  const originalUserProfile = process.env.USERPROFILE;
+  let fakeRealHome: string;
+  let tempRoot: string;
+
+  beforeEach(() => {
+    fakeRealHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-real-"));
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-harness-iso-"));
+    // Seed `realHome` with an auth tree so the copy behavior is observable.
+    fs.mkdirSync(path.join(fakeRealHome, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(fakeRealHome, ".claude", "token"), "abc123");
+  });
+
+  afterEach(() => {
+    // Restore process env back to the pre-suite state.
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = originalUserProfile;
+    }
+    fs.rmSync(fakeRealHome, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it("points HOME and USERPROFILE at the tempRoot for the duration of the run", () => {
+    process.env.HOME = fakeRealHome;
+    process.env.USERPROFILE = fakeRealHome;
+    const ctx = installHarnessIsolation({ tempRoot, realHome: fakeRealHome });
+    try {
+      expect(process.env.HOME).toBe(tempRoot);
+      expect(process.env.USERPROFILE).toBe(tempRoot);
+    } finally {
+      ctx.restore();
+    }
+  });
+
+  it("copies .claude auth into the temp HOME and reports what was copied", () => {
+    process.env.HOME = fakeRealHome;
+    const ctx = installHarnessIsolation({ tempRoot, realHome: fakeRealHome });
+    try {
+      expect(ctx.copiedAuthDirs).toContain(".claude");
+      expect(fs.readFileSync(path.join(tempRoot, ".claude", "token"), "utf8")).toBe("abc123");
+    } finally {
+      ctx.restore();
+    }
+  });
+
+  it("skips auth copy entries that do not exist (e.g. dev box without codex)", () => {
+    process.env.HOME = fakeRealHome;
+    const ctx = installHarnessIsolation({ tempRoot, realHome: fakeRealHome });
+    try {
+      expect(ctx.copiedAuthDirs).not.toContain(".codex");
+      expect(fs.existsSync(path.join(tempRoot, ".codex"))).toBe(false);
+    } finally {
+      ctx.restore();
+    }
+  });
+
+  it("restore() puts HOME back and is idempotent", () => {
+    process.env.HOME = fakeRealHome;
+    const before = process.env.HOME;
+    const ctx = installHarnessIsolation({ tempRoot, realHome: fakeRealHome });
+    expect(process.env.HOME).toBe(tempRoot);
+    ctx.restore();
+    expect(process.env.HOME).toBe(before);
+    // Calling restore again must not throw and must not regress HOME.
+    ctx.restore();
+    expect(process.env.HOME).toBe(before);
+  });
+
+  it("restore() unsets HOME when it was undefined at setup time", () => {
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+    const ctx = installHarnessIsolation({ tempRoot, realHome: fakeRealHome });
+    expect(process.env.HOME).toBe(tempRoot);
+    ctx.restore();
+    expect(process.env.HOME).toBeUndefined();
+    expect(process.env.USERPROFILE).toBeUndefined();
+  });
+
+  it("exposes the resolved agentCwd so the harness can write it into config", () => {
+    process.env.HOME = fakeRealHome;
+    const ctx = installHarnessIsolation({
+      tempRoot,
+      realHome: fakeRealHome,
+      // Force the fallback path so the assertion does not depend on the
+      // test runner actually being inside /home/richard/repos/openclaw-source.
+      repoRoot: "/nonexistent-path-xyz",
+    });
+    try {
+      expect(ctx.agentCwd.startsWith(tempRoot)).toBe(true);
+      expect(fs.existsSync(path.join(ctx.agentCwd, "package.json"))).toBe(true);
+      expect(fs.existsSync(path.join(ctx.agentCwd, "CLAUDE.md"))).toBe(true);
+    } finally {
+      ctx.restore();
+    }
+  });
+
+  it("does NOT write into the real ~/.openclaw/agents/* tree under the supplied realHome", () => {
+    // Proof-of-isolation: after HOME swap, any filesystem write performed
+    // with paths derived from `process.env.HOME` lands under tempRoot, not
+    // fakeRealHome. Simulate the kind of write an ACP session does.
+    process.env.HOME = fakeRealHome;
+    const ctx = installHarnessIsolation({ tempRoot, realHome: fakeRealHome });
+    try {
+      const simulatedSessionsDir = path.join(
+        process.env.HOME ?? "",
+        ".openclaw",
+        "agents",
+        "claude",
+        "sessions",
+      );
+      fs.mkdirSync(simulatedSessionsDir, { recursive: true });
+      fs.writeFileSync(path.join(simulatedSessionsDir, "bleed-test.jsonl"), "{}\n");
+      // The bleed test file must exist under tempRoot, NOT under fakeRealHome.
+      expect(
+        fs.existsSync(
+          path.join(tempRoot, ".openclaw", "agents", "claude", "sessions", "bleed-test.jsonl"),
+        ),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(fakeRealHome, ".openclaw", "agents", "claude", "sessions", "bleed-test.jsonl"),
+        ),
+      ).toBe(false);
+    } finally {
+      ctx.restore();
+    }
   });
 });
 

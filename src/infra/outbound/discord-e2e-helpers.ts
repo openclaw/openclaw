@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 /**
  * Live Discord E2E test helpers.
  *
@@ -18,6 +20,28 @@ import { Routes } from "discord-api-types/v10";
 import type { GatewayClient } from "../../gateway/client.js";
 import { sleep } from "../../utils.js";
 import { isTruthyEnvValue } from "../env.js";
+
+/**
+ * Minimal external auth directories the harness copies from the real HOME
+ * into the tempRoot so the spawned ACP child sees Claude Code / Codex CLI
+ * credentials. Mirrors the canonical `LIVE_EXTERNAL_AUTH_DIRS` list from
+ * `test/test-env.ts` but scoped to just what Discord E2E needs — we do NOT
+ * copy `.gemini` / `.minimax` because the live suite only spawns the two
+ * agents currently configured for the bound-thread flow.
+ *
+ * Keep this list in sync with the set of agents the harness actually spawns.
+ * Production auth layouts under `~/.claude` / `~/.codex` can contain large
+ * session history trees; we recursively copy the whole directory so auth
+ * probes that read sibling files (token store, mcp config) still work.
+ */
+export const HARNESS_AUTH_DIRS = [".claude", ".codex"] as const;
+
+/**
+ * Optional dotfiles the harness also copies alongside the auth dirs. Mirrors
+ * `LIVE_EXTERNAL_AUTH_FILES` in `test/test-env.ts`. Kept separate so the dir
+ * copy helpers do not try to `cpSync(dir, file)`.
+ */
+export const HARNESS_AUTH_FILES = [".claude.json"] as const;
 
 /**
  * Required environment for live Discord E2E tests. We keep a separate
@@ -1318,4 +1342,231 @@ async function waitForAcpBackendHealthy(params: { timeoutMs: number }): Promise<
   throw new Error(
     `waitForAcpBackendHealthy: acpx backend did not become healthy within ${String(timeoutMs)}ms${detail}`,
   );
+}
+
+// --- Harness isolation (Task 5) ----------------------------------------------
+//
+// The live Discord E2E harness used to spawn ACP children without isolating
+// HOME or providing a sane CWD. That meant the child wrote into the real
+// production session dirs under `~/.openclaw/agents/*` AND operated out of
+// an empty temp workspace where Claude Code / Codex CLI silently no-op.
+// Source of analysis:
+//   /home/richard/repos/shared-memory/main/lesson-e2e-harness-isolation-gap-2026-04-18.md
+//
+// The helpers below implement code-side isolation only. They do NOT change
+// guild membership, pause production accounts, or alter production bot
+// participation. Those remain an ops prerequisite documented in
+// `src/infra/outbound/discord-surface.e2e.test.ts` above `withLiveHarness`.
+
+/**
+ * Default CWD the harness should pass to spawned ACP child sessions. Prefer
+ * the repo root because the ACP agents (Claude Code, Codex) load `CLAUDE.md`
+ * + `package.json` signals on spawn; pointing them at an empty tempdir makes
+ * them silently no-op. Falls back to a minimal workspace under `<tempRoot>`
+ * only when the repo root does not exist (e.g. on a detached test runner).
+ */
+export function resolveHarnessAgentCwd(params: { tempRoot: string; repoRoot?: string }): string {
+  const preferredRepoRoot = params.repoRoot ?? "/home/richard/repos/openclaw-source";
+  try {
+    const stat = fs.statSync(preferredRepoRoot);
+    if (stat.isDirectory()) {
+      // Verify the directory is recognizable as a repo root so we do not
+      // accidentally point the child at an unrelated path. Any of these is
+      // sufficient evidence that the spawned agent will see a real workspace.
+      for (const marker of ["package.json", "CLAUDE.md", ".git"]) {
+        if (fs.existsSync(path.join(preferredRepoRoot, marker))) {
+          return preferredRepoRoot;
+        }
+      }
+    }
+  } catch {
+    // fall through to fallback workspace
+  }
+  // Fallback: prepare a minimal workspace so the child has at least a
+  // package.json + CLAUDE.md to anchor on. This is strictly a worst-case
+  // path — the repo-root preference above should hit in every supported
+  // environment.
+  const fallback = path.join(params.tempRoot, "workspace");
+  fs.mkdirSync(fallback, { recursive: true });
+  const stub = path.join(fallback, "package.json");
+  if (!fs.existsSync(stub)) {
+    fs.writeFileSync(
+      stub,
+      `${JSON.stringify(
+        { name: "openclaw-discord-e2e-fallback-workspace", private: true, version: "0.0.0" },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+  const claudeMd = path.join(fallback, "CLAUDE.md");
+  if (!fs.existsSync(claudeMd)) {
+    fs.writeFileSync(
+      claudeMd,
+      "# openclaw live Discord E2E harness fallback workspace\n\n" +
+        "This directory exists only because the harness could not locate\n" +
+        "the real repo root. Delete it after the run completes.\n",
+    );
+  }
+  return fallback;
+}
+
+/**
+ * Copy the minimal set of external auth directories/files from `realHome`
+ * into `tempHome`. Quietly skips entries that do not exist on the host.
+ *
+ * Mirrors the `LIVE_EXTERNAL_AUTH_DIRS` + `LIVE_EXTERNAL_AUTH_FILES` pattern
+ * from `test/test-env.ts` so harness isolation matches the rest of the live
+ * test infra. Kept here (rather than reaching into `test/test-env.ts`) so the
+ * helper stays usable from this core-adjacent test surface without pulling
+ * the whole `installTestEnv` machinery into the Discord harness.
+ */
+export function copyHarnessAuthDirs(params: {
+  realHome: string;
+  tempHome: string;
+  authDirs?: readonly string[];
+  authFiles?: readonly string[];
+}): { copiedDirs: string[]; copiedFiles: string[] } {
+  const dirs = params.authDirs ?? HARNESS_AUTH_DIRS;
+  const files = params.authFiles ?? HARNESS_AUTH_FILES;
+  const copiedDirs: string[] = [];
+  const copiedFiles: string[] = [];
+  for (const dirName of dirs) {
+    const src = path.join(params.realHome, dirName);
+    const dst = path.join(params.tempHome, dirName);
+    if (!fs.existsSync(src)) {
+      continue;
+    }
+    try {
+      const stat = fs.statSync(src);
+      if (!stat.isDirectory()) {
+        continue;
+      }
+      fs.mkdirSync(dst, { recursive: true });
+      fs.cpSync(src, dst, { recursive: true, force: true });
+      copiedDirs.push(dirName);
+    } catch (err) {
+      // Auth copy is best-effort: a missing sub-file should not abort the
+      // whole harness run. Surface a trace so operators can diagnose later.
+      e2eTrace(
+        `copyHarnessAuthDirs: failed to copy ${dirName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  for (const fileName of files) {
+    const src = path.join(params.realHome, fileName);
+    const dst = path.join(params.tempHome, fileName);
+    if (!fs.existsSync(src)) {
+      continue;
+    }
+    try {
+      const stat = fs.statSync(src);
+      if (!stat.isFile()) {
+        continue;
+      }
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      copiedFiles.push(fileName);
+    } catch (err) {
+      e2eTrace(
+        `copyHarnessAuthDirs: failed to copy ${fileName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return { copiedDirs, copiedFiles };
+}
+
+/**
+ * Context returned by `installHarnessIsolation`. Callers MUST invoke
+ * `restore()` in their finally block or the real HOME environment variable
+ * will leak the temp path across subsequent tests.
+ */
+export interface HarnessIsolationContext {
+  /** The temp HOME directory the harness writes into. */
+  tempHome: string;
+  /** The real HOME this isolation replaced (for diagnostics only). */
+  realHome: string;
+  /** CWD the harness should pass to spawned ACP child sessions. */
+  agentCwd: string;
+  /** Names of auth directories that were actually copied. */
+  copiedAuthDirs: string[];
+  /** Names of auth files that were actually copied. */
+  copiedAuthFiles: string[];
+  /** Restore the original HOME + USERPROFILE. Idempotent. */
+  restore: () => void;
+}
+
+/**
+ * Install HOME isolation + prepare a sane CWD for the live Discord E2E
+ * harness. This is the Task-5 entrypoint; every `withLiveHarness` run must
+ * call this helper so:
+ *
+ *   1. The spawned ACP child cannot write into the real production session
+ *      tree under the developer's home directory (prevents state bleed).
+ *   2. Claude Code / Codex CLI see their usual auth tree under the paths
+ *      `<tempHome>/.claude` and `<tempHome>/.codex`.
+ *   3. The child agent CWD is a real repo root (or a prepared minimal
+ *      workspace fallback) so package.json / CLAUDE.md lookups succeed.
+ *
+ * The returned `restore()` MUST be invoked in the caller's finally block.
+ * Doing so in a `try/finally` around a single describe/it covers both happy
+ * and error paths.
+ */
+export function installHarnessIsolation(params: {
+  tempRoot: string;
+  realHome?: string;
+  authDirs?: readonly string[];
+  authFiles?: readonly string[];
+  repoRoot?: string;
+}): HarnessIsolationContext {
+  const realHome = params.realHome ?? process.env.HOME ?? "";
+  const tempHome = params.tempRoot;
+  fs.mkdirSync(tempHome, { recursive: true });
+
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+
+  const copyResult = realHome
+    ? copyHarnessAuthDirs({
+        realHome,
+        tempHome,
+        authDirs: params.authDirs,
+        authFiles: params.authFiles,
+      })
+    : { copiedDirs: [], copiedFiles: [] };
+
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
+
+  const agentCwd = resolveHarnessAgentCwd({
+    tempRoot: tempHome,
+    repoRoot: params.repoRoot,
+  });
+
+  let restored = false;
+  const restore = () => {
+    if (restored) {
+      return;
+    }
+    restored = true;
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
+  };
+
+  return {
+    tempHome,
+    realHome,
+    agentCwd,
+    copiedAuthDirs: copyResult.copiedDirs,
+    copiedAuthFiles: copyResult.copiedFiles,
+    restore,
+  };
 }
