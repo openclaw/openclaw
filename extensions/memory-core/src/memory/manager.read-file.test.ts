@@ -274,6 +274,39 @@ describe("MemoryIndexManager.readFile", () => {
     }
   });
 
+  it("returns empty text when the file disappears before realpath resolves", async () => {
+    const relPath = "memory/transient-realpath.md";
+    const absPath = path.join(workspaceDir, relPath);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, "first\nsecond", "utf-8");
+
+    const realRealpath = fs.realpath;
+    let injected = false;
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockImplementation(async (...args: Parameters<typeof realRealpath>) => {
+        const [target] = args;
+        if (!injected && typeof target === "string" && path.resolve(target) === absPath) {
+          injected = true;
+          const err = new Error("missing") as NodeJS.ErrnoException;
+          err.code = "ENOENT";
+          throw err;
+        }
+        return await realRealpath(...args);
+      });
+
+    try {
+      const result = await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+      });
+      expect(result).toEqual({ text: "", path: relPath });
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("rejects non-memory paths", async () => {
     await expect(
       readMemoryFile({

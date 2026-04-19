@@ -54,7 +54,15 @@ export async function resolveContainedRegularFile(params: {
   if (statResult.missing) {
     return { missing: true };
   }
-  const realPath = await fs.realpath(params.absPath);
+  let realPath: string;
+  try {
+    realPath = await fs.realpath(params.absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return { missing: true };
+    }
+    throw err;
+  }
   const allowedRoots = await Promise.all(
     params.allowedRoots.map(async (root) => {
       try {

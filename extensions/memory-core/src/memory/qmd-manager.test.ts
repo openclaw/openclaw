@@ -3566,10 +3566,22 @@ describe("QmdMemoryManager", () => {
     try {
       await fs.writeFile(path.join(outsideDir, "secret.md"), "outside qmd secret", "utf-8");
       const nestedLink = path.join(workspaceDir, "linked-dir");
-      await fs.symlink(outsideDir, nestedLink, "dir");
-      await expect(
-        manager.readFile({ relPath: "qmd/workspace-main/linked-dir/secret.md" }),
-      ).rejects.toThrow("path required");
+      let symlinkOk = true;
+      try {
+        await fs.symlink(outsideDir, nestedLink, "dir");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES") {
+          symlinkOk = false;
+        } else {
+          throw err;
+        }
+      }
+      if (symlinkOk) {
+        await expect(
+          manager.readFile({ relPath: "qmd/workspace-main/linked-dir/secret.md" }),
+        ).rejects.toThrow("path required");
+      }
     } finally {
       await fs.rm(outsideDir, { recursive: true, force: true });
     }
