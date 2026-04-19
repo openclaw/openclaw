@@ -115,6 +115,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
 import { PLAN_ARCHETYPE_PROMPT } from "../../plan-mode/plan-archetype-prompt.js";
+import { PLAN_MODE_REFERENCE_CARD } from "../../plan-mode/reference-card.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -709,6 +710,15 @@ export async function runEmbeddedAttempt(
             // (analysis + assumptions + risks + verification) instead
             // of bare step lists.
             PLAN_ARCHETYPE_PROMPT,
+            "",
+            // Iter-3 D1: append the plan-mode reference card so the
+            // agent ALWAYS sees the state diagram + tool contract +
+            // [PLAN_*]: tag taxonomy + slash-command surface + common
+            // pitfalls + debugging tips on every in-mode turn.
+            // Eliminates the 2-turn learning curve on fresh installs.
+            // Companion artifact: extensions/plan-mode-101/SKILL.md
+            // (D7) carries the same content for normal-mode discovery.
+            PLAN_MODE_REFERENCE_CARD,
           ].join("\n")
         : planModeFeatureEnabled
           ? [

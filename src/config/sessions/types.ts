@@ -289,6 +289,20 @@ export type SessionEntry = {
    */
   recentlyApprovedAt?: number;
   /**
+   * Live-test iteration 3 D2: marker timestamp set at the FIRST
+   * `sessions.patch { planMode: "plan" }` transition for this
+   * session. Used to gate the one-shot `[PLAN_MODE_INTRO]:` synthetic
+   * injection — the intro fires only when this field is undefined,
+   * then the field is set so subsequent enter_plan_mode calls in the
+   * same session skip the intro (avoiding repeat-noise on every
+   * planning cycle).
+   *
+   * Stored at SessionEntry ROOT (not under `planMode`) so it
+   * SURVIVES planMode deletion on approve/edit. Cleared only on
+   * `/new` (sessions.reset).
+   */
+  planModeIntroDeliveredAt?: number;
+  /**
    * PR-11 review fix (Codex P1 #3105216364 / #3105247854 / #3105261556 —
    * escalation cluster): when set, this synthetic user-message text is
    * prepended to the next agent turn's user input by the runtime, then

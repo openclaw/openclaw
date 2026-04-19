@@ -75,6 +75,10 @@ export function describeUpdatePlanTool(): string {
     "TRACKING ONLY — this tool does NOT submit the plan for approval. Mutations stay BLOCKED while in plan mode. Call exit_plan_mode (NOT update_plan) when you're ready to propose the plan to the user.",
     "Use this for non-trivial multi-step work so the plan stays current while execution continues.",
     "Keep steps short, mark at most one step as `in_progress`, and skip this tool for simple one-step tasks.",
+    // Iter-3 D3: pointer to the bootstrap-injected reference card +
+    // self-test command so agents have a single source of truth for
+    // plan-mode lifecycle/tag-taxonomy/debugging.
+    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. Verify your local install with `/plan self-test`.",
   ].join(" ");
 }
 
@@ -94,6 +98,8 @@ export function describeEnterPlanModeTool(): string {
       "(2) update_plan = DURING investigation/execution to track progress (steps + status). Does NOT submit. " +
       "(3) exit_plan_mode = ONCE when ready to propose. Submits the plan for user approval. " +
       "After approval, mutations unlock — continue executing without re-entering plan mode unless the user requests a NEW planning cycle.",
+    // Iter-3 D3: pointer to reference card + self-test for full context.
+    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. Verify your local install with `/plan self-test`.",
   ].join(" ");
 }
 
@@ -120,5 +126,7 @@ export function describeExitPlanModeTool(): string {
     "Optionally pass `summary` (one sentence) — surfaced as the subtitle next to the title.",
     "The runtime emits an approval card; the user can Approve (mutations unlock and you proceed), Approve with edits (same), Reject with feedback (you stay in plan mode and revise; feedback arrives in your next turn as [PLAN_DECISION]: rejected), or let it Time Out.",
     "Calling this without an active plan-mode session is a no-op; calling it without `plan` content is rejected.",
+    // Iter-3 D3: pointer to reference card + self-test for full context.
+    "For the full plan-mode reference (state diagram, [PLAN_*]: tag taxonomy, /plan slash commands, common pitfalls, debugging tips): see the bootstrap-injected reference card visible on every in-mode turn. Verify your local install with `/plan self-test`.",
   ].join(" ");
 }
