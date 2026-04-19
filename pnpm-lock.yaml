@@ -1295,9 +1295,6 @@ importers:
       protobufjs:
         specifier: 7.5.5
         version: 7.5.5
-      uuid:
-        specifier: ^13.0.0
-        version: 13.0.0
       ws:
         specifier: ^8.20.0
         version: 8.20.0
