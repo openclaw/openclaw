@@ -332,6 +332,7 @@ export async function maybeWakeNodeWithApns(
     try {
       const registration = await loadApnsRegistration(nodeId);
       if (!registration) {
+        nodeWakeById.delete(nodeId);
         return withDuration({ available: false, throttled: false, path: "no-registration" });
       }
 
