@@ -67,22 +67,6 @@ export function resolveConversationDeliveryTarget(params: {
       : typeof params.parentConversationId === "string"
         ? normalizeOptionalString(params.parentConversationId)
         : undefined;
-  const isThreadChild =
-    conversationId && parentConversationId && parentConversationId !== conversationId;
-  if (channel && isThreadChild) {
-    if (channel === "matrix") {
-      return {
-        to: `room:${parentConversationId}`,
-        threadId: conversationId,
-      };
-    }
-    if (channel === "slack" || channel === "mattermost" || channel === "telegram") {
-      return {
-        to: `channel:${parentConversationId}`,
-        threadId: conversationId,
-      };
-    }
-  }
   const pluginTarget =
     channel && conversationId
       ? getChannelPlugin(

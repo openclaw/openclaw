@@ -280,6 +280,23 @@ function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
+  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
+    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
+    : typeof m.MediaPath === "string"
+      ? [m.MediaPath]
+      : [];
+  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
+    ? m.MediaTypes
+    : typeof m.MediaType === "string"
+      ? [m.MediaType]
+      : [];
+  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
+    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
+      continue;
+    }
+    appendImageBlock(images, { url: mediaPath });
+  }
+
   return images;
 }
 
@@ -823,7 +840,25 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-function renderMessageImages(images: ImageBlock[]) {
+function resolveRenderableMessageImages(
+  images: ImageBlock[],
+  opts?: ImageRenderOptions,
+): RenderableImageBlock[] {
+  return images.flatMap((img) => {
+    const isLocalImage = isLocalAssistantAttachmentSource(img.url);
+    const canProxyLocalImage =
+      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
+    if (isLocalImage && !canProxyLocalImage) {
+      return [];
+    }
+    const displayUrl = canProxyLocalImage
+      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
+      : img.url;
+    return [{ ...img, displayUrl }];
+  });
+}
+
+function renderMessageImages(images: RenderableImageBlock[]) {
   if (images.length === 0) {
     return nothing;
   }
