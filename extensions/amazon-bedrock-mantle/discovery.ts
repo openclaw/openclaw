@@ -32,18 +32,20 @@ const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
  * the amazon-bedrock extension, not this one.
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
-  // DeepSeek
-  "deepseek.v3.2": 128_000,
-  "deepseek.v3.1": 128_000,
   // MiniMax
   "minimax.minimax-m2.1": 1_000_000,
   "minimax.minimax-m2": 1_000_000,
   // Qwen
-  "qwen.qwen3-235b-a22b-2507": 128_000,
-  "qwen.qwen3-32b": 128_000,
   "qwen.qwen3-coder-480b-a35b-instruct": 256_000,
   "qwen.qwen3-coder-next": 256_000,
   "qwen.qwen3-coder-30b-a3b-instruct": 256_000,
+  "qwen.qwen3-235b-a22b-2507": 128_000,
+  "qwen.qwen3-32b": 128_000,
+  "qwen.qwen3-next-80b-a3b-instruct": 128_000,
+  "qwen.qwen3-vl-235b-a22b-instruct": 128_000,
+  // DeepSeek
+  "deepseek.v3.2": 128_000,
+  "deepseek.v3.1": 128_000,
   // GLM
   "zai.glm-4.7": 128_000,
   "zai.glm-4.7-flash": 128_000,
@@ -52,6 +54,9 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "nvidia.nemotron-nano-3-30b": 128_000,
   "nvidia.nemotron-nano-12b-v2": 128_000,
   "nvidia.nemotron-nano-9b-v2": 128_000,
+  // Mistral
+  "mistral.mistral-large-3-675b-instruct": 128_000,
+  "mistral.devstral-2-123b": 128_000,
 };
 
 function resolveKnownContextWindow(modelId: string): number | undefined {
