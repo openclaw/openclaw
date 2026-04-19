@@ -153,4 +153,58 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(1111);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
+
+  it("self-heals legacy main-heartbeat route contradictions while loading", async () => {
+    const heartbeatKey = "agent:main:main:heartbeat";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [heartbeatKey]: {
+            sessionId: "self-heal-test",
+            updatedAt: 1776246496808,
+            heartbeatIsolatedBaseSessionKey: "agent:main:main",
+            origin: {
+              label: "8582659364",
+              provider: "telegram",
+              from: "8582659364",
+              to: "8582659364",
+            },
+            routeMetadata: {
+              resolvedAt: 1776246496808,
+              sessionKey: heartbeatKey,
+              surface: "telegram",
+              scope: "heartbeat-isolated",
+              explicit: false,
+              actorFingerprint: "telegram|||8582659364|8582659364|8582659364",
+              heartbeatIsolatedBaseSessionKey: "agent:main:main",
+              provenance: {
+                provider: "telegram",
+                surface: null,
+                from: "8582659364",
+                to: "8582659364",
+                chatType: null,
+                label: "8582659364",
+                accountId: null,
+                threadId: null,
+              },
+              integrity: "contradictory",
+            },
+            routeIntegrityState: "contradictory",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const entry = store[heartbeatKey];
+    expect(entry.origin).toBeUndefined();
+    expect(entry.routeMetadata?.surface).toBe("heartbeat");
+    expect(entry.routeMetadata?.heartbeatIsolatedBaseSessionKey).toBe("agent:main:main");
+    expect(entry.routeIntegrityState).toBe("ok");
+  });
 });

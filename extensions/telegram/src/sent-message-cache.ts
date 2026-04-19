@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
@@ -28,9 +29,33 @@ function createSentMessageStore(): SentMessageStore {
   return new Map<string, Map<string, number>>();
 }
 
-function resolveSentMessageStorePath(): string {
+function resolveLegacySentMessageStorePath(): string {
   const cfg = loadConfig();
   return `${resolveStorePath(cfg.session?.store)}.telegram-sent-messages.json`;
+}
+
+function resolveSentMessageStorePath(): string {
+  return path.join(resolveStateDir(process.env), "telegram", "sent-messages.json");
+}
+
+function migrateLegacySentMessageStoreIfNeeded(filePath: string): void {
+  const legacyPath = resolveLegacySentMessageStorePath();
+  if (legacyPath === filePath || !fs.existsSync(legacyPath) || fs.existsSync(filePath)) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  try {
+    fs.renameSync(legacyPath, filePath);
+    return;
+  } catch {
+    // Fall back to copy + remove on cross-device filesystems.
+  }
+  try {
+    fs.copyFileSync(legacyPath, filePath);
+    fs.rmSync(legacyPath, { force: true });
+  } catch {
+    // Best effort migration.
+  }
 }
 
 function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
@@ -79,6 +104,7 @@ function getSentMessages(): SentMessageStore {
   const state = getSentMessageState();
   const persistedPath = resolveSentMessageStorePath();
   if (!state.store || state.persistedPath !== persistedPath) {
+    migrateLegacySentMessageStoreIfNeeded(persistedPath);
     state.store = readPersistedSentMessages(persistedPath);
     state.persistedPath = persistedPath;
   }

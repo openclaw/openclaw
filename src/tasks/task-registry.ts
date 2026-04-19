@@ -4,10 +4,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveConversationDeliveryTarget } from "../utils/delivery-context.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
@@ -89,6 +91,64 @@ type TaskDeliveryOwner = {
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   flowId?: string;
 };
+
+function isProtectedPrimaryTelegramOwnerSessionKey(sessionKey?: string): boolean {
+  const normalized = normalizeOptionalString(sessionKey);
+  return Boolean(normalized && /^agent:[^:]+:telegram:direct:[^:]+$/u.test(normalized));
+}
+
+function resolveProtectedPrimaryTelegramAcpDeliveryOwner(
+  task: TaskRecord,
+  owner: TaskDeliveryOwner,
+): TaskDeliveryOwner {
+  const childSessionKey = normalizeOptionalString(task.childSessionKey);
+  if (
+    task.runtime !== "acp" ||
+    task.scopeKind !== "session" ||
+    !childSessionKey ||
+    !isProtectedPrimaryTelegramOwnerSessionKey(owner.sessionKey)
+  ) {
+    return owner;
+  }
+
+  const route = createBoundDeliveryRouter().resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: childSessionKey,
+    failClosed: true,
+  });
+  if (route.mode === "bound" && route.binding) {
+    const telegramTopicMatch =
+      route.binding.conversation.channel === "telegram"
+        ? /^(-?\d+):topic:(\d+)$/u.exec(route.binding.conversation.conversationId)
+        : null;
+    const boundTarget = telegramTopicMatch
+      ? {
+          to: telegramTopicMatch[1],
+          threadId: telegramTopicMatch[2],
+        }
+      : resolveConversationDeliveryTarget({
+          channel: route.binding.conversation.channel,
+          conversationId: route.binding.conversation.conversationId,
+          parentConversationId: route.binding.conversation.parentConversationId,
+        });
+    return {
+      sessionKey: childSessionKey,
+      requesterOrigin: normalizeDeliveryContext({
+        channel: route.binding.conversation.channel,
+        accountId: route.binding.conversation.accountId,
+        to: boundTarget.to,
+        threadId: boundTarget.threadId,
+      }),
+      flowId: owner.flowId,
+    };
+  }
+
+  return {
+    sessionKey: childSessionKey,
+    requesterOrigin: undefined,
+    flowId: owner.flowId,
+  };
+}
 
 export type ParentFlowLinkErrorCode =
   | "scope_kind_not_session"
@@ -784,21 +844,21 @@ function getLinkedFlowForDelivery(task: TaskRecord) {
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   const flow = getLinkedFlowForDelivery(task);
   if (flow) {
-    return {
+    return resolveProtectedPrimaryTelegramAcpDeliveryOwner(task, {
       sessionKey: flow.ownerKey.trim(),
       requesterOrigin: normalizeDeliveryContext(
         flow.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
       ),
       flowId: flow.flowId,
-    };
+    });
   }
   if (task.scopeKind !== "session") {
     return {};
   }
-  return {
+  return resolveProtectedPrimaryTelegramAcpDeliveryOwner(task, {
     sessionKey: task.ownerKey.trim(),
     requesterOrigin: normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin),
-  };
+  });
 }
 
 function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
@@ -971,6 +1031,21 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+function shouldQueueProtectedPrimaryTelegramTerminalUpdate(
+  task: TaskRecord,
+  owner: TaskDeliveryOwner,
+): boolean {
+  const childSessionKey = normalizeOptionalString(task.childSessionKey);
+  const ownerSessionKey = normalizeOptionalString(owner.sessionKey);
+  return Boolean(
+    task.runtime === "acp" &&
+      task.scopeKind === "session" &&
+      isProtectedPrimaryTelegramOwnerSessionKey(task.ownerKey) &&
+      childSessionKey &&
+      ownerSessionKey === childSessionKey,
+  );
+}
+
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
@@ -1050,7 +1125,10 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const eventText = formatTaskTerminalMessage(latest);
-    if (!canDeliverTaskToRequesterOrigin(latest)) {
+    if (
+      shouldQueueProtectedPrimaryTelegramTerminalUpdate(latest, owner) ||
+      !canDeliverTaskToRequesterOrigin(latest)
+    ) {
       try {
         queueTaskSystemEvent(latest, eventText);
         if (latest.terminalOutcome === "blocked") {

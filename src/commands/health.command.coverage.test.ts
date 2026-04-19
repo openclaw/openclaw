@@ -71,6 +71,8 @@ describe("healthCommand (coverage)", () => {
     const recent = createRecentSessionRows();
     callGatewayMock.mockResolvedValueOnce({
       ok: true,
+      state: "ok",
+      reasons: [],
       ts: Date.now(),
       durationMs: 5,
       channels: {

@@ -11,6 +11,7 @@ import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
+import { resolveSessionTranscriptArchiveDir } from "../config/sessions/store-maintenance.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
 export type ArchiveFileReason = SessionArchiveReason;
@@ -123,9 +124,31 @@ export function resolveSessionTranscriptCandidates(
   return Array.from(new Set(candidates));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
+function resolveTranscriptArchiveDirectory(filePath: string, storePath?: string): string {
+  if (storePath) {
+    return resolveSessionTranscriptArchiveDir(storePath);
+  }
+  const resolvedFilePath = path.resolve(filePath);
+  const sessionsDir = path.dirname(resolvedFilePath);
+  if (path.basename(sessionsDir) === "sessions") {
+    const agentDir = path.dirname(sessionsDir);
+    const agentsDir = path.dirname(agentDir);
+    if (path.basename(agentsDir) === "agents") {
+      return path.join(agentDir, "artifacts", "session-transcripts");
+    }
+  }
+  return path.join(path.dirname(sessionsDir), ".openclaw-artifacts", "session-transcripts");
+}
+
+export function archiveFileOnDisk(
+  filePath: string,
+  reason: ArchiveFileReason,
+  storePath?: string,
+): string {
   const ts = formatSessionArchiveTimestamp();
-  const archived = `${filePath}.${reason}.${ts}`;
+  const archiveDir = resolveTranscriptArchiveDirectory(filePath, storePath);
+  fs.mkdirSync(archiveDir, { recursive: true });
+  const archived = path.join(archiveDir, `${path.basename(filePath)}.${reason}.${ts}`);
   fs.renameSync(filePath, archived);
   return archived;
 }
@@ -181,7 +204,7 @@ export function archiveSessionTranscriptsDetailed(opts: {
     try {
       archived.push({
         sourcePath: candidatePath,
-        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
+        archivedPath: archiveFileOnDisk(candidatePath, opts.reason, opts.storePath),
       });
     } catch {
       // Best-effort.

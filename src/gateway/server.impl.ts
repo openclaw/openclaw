@@ -84,6 +84,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
+  setHealthRuntimeSnapshotGetter,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
@@ -416,6 +417,7 @@ export async function startGatewayServer(
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
   });
+  setHealthRuntimeSnapshotGetter(() => channelManager.getRuntimeSnapshot());
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,

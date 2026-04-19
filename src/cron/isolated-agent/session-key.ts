@@ -1,6 +1,6 @@
-import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { SessionScope } from "../../config/sessions/types.js";
-import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { resolveSessionRoute } from "../../routing/resolve-route.js";
 
 export function resolveCronAgentSessionKey(params: {
   sessionKey: string;
@@ -8,17 +8,20 @@ export function resolveCronAgentSessionKey(params: {
   mainKey?: string | undefined;
   cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
 }): string {
-  const raw = toAgentStoreSessionKey({
+  const resolved = resolveSessionRoute({
+    cfg: params.cfg ?? {},
     agentId: params.agentId,
-    requestKey: params.sessionKey.trim(),
+    surface: "cron",
+    rawSessionInput: params.sessionKey.trim(),
+    sessionScope: "agent",
     mainKey: params.mainKey,
   });
-  // Canonicalize so "agent:<id>:main" → "agent:<id>:<configuredMainKey>"
-  // when cfg.session.mainKey differs from "main". Without this, cron sessions
-  // are orphaned when read paths use the configured mainKey alias (#29683).
-  return canonicalizeMainSessionAlias({
-    cfg: params.cfg,
+  const fallbackMainSessionKey = resolveAgentMainSessionKey({
+    cfg: params.cfg ?? {},
     agentId: params.agentId,
-    sessionKey: raw,
   });
+  if (resolved.sessionKey === "global") {
+    return fallbackMainSessionKey;
+  }
+  return resolved.sessionKey;
 }

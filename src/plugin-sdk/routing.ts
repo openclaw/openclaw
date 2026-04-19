@@ -3,7 +3,9 @@ export {
   deriveLastRoutePolicy,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
+  resolveSessionRoute,
   type ResolvedAgentRoute,
+  type ResolvedSessionRoute,
   type RoutePeer,
   type RoutePeerKind,
 } from "../routing/resolve-route.js";

@@ -9,6 +9,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import {
+  SessionBindingError,
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
   type SessionBindingAdapterCapabilities,
@@ -1978,8 +1979,19 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBe("telegram");
   });
 
-  it("drops self-parent Telegram current-conversation refs before binding", async () => {
+  it("fails closed when Telegram current-conversation ACP binding targets the protected primary DM", async () => {
     enableTelegramCurrentConversationBindings();
+    hoisted.sessionBindingBindMock.mockRejectedValueOnce(
+      new SessionBindingError(
+        "BINDING_PROTECTED_CONVERSATION",
+        "Primary Telegram direct conversations cannot be bound to ACP sessions. Use a child thread instead.",
+        {
+          channel: "telegram",
+          accountId: "default",
+          placement: "current",
+        },
+      ),
+    );
 
     const result = await spawnAcpDirect(
       {
@@ -1996,8 +2008,12 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    const accepted = expectAcceptedSpawn(result);
-    expect(accepted.mode).toBe("session");
+    expect(result).toEqual({
+      status: "error",
+      errorCode: "thread_binding_invalid",
+      error:
+        "Primary Telegram direct conversations cannot be bound to ACP sessions. Use a child thread instead.",
+    });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",

@@ -51,7 +51,7 @@ function createMockBtwPresenter(): MockBtwPresenter & HandlerBtwPresenter {
 describe("tui-event-handlers: handleAgentEvent", () => {
   const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
     agentDefaultId: "main",
-    sessionMainKey: "agent:main:main",
+    sessionMainKey: "main",
     sessionScope: "global",
     agents: [],
     currentAgentId: "main",

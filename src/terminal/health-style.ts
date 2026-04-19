@@ -24,6 +24,9 @@ export function styleHealthChannelLine(line: string, rich: boolean): string {
   if (normalized.startsWith("ok")) {
     return applyPrefix("ok", theme.success);
   }
+  if (normalized.startsWith("degraded")) {
+    return applyPrefix("degraded", theme.warn);
+  }
   if (normalized.startsWith("linked")) {
     return applyPrefix("linked", theme.success);
   }

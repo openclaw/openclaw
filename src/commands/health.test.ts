@@ -39,6 +39,8 @@ const createHealthSummary = (params: {
   const sessions = params.sessions ?? defaultSessions;
   return {
     ok: true,
+    state: "ok",
+    reasons: [],
     ts: Date.now(),
     durationMs: 5,
     channels: params.channels,

@@ -5,6 +5,11 @@ const createTelegramBotMock = vi.hoisted(() => vi.fn());
 const isRecoverableTelegramNetworkErrorMock = vi.hoisted(() => vi.fn(() => true));
 const computeBackoffMock = vi.hoisted(() => vi.fn(() => 0));
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
+const getActiveEmbeddedRunCountMock = vi.hoisted(() => vi.fn(() => 0));
+const getActiveTaskCountMock = vi.hoisted(() => vi.fn(() => 0));
+const getTotalQueueSizeMock = vi.hoisted(() => vi.fn(() => 0));
+
+const JUST_OVER_POLL_STALL_THRESHOLD_MS = 72e4 + 100;
 
 vi.mock("@grammyjs/runner", () => ({
   run: runMock,
@@ -26,6 +31,12 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   computeBackoff: computeBackoffMock,
   formatDurationPrecise: vi.fn((ms: number) => `${ms}ms`),
   sleepWithAbort: sleepWithAbortMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+  getActiveEmbeddedRunCount: getActiveEmbeddedRunCountMock,
+  getActiveTaskCount: getActiveTaskCountMock,
+  getTotalQueueSize: getTotalQueueSizeMock,
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
@@ -50,7 +61,7 @@ function makeBot() {
 
 function installPollingStallWatchdogHarness(
   dateNowSequence: readonly number[] = [0, 0],
-  fallbackDateNow = 120_001,
+  fallbackDateNow = JUST_OVER_POLL_STALL_THRESHOLD_MS,
 ) {
   let watchdog: (() => void) | undefined;
   const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
@@ -199,6 +210,9 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
+    getActiveEmbeddedRunCountMock.mockReset().mockReturnValue(0);
+    getActiveTaskCountMock.mockReset().mockReturnValue(0);
+    getTotalQueueSizeMock.mockReset().mockReturnValue(0);
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -399,6 +413,42 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("suppresses stall restarts when gateway work is still active", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    createTelegramBotMock.mockReturnValueOnce({
+      ...makeBot(),
+      stop: botStop,
+    });
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+    getActiveTaskCountMock.mockReturnValue(1);
+
+    const watchdogHarness = installPollingStallWatchdogHarness();
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdog?.();
+
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("class=busy_processing"));
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("class=transport_stalled"));
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
   it("rebuilds the transport after a recoverable polling error", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");
@@ -428,8 +478,8 @@ describe("TelegramPollingSession", () => {
     const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
     // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
-    // t=120_001: watchdog fires (getUpdates stale for 120s)
-    // But right before watchdog, a sendMessage succeeded at t=120_000
+    // The watchdog fires after the getUpdates gap is beyond the 12-minute threshold.
+    // Right before that, a sendMessage succeeds, so API liveness stays fresh.
     // All subsequent Date.now calls return the same value, giving apiIdle = 0.
     const watchdogHarness = installPollingStallWatchdogHarness();
 
@@ -555,7 +605,7 @@ describe("TelegramPollingSession", () => {
         );
         const sendPromise = apiMiddleware(slowPrev, "sendMessage", { chat_id: 123, text: "hello" });
 
-        // The in-flight send started at t=1 and is still stuck at t=120_001.
+        // The in-flight send started at t=1 and is still stuck past the threshold.
         // That is older than the watchdog threshold, so restart should proceed.
         watchdog?.();
 

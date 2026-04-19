@@ -20,8 +20,16 @@ export type AgentHealthSummary = {
   sessions: HealthSummary["sessions"];
 };
 
+export type HealthReason = {
+  code: string;
+  label: string;
+  detail: string;
+};
+
 export type HealthSummary = {
-  ok: true;
+  ok: boolean;
+  state: "ok" | "degraded";
+  reasons: HealthReason[];
   ts: number;
   durationMs: number;
   channels: Record<string, ChannelHealthSummary>;

@@ -200,6 +200,10 @@ export type ChannelAccountSnapshot = {
   lastEventAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  deliveryTruth?: string | null;
+  transportTruth?: string | null;
+  routeIntegrity?: string | null;
+  sessionStoreIntegrity?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;

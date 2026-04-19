@@ -8,6 +8,7 @@ import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
   resolveThreadBindingEffectiveExpiresAt,
+  SessionBindingError,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingAdapter,
@@ -19,6 +20,7 @@ import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveTelegramTargetChatType } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -118,6 +120,32 @@ function resolveBindingKey(params: { accountId: string; conversationId: string }
 
 function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
   return raw === "subagent" ? "subagent" : "session";
+}
+
+function isProtectedTelegramPrimaryConversation(params: {
+  accountId: string;
+  targetKind: BindingTargetKind;
+  placement: "current" | "child";
+  conversationId?: string;
+}): boolean {
+  const conversationId = normalizeOptionalString(params.conversationId);
+  return (
+    params.accountId === "default" &&
+    params.targetKind === "session" &&
+    params.placement === "current" &&
+    Boolean(conversationId && resolveTelegramTargetChatType(conversationId) === "direct")
+  );
+}
+
+function isUnsafeProtectedTelegramPrimaryBindingRecord(
+  record: Pick<TelegramThreadBindingRecord, "accountId" | "targetKind" | "conversationId">,
+): boolean {
+  return isProtectedTelegramPrimaryConversation({
+    accountId: record.accountId,
+    targetKind: toSessionBindingTargetKind(record.targetKind),
+    placement: "current",
+    conversationId: record.conversationId,
+  });
 }
 
 function toTelegramTargetKind(raw: BindingTargetKind): TelegramBindingTargetKind {
@@ -315,18 +343,15 @@ async function persistBindingsToDisk(params: {
   }
   const payload: StoredTelegramBindingState = {
     version: STORE_VERSION,
-    bindings:
-      params.bindings ??
-      [...getThreadBindingsState().bindingsByAccountConversation.values()].filter(
-        (entry) => entry.accountId === params.accountId,
-      ),
+    bindings: params.bindings ?? listBindingsForAccount(params.accountId),
   };
   await writeJsonFileAtomically(resolveBindingsPath(params.accountId), payload);
 }
 
 function listBindingsForAccount(accountId: string): TelegramThreadBindingRecord[] {
   return [...getThreadBindingsState().bindingsByAccountConversation.values()].filter(
-    (entry) => entry.accountId === accountId,
+    (entry) =>
+      entry.accountId === accountId && !isUnsafeProtectedTelegramPrimaryBindingRecord(entry),
   );
 }
 
@@ -430,7 +455,12 @@ export function createTelegramThreadBindingManager(
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
   const loaded = loadBindingsFromDisk(accountId);
+  let droppedUnsafeBinding = false;
   for (const entry of loaded) {
+    if (isUnsafeProtectedTelegramPrimaryBindingRecord(entry)) {
+      droppedUnsafeBinding = true;
+      continue;
+    }
     const key = resolveBindingKey({
       accountId,
       conversationId: entry.conversationId,
@@ -505,12 +535,13 @@ export function createTelegramThreadBindingManager(
       if (!conversationId) {
         return undefined;
       }
-      return getThreadBindingsState().bindingsByAccountConversation.get(
+      const record = getThreadBindingsState().bindingsByAccountConversation.get(
         resolveBindingKey({
           accountId,
           conversationId,
         }),
       );
+      return record && !isUnsafeProtectedTelegramPrimaryBindingRecord(record) ? record : undefined;
     },
     listBySessionKey: (targetSessionKeyRaw) => {
       const targetSessionKey = targetSessionKeyRaw.trim();
@@ -608,6 +639,15 @@ export function createTelegramThreadBindingManager(
     },
   };
 
+  if (droppedUnsafeBinding) {
+    persistBindingsSafely({
+      accountId,
+      persist,
+      bindings: listBindingsForAccount(accountId),
+      reason: "sanitize-protected-primary-load",
+    });
+  }
+
   const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "telegram",
     accountId,
@@ -623,6 +663,24 @@ export function createTelegramThreadBindingManager(
         return null;
       }
       const placement = input.placement === "child" ? "child" : "current";
+      if (
+        isProtectedTelegramPrimaryConversation({
+          accountId,
+          targetKind: input.targetKind,
+          placement,
+          conversationId: input.conversation.conversationId,
+        })
+      ) {
+        throw new SessionBindingError(
+          "BINDING_PROTECTED_CONVERSATION",
+          "Primary Telegram direct conversations cannot be bound to ACP sessions. Use a child thread instead.",
+          {
+            channel: "telegram",
+            accountId,
+            placement,
+          },
+        );
+      }
       const metadata = input.metadata ?? {};
       let conversationId: string | undefined;
 

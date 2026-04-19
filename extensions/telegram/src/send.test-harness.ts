@@ -49,6 +49,10 @@ const { loadConfig, resolveStorePath } = vi.hoisted(() => ({
   ),
 }));
 
+const { resolveStateDir } = vi.hoisted(() => ({
+  resolveStateDir: vi.fn(() => "/tmp/openclaw-telegram-state"),
+}));
+
 const { maybePersistResolvedTelegramTarget } = vi.hoisted(() => ({
   maybePersistResolvedTelegramTarget: vi.fn(async () => {}),
 }));
@@ -151,6 +155,10 @@ vi.mock("./target-writeback.js", () => ({
   maybePersistResolvedTelegramTarget,
 }));
 
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  resolveStateDir,
+}));
+
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
   return {
     botApi,
@@ -167,6 +175,7 @@ export function installTelegramSendTestHooks() {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
+    resolveStateDir.mockReturnValue("/tmp/openclaw-telegram-state");
     loadWebMedia.mockReset();
     imageMetadata.width = 1200;
     imageMetadata.height = 800;

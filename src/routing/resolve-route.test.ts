@@ -5,6 +5,7 @@ import {
   deriveLastRoutePolicy,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
+  resolveSessionRoute,
 } from "./resolve-route.js";
 
 type ResolvedRouteExpectation = {
@@ -47,6 +48,66 @@ function expectResolvedRoute(
 function createCompatPeer(kind: CompatRoutePeerKind, id: string) {
   return { kind, id } as unknown as NonNullable<Parameters<typeof resolveAgentRoute>[0]["peer"]>;
 }
+
+describe("resolveSessionRoute", () => {
+  test("routes direct Telegram actors through the canonical peer session key", () => {
+    const resolved = resolveSessionRoute({
+      cfg: {
+        session: {
+          dmScope: "per-channel-peer",
+          identityLinks: {
+            thomas: ["telegram:thomas"],
+          },
+        },
+      },
+      agentId: "main",
+      mainKey: "main",
+      surface: "telegram",
+      actor: {
+        provider: "telegram",
+        accountId: "default",
+        from: "thomas",
+        identityLinkKey: "thomas",
+        chatType: "direct",
+        label: "thomas",
+      },
+    });
+
+    expect(resolved.sessionKey).toBe("agent:main:telegram:direct:thomas");
+    expect(resolved.scope).toBe("peer-scoped-direct");
+    expect(resolved.reason).toBe("telegram-peer-direct");
+    expect(resolved.explicit).toBe(false);
+    expect(resolved.surface).toBe("telegram");
+    expect(resolved.resolverVersion).toBe("2026-04-15-route-v1");
+  });
+
+  test("isolates heartbeat sessions from an explicit base session key", () => {
+    const resolved = resolveSessionRoute({
+      agentId: "main",
+      mainKey: "main",
+      surface: "heartbeat",
+      heartbeatBaseSessionKey: "agent:main:telegram:direct:thomas",
+    });
+
+    expect(resolved.sessionKey).toBe("agent:main:telegram:direct:thomas:heartbeat");
+    expect(resolved.scope).toBe("heartbeat-isolated");
+    expect(resolved.reason).toBe("heartbeat-isolated-base-session");
+    expect(resolved.explicit).toBe(true);
+  });
+
+  test("uses the canonical main bucket for blank tui sessions", () => {
+    const resolved = resolveSessionRoute({
+      agentId: "main",
+      mainKey: "main",
+      surface: "tui",
+    });
+
+    expect(resolved.sessionKey).toBe("agent:main:main");
+    expect(resolved.mainSessionKey).toBe("agent:main:main");
+    expect(resolved.scope).toBe("agent-main");
+    expect(resolved.reason).toBe("tui-agent-main");
+  });
+});
 
 describe("resolveAgentRoute", () => {
   const expectDirectRouteSessionKey = (params: {

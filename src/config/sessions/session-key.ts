@@ -4,6 +4,12 @@ import {
   DEFAULT_AGENT_ID,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { resolveSessionRoute } from "../../routing/resolve-route.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { normalizeE164 } from "../../utils.js";
 import { normalizeExplicitSessionKey } from "./explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "./group.js";
@@ -22,27 +28,55 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
   return from || "unknown";
 }
 
+function buildRouteActorFromCtx(
+  ctx: MsgContext,
+  groupResolution: ReturnType<typeof resolveGroupSessionKey> | null,
+) {
+  const provider = normalizeMessageChannel(
+    ctx.Surface || ctx.Provider || normalizeLowercaseStringOrEmpty(ctx.From).split(":", 1)[0],
+  );
+  const chatType =
+    groupResolution?.chatType ??
+    (normalizeOptionalLowercaseString(ctx.ChatType) === "group"
+      ? "group"
+      : normalizeOptionalLowercaseString(ctx.ChatType) === "channel"
+        ? "channel"
+        : "direct");
+  return {
+    provider: provider || "api",
+    accountId: ctx.AccountId,
+    from: ctx.From,
+    to: typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To,
+    chatType,
+  };
+}
+
 /**
  * Resolve the session key with a canonical direct-chat bucket (default: "main").
  * All non-group direct chats collapse to this bucket; groups stay isolated.
  */
 export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
   const explicit = ctx.SessionKey?.trim();
-  if (explicit) {
-    return normalizeExplicitSessionKey(explicit, ctx);
-  }
-  const raw = deriveSessionKey(scope, ctx);
+  const normalizedMainKey = normalizeMainKey(mainKey);
+  const groupResolution = resolveGroupSessionKey(ctx);
   if (scope === "global") {
-    return raw;
+    return "global";
   }
-  const canonicalMainKey = normalizeMainKey(mainKey);
-  const canonical = buildAgentMainSessionKey({
-    agentId: DEFAULT_AGENT_ID,
-    mainKey: canonicalMainKey,
-  });
-  const isGroup = raw.includes(":group:") || raw.includes(":channel:");
-  if (!isGroup) {
-    return canonical;
+  if (groupResolution) {
+    return `agent:${DEFAULT_AGENT_ID}:${groupResolution.key}`;
   }
-  return `agent:${DEFAULT_AGENT_ID}:${raw}`;
+  return (
+    resolveSessionRoute({
+      agentId: DEFAULT_AGENT_ID,
+      surface: normalizeMessageChannel(ctx.Surface || ctx.Provider) || "api",
+      rawSessionInput: explicit ? normalizeExplicitSessionKey(explicit, ctx) : undefined,
+      sessionScope: "agent",
+      mainKey: normalizedMainKey,
+      actor: buildRouteActorFromCtx(ctx, groupResolution),
+    }).sessionKey ??
+    buildAgentMainSessionKey({
+      agentId: DEFAULT_AGENT_ID,
+      mainKey: normalizedMainKey,
+    })
+  );
 }

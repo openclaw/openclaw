@@ -39,6 +39,7 @@ import {
   getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
   resolveMaintenanceConfig,
+  resolveSessionTranscriptArchiveDir,
   rotateSessionFile,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
@@ -312,7 +313,7 @@ async function saveSessionStoreUnlocked(
       if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
         const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
         const targetDirs =
-          archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
+          archivedDirs.size > 0 ? [...archivedDirs] : [resolveSessionTranscriptArchiveDir(storePath)];
         await cleanupArchivedSessionTranscripts({
           directories: targetDirs,
           olderThanMs: maintenance.pruneAfterMs,

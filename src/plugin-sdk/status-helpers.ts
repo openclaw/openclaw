@@ -321,6 +321,14 @@ export function buildTokenChannelStatusSummary(
     tokenSource?: string | null;
     running?: boolean | null;
     mode?: string | null;
+    connected?: boolean | null;
+    lastInboundAt?: number | null;
+    lastOutboundAt?: number | null;
+    healthState?: string | null;
+    deliveryTruth?: string | null;
+    transportTruth?: string | null;
+    routeIntegrity?: string | null;
+    sessionStoreIntegrity?: string | null;
     lastStartAt?: number | null;
     lastStopAt?: number | null;
     lastError?: string | null;
@@ -334,6 +342,14 @@ export function buildTokenChannelStatusSummary(
     tokenSource: snapshot.tokenSource ?? "none",
     probe: snapshot.probe,
     lastProbeAt: snapshot.lastProbeAt ?? null,
+    ...(typeof snapshot.connected === "boolean" ? { connected: snapshot.connected } : {}),
+    lastInboundAt: snapshot.lastInboundAt ?? null,
+    lastOutboundAt: snapshot.lastOutboundAt ?? null,
+    healthState: snapshot.healthState ?? null,
+    deliveryTruth: snapshot.deliveryTruth ?? null,
+    transportTruth: snapshot.transportTruth ?? null,
+    routeIntegrity: snapshot.routeIntegrity ?? null,
+    sessionStoreIntegrity: snapshot.sessionStoreIntegrity ?? null,
   };
   if (opts?.includeMode === false) {
     return base;

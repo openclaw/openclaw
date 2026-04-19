@@ -8,7 +8,8 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import { resolveSessionRoute } from "../routing/resolve-route.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -286,15 +287,30 @@ export function resolveSessionKey(params: {
   agentId: string;
   user?: string | undefined;
   prefix: string;
+  defaultMessageChannel?: string;
 }): string {
+  const cfg = loadConfig();
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
-    return explicit;
+    return resolveSessionRoute({
+      cfg,
+      agentId: params.agentId,
+      surface: params.defaultMessageChannel === "webchat" ? "webchat" : "api",
+      rawSessionInput: explicit,
+      sessionScope: "agent",
+      mainKey: cfg.session?.mainKey,
+    }).sessionKey;
   }
 
   const user = params.user?.trim();
   const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
-  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+  return resolveSessionRoute({
+    cfg,
+    agentId: params.agentId,
+    surface: params.defaultMessageChannel === "webchat" ? "webchat" : "api",
+    sessionScope: "agent",
+    mainKey,
+  }).sessionKey;
 }
 
 export function resolveGatewayRequestContext(params: {
@@ -311,6 +327,7 @@ export function resolveGatewayRequestContext(params: {
     agentId,
     user: params.user,
     prefix: params.sessionPrefix,
+    defaultMessageChannel: params.defaultMessageChannel,
   });
 
   const messageChannel = params.useMessageChannelHeader

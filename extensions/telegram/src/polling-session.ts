@@ -1,5 +1,10 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import {
+  getActiveEmbeddedRunCount,
+  getActiveTaskCount,
+  getTotalQueueSize,
+} from "openclaw/plugin-sdk/gateway-runtime";
+import {
   computeBackoff,
   formatDurationPrecise,
   sleepWithAbort,
@@ -19,7 +24,10 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
-const POLL_STALL_THRESHOLD_MS = 90_000;
+// Telegram updates are sequentialized per chat, so a single long-running turn
+// can legitimately pause getUpdates for several minutes without the poller
+// being broken. Keep the watchdog comfortably above the normal agent timeout.
+const POLL_STALL_THRESHOLD_MS = 72e4;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 
@@ -335,6 +343,12 @@ export class TelegramPollingSession {
           ? lastApiActivityAt
           : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
       const apiElapsed = now - apiLivenessAt;
+      const activeCommandTasks = getActiveTaskCount();
+      const queuedCommandTasks = getTotalQueueSize();
+      const activeEmbeddedRuns = getActiveEmbeddedRunCount();
+      const busyProcessing =
+        inFlightGetUpdates === 0 &&
+        (activeEmbeddedRuns > 0 || activeCommandTasks > 0 || queuedCommandTasks > 0);
 
       // Treat recent non-getUpdates success and recent non-getUpdates start as
       // the same liveness signal. Slow delivery should suppress the watchdog,
@@ -348,6 +362,12 @@ export class TelegramPollingSession {
           return;
         }
         stallDiagLoggedAt = now;
+        if (busyProcessing) {
+          this.opts.log(
+            `[telegram][diag] polling watchdog observed a long getUpdates gap but gateway work is still active; suppressing restart. [diag class=busy_processing activeRuns=${activeEmbeddedRuns} activeTasks=${activeCommandTasks} queued=${queuedCommandTasks} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
+          );
+          return;
+        }
         this.#transportState.markDirty();
         stalledRestart = true;
         const elapsedLabel =
@@ -355,7 +375,7 @@ export class TelegramPollingSession {
             ? `active getUpdates stuck for ${formatDurationPrecise(elapsed)}`
             : `no completed getUpdates for ${formatDurationPrecise(elapsed)}`;
         this.opts.log(
-          `[telegram] Polling stall detected (${elapsedLabel}); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
+          `[telegram] Polling stall detected (${elapsedLabel}); forcing restart. [diag class=transport_stalled activeRuns=${activeEmbeddedRuns} activeTasks=${activeCommandTasks} queued=${queuedCommandTasks} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
         );
         void stopRunner();
         void stopBot();
