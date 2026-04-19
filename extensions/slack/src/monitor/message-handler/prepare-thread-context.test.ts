@@ -56,6 +56,8 @@ describe("resolveSlackThreadContextData", () => {
       response_metadata: { next_cursor: "" },
     });
     const ctx = createThreadContext({ replies });
+    ctx.botUserId = "U_BOT";
+    ctx.botId = "B1";
     ctx.resolveUserName = async (id: string) => ({
       name: id === "U1" ? "Alice" : "Mallory",
     });
@@ -173,5 +175,26 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toContain("other bot starter");
     expect(result.threadHistoryBody).toContain("other bot starter");
     expect(result.threadHistoryBody).toContain("allowed follow-up");
+  });
+
+  it("omits self-authored starter text when identified by bot user id", async () => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [
+        { text: "self starter", user: "U_BOT", ts: "100.000" },
+        { text: "allowed follow-up", user: "U1", ts: "100.800" },
+        { text: "current message", user: "U1", ts: "101.000" },
+      ],
+      threadStarter: {
+        text: "self starter",
+        userId: "U_BOT",
+        ts: "100.000",
+      },
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+    });
+
+    expect(result.threadStarterBody).toBeUndefined();
+    expect(result.threadHistoryBody).toContain("allowed follow-up");
+    expect(result.threadHistoryBody).not.toContain("self starter");
   });
 });

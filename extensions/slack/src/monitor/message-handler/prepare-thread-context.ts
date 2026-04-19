@@ -64,6 +64,12 @@ export async function resolveSlackThreadContextData(params: {
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
 }): Promise<SlackThreadContextData> {
+  const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
+    Boolean(
+      (params.ctx.botUserId && author.userId && author.userId === params.ctx.botUserId) ||
+      (params.ctx.botId && author.botId && author.botId === params.ctx.botId),
+    );
+
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
   let threadSessionPreviousTimestamp: number | undefined;
@@ -85,7 +91,13 @@ export async function resolveSlackThreadContextData(params: {
     params.allowNameMatching && starter?.userId
       ? (await params.ctx.resolveUserName(starter.userId))?.name
       : undefined;
-  const starterIsCurrentBot = Boolean(starter?.botId && starter.botId === params.ctx.botUserId);
+  const starterIsCurrentBot = Boolean(
+    starter &&
+    isCurrentBotAuthor({
+      userId: starter.userId,
+      botId: starter.botId,
+    }),
+  );
   const starterAllowed =
     !starter ||
     (!starterIsCurrentBot &&
@@ -148,7 +160,11 @@ export async function resolveSlackThreadContextData(params: {
 
     if (threadHistory.length > 0) {
       const threadHistoryWithoutCurrentBot = threadHistory.filter(
-        (historyMsg) => !historyMsg.botId || historyMsg.botId !== params.ctx.botUserId,
+        (historyMsg) =>
+          !isCurrentBotAuthor({
+            userId: historyMsg.userId,
+            botId: historyMsg.botId,
+          }),
       );
       const omittedCurrentBotHistoryCount =
         threadHistory.length - threadHistoryWithoutCurrentBot.length;
