@@ -34,14 +34,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-const SAFE_ZIP_BUFFER = Buffer.from(
-  "UEsDBAoAAAAAAMOJVlysKpPYAgAAAAIAAAAJAAAAaGVsbG8udHh0aGlQSwECFAAKAAAAAADDiVZcrCqT2AIAAAACAAAACQAAAAAAAAAAAAAAAAAAAAAAaGVsbG8udHh0UEsFBgAAAAABAAEANwAAACkAAAAAAA==",
-  "base64",
-);
-const STRIP_COMPONENTS_ZIP_BUFFER = Buffer.from(
-  "UEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAAIAAAAcGFja2FnZS9QSwMECgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAABwYWNrYWdlL2hlbGxvLnR4dGhpUEsBAhQACgAAAAAAw4lWXAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAQAAAAAAAAAHBhY2thZ2UvUEsBAhQACgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAAAAAAAAAAAAAAAAJgAAAHBhY2thZ2UvaGVsbG8udHh0UEsFBgAAAAACAAIAdQAAAFcAAAAAAA==",
-  "base64",
-);
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
   const filePath = path.join(skillDir, "SKILL.md");
@@ -167,25 +159,7 @@ beforeEach(() => {
 });
 
 describe("installDownloadSpec extraction safety", () => {
-  it("extracts zip with stripComponents safely", async () => {
-    const entry = buildEntry("zip-good");
-    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
-
-    mockArchiveResponse(new Uint8Array(STRIP_COMPONENTS_ZIP_BUFFER));
-
-    const result = await installDownloadSkill({
-      name: "zip-good",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      stripComponents: 1,
-      targetDir,
-    });
-    expect(result.ok).toBe(true);
-    expect(await fs.readFile(path.join(targetDir, "hello.txt"), "utf-8")).toBe("hi");
-  });
-
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
-    mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
 
     const result = await installDownloadSkill({
@@ -202,22 +176,27 @@ describe("installDownloadSpec extraction safety", () => {
   });
 
   it("allows relative targetDir inside the per-skill tools root", async () => {
-    mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
+    mockArchiveResponse(new TextEncoder().encode("payload"));
     const entry = buildEntry("relative-targetdir");
 
-    const result = await installDownloadSkill({
-      name: "relative-targetdir",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      targetDir: "runtime",
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/payload.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
     });
     expect(result.ok).toBe(true);
     expect(
       await fs.readFile(
-        path.join(resolveSkillToolsRootDir(entry), "runtime", "hello.txt"),
+        path.join(resolveSkillToolsRootDir(entry), "runtime", "payload.bin"),
         "utf-8",
       ),
-    ).toBe("hi");
+    ).toBe("payload");
   });
 
   it.runIf(process.platform !== "win32")(

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/io.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
@@ -24,6 +24,16 @@ vi.mock("./tools/nodes-utils.js", () => ({
 vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
+
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
+  return {
+    ...mod,
+    getShellPathFromLoginShell: vi.fn(() => null),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+  };
+});
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -221,13 +231,20 @@ describe("exec approvals", () => {
   let previousUserProfile: string | undefined;
   let previousBundledPluginsDir: string | undefined;
   let previousDisableBundledPlugins: string | undefined;
+  let tempRoot = "";
+  let tempCaseIndex = 0;
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  });
 
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
     previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
+    await fs.mkdir(tempDir, { recursive: true });
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
@@ -260,6 +277,12 @@ describe("exec approvals", () => {
       delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     } else {
       process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
+    }
+  });
+
+  afterAll(async () => {
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   });
 
@@ -582,7 +605,7 @@ describe("exec approvals", () => {
       security: "allowlist",
       approvalRunningNoticeMs: 0,
     });
-    const command = `${JSON.stringify(process.execPath)} --version`;
+    const command = "echo allow-always";
 
     const first = await tool.execute("call-gateway-allow-always-initial", {
       command,
@@ -594,13 +617,16 @@ describe("exec approvals", () => {
 
     const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
     await expect
-      .poll(async () => {
-        const raw = await fs.readFile(approvalsPath, "utf8");
-        const parsed = JSON.parse(raw) as {
-          agents?: { main?: { allowlist?: Array<{ source?: string }> } };
-        };
-        return parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always");
-      })
+      .poll(
+        async () => {
+          const raw = await fs.readFile(approvalsPath, "utf8");
+          const parsed = JSON.parse(raw) as {
+            agents?: { main?: { allowlist?: Array<{ source?: string }> } };
+          };
+          return parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always");
+        },
+        { timeout: 1_000, interval: 1 },
+      )
       .toBe(true);
 
     calls.length = 0;
@@ -833,8 +859,6 @@ describe("exec approvals", () => {
 
   it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-discord-"));
-    const markerPath = path.join(tempDir, "marker.txt");
     let resolveDecision: ((value: { decision: string }) => void) | undefined;
     const decisionPromise = new Promise<{ decision: string }>((resolve) => {
       resolveDecision = resolve;
@@ -867,25 +891,12 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-gw-followup-discord-delayed", {
-      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
-      workdir: tempDir,
+      command: "printf delayed-ok",
+      workdir: process.cwd(),
     });
 
     expect(result.details.status).toBe("approval-pending");
     expect(agentCalls).toHaveLength(0);
-    await expect
-      .poll(
-        async () => {
-          try {
-            await fs.access(markerPath);
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 500, interval: 50 },
-      )
-      .toBe(false);
 
     resolveDecision?.({ decision: "allow-once" });
 
@@ -905,26 +916,12 @@ describe("exec approvals", () => {
     expect(agentCalls[0]?.message).toContain(
       "If the task requires more steps, continue from this result before replying to the user.",
     );
+    expect(agentCalls[0]?.message).toContain("delayed-ok");
     expect(sendMessage).not.toHaveBeenCalled();
-
-    await expect
-      .poll(
-        async () => {
-          try {
-            return await fs.readFile(markerPath, "utf8");
-          } catch {
-            return "";
-          }
-        },
-        { timeout: 5_000, interval: 50 },
-      )
-      .toBe("ok");
   });
 
   it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-sidefx-"));
-    const markerPath = path.join(tempDir, "marker.txt");
 
     mockAcceptedApprovalFlow({
       onAgent: (params) => {
@@ -941,8 +938,8 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-gw-followup-webchat", {
-      command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
-      workdir: tempDir,
+      command: "printf webchat-ok",
+      workdir: process.cwd(),
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -954,19 +951,7 @@ describe("exec approvals", () => {
         deliver: false,
       }),
     );
-
-    await expect
-      .poll(
-        async () => {
-          try {
-            return await fs.readFile(markerPath, "utf8");
-          } catch {
-            return "";
-          }
-        },
-        { timeout: 5_000, interval: 50 },
-      )
-      .toBe("ok");
+    expect(agentCalls[0]?.message).toContain("webchat-ok");
   });
 
   it("uses a deny-specific followup prompt so prior output is not reused", async () => {

@@ -6,8 +6,9 @@ import {
   sortSubagentRuns,
   type SubagentTargetResolution,
 } from "../auto-reply/reply/subagents-utils.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { loadSessionStore, resolveStorePath, updateSessionStore } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { logVerbose } from "../globals.js";
@@ -56,15 +57,18 @@ const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
+type UpdateSessionStore = typeof updateSessionStore;
 type AbortEmbeddedPiRun = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
   callGateway,
+  updateSessionStore,
 };
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
+  updateSessionStore: UpdateSessionStore;
   abortEmbeddedPiRun?: AbortEmbeddedPiRun;
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
@@ -190,7 +194,7 @@ async function killSubagentRun(params: {
   }
   if (resolved.entry) {
     try {
-      await updateSessionStore(resolved.storePath, (store) => {
+      await subagentControlDeps.updateSessionStore(resolved.storePath, (store) => {
         const current = store[childSessionKey];
         if (!current) {
           return;
@@ -743,6 +747,7 @@ export const __testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
+      updateSessionStore: UpdateSessionStore;
       abortEmbeddedPiRun: AbortEmbeddedPiRun;
       clearSessionQueues: ClearSessionQueues;
     }>,

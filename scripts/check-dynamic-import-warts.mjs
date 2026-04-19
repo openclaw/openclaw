@@ -40,6 +40,26 @@ function isTypeOnlyImportDeclaration(node) {
   );
 }
 
+function readDeclarationName(node) {
+  if (
+    (ts.isFunctionDeclaration(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isVariableDeclaration(node)) &&
+    node.name &&
+    ts.isIdentifier(node.name)
+  ) {
+    return node.name.text;
+  }
+
+  if (ts.isPropertyAssignment(node)) {
+    if (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) {
+      return node.name.text;
+    }
+  }
+
+  return null;
+}
+
 function isIgnoredTestHelperContent(content) {
   return /\bfrom\s+["']vitest["']/.test(content) || /\bfrom\s+["']@vitest\//.test(content);
 }
@@ -61,6 +81,8 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const staticRuntimeImports = new Map();
   const dynamicImports = new Map();
+  const directExecuteImports = [];
+  const declarationStack = [];
 
   const addLine = (map, specifier, line) => {
     const lines = map.get(specifier) ?? [];
@@ -69,6 +91,11 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   };
 
   const visit = (node) => {
+    const declarationName = readDeclarationName(node);
+    if (declarationName) {
+      declarationStack.push(declarationName);
+    }
+
     if (
       ts.isImportDeclaration(node) &&
       ts.isStringLiteral(node.moduleSpecifier) &&
@@ -84,16 +111,26 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
     ) {
       const specifier = readStringLiteral(node.arguments[0]);
       if (specifier) {
-        addLine(dynamicImports, specifier, toLine(sourceFile, node));
+        const line = toLine(sourceFile, node);
+        addLine(dynamicImports, specifier, line);
+        if (declarationStack.includes("execute")) {
+          directExecuteImports.push({
+            line,
+            reason: `direct dynamic import of "${specifier}" inside execute path; move it behind a cached loader`,
+          });
+        }
       }
     }
 
     ts.forEachChild(node, visit);
+    if (declarationName) {
+      declarationStack.pop();
+    }
   };
 
   visit(sourceFile);
 
-  const advisories = [];
+  const advisories = [...directExecuteImports];
   for (const [specifier, dynamicLines] of dynamicImports) {
     const staticLines = staticRuntimeImports.get(specifier);
     if (staticLines?.length) {

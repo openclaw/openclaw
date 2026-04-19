@@ -293,7 +293,7 @@ async function discoverAllSessionsForUsage(params: {
         startMs: params.startMs,
         endMs: params.endMs,
       });
-      return sessions.map((session) => ({ ...session, agentId: agent.id }));
+      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);

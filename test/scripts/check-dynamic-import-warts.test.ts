@@ -54,4 +54,39 @@ describe("check-dynamic-import-warts", () => {
     `;
     expect(findDynamicImportAdvisories(source)).toEqual([]);
   });
+
+  it("flags direct dynamic imports inside execute paths", () => {
+    const source = `
+      export function createTool() {
+        return {
+          execute: async () => {
+            return await import("./runtime.js");
+          },
+        };
+      }
+    `;
+    expect(findDynamicImportAdvisories(source)).toEqual([
+      {
+        line: 5,
+        reason:
+          'direct dynamic import of "./runtime.js" inside execute path; move it behind a cached loader',
+      },
+    ]);
+  });
+
+  it("allows execute paths that call cached loaders", () => {
+    const source = `
+      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
+      function loadRuntime() {
+        runtimePromise ??= import("./runtime.js");
+        return runtimePromise;
+      }
+      export function createTool() {
+        return {
+          execute: async () => await loadRuntime(),
+        };
+      }
+    `;
+    expect(findDynamicImportAdvisories(source)).toEqual([]);
+  });
 });

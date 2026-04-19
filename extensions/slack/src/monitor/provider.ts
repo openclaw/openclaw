@@ -512,7 +512,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             summarizeMapping("slack channels", mapping, unresolved, runtime);
           }
         } catch (err) {
-          runtime.log?.(`slack channel resolve failed; using config entries. ${String(err)}`);
+          runtime.log?.(
+            `slack channel resolve failed; using config entries. ${formatUnknownError(err)}`,
+          );
         }
       }
 
@@ -533,7 +535,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           ctx.allowFrom = normalizeAllowList(allowFrom);
           summarizeMapping("slack users", mapping, unresolved, runtime);
         } catch (err) {
-          runtime.log?.(`slack user resolve failed; using config entries. ${String(err)}`);
+          runtime.log?.(
+            `slack user resolve failed; using config entries. ${formatUnknownError(err)}`,
+          );
         }
       }
 
@@ -565,7 +569,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             summarizeMapping("slack channel users", mapping, unresolved, runtime);
           } catch (err) {
             runtime.log?.(
-              `slack channel user resolve failed; using config entries. ${String(err)}`,
+              `slack channel user resolve failed; using config entries. ${formatUnknownError(err)}`,
             );
           }
         }

@@ -1223,14 +1223,15 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
-  it("enables streaming usage compat for Ollama OpenAI-compat endpoints", () => {
+  it("honors explicit streaming usage compat for configured custom providers", () => {
     const params = buildOpenAICompletionsParams(
       {
-        id: "qwen2.5:7b",
-        name: "Qwen 2.5 7B",
+        id: "custom-model",
+        name: "Custom Model",
         api: "openai-completions",
-        provider: "ollama",
-        baseUrl: "http://127.0.0.1:11434/v1",
+        provider: "custom-cpa",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1248,6 +1249,33 @@ describe("openai transport stream", () => {
     };
 
     expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
+  it("always includes stream_options.include_usage for non-standard backends like llama-cpp", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "llama-3",
+        name: "Llama 3",
+        api: "openai-completions",
+        provider: "custom-cpa",
+        baseUrl: "http://localhost:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toEqual({ include_usage: true });
   });
 
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
@@ -1288,7 +1316,7 @@ describe("openai transport stream", () => {
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params).not.toHaveProperty("stream_options");
+    expect(params.stream_options).toMatchObject({ include_usage: true });
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });

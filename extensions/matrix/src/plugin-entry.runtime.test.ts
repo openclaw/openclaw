@@ -144,7 +144,7 @@ function writeTrustedOpenClawBinFixture(
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+  for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -2,6 +2,40 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
+
+### Fixes
+
+- Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
+- Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
+- OpenAI/Responses: strip orphaned reasoning blocks before outbound Responses API calls so compacted or restored histories no longer fail on standalone reasoning items. (#55787) Thanks @suboss87.
+- Cron/CLI: parse PowerShell-style `--tools` allow-lists the same way as comma-separated input, so `cron add` and `cron edit` no longer persist `exec read write` as one combined tool entry on Windows. (#68858) Thanks @chen-zhang-cs-code.
+- Browser/user-profile: let existing-session `profile="user"` tool calls auto-route to a connected browser node or use explicit `target="node"`, while still honoring explicit `target="host"` pinning. (#48677)
+
+## 2026.4.19-beta.2
+
+### Fixes
+
+- Agents/openai-completions: always send `stream_options.include_usage` on streaming requests, so local and custom OpenAI-compatible backends report real context usage instead of showing 0%. (#68746) Thanks @kagura-agent.
+- Agents/nested lanes: scope nested agent work per target session so a long-running nested run on one session no longer head-of-line blocks unrelated sessions across the gateway. (#67785) Thanks @stainlu.
+- Agents/status: preserve carried-forward session token totals for providers that omit usage metadata, so `/status` and `openclaw sessions` keep showing the last known context usage instead of dropping back to unknown/0%. (#67695) Thanks @stainlu.
+- Install/update: keep legacy update verification compatible with the QA Lab runtime shim, so updating older global installs to beta no longer fails after npm installs the package successfully.
+
+## 2026.4.19-beta.1
+
+### Fixes
+
+- Agents/channels: route cross-agent subagent spawns through the target agent's bound channel account while preserving peer and workspace/role-scoped bindings, so child sessions no longer inherit the caller's account in shared rooms, workspaces, or multi-account setups. (#67508) Thanks @lukeboyett and @gumadeiras.
+- Telegram/callbacks: treat permanent callback edit errors as completed updates so stale command pagination buttons no longer wedge the update watermark and block newer Telegram updates. (#68588) Thanks @Lucenx9.
+- Browser/CDP: allow the selected remote CDP profile host for CDP health and control checks without widening browser navigation SSRF policy, so WSL-to-Windows Chrome endpoints no longer appear offline under strict defaults. Fixes #68108. (#68207) Thanks @Mlightsnow.
+- Codex: stop cumulative app-server token totals from being treated as fresh context usage, so session status no longer reports inflated context percentages after long Codex threads. (#64669) Thanks @cyrusaf.
+- Browser/CDP: add phase-specific CDP readiness diagnostics and normalize loopback WebSocket host aliases, so Windows browser startup failures surface whether HTTP discovery, WebSocket discovery, SSRF validation, or the `Browser.getVersion` health check failed.
+- Browser/CDP: discover Chrome’s real DevTools websocket from bare `ws://host:port` attach-only roots before declaring the profile down, while still falling back to direct websocket providers that do not expose `/json/version`. Fixes #68027. (#68715) Thanks @visionik.
+
 ## 2026.4.18
 
 ### Changes
@@ -57,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/display: escape raw control characters (including newline and carriage return) in the shared and macOS approval-prompt command sanitizers, so trailing command payloads no longer render on hidden extra lines in the approval UI. (#68198)
 - Telegram/streaming: fence same-session stale preview and finalization work after aborts so Telegram no longer replays an older reply or flushes a hidden short preview after the abort confirmation lands. (#68100) Thanks @rubencu.
 - OpenAI Codex/OAuth + Pi: keep imported Codex CLI OAuth bootstrap, Pi auth export, and runtime overlay handling aligned so Codex sessions survive refresh and health checks without leaking transient CLI state into saved auth files. Thanks @vincentkoc.
+- OpenAI Codex/OAuth: keep Codex-specific auth bridging inside the owning plugins, preserve canonical imported CLI profiles, and allow legacy identity-less main-store OAuth sessions to upgrade during refresh mirroring. (#68284) Thanks @vincentkoc.
 - Config/redact: add `browser.cdpUrl` and `browser.profiles.*.cdpUrl` to sensitive URL config paths so embedded credentials (query tokens and HTTP Basic auth) are properly redacted in `config.get` API responses and availability error messages. (#67679) Thanks @Ziy1-Tan.
 - Agents/TTS: report failed speech synthesis as a real tool error so unconfigured providers no longer feed successful TTS failure output back into agent loops. (#67980) Thanks @lawrence3699.
 - Gateway/wake: allow unknown properties on wake payloads so external senders like Paperclip can attach opaque metadata without failing schema validation. (#68355) Thanks @kagura-agent.
@@ -70,6 +105,10 @@ Docs: https://docs.openclaw.ai
 - Gateway/restart: keep stale-gateway cleanup from terminating the current process's parent or ancestors, so plugin sidecars like WeChat no longer kill the active gateway and trigger an infinite supervisor restart loop. Fixes #68451. (#68517) Thanks @openperf.
 - Gateway/auth: reject gateway auth credentials that match published example placeholders at startup and secret reload, and keep cloud install snippets from publishing copy-paste gateway/keyring secrets. (#68404) Thanks @coygeek.
 - CLI/update: preserve macOS restart helper launchctl failures in the update restart log without letting log setup block the restart path. (#68492) Thanks @hclsys.
+- Slack/threads: keep file-only root messages as starter context so first thread replies can still hydrate starter media. (#68594) Thanks @martingarramon.
+- Google/Antigravity: resolve forward-compatible Gemini 3.1 Pro custom-tools and Flash variants from the bundled Google plugin templates, so `google-antigravity/gemini-3.1-pro-preview-customtools` no longer falls through to an unknown-model error. Fixes #35512.
+- Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
+- Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
 
 ## 2026.4.15
 

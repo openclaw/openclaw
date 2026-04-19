@@ -205,7 +205,7 @@ describe("acquireSessionWriteLock", () => {
 
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       const sessionFile = path.join(root, "session.jsonl");
       const lockPath = `${sessionFile}.lock`;
@@ -229,7 +229,7 @@ describe("acquireSessionWriteLock", () => {
         secondLock: lockB,
       });
     } finally {
-      warnSpy.mockRestore();
+      stderrSpy.mockRestore();
       await fs.rm(root, { recursive: true, force: true });
     }
   });

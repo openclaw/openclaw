@@ -63,4 +63,54 @@ describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
     sanitizeGoogleThinkingPayload({ payload, modelId: "gemini-2.5-pro" });
     expect(payload.config.thinkingConfig).toHaveProperty("thinkingBudget", 1000);
   });
+
+  it("rewrites Gemini 3 Pro budgets to thinkingLevel", () => {
+    const payload = {
+      config: {
+        thinkingConfig: { thinkingBudget: 2048, includeThoughts: true },
+      },
+    };
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-3.1-pro-preview",
+      thinkingLevel: "high",
+    });
+    expect(payload.config.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+  });
+
+  it("rewrites Gemini 3 Flash latest disabled budgets to minimal thinkingLevel", () => {
+    const payload = {
+      generationConfig: {
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    };
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-flash-latest",
+      thinkingLevel: "off",
+    });
+    expect(payload.generationConfig.thinkingConfig).toEqual({
+      thinkingLevel: "MINIMAL",
+    });
+  });
+
+  it("fills thinkingLevel for Gemini 3 Flash negative budgets", () => {
+    const payload = {
+      config: {
+        thinkingConfig: { thinkingBudget: -1, includeThoughts: true },
+      },
+    };
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-3-flash-preview",
+      thinkingLevel: "medium",
+    });
+    expect(payload.config.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "MEDIUM",
+    });
+  });
 });

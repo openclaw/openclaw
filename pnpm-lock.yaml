@@ -182,9 +182,6 @@ importers:
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
-      long:
-        specifier: ^5.3.2
-        version: 5.3.2
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
@@ -242,9 +239,6 @@ importers:
       undici:
         specifier: 8.1.0
         version: 8.1.0
-      uuid:
-        specifier: ^13.0.0
-        version: 13.0.0
       ws:
         specifier: ^8.20.0
         version: 8.20.0

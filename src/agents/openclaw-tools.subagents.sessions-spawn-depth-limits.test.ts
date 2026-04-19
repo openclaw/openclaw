@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 
 const callGatewayMock = vi.fn();
@@ -110,6 +110,11 @@ describe("sessions_spawn depth + child limits", () => {
       }
       return {};
     });
+  });
+
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    subagentRegistryTesting.setDepsForTest();
   });
 
   afterAll(() => {
