@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { buildInlineProviderModels, withProviderOptions } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
@@ -200,6 +200,48 @@ describe("buildInlineProviderModels", () => {
     expect(result).toHaveLength(1);
     expect(result[0].headers).toEqual({
       "X-Static": "tenant-a",
+    });
+  });
+});
+
+describe("withProviderOptions", () => {
+  it("returns original model when providerOptions is undefined", () => {
+    const model = { id: "gpt-5", name: "gpt-5" };
+    const result = withProviderOptions(model, undefined);
+
+    expect(result).toBe(model);
+  });
+
+  it("returns original model when providerOptions is empty object", () => {
+    const model = { id: "gpt-5", name: "gpt-5" };
+    const result = withProviderOptions(model, {});
+
+    expect(result).toBe(model);
+  });
+
+  it("returns new object with providerOptions when providerOptions has values", () => {
+    const model = { id: "gpt-5", name: "gpt-5" };
+    const providerOptions = { llmStateful: true };
+    const result = withProviderOptions(model, providerOptions);
+
+    expect(result).not.toBe(model);
+    expect(result).toEqual({
+      id: "gpt-5",
+      name: "gpt-5",
+      providerOptions: { llmStateful: true },
+    });
+  });
+
+  it("preserves existing model properties when adding providerOptions", () => {
+    const model = { id: "gpt-5", name: "gpt-5", provider: "openai" };
+    const providerOptions = { llmStateful: true, customFlag: "test" };
+    const result = withProviderOptions(model, providerOptions);
+
+    expect(result).toEqual({
+      id: "gpt-5",
+      name: "gpt-5",
+      provider: "openai",
+      providerOptions: { llmStateful: true, customFlag: "test" },
     });
   });
 });

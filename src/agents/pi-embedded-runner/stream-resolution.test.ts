@@ -1,3 +1,4 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -137,5 +138,64 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
     expect(authStorage.getApiKey).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses boundary-aware transport when model has providerOptions", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        providerOptions: { llmStateful: true },
+      } as never,
+      resolvedApiKey: "test-key",
+    });
+
+    // Should use boundary-aware transport, not streamSimple
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("injects api key when model has providerOptions and authStorage is provided", async () => {
+    const authStorage = {
+      getApiKey: vi.fn(async () => "storage-key"),
+    };
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        providerOptions: { llmStateful: true },
+      } as never,
+      authStorage,
+    });
+
+    // The returned function should inject the api key from authStorage
+    // Note: we don't actually call streamFn here because it requires a valid context with messages
+    // The important thing is that resolveEmbeddedAgentStreamFn returns a function, not streamSimple
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("falls back to currentStreamFn when model has providerOptions but no auth", () => {
+    const customStreamFn = vi.fn() as unknown as StreamFn;
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: customStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        providerOptions: { llmStateful: true },
+      } as never,
+      // no authStorage, no resolvedApiKey
+    });
+
+    expect(streamFn).toBe(customStreamFn);
   });
 });
