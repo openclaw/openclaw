@@ -6,7 +6,10 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
-import { isAcpStaleSessionError } from "../../acp/runtime/stale-session.js";
+import {
+  ACP_STALE_BINDING_UNBIND_REASON,
+  isAcpStaleSessionError,
+} from "../../acp/runtime/stale-session.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -166,8 +169,6 @@ export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
 };
-
-const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
 async function maybeUnbindStaleBoundConversations(params: {
   targetSessionKey: string;

@@ -1,3 +1,5 @@
+export const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
+
 const STALE_ACP_SESSION_MESSAGE_RE =
   /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found|working directory does not exist)/i;
 
