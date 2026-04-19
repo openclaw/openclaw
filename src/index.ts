@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { assertNotRoot } from "./cli/root-guard.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -49,6 +51,12 @@ export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
 ): Promise<void> {
+  // Block root execution on the legacy path too, matching src/entry.ts.
+  // Allow --help and --version so users can still discover the override env var.
+  if (!isRootHelpInvocation(argv) && !isRootVersionInvocation(argv)) {
+    assertNotRoot();
+  }
+
   const { runCli } = deps ?? (await loadLegacyCliDeps());
   await runCli(argv);
 }
