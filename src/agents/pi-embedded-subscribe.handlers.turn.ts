@@ -22,6 +22,8 @@ export function handleTurnEnd(
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "turn",
+    data: { phase: "end", toolResultsCount, endedAt: Date.now() },
+  });
     data: { phase: "end", toolResultsCount },
   });
   void ctx.params.onAgentEvent?.({
