@@ -385,6 +385,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let hasThinkingPrelude = false;
   let thinkingCollapsed = false;
   let thinkingActivityTick = 0;
+  let claudeCliInitThinkingPanelEnabled = false;
   let replyCycleInitialized = false;
   /**
    * Deliver media files and emit persistence signals for media-only final payloads.
@@ -820,7 +821,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       toolCallCount > 0 ||
       activeTools.length > 0 ||
       hasReasoningText() ||
-      (reasoningPreviewEnabled && hasThinkingPrelude),
+      ((reasoningPreviewEnabled || claudeCliInitThinkingPanelEnabled) && hasThinkingPrelude),
     );
 
   const queueThinkingPrelude = (options?: { forcePreview?: boolean }): boolean => {
@@ -1405,7 +1406,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     dispatcher,
     replyOptions: {
       ...replyOptions,
-      onModelSelected: prefixContext.onModelSelected,
+      onModelSelected: (ctx: {
+        provider: string;
+        model: string;
+        thinkLevel: string | undefined;
+      }) => {
+        prefixContext.onModelSelected(ctx);
+        claudeCliInitThinkingPanelEnabled = ctx.provider === "claude-cli";
+      },
       onAgentEvent: async (evt: { stream: string; data: Record<string, unknown> }) => {
         if (evt.stream !== "tool") {
           return;
@@ -1436,7 +1444,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onAssistantMessageStart: streamingEnabled
         ? () => {
             startStreaming();
-            if (reasoningPreviewEnabled) {
+            if (reasoningPreviewEnabled || claudeCliInitThinkingPanelEnabled) {
               queueThinkingPrelude({ forcePreview: true });
               queueThinkingPanelUpdate();
             }

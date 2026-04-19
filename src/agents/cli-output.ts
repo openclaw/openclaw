@@ -486,13 +486,19 @@ export function createCliJsonlStreamingParser(params: {
     if (isRecord(parsed.usage)) {
       usage = toCliUsage(parsed.usage) ?? usage;
     }
+    const initSubtype =
+      parsed.type === "init"
+        ? "init"
+        : typeof parsed.subtype === "string"
+          ? parsed.subtype
+          : undefined;
     if (
       params.onSystemInit &&
       (parsed.type === "system" || parsed.type === "init") &&
-      typeof parsed.subtype === "string"
+      initSubtype
     ) {
       params.onSystemInit({
-        subtype: parsed.subtype,
+        subtype: initSubtype,
         ...(sessionId ? { sessionId } : {}),
       });
     }

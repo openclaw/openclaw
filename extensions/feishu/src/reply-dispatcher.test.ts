@@ -785,6 +785,28 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("renders the thinking panel on assistant start for claude-cli even without reasoning preview", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      allowReasoningPreview: false,
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onModelSelected?.({
+      provider: "claude-cli",
+      model: "opus-4.5",
+      thinkLevel: "off",
+    });
+    result.replyOptions.onAssistantMessageStart?.();
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Thinking"),
+      { title: "💭 Thinking" },
+    );
+  });
+
   it("does not animate a thinking panel for plain text-only streaming", async () => {
     vi.useFakeTimers();
     try {

@@ -260,6 +260,28 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
+  it("emits Claude bare init records as system init events", () => {
+    const onSystemInit = vi.fn();
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onSystemInit,
+      onAssistantDelta: vi.fn(),
+    });
+
+    parser.push(JSON.stringify({ type: "init", session_id: "session-456" }) + "\n");
+    parser.finish();
+
+    expect(onSystemInit).toHaveBeenCalledWith({
+      subtype: "init",
+      sessionId: "session-456",
+    });
+  });
+
   it("emits Claude thinking deltas and tool results", () => {
     const onThinkingDelta = vi.fn();
     const onToolResult = vi.fn();
