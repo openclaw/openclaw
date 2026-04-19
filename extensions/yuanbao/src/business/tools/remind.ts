@@ -1,36 +1,20 @@
-/**
- * Scheduled reminder guidance tool (yuanbao_remind).
- *
- * Goal:
- * - Converge LLM call entry with simple params (action/content/time)
- * - Produce standardized cron tool params (cronParams)
- * - Guide model to call this tool first, then immediately call cron
- */
+/** Scheduled reminder guidance tool (yuanbao_remind). */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { type OpenClawPluginToolContext, json } from "../utils/utils.js";
 
 interface RemindParams {
   action: "add" | "list" | "remove";
-  /** Default remind */
   intent?: "remind" | "task";
-  /** Required when action=add */
   content?: string;
-  /**
-   * Time description (required when action=add)
-   * - One-time: 5m / 1h30m / 2d
-   * - Recurring: cron, e.g. 0 8 * * *
-   */
   time?: string;
   timezone?: string;
   name?: string;
-  /** Required when action=remove */
   jobId?: string;
 }
 
 // Prompt constants
 
-// Parameter extraction prompt
 const RemindSchema = {
   type: "object",
   properties: {

@@ -16,16 +16,12 @@ import type {
 
 const DEFAULT_API_DOMAIN = "bot.yuanbao.tencent.com";
 const DEFAULT_WS_GATEWAY_URL = "wss://bot-wss.yuanbao.tencent.com/wss/connection";
-// const DEFAULT_API_DOMAIN = "bot-test.yuanbao.tencent.com";
-// const DEFAULT_WS_GATEWAY_URL = "wss://bot-wss-test.yuanbao.tencent.com/wss/connection";
 
 // Use SDK official API to generate account list and default account resolution functions
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("yuanbao");
 
 /**
  * Get all Yuanbao account IDs from configuration
- * @param cfg - OpenClaw global configuration
- * @returns Array of account IDs; returns default account if none configured
  */
 export function listYuanbaoAccountIds(cfg: OpenClawConfig): string[] {
   return listAccountIds(cfg);
@@ -33,8 +29,6 @@ export function listYuanbaoAccountIds(cfg: OpenClawConfig): string[] {
 
 /**
  * Resolve default Yuanbao account ID
- * @param cfg - OpenClaw global configuration
- * @returns Default account ID; prefers the configured defaultAccount
  */
 export function resolveDefaultYuanbaoAccountId(cfg: OpenClawConfig): string {
   return resolveDefaultAccountId(cfg);
@@ -72,9 +66,6 @@ function warnIncompleteConfig(appKey: string | undefined, appSecret: string | un
  *
  * Core logic: merge top-level + sub-account config → extract fields and set defaults → determine configured status
  * configured condition: appKey + appSecret both present
- *
- * @param params - Contains global config and optional account ID
- * @returns Complete account configuration object with all required fields and defaults
  */
 export function resolveYuanbaoAccount(params: {
   cfg: OpenClawConfig;

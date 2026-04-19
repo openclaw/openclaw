@@ -1,13 +1,4 @@
-/**
- * WebSocket gateway adapter
- *
- * Integrates YuanbaoWsClient with the OpenClaw channel gateway lifecycle.
- * Responsibilities:
- *   - Build connection params from account config (obtain auth token via sign-token API)
- *   - Bind abortSignal for graceful shutdown
- *   - Report connection status via statusSink
- *   - Convert incoming push events into YuanbaoInboundMessage and feed them into the message pipeline
- */
+/** WebSocket gateway adapter — integrates YuanbaoWsClient with the OpenClaw channel lifecycle. */
 
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { buildSyncCommandsPayload } from "../../business/commands/slash-commands/index.js";
@@ -43,12 +34,6 @@ export type StartWsGatewayParams = {
   statusSink?: (patch: GatewayStatusPatch) => void;
 };
 
-/**
- * Start the WebSocket gateway.
- *
- * Flow: sign token → establish WS connection → authenticate.
- * Returns a Promise that stays pending until abortSignal fires.
- */
 export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promise<void> {
   const { account, config, abortSignal, log, runtime, statusSink } = params;
   const gwlog = createLog("ws", log);
@@ -166,9 +151,6 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
   });
 }
 
-/**
- * Build WS auth info from account config (obtained via sign-token API, cached by duration).
- */
 async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) {
   const mlog = createLog("ws", log);
   mlog.info(`[${account.accountId}] resolveWsAuth params:`, {
@@ -211,9 +193,6 @@ async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) 
   };
 }
 
-/**
- * Parse push content into Tencent IM MsgBody format.
- */
 function parsePushContentToMsgBody(content: unknown): YuanbaoMsgBodyElement[] | undefined {
   if (typeof content === "string" && content.trim()) {
     // Try JSON parse (push content may be a JSON string)
@@ -236,7 +215,6 @@ function parsePushContentToMsgBody(content: unknown): YuanbaoMsgBodyElement[] | 
 
 type InboundResult = { msg: YuanbaoInboundMessage; chatType: "c2c" | "group" };
 
-/** Infer chat type from message fields */
 function inferChatType(msg: Record<string, unknown>): "c2c" | "group" {
   if (msg.group_code) {
     return "group";
@@ -248,12 +226,10 @@ function inferChatType(msg: Record<string, unknown>): "c2c" | "group" {
   return "c2c";
 }
 
-/** Check whether the message has at least one valid business field */
 function hasValidMsgFields(msg: Record<string, unknown>): boolean {
   return Boolean(msg.callback_command || msg.from_account || msg.msg_body);
 }
 
-/** Try protobuf decode on rawData; returns null on failure */
 function decodeFromProtobuf(rawData: Uint8Array, pushType: string): InboundResult | null {
   const decoded = decodeInboundMessage(rawData);
   if (!decoded || !hasValidMsgFields(decoded as Record<string, unknown>)) {
@@ -263,7 +239,6 @@ function decodeFromProtobuf(rawData: Uint8Array, pushType: string): InboundResul
   return { msg: decoded, chatType: inferChatType(decoded as Record<string, unknown>) };
 }
 
-/** Fallback: try to decode rawData as JSON text when protobuf fails */
 function decodeFromRawDataJson(rawData: Uint8Array, pushType: string): InboundResult | null {
   try {
     const rawJson = JSON.parse(new TextDecoder().decode(rawData));
@@ -282,7 +257,6 @@ function decodeFromRawDataJson(rawData: Uint8Array, pushType: string): InboundRe
   }
 }
 
-/** Decode message body from the DirectedPush content field */
 function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
   const msgBody = parsePushContentToMsgBody(pushEvent.content);
   if (!msgBody) {
@@ -315,12 +289,6 @@ function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
   };
 }
 
-/**
- * Convert a WS push event into YuanbaoInboundMessage + chatType.
- * Returns null if the push does not need to enter the message pipeline.
- *
- * Decode priority: rawData protobuf → rawData JSON fallback → DirectedPush content
- */
 export function wsPushToInboundMessage(
   pushEvent: WsPushEvent,
   log?: GatewayLog,

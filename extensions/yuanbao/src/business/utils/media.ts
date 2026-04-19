@@ -1,4 +1,4 @@
-/** Media file processing — image/file upload (via COS) and download (URL/local path to Buffer). */
+/** Media file processing — upload (COS) and download (URL/local path to Buffer). */
 
 import { randomBytes, createHash } from "node:crypto";
 import { createReadStream, statSync, existsSync } from "node:fs";
@@ -11,20 +11,16 @@ import { apiGetDownloadUrl, apiGetUploadInfo } from "../../access/api.js";
 import type { CosUploadConfig } from "../../access/api.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
 
-/** Upload result */
 export type CosUploadResult = {
   url: string;
   filename: string;
   size: number;
   mimeType: string;
-  /** File content MD5 (hex), usable as image UUID */
   uuid: string;
-  /** Only for image types */
   imageInfo?: { width: number; height: number };
   resourceId?: string;
 };
 
-/** @deprecated Use CosUploadResult */
 export type MediaUploadResult = CosUploadResult;
 
 type DownloadedFile = {
@@ -34,14 +30,11 @@ type DownloadedFile = {
   mimeType: string;
 };
 
-/** @deprecated Use DownloadedFile */
 type MediaFile = DownloadedFile;
 
 const DEFAULT_MAX_MB = 20;
 
-/** Image extension set (lowercase) */
 export const IMAGE_EXTS = new Set([
-  ".jpg",
   ".jpeg",
   ".png",
   ".gif",

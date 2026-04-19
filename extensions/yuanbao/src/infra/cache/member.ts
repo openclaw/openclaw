@@ -1,8 +1,4 @@
-/**
- * Member module — group member recording and querying with two-layer architecture:
- * GroupMember (API layer) and SessionMember (session cache layer).
- * Instances are managed per accountId via `getMember(accountId)`.
- */
+/** Member module — group member recording and querying with GroupMember (API) and SessionMember (cache). */
 
 import { getActiveWsClient } from "../../access/ws/runtime.js";
 import { createLog } from "../../logger.js";
@@ -11,22 +7,17 @@ export type UserRecord = {
   userId: string;
   nickName: string;
   lastSeen: number;
-  /** Member role type (from API query: 0=undefined, 1=user, 2=yuanbao, 3=bot) */
   userType?: number;
 };
 
 // SessionMember — Group active user submodule (session cache layer)
 
-/** Active user entry TTL (24 hours) */
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** Group active user manager — collects user info from group messages with expiration cleanup. */
 export class SessionMember {
-  /** Isolated by group: key = groupCode → Map<userId, UserRecord> */
   private groupUsers = new Map<string, Map<string, UserRecord>>();
   private log = createLog("member:session");
 
-  /** Record active user info (called when a message is received). */
   recordUser(groupCode: string, userId: string, nickName: string): void {
     if (!userId) {
       return;
@@ -48,7 +39,6 @@ export class SessionMember {
     this.log.debug(`recorded user: ${nickName ?? "?"} (${userId}) in group=${groupCode}`);
   }
 
-  /** Query users in a group, optionally filtered by name (fuzzy, case-insensitive). Sorted by lastSeen desc. */
   lookupUsers(groupCode: string, nameFilter?: string): UserRecord[] {
     const users = this.groupUsers.get(groupCode);
     if (!users || users.size === 0) {
@@ -67,7 +57,6 @@ export class SessionMember {
     return results;
   }
 
-  /** Look up a user by exact nickname match (case-insensitive). */
   lookupUserByNickName(groupCode: string, nickName: string): UserRecord | undefined {
     const users = this.groupUsers.get(groupCode);
     if (!users || users.size === 0) {
@@ -83,13 +72,11 @@ export class SessionMember {
     return undefined;
   }
 
-  /** Look up a user record by userId. */
   lookupUserById(groupCode: string, userId: string): UserRecord | undefined {
     const users = this.groupUsers.get(groupCode);
     return users?.get(userId);
   }
 
-  /** Insert or update a user record. */
   upsertUser(groupCode: string, record: UserRecord): void {
     if (!this.groupUsers.has(groupCode)) {
       this.groupUsers.set(groupCode, new Map());
@@ -97,12 +84,10 @@ export class SessionMember {
     this.groupUsers.get(groupCode)!.set(record.userId, record);
   }
 
-  /** List all groupCodes that have active user records. */
   listGroupCodes(): string[] {
     return Array.from(this.groupUsers.keys());
   }
 
-  /** Clean up expired active user entries */
   private cleanExpired(): void {
     const now = Date.now();
     for (const [code, users] of this.groupUsers) {
@@ -120,16 +105,13 @@ export class SessionMember {
 
 // GroupMember — API member submodule (WS API layer)
 
-/** API data cache TTL (5 minutes) */
 const GROUP_CACHE_TTL_MS = 5 * 60 * 1000;
 
-/** Member list cache entry */
 type GroupMemberCache = {
   members: UserRecord[];
   fetchedAt: number;
 };
 
-/** Group owner info */
 type GroupOwnerInfo = {
   userId: string;
   nickName: string;
@@ -142,26 +124,17 @@ export interface GroupInfoData {
   ownerNickName: string;
   groupSize: number;
 }
-/** Group owner info cache entry */
 type GroupOwnerCache = {
   owner: GroupOwnerInfo;
   fetchedAt: number;
 };
 
-/** Group info cache entry */
 type GroupInfoCache = {
   info: GroupInfoData;
   fetchedAt: number;
 };
 
-/**
- * Group member API manager (WS API layer).
- *
- * Fetches full group member list and group info via wsClient with local caching and TTL.
- * Members fetched from API are synced to SessionMember to keep both layers consistent.
- */
 export class GroupMember {
-  /** Account ID this instance belongs to, used to obtain wsClient */
   private readonly accountId: string;
   private readonly sessionMember: SessionMember;
   private cache = new Map<string, GroupMemberCache>();
@@ -174,9 +147,7 @@ export class GroupMember {
     this.sessionMember = sessionMember;
   }
 
-  /** Get group member list (uses cache if not expired, re-fetches otherwise). */
   async getMembers(groupCode: string): Promise<UserRecord[]> {
-    // Cache not expired, return directly
     const cached = this.cache.get(groupCode);
     if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL_MS) {
       this.log.debug(`cache hit for group=${groupCode}, ${cached.members.length} members`);
@@ -199,7 +170,6 @@ export class GroupMember {
     return [];
   }
 
-  /** Query users from cache (synchronous, no API request). */
   lookupUsers(groupCode: string, nameFilter?: string): UserRecord[] {
     const cached = this.cache.get(groupCode);
     if (!cached) {
@@ -216,7 +186,6 @@ export class GroupMember {
     return results;
   }
 
-  /** Look up a user by exact nickname match (synchronous, from cache). */
   lookupUserByNickName(groupCode: string, nickName: string): UserRecord | undefined {
     const cached = this.cache.get(groupCode);
     if (!cached) {
@@ -227,20 +196,16 @@ export class GroupMember {
     return cached.members.find((u) => u.nickName.toLowerCase() === target);
   }
 
-  /** Check whether the specified group has cached data (regardless of expiration). */
   hasCachedData(groupCode: string): boolean {
     return this.cache.has(groupCode);
   }
 
-  /** Force refresh the cache for a specific group. */
   async refresh(groupCode: string): Promise<UserRecord[]> {
     this.cache.delete(groupCode);
     return this.getMembers(groupCode);
   }
 
-  /** Query group owner info (via queryGroupInfo API, with caching). */
   async queryGroupOwner(groupCode: string): Promise<GroupOwnerInfo | null> {
-    // Cache not expired, return directly
     const cached = this.ownerCache.get(groupCode);
     if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL_MS) {
       this.log.debug(`owner cache hit for group=${groupCode}`);
@@ -282,9 +247,7 @@ export class GroupMember {
     }
   }
 
-  /** Query full group info (name, owner, member count) via queryGroupInfo API with caching. */
   async queryGroupInfo(groupCode: string): Promise<GroupInfoData | null> {
-    // Cache not expired, return directly
     const cached = this.infoCache.get(groupCode);
     if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL_MS) {
       this.log.debug(`group info cache hit for group=${groupCode}`);
@@ -337,10 +300,6 @@ export class GroupMember {
     }
   }
 
-  /**
-   * Fetch group member list via wsClient API.
-   * On success, syncs entries to SessionMember. Safely degrades to empty array on failure.
-   */
   private async fetchFromApi(groupCode: string): Promise<UserRecord[]> {
     const wsClient = getActiveWsClient(this.accountId);
     if (!wsClient) {
@@ -394,24 +353,12 @@ export class GroupMember {
 
 // Member — Facade
 
-/** Formatted user record (lastSeen as ISO string) */
 export type FormattedUserRecord = {
   userId: string;
   nickName: string;
   lastSeen: string;
 };
 
-/**
- * Member management facade — delegates to GroupMember (API) and SessionMember (session cache).
- * Query strategy: prioritize GroupMember → fall back to SessionMember.
- *
- * @example
- * ```ts
- * const member = getMember('account_123');
- * member.recordUser('group_123', 'user_1', 'John');
- * const users = await member.queryMembers('group_123', 'John');
- * ```
- */
 export class Member {
   readonly accountId: string;
   readonly session = new SessionMember();
@@ -425,18 +372,10 @@ export class Member {
     this.group = new GroupMember(accountId, this.session);
   }
 
-  /**
-   * Record group active user info.
-   * Called on each group message; writes sender to active list with TTL cleanup.
-   */
   recordUser(groupCode: string, userId: string, nickName: string): void {
     this.session.recordUser(groupCode, userId, nickName);
   }
 
-  /**
-   * Query group members (async, may trigger API request).
-   * Tries GroupMember first, falls back to SessionMember.
-   */
   async queryMembers(groupCode: string, nameFilter?: string): Promise<UserRecord[]> {
     // Prioritize GroupMember
     const groupMembers = await this.group.getMembers(groupCode);
@@ -459,7 +398,6 @@ export class Member {
     return this.session.lookupUsers(groupCode, nameFilter);
   }
 
-  /** Query active users (synchronous, cache only). Prioritizes GroupMember → SessionMember. */
   lookupUsers(groupCode: string, nameFilter?: string): UserRecord[] {
     // Prioritize GroupMember cache
     const groupResults = this.group.lookupUsers(groupCode, nameFilter);
@@ -471,7 +409,6 @@ export class Member {
     return this.session.lookupUsers(groupCode, nameFilter);
   }
 
-  /** Look up user by exact nickname (synchronous). Prioritizes GroupMember → SessionMember. */
   lookupUserByNickName(groupCode: string, nickName: string): UserRecord | undefined {
     // Prioritize GroupMember cache
     return (
@@ -480,20 +417,14 @@ export class Member {
     );
   }
 
-  /** Query group owner info (async, via queryGroupInfo API). */
   async queryGroupOwner(groupCode: string): Promise<GroupOwnerInfo | null> {
     return this.group.queryGroupOwner(groupCode);
   }
 
-  /** Query full group info (async, via queryGroupInfo API). */
   async queryGroupInfo(groupCode: string): Promise<GroupInfoData | null> {
     return this.group.queryGroupInfo(groupCode);
   }
 
-  /**
-   * Query Yuanbao user ID (cached after first hit).
-   * Uses group member list to find userType=2 (yuanbao) or userType=3 (bot) as fallback.
-   */
   async queryYuanbaoUserId(groupCode?: string): Promise<string | null> {
     if (this.yuanbaoUserIdCache) {
       return this.yuanbaoUserIdCache;
@@ -517,12 +448,10 @@ export class Member {
     return this.yuanbaoUserIdCache;
   }
 
-  /** List all groupCodes with active user records (from SessionMember). */
   listGroupCodes(): string[] {
     return this.session.listGroupCodes();
   }
 
-  /** Format UserRecord list with lastSeen as ISO time strings. */
   formatRecords(records: UserRecord[]): FormattedUserRecord[] {
     return records.map((u) => ({
       userId: u.userId,
@@ -534,13 +463,9 @@ export class Member {
 
 // Multi-instance Runtime — Managed by accountId
 
-/** Store Member instances by accountId */
 const activeMembers = new Map<string, Member>();
-
-/** Runtime logger instance */
 const runtimeLog = createLog("member:runtime");
 
-/** Get the Member instance for a given account (auto-creates if needed). */
 export function getMember(accountId: string): Member {
   let inst = activeMembers.get(accountId);
   if (!inst) {
@@ -551,13 +476,11 @@ export function getMember(accountId: string): Member {
   return inst;
 }
 
-/** Remove the Member instance for a given account (called on account logout). */
 export function removeMember(accountId: string): void {
   activeMembers.delete(accountId);
   runtimeLog.debug(`removed Member instance for account=${accountId}`);
 }
 
-/** Get all active Member instances. */
 export function getAllActiveMembers(): ReadonlyMap<string, Member> {
   return activeMembers;
 }

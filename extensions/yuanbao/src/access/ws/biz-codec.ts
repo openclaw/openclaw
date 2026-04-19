@@ -1,4 +1,4 @@
-/** Business-layer Protobuf codec — encode/decode for inbound/outbound business messages. */
+/** Business-layer Protobuf codec — encode/decode for business messages. */
 
 import protobuf from "protobufjs";
 import { createLog } from "../../logger.js";
@@ -27,7 +27,6 @@ import type {
 
 // Module-level logger instance
 
-/** InboundMessagePush decode result (camelCase fields) */
 type PBInboundMessage = {
   callbackCommand?: string;
   fromAccount?: string;
@@ -51,19 +50,16 @@ type PBInboundMessage = {
   logExt?: { traceId?: string };
 };
 
-/** Generic response decode result (code + message) */
 type PBCodeMessageRsp = {
   code?: number;
   message?: string;
 };
 
-/** Generic response decode result (code + msg) */
 type PBCodeMsgRsp = {
   code?: number;
   msg?: string;
 };
 
-/** QueryGroupInfoRsp decode result */
 type PBQueryGroupInfoRsp = PBCodeMsgRsp & {
   groupInfo?: {
     groupName?: string;
@@ -73,12 +69,10 @@ type PBQueryGroupInfoRsp = PBCodeMsgRsp & {
   };
 };
 
-/** GetGroupMemberListRsp decode result */
 type PBGetGroupMemberListRsp = PBCodeMessageRsp & {
   memberList?: Array<{ userId?: string; nickName?: string; userType?: number }>;
 };
 
-/** SyncInformationRsp decode result */
 type PBSyncInformationRsp = PBCodeMsgRsp;
 
 let root: protobuf.Root | null = null;
@@ -112,7 +106,6 @@ export const BIZ_MSG_TYPES = {
   SyncInformationRsp: `${PKG}.SyncInformationRsp`,
 } as const;
 
-/** Encode a business-layer protobuf message. */
 export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8Array | null {
   try {
     const type = getRoot().lookupType(key);
@@ -125,14 +118,13 @@ export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8A
   }
 }
 
-/** Decode a business-layer protobuf message. */
 export function decodeBizPB(key: string, data: Uint8Array | ArrayBuffer): unknown {
   try {
     const buf = data instanceof Uint8Array ? data : new Uint8Array(data);
     const type = getRoot().lookupType(key);
     return type.decode(buf);
   } catch {
-    // protobuf decode failure is expected (data may not match the message type), silently return null
+    // protobuf decode failure is expected, silently return null
     return null;
   }
 }

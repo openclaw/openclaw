@@ -1,9 +1,4 @@
-/**
- * Message debounce dispatcher.
- *
- * Centralizes SDK createChannelInboundDebouncer initialization and config.
- * After debounce flush, uses SessionQueue to ensure serial execution per session.
- */
+/** Message debounce dispatcher. */
 
 import {
   createChannelInboundDebouncer,
@@ -27,7 +22,6 @@ const sessionAbortManager = new SessionAbortManager();
 let debouncer: ReturnType<typeof createChannelInboundDebouncer<DebouncerItem>>["debouncer"] | null =
   null;
 
-/** Media message types, used to separate text and media elements from msg_body */
 const MEDIA_MSG_TYPES = new Set([
   "TIMImageElem",
   "TIMSoundElem",
@@ -35,12 +29,6 @@ const MEDIA_MSG_TYPES = new Set([
   "TIMFileElem",
 ]);
 
-/**
- * Build base sessionKey (without command suffix).
- *
- * Group: `group:{accountId}:{groupCode}`
- * C2C: `direct:{accountId}:{fromAccount}`
- */
 function buildBaseSessionKey(item: DebouncerItem): string {
   const { msg, isGroup, account } = item;
   return isGroup
@@ -48,9 +36,6 @@ function buildBaseSessionKey(item: DebouncerItem): string {
     : `direct:${account.accountId}:${msg.from_account?.trim() || "unknown"}`;
 }
 
-/**
- * Extract plain text from a DebouncerItem (lightweight, TIMTextElem only).
- */
 function extractRawText(item: DebouncerItem): string {
   if (!item.msg.msg_body) {
     return "";
@@ -62,36 +47,22 @@ function extractRawText(item: DebouncerItem): string {
     .trim();
 }
 
-/**
- * Build sessionKey — assigns independent serial queues for different
- * command types in direct chat to prevent control commands from being
- * blocked by regular messages.
- *
- * Direct chat:
- * - abort → `{base}:control`      (stop commands need immediate response)
- * - btw   → `{base}:btw:{seqId}`  (interjections run independently)
- * - normal→ `{base}`              (sequential within the same session)
- *
- * Group chat:
- * - Unified `{base}`, no command-type distinction.
- */
 function buildSessionKey(item: DebouncerItem): string {
   const base = buildBaseSessionKey(item);
 
-  // Group chat: no command-type distinction, use a single queue
+  // Group chat: single queue
   if (item.isGroup) {
     return base;
   }
 
-  // Direct chat: assign independent queues by command type
   const rawText = extractRawText(item);
 
-  // abort (/stop etc.) → independent control queue for immediate interruption
+  // abort (/stop etc.) → independent control queue
   if (isAbortRequestText(rawText)) {
     return `${base}:control`;
   }
 
-  // btw (/btw ...) → each interjection gets its own queue, non-blocking
+  // btw (/btw ...) → each interjection gets its own queue
   if (isBtwRequestText(rawText)) {
     const seqId = item.msg.msg_seq ?? item.msg.msg_id ?? "";
     return seqId ? `${base}:btw:${seqId}` : `${base}:btw`;
@@ -100,11 +71,7 @@ function buildSessionKey(item: DebouncerItem): string {
   return base;
 }
 
-/**
- * Check if this is a normal direct-chat message (not btw, not abort).
- *
- * Only normal direct messages trigger the "new question interrupts old" logic.
- */function isDirectNormalMessage(item: DebouncerItem): boolean {
+function isDirectNormalMessage(item: DebouncerItem): boolean {
   if (item.isGroup) {
     return false;
   }
@@ -118,9 +85,6 @@ function buildSessionKey(item: DebouncerItem): string {
   return true;
 }
 
-/**
- * Build minimal context compatible with extractTextFromMsgBody.
- */
 function buildMinCtx(item: DebouncerItem, log: ReturnType<typeof createLog>) {
   return {
     account: item.account,
@@ -131,12 +95,6 @@ function buildMinCtx(item: DebouncerItem, log: ReturnType<typeof createLog>) {
   };
 }
 
-/**
- * Merge msg_body from multiple debounced messages into a single synthetic message.
- *
- * Text elements are concatenated in order; media elements are collected in order.
- * Other fields use the primary (last item) as the base.
- */
 function buildSyntheticMessage(
   primary: DebouncerItem,
   items: DebouncerItem[],
@@ -148,9 +106,6 @@ function buildSyntheticMessage(
   };
 }
 
-/**
- * Build pipeline context
- */
 function buildPipelineContext(primary: DebouncerItem, items: DebouncerItem[]): PipelineContext {
   return {
     // Immutable input
@@ -187,10 +142,6 @@ function buildPipelineContext(primary: DebouncerItem, items: DebouncerItem[]): P
   };
 }
 
-/**
- * Combine gateway-level and session-level AbortSignals.
- * The combined signal aborts when either source signal fires.
- */
 function combineAbortSignals(
   gatewaySignal?: AbortSignal,
   sessionSignal?: AbortSignal,
@@ -208,9 +159,6 @@ function combineAbortSignals(
   return AbortSignal.any([gatewaySignal, sessionSignal]);
 }
 
-/**
- * Clean up session-level AbortSignal attached to a DebouncerItem (prevent memory leaks).
- */
 function cleanupSessionSignal(primary: DebouncerItem): void {
   const sessionSignal = (primary as DebouncerItem & { _sessionAbortSignal?: AbortSignal })
     ._sessionAbortSignal;
@@ -220,9 +168,6 @@ function cleanupSessionSignal(primary: DebouncerItem): void {
   }
 }
 
-/**
- * Ensure the debouncer is initialized and return it
- */
 export function ensureDebouncer(config: OpenClawConfig) {
   if (debouncer) {
     return debouncer;

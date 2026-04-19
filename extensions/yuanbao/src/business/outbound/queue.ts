@@ -1,16 +1,4 @@
-/**
- * Outbound queue (MessageSender-based).
- *
- * Receives a MessageSender instance and dispatches via sender.send(item) / sender.sendText(text).
- * Supports three strategies: immediate, merge-text, mergeOnFlush.
- *
- * Design notes:
- * - QueueSession is a per-session queue instance bound to a MessageSender
- * - push(item) enqueues a message
- * - flush() sends all remaining buffered content, then calls onComplete
- * - abort() cancels the queue, discarding unsent content
- * - Uses MessageSender interface directly, decoupling send logic
- */
+/** Outbound queue (MessageSender-based). */
 
 import { createLog } from "../../logger.js";
 import { mdFence, mdBlock, mdAtomic } from "../utils/markdown.js";
@@ -20,13 +8,8 @@ import type { MessageSender, OutboundItem } from "./types.js";
 export interface QueueSession {
   readonly strategy: "immediate" | "merge-text" | "mergeOnFlush";
   push(item: OutboundItem): Promise<void>;
-  /** Returns whether any content was sent */
   flush(): Promise<boolean>;
   abort(): void;
-  /**
-   * Force-flush current buffer immediately without closing the session.
-   * Used before tool_call to deliver accumulated text to the user promptly.
-   */
   drainNow(): Promise<void>;
 }
 
@@ -34,22 +17,11 @@ export interface QueueSession {
 export interface QueueSessionOptions {
   sender: MessageSender;
   strategy: "immediate" | "merge-text";
-  /**
-   * When enabled, push only buffers; flush merges all text into a single message.
-   * Orthogonal to strategy, takes priority over it.
-   */
   mergeOnFlush?: boolean;
   onComplete: () => void;
   sessionKey?: string;
-  /** Default 2800 */
   minChars?: number;
-  /** Default 3000 */
   maxChars?: number;
-  /**
-   * Markdown-aware text chunking function (fence-aware).
-   * Injected by channel.ts using OpenClaw core's chunkMarkdownText.
-   * Falls back to even character-count splitting when not provided.
-   */
   chunkText?: (text: string, maxChars: number) => string[];
 }
 
@@ -64,7 +36,6 @@ function defaultChunkText(text: string, max: number): string[] {
   return chunks;
 }
 
-/** Create a queue session */
 export function createQueueSession(opts: QueueSessionOptions): QueueSession {
   if (opts.mergeOnFlush) {
     return createMergeOnFlushSession(opts);
@@ -79,9 +50,6 @@ export function createQueueSession(opts: QueueSessionOptions): QueueSession {
   }
 }
 
-/**
- * immediate strategy: send each message directly, no buffering.
- */
 function createImmediateSession(opts: QueueSessionOptions): QueueSession {
   const { sender, onComplete } = opts;
   const log = createLog("outbound-queue");
@@ -124,17 +92,12 @@ function createImmediateSession(opts: QueueSessionOptions): QueueSession {
     },
 
     drainNow() {
-      // immediate strategy sends each message directly, no buffer, no extra action needed
+      // immediate strategy: no buffer, no extra action needed
       return sendChain;
     },
   };
 }
 
-/**
- * mergeOnFlush mode: push only buffers, flush merges all text into a single message.
- *
- * Used for disableBlockStreaming=true scenarios to avoid sending multi-segment replies.
- */
 function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
   const { sender, onComplete } = opts;
   const log = createLog("outbound-queue");
@@ -205,27 +168,18 @@ function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
     },
 
     drainNow() {
-      // mergeOnFlush strategy sends nothing before flush, drainNow is a no-op
+      // mergeOnFlush: sends nothing before flush, drainNow is a no-op
       return Promise.resolve();
     },
   };
 }
 
-/**
- * merge-text strategy (default):
- * - On each deliver arrival, immediately process: concatenate then use chunkText (chunkMarkdownText)
- *   for fence-aware splitting; chunks exceeding maxChars send the first n-1 immediately,
- *   the last chunk (possibly inside a fence) stays in buffer for next push or flush
- * - On media, flush text buffer first then send media, preserving order
- * - Accumulation and idle timeout managed by OpenClaw streaming.blockStreamingCoalesceDefaults,
- *   this layer no longer maintains extra idleTimer
- */
 function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
   const { sender, onComplete, sessionKey = "" } = opts;
   const minChars = opts.minChars ?? 2800;
   const maxChars = opts.maxChars ?? 3000;
   const baseChunkText = opts.chunkText ?? defaultChunkText;
-  // Layer atomic block awareness on top of fence-aware splitting: ensures table and chart fence blocks are not split across messages
+  // Layer atomic block awareness on top of fence-aware splitting
   const chunkText = (text: string, max: number) => mdAtomic.chunkAware(text, max, baseChunkText);
   const log = createLog("outbound-queue");
   let aborted = false;
@@ -233,13 +187,6 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
   let sendChain: Promise<void> = Promise.resolve();
   let hasSentContent = false;
 
-  /**
-   * Split buffer content and send.
-   *
-   * - `force=true`: split at maxChars limit and send all content, clearing buffer.
-   * - `force=false`: fence-aware split at maxChars; if multiple chunks, send first n-1,
-   *   keep last chunk in buffer; if only 1 chunk and fence unclosed, defer sending.
-   */
   async function drainBuffer(force: boolean): Promise<void> {
     if (textBuffer.length === 0) {
       return;
@@ -330,10 +277,7 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
           }
           if (textBuffer) {
             // block-streaming's trimEnd/trimStart strips newlines at each block boundary;
-            // need to infer and restore the correct separator based on context:
-            //  - block-level element start (heading/hr/blockquote/list/fence) → add \n\n
-            //  - consecutive table rows split → add \n (table rows can't have blank lines between)
-            //  - inside fence / already has newline / plain text continuation → don't add
+            // infer and restore the correct separator based on context
             const separator = mdBlock.inferSeparator(textBuffer, item.text);
             textBuffer = mdFence.mergeBlockStreaming(
               separator ? `${textBuffer}${separator}` : textBuffer,
@@ -406,8 +350,4 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
   };
 }
 
-/**
- * merge-text strategy session factory, exported only for unit testing.
- * @internal
- */
 export { createMergeTextSession as createMergeTextSessionForTest };

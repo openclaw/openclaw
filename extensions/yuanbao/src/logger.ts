@@ -1,4 +1,4 @@
-/** Yuanbao plugin shared logging module. Falls back to console before runtime init. */
+/** Yuanbao plugin shared logging module. */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getPluginVersion } from "./infra/env.js";
@@ -38,10 +38,6 @@ const fallbackLogger: PluginLogger = {
   },
 };
 
-/**
- * Initialize the plugin logger (called during plugin registration).
- * Creates a child logger tagged with the plugin identifier via the OpenClaw API.
- */
 export function initLogger(api: OpenClawPluginApi): void {
   try {
     childLogger = api.runtime.logging.getChildLogger({ plugin: "yuanbao" }) as PluginLogger;
@@ -53,7 +49,6 @@ export function initLogger(api: OpenClawPluginApi): void {
   }
 }
 
-/** Return the currently active logger (childLogger when initialized, otherwise console fallback). */
 function getActiveLogger(): PluginLogger {
   if (initialized && childLogger) {
     const cl = childLogger;
@@ -87,12 +82,10 @@ export const logger: PluginLogger = {
   },
 };
 
-/** Check whether verbose mode is enabled. Useful to avoid unnecessary string concatenation in hot paths. */
 export function isVerbose(): boolean {
   return verboseEnabled;
 }
 
-/** Parse debug bot IDs from the YUANBAO_DEBUG_BOT_IDS environment variable. */
 function parseEnvDebugBotIds(): string[] {
   const raw = process.env.YUANBAO_DEBUG_BOT_IDS;
   if (!raw) {
@@ -104,14 +97,8 @@ function parseEnvDebugBotIds(): string[] {
     .filter(Boolean);
 }
 
-/** Bot IDs in the debug whitelist — log sanitization is skipped for these */
 const debugBotIds = new Set<string>(parseEnvDebugBotIds());
 
-/**
- * Set the debug whitelist bot IDs.
- * Merges YAML config `debugBotIds` with `YUANBAO_DEBUG_BOT_IDS` env var.
- * Whitelisted bot IDs skip log sanitization.
- */
 export function setDebugBotIds(ids: string[]): void {
   debugBotIds.clear();
   for (const id of parseEnvDebugBotIds()) {
@@ -125,7 +112,6 @@ export function setDebugBotIds(ids: string[]): void {
   }
 }
 
-/** Check whether a bot ID is in the debug whitelist. */
 export function isDebugBotId(botId?: string): boolean {
   if (!botId) {
     return false;
@@ -150,7 +136,6 @@ export interface ModuleLog {
   debug(msg: string, data?: Record<string, unknown>): void;
 }
 
-/** Format a log message with LOG_PREFIX + module, auto-sanitizing data. */
 export function formatLog(
   module: string,
   msg: string,
@@ -165,7 +150,6 @@ export function formatLog(
   return `${prefix} ${msg} ${serialized}`;
 }
 
-/** Create a module-scoped log helper with auto-prefix and sanitization. */
 export function createLog(module: string, sink?: LogSink, options?: { botId?: string }): ModuleLog {
   const target = sink ?? logger;
   const skipSanitize = isDebugBotId(options?.botId);
@@ -182,10 +166,8 @@ export function createLog(module: string, sink?: LogSink, options?: { botId?: st
   };
 }
 
-/** Field names to omit entirely from log output */
 const OMIT_KEYS = new Set(["msg_body"]);
 
-/** Sensitive field names to mask in log output */
 const SENSITIVE_KEYS = new Set([
   "token",
   "signature",
@@ -201,7 +183,6 @@ const SENSITIVE_KEYS = new Set([
   "model_output",
 ]);
 
-/** Mask a string value, keeping the first and last 3 characters. Strings < 8 chars are fully masked. */
 function maskValue(value: string): string {
   if (value.length < 8) {
     return "***";
@@ -209,7 +190,6 @@ function maskValue(value: string): string {
   return `${value.slice(0, 3)}****${value.slice(-3)}`;
 }
 
-/** Sanitize sensitive fields before writing to logs. Accepts objects, JSON strings, or primitives. */
 export function sanitize(value: unknown): string {
   if (value === null || value === undefined) {
     return String(value);

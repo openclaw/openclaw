@@ -1,8 +1,7 @@
-/** Markdown processing utilities: fence detection/repair, block-level analysis, and atomic-block-aware chunking. */
+/** Markdown processing utilities: fence detection/repair, block-level analysis, and chunking. */
 
 // Fence-related
 
-/** Strip outer ```markdown fences wrapping AI replies (only when interior contains a table). */
 function stripOuterMarkdownFence(text: string): string {
   const HAS_TABLE = /^\s*\|[-:| ]+\|/m;
   return text.replace(/```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/gm, (fullMatch, inner: string) =>
@@ -10,7 +9,6 @@ function stripOuterMarkdownFence(text: string): string {
   );
 }
 
-/** Check if text is inside an unclosed code fence (``` block). */
 function hasUnclosedFence(text: string): boolean {
   let inFence = false;
   for (const line of text.split("\n")) {
@@ -21,7 +19,6 @@ function hasUnclosedFence(text: string): boolean {
   return inFence;
 }
 
-/** Check if text is inside an unclosed math block ($$...$$). Skips content inside code fences. */
 function hasUnclosedMathBlock(text: string): boolean {
   let inFence = false;
   let mathOpen = false;
@@ -46,7 +43,6 @@ function hasUnclosedMathBlock(text: string): boolean {
   return mathOpen;
 }
 
-/** Fix paragraph separators erroneously inserted inside math blocks by block-streaming. */
 function normalizeMathBlocks(text: string): string {
   if (!text.includes("$$")) {
     return text;
@@ -91,10 +87,6 @@ function normalizeMathBlocks(text: string): string {
   return parts.join("");
 }
 
-/**
- * Append incoming to buffer, stripping redundant fence repair markers from block-streaming.
- * Handles: (1) internal pseudo-lines, (2) boundary close+open, (3) unclosed fence re-open.
- */
 function mergeBlockStreamingFences(buffer: string, incoming: string): string {
   const CLOSE_RE = /\n```\s*$/;
   const OPEN_RE = /^```[^\n]*\n/;
@@ -117,7 +109,6 @@ function mergeBlockStreamingFences(buffer: string, incoming: string): string {
 
 // Block-level structure
 
-/** Check if the last non-empty line is a Markdown table row (starts and ends with |). */
 function endsWithTableRow(text: string): boolean {
   const trimmed = text.trimEnd();
   if (!trimmed) {
@@ -128,7 +119,6 @@ function endsWithTableRow(text: string): boolean {
   return line.startsWith("|") && line.endsWith("|");
 }
 
-/** Check if text starts with a Markdown block-level element. */
 function startsWithBlockElement(text: string): boolean {
   const firstLine = (text.trimStart().split("\n")[0] ?? "").trimStart();
   return (
@@ -145,11 +135,6 @@ function startsWithBlockElement(text: string): boolean {
   ); // display math
 }
 
-/**
- * Infer the separator to insert between buffer and incoming blocks.
- * Priority: inside fence/math → no sep; mid-row table split → ' '; consecutive table rows → '\n';
- * block element → '\n\n'; otherwise → ''.
- */
 function inferBlockSeparator(buffer: string, incoming: string): string {
   if (hasUnclosedFence(buffer)) {
     return "";
@@ -185,11 +170,6 @@ function inferBlockSeparator(buffer: string, incoming: string): string {
 
 // Pipe-table sanitize
 
-/**
- * Markdown pipe-table sanitizer — fixes tables broken by block-streaming \n\n insertion.
- * Phase 0: fast-path exit. Phase 1: find table regions. Phase 2: heal regions. Phase 3: reassemble.
- */
-
 interface PipeTableRegion {
   /** Start line index (inclusive) */
   startLine: number;
@@ -197,7 +177,6 @@ interface PipeTableRegion {
   endLine: number;
 }
 
-/** Scan lines, grouping consecutive pipe-containing lines as candidate table regions. */
 function findPipeTableRegions(lines: string[]): PipeTableRegion[] {
   const regions: PipeTableRegion[] = [];
   let groupStart = -1;
@@ -232,14 +211,12 @@ function findPipeTableRegions(lines: string[]): PipeTableRegion[] {
   return regions;
 }
 
-/** GFM separator row regex: optional colon + 2+ dashes + optional colon, between two `|` */
 const PIPE_TABLE_SEPARATOR_RE = /\|[\s]*:?-{2,}:?[\s]*(?:\|[\s]*:?-{2,}:?[\s]*)+\|/;
 
 function findSeparatorInFlat(flat: string): boolean {
   return PIPE_TABLE_SEPARATOR_RE.test(flat);
 }
 
-/** Fix a table region: remove blank lines and merge fragment lines using | boundary signals. */
 function healPipeTableRegion(regionLines: string[]): string | null {
   if (!regionLines.some((l) => l.trim() === "")) {
     return null;
@@ -272,7 +249,6 @@ function healPipeTableRegion(regionLines: string[]): string | null {
   return result.join("\n");
 }
 
-/** Fix Markdown pipe tables broken by block-streaming. Safe to call on any text. */
 function sanitizePipeTables(text: string): string {
   // Phase 0 — fast-path exit
   if (!text) {
@@ -314,10 +290,8 @@ function sanitizePipeTables(text: string): string {
 
 // Atomic blocks — tables & diagram fence blocks
 
-/** Markdown structures that cannot render independently after splitting */
 export type AtomicBlock = { start: number; end: number; kind: "table" | "diagram-fence" };
 
-/** Diagram fence language identifiers — these fence blocks cannot render after splitting */
 const DIAGRAM_LANGUAGES = new Set([
   "mermaid",
   "plantuml",
@@ -333,10 +307,6 @@ const DIAGRAM_LANGUAGES = new Set([
   "timeline",
 ]);
 
-/**
- * Extract all atomic blocks (tables and diagram fence blocks) with character offset ranges.
- * Skips content inside plain code fences.
- */
 function extractAtomicBlocks(text: string): AtomicBlock[] {
   const blocks: AtomicBlock[] = [];
   const lines = text.split("\n");
@@ -420,10 +390,6 @@ function extractAtomicBlocks(text: string): AtomicBlock[] {
   return blocks.toSorted((a, b) => a.start - b.start);
 }
 
-/**
- * Atomic-block-aware Markdown text chunking.
- * Adjusts split boundaries to avoid landing inside atomic blocks (tables / diagram fences).
- */
 function chunkMarkdownTextAtomicAware(
   text: string,
   maxChars: number,

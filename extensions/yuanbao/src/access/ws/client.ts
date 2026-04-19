@@ -1,7 +1,4 @@
-/**
- * WebSocket client — connection management, auth, heartbeat, and auto-reconnect
- * based on the Yuanbao ConnMsg protobuf protocol.
- */
+/** WebSocket client — connection management, auth, heartbeat, and auto-reconnect. */
 
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -56,7 +53,6 @@ import type {
   WsSyncInformationResponse,
 } from "./types.js";
 
-/** AuthBindRsp decoded result */
 type PBAuthBindRsp = {
   code?: number;
   message?: string;
@@ -65,19 +61,16 @@ type PBAuthBindRsp = {
   clientIp?: string;
 };
 
-/** PingRsp decoded result */
 type PBPingRsp = {
   heartInterval?: number;
 };
 
-/** KickoutMsg decoded result */
 type PBKickoutMsg = {
   status?: number;
   reason?: string;
   otherDeviceName?: string;
 };
 
-/** PushMsg decoded result */
 type PBPushMsg = {
   cmd?: string;
   module?: string;
@@ -85,7 +78,6 @@ type PBPushMsg = {
   data?: Uint8Array;
 };
 
-/** DirectedPush decoded result */
 type PBDirectedPush = {
   type?: number;
   content?: string;
@@ -93,7 +85,6 @@ type PBDirectedPush = {
 
 const DEFAULT_RECONNECT_DELAYS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 
-/** Close codes that should NOT trigger auto-reconnect */
 const NO_RECONNECT_CLOSE_CODES = new Set([
   4012, // Version ban
   4013, // User ban
@@ -106,13 +97,9 @@ const DEFAULT_MAX_RECONNECT_ATTEMPTS = 100;
 const DEFAULT_SEND_TIMEOUT_MS = 30_000;
 const DEFAULT_HEARTBEAT_INTERVAL_S = 5;
 
-/** Auth error codes requiring token refresh before reconnect */
 const AUTH_FAILED_CODES = new Set([41103, 41104, 41108]);
-
-/** Already authenticated — treat as auth success */
 const AUTH_ALREADY_CODE = 41101;
 
-/** Transient server errors — can reconnect directly without refreshing the token */
 const AUTH_RETRYABLE_CODES = new Set([
   50400, // Server program error
   50503, // System overload protection

@@ -1,15 +1,4 @@
-/**
- * Message type handler registry.
- *
- * Unified registration and management of all message type handlers, providing:
- * - Handler lookup by msgType (for input parsing)
- * - Message body construction by msgType (for output sending)
- * - Outbound content preparation and msgBody construction pipeline
- *
- * To add a new message type:
- * 1. Create a handler file under handlers/ directory
- * 2. Register it in the handlerList below
- */
+/** Message type handler registry. */
 
 import type { Member } from "../../../infra/cache/member.js";
 import { mdTable, mdMath } from "../../utils/markdown.js";
@@ -22,7 +11,6 @@ import { textHandler } from "./text.js";
 import type { MessageElemHandler, MsgBodyItemType, OutboundContentItem } from "./types.js";
 import { videoHandler } from "./video.js";
 
-/** All registered message type handlers */
 const handlerList: MessageElemHandler[] = [
   textHandler,
   customHandler,
@@ -33,15 +21,8 @@ const handlerList: MessageElemHandler[] = [
   faceHandler,
 ];
 
-/** msgType → Handler fast lookup map */
 const handlerMap = new Map<string, MessageElemHandler>(handlerList.map((h) => [h.msgType, h]));
 
-/**
- * OutboundContentItem.type → Tencent IM msgType mapping.
- *
- * Maps short content type identifiers ("text", "image", etc.) to corresponding handler msgType,
- * allowing buildOutboundMsgBody to find the correct handler for msgBody construction.
- */
 const outboundTypeToMsgType: Record<string, string> = {
   text: "TIMTextElem",
   image: "TIMImageElem",
@@ -50,23 +31,14 @@ const outboundTypeToMsgType: Record<string, string> = {
   custom: "TIMCustomElem",
 };
 
-/**
- * Get handler by message type.
- */
 export function getHandler(msgType: string): MessageElemHandler | undefined {
   return handlerMap.get(msgType);
 }
 
-/**
- * Get all registered handlers.
- */
 export function getAllHandlers(): readonly MessageElemHandler[] {
   return handlerList;
 }
 
-/**
- * Build message body by msgType (convenience method).
- */
 export function buildMsgBody(
   msgType: string,
   data: Record<string, unknown>,
@@ -75,21 +47,8 @@ export function buildMsgBody(
   return handler?.buildMsgBody?.(data);
 }
 
-/**
- * @user regex: whitespace (or line start) + @ + nickname + whitespace (or line end).
- *
- * Uses lookbehind to ensure preceding whitespace/line-start, lookahead for trailing whitespace/line-end.
- * Group 1: nickname (non-whitespace chars after @ until next whitespace)
- */
 const AT_USER_RE = /(?<=\s|^)@(\S+?)(?=\s|$)/g;
 
-/**
- * Parse @user mentions in a plain text fragment, splitting into text + custom mixed content items.
- *
- * Scans for whitespace+@+nickname+whitespace patterns:
- * - With groupCode and memberInst: queries member module, inserts custom type (elem_type: 1002) on hit
- * - No match or no groupCode/memberInst: preserves @nickname as text type
- */
 function resolveAtMentions(
   text: string,
   groupCode?: string,
@@ -147,13 +106,6 @@ function resolveAtMentions(
   return items;
 }
 
-/**
- * Content formatting preparation: extract raw text into structured content item list.
- *
- * Processing:
- * 1. Sanitize markdown (table/math normalization)
- * 2. Parse @user mentions, replacing matched @nickname with custom or preserving as text
- */
 export function prepareOutboundContent(
   text: string,
   groupCode?: string,
@@ -183,12 +135,6 @@ export function prepareOutboundContent(
   return items;
 }
 
-/**
- * Convert content item list to final MsgBody array via type-specific handlers.
- *
- * Iterates OutboundContentItem list, finds corresponding handler's buildMsgBody by type,
- * and merges all results into a complete MsgBody array.
- */
 export function buildOutboundMsgBody(items: OutboundContentItem[]): MsgBodyItemType[] {
   const msgBody: MsgBodyItemType[] = [];
 

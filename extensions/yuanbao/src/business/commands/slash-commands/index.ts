@@ -1,29 +1,10 @@
-/**
- * Slash command registry.
- *
- * Maintains the list of /commands available in Bot direct-message scenarios.
- * Split by protocol into bot_commands (OpenClaw built-in) and plugin_commands (plugin-provided).
- *
- * - plugin_commands: dynamically collected during plugin registration (registerPluginCommand)
- * - bot_commands: dynamically fetched via openclaw/plugin-sdk/command-auth's listChatCommands
- *
- * Usage:
- *   import { buildSyncCommandsPayload } from './commands/slash-commands/index.js';
- *   const payload = buildSyncCommandsPayload(config);
- *   await client.syncInformation(payload);
- */
+/** Slash command registry. */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getPluginVersion, getOpenclawVersion } from "../../../infra/env.js";
 import { createLog } from "../../../logger.js";
 
-/**
- * openclaw/plugin-sdk/command-auth is only available in newer versions (>= 2026.4).
- * Older OpenClaw (e.g. 2026.3.x) lacks this module; static import would cause plugin load failure.
- * Therefore use runtime import() for dynamic loading, falling back to default list on failure.
- *
- * Note: project is ESM ("type": "module"), must use import() not require().
- */
+// Dynamic import: command-auth may not exist in older OpenClaw versions
 let _listChatCommands: ((options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
 let _listChatCommandsForConfig:
   | ((cfg: Record<string, unknown>, options?: Record<string, unknown>) => ChatCommandDef[])
@@ -49,12 +30,10 @@ function loadCommandAuth(): Promise<void> {
 }
 
 export type CommandItem = {
-  /** With /, e.g. "/help" */
   name: string;
   description: string;
 };
 
-/** Command definition returned by openclaw/plugin-sdk/command-auth */
 type ChatCommandDef = {
   name?: string;
   description?: string;
@@ -67,10 +46,6 @@ export const SYNC_INFORMATION_TYPE = {
   COMMANDS: 1,
 } as const;
 
-/**
- * Fallback command list: used when command-auth module is unavailable (older OpenClaw).
- * Contains known common OpenClaw framework built-in commands.
- */
 const FALLBACK_BOT_COMMANDS: CommandItem[] = [
   { name: "/help", description: "Show available commands." },
   { name: "/status", description: "Show current status." },
@@ -80,12 +55,6 @@ const FALLBACK_BOT_COMMANDS: CommandItem[] = [
   { name: "/compact", description: "Compact the session context." },
 ];
 
-/**
- * Fetch full OpenClaw framework command list.
- *
- * Prefers dynamic fetch via command-auth module (new OpenClaw >= 2026.4),
- * falls back to default list when older OpenClaw doesn't support it.
- */
 async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef[] | null> {
   const log = createLog("slash-commands");
 
@@ -130,14 +99,6 @@ async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef
   }
 }
 
-/**
- * Convert ChatCommandDefinition[] to CommandItem[].
- *
- * Commands returned by listChatCommandsForConfig may have various field names:
- * - name: command name (may not include /)
- * - textAliases: text alias array (e.g. ["/help", "/commands"])
- * - description: command description
- */
 function toBotCommandItems(commands: ChatCommandDef[]): CommandItem[] {
   const log = createLog("slash-commands");
   const result: CommandItem[] = [];
@@ -172,18 +133,8 @@ function toBotCommandItems(commands: ChatCommandDef[]): CommandItem[] {
   return result;
 }
 
-/**
- * Plugin-registered command list (collected at runtime).
- *
- * After each api.registerCommand call in channel.ts register(),
- * registerPluginCommand is called synchronously to record command info here.
- */
 const pluginCommands: CommandItem[] = [];
 
-/**
- * Register a plugin command to the sync list.
- * Called in channel.ts plugin.register(), paired with api.registerCommand.
- */
 export function registerPluginCommand(name: string, description: string): void {
   const fullName = name.startsWith("/") ? name : `/${name}`;
   // Deduplicate
@@ -192,9 +143,6 @@ export function registerPluginCommand(name: string, description: string): void {
   }
 }
 
-/**
- * Get registered plugin command list (read-only copy).
- */
 export function getPluginCommands(): ReadonlyArray<CommandItem> {
   return pluginCommands;
 }
@@ -209,12 +157,6 @@ export type SyncInformationPayload = {
   };
 };
 
-/**
- * Build SyncInformationReq payload (sync_type=COMMANDS).
- *
- * - bot_commands: dynamically fetched from OpenClaw framework via listChatCommandsForConfig / listChatCommands
- * - plugin_commands: dynamically collected from plugin registration phase
- */
 export async function buildSyncCommandsPayload(
   config?: OpenClawConfig,
 ): Promise<SyncInformationPayload> {
