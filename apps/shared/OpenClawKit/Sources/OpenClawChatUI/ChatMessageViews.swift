@@ -351,7 +351,7 @@ private struct ChatMessageBody: View {
 }
 
 private struct AttachmentRow: View {
-    private static let maxPreviewBytes = 5_000_000
+    nonisolated(unsafe) private static let maxPreviewBytes = 5_000_000
 
     let att: OpenClawChatMessageContent
     let isUser: Bool
@@ -385,7 +385,7 @@ private struct AttachmentRow: View {
     }
 
     private var previewSourceKey: String {
-        [self.att.type, self.att.fileName, self.att.mimeType, self.contentSourceString].compactMap { $0 }.joined(separator: "|")
+        [self.att.type, self.att.fileName, self.att.mimeType, self.contentSourceDigest].compactMap { $0 }.joined(separator: "|")
     }
 
     private var contentSourceString: String? {
@@ -405,6 +405,14 @@ private struct AttachmentRow: View {
             return url
         }
         return nil
+    }
+
+    private var contentSourceDigest: String? {
+        guard let source = self.contentSourceString else { return nil }
+        var hasher = Hasher()
+        hasher.combine(source)
+        hasher.combine(source.count)
+        return String(hasher.finalize(), radix: 16)
     }
 
     nonisolated private static func loadPreviewImage(from att: OpenClawChatMessageContent) async -> OpenClawPlatformImage? {
@@ -447,8 +455,10 @@ private struct AttachmentRow: View {
         if let base64 = Self.decodeBase64ImageData(trimmed) {
             return base64
         }
-        guard let url = URL(string: trimmed), url.isFileURL else { return nil }
-        return Self.readImageData(from: url)
+        if let url = URL(string: trimmed), url.isFileURL {
+            return Self.readImageData(from: url)
+        }
+        return Self.readImageData(from: URL(fileURLWithPath: trimmed))
     }
 
     nonisolated private static func decodeBase64ImageData(_ base64: String) -> Data? {
