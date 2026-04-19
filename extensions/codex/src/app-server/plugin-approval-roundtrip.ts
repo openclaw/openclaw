@@ -1,6 +1,8 @@
 import { callGatewayTool, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 
 export const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
+const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
+const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 
 type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
@@ -35,8 +37,8 @@ export async function requestPluginApproval(params: {
     { timeoutMs: timeoutMs + 10_000 },
     {
       pluginId: "openclaw-codex-app-server",
-      title: params.title,
-      description: params.description,
+      title: truncateForGateway(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
+      description: truncateForGateway(params.description, MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH),
       severity: params.severity,
       toolName: params.toolName,
       toolCallId: params.toolCallId,
@@ -97,4 +99,8 @@ export function mapExecDecisionToOutcome(
     return "unavailable";
   }
   return "denied";
+}
+
+function truncateForGateway(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }

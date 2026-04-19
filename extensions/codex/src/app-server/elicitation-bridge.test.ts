@@ -101,6 +101,56 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
+  it("truncates long approval titles and descriptions before requesting approval", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-4", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-4", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        message: "Approve ".repeat(20).trim(),
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approve: {
+              type: "boolean",
+              title: "Approve this tool call",
+              description: "Explain ".repeat(60).trim(),
+            },
+          },
+          required: ["approve"],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: {
+        approve: true,
+      },
+      _meta: null,
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        title: expect.any(String),
+        description: expect.any(String),
+      }),
+      { expectFinal: false },
+    );
+    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+      title: string;
+      description: string;
+    };
+    expect(approvalRequest.title.length).toBeLessThanOrEqual(80);
+    expect(approvalRequest.description.length).toBeLessThanOrEqual(256);
+  });
+
   it("fails closed when the approval route is unavailable", async () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "plugin:approval-3", decision: null });
 
