@@ -549,6 +549,47 @@ function normalizeSessionCorpusSnippet(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
+/**
+ * Returns true if a normalized session corpus snippet is automation
+ * scaffolding rather than a meaningful user/assistant exchange and should
+ * be skipped by dreaming ingestion.
+ *
+ * Concretely this drops:
+ * - Cron-triggered user prompts of the shape `User: [cron:<id> ...]` (and
+ *   the bracketed variant with or without a trailing label), which are
+ *   runtime-generated and leak the raw cron payload into the corpus.
+ * - Assistant `NO_REPLY` sentinels, which are the documented "silent reply"
+ *   marker from the system prompt rather than actual content.
+ * - System-injected `HEARTBEAT_OK` acknowledgements from heartbeat polls.
+ *
+ * Everything else (including real user mentions of the word "cron" in
+ * prose) is passed through untouched, because the matches are anchored
+ * on the `User:`/`Assistant:` role prefix produced by `buildSessionEntry`.
+ *
+ * See openclaw/openclaw#68449 issue 2.
+ */
+function isCronNoiseSessionSnippet(snippet: string): boolean {
+  const trimmed = snippet.trim();
+  if (trimmed.length === 0) {
+    return true;
+  }
+  // Cron-triggered user prompts carry a `[cron:<id>` or `[cron <id>` marker
+  // inside the first ~120 chars of the User: line. Anchoring on `User:` keeps
+  // this from matching legitimate prose that happens to mention "cron".
+  if (/^User:\s*\[\s*cron[:\s]/i.test(trimmed)) {
+    return true;
+  }
+  // Silent-reply sentinel and heartbeat acks are fixed strings the assistant
+  // is instructed to emit instead of real content.
+  if (/^Assistant:\s*NO_REPLY\s*$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^Assistant:\s*HEARTBEAT_OK\s*$/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
 function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
@@ -831,6 +872,12 @@ async function collectSessionIngestionBatches(params: {
       const rawSnippet = lines[index] ?? "";
       const snippet = normalizeSessionCorpusSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+        continue;
+      }
+      // Drop cron-triggered prompts and NO_REPLY/HEARTBEAT_OK sentinels so
+      // they don't flood the dreaming corpus with automation scaffolding.
+      // See openclaw/openclaw#68449 issue 2.
+      if (isCronNoiseSessionSnippet(snippet)) {
         continue;
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;

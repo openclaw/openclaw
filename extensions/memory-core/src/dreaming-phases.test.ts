@@ -1860,4 +1860,102 @@ describe("memory-core dreaming phases", () => {
     // Before the fix, it stayed at 1 because dayBucket was the file date.
     expect(after2[0]?.dailyCount).toBe(2);
   });
+
+  it("filters cron-triggered prompts and NO_REPLY/HEARTBEAT_OK sentinels out of the session corpus", async () => {
+    // Regression for openclaw/openclaw#68449 (issue 2): a workspace with lots
+    // of cron-triggered sessions would flood the dreaming corpus with lines
+    // like `User: [cron:<id> ...]` / `Assistant: NO_REPLY`, which then
+    // dominated concept ranking. These shapes should be dropped at ingestion.
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "cron-noise.jsonl");
+    const makeMessage = (role: "user" | "assistant", text: string, secondsOffset: number) =>
+      JSON.stringify({
+        type: "message",
+        message: {
+          role,
+          timestamp: new Date(Date.parse("2026-04-05T18:00:00.000Z") + secondsOffset * 1000)
+            .toISOString(),
+          content: [{ type: "text", text }],
+        },
+      });
+    await fs.writeFile(
+      transcriptPath,
+      [
+        // Pure cron scaffolding — should be filtered.
+        makeMessage("user", "[cron:abc-123 WHOOP Token Refresh] refresh the token please", 0),
+        makeMessage("assistant", "NO_REPLY", 5),
+        makeMessage("user", "[cron: heartbeat-daily] heartbeat poll", 10),
+        makeMessage("assistant", "HEARTBEAT_OK", 15),
+        // Meaningful exchange that happens to mention cron in prose — must stay.
+        makeMessage(
+          "user",
+          "Please help me wire up a cron job to back up the vault every night at 3am.",
+          20,
+        ),
+        makeMessage(
+          "assistant",
+          "Sure — the cleanest approach is a systemd timer, but cron also works.",
+          25,
+        ),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const mtime = new Date("2026-04-05T18:05:00.000Z");
+    await fs.utimes(transcriptPath, mtime, mtime);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: { enabled: true, limit: 20, lookbackDays: 7 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-05.txt",
+    );
+    const corpus = await fs.readFile(corpusPath, "utf-8");
+
+    // Automation scaffolding must not leak into the corpus.
+    expect(corpus).not.toContain("[cron:abc-123");
+    expect(corpus).not.toContain("[cron: heartbeat-daily");
+    expect(corpus).not.toMatch(/Assistant:\s*NO_REPLY/);
+    expect(corpus).not.toMatch(/Assistant:\s*HEARTBEAT_OK/);
+
+    // Legitimate prose that merely mentions cron must still be ingested.
+    expect(corpus).toContain("wire up a cron job to back up the vault");
+    expect(corpus).toContain("systemd timer, but cron also works");
+  });
 });
