@@ -46,4 +46,18 @@ describe("timeout-policy", () => {
     );
     expect(timeout).toBe(1_900);
   });
+
+  it("applies explicit timeoutSeconds on systemEvent payloads", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "systemEvent", text: "dream", timeoutSeconds: 120 }),
+    );
+    expect(timeout).toBe(120_000);
+  });
+
+  it("disables timeout when systemEvent timeoutSeconds <= 0", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "systemEvent", text: "dream", timeoutSeconds: 0 }),
+    );
+    expect(timeout).toBeUndefined();
+  });
 });
