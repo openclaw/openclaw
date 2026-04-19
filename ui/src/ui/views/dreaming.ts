@@ -680,11 +680,12 @@ function sortWaitingEntries(entries: DreamingEntry[], sort: AdvancedWaitingSort)
 
 function describeWaitingEntryOrigin(entry: DreamingEntry): string {
   const hasGroundedReplay = entry.groundedCount > 0;
-  const hasLiveSupport = entry.recallCount > 0 || entry.dailyCount > 0;
+  const hasDailyLog = entry.dailyCount > 0;
+  const hasLiveSupport = entry.recallCount > 0 || hasDailyLog;
   if (hasGroundedReplay && hasLiveSupport) {
     return t("dreaming.advanced.originMixed");
   }
-  if (hasGroundedReplay) {
+  if (hasDailyLog) {
     return t("dreaming.advanced.originDailyLog");
   }
   return t("dreaming.advanced.originLive");
