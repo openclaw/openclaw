@@ -209,7 +209,7 @@ function renderDailyChartCompact(
           </button>
         </div>
         <div class="card-title">
-          ${isTokenMode ? t("usage.daily.tokensTitle") : t("usage.daily.costTitle")}
+          ${isTokenMode ? t("usage.daily.tokensTitle") : "Daily Usage Cost"}
         </div>
       </div>
       <div class="daily-chart">
@@ -314,7 +314,7 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
   return html`
     <div class="cost-breakdown cost-breakdown-compact">
       <div class="cost-breakdown-header">
-        ${isTokenMode ? t("usage.breakdown.tokensByType") : t("usage.breakdown.costByType")}
+        ${isTokenMode ? t("usage.breakdown.tokensByType") : "Usage Cost by Type"}
       </div>
       <div class="cost-breakdown-bar">
         <div
@@ -616,8 +616,9 @@ function renderUsageInsights(
             className: "usage-summary-card--medium",
           })}
           ${renderSummaryStat({
-            title: t("usage.overview.avgCost"),
-            hint: costHint,
+            title: "Avg Usage Cost / Msg",
+            hint:
+              "Average estimated or provider-reported usage cost per message. This is not necessarily your actual bill.",
             value: formatCost(avgCost, 4),
             sub: `${formatCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
             className: "usage-summary-card--compact",
