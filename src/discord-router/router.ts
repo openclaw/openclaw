@@ -679,20 +679,18 @@ async function recoverUnansweredDMs(
       // Skip italic lifecycle messages (*Back online.*, *Shutting down...*)
       const isLifecycle = (c: string) => /^\*[^*]+\*$/.test(c?.trim() ?? "");
 
-      // Walk messages (newest first) — find last real user message
-      // that wasn't followed by a real (non-lifecycle) bot response
+      // Walk messages (newest first). Skip lifecycle messages.
+      // If the first non-lifecycle message is from the user → unanswered.
+      // If it's from the bot → already responded, skip.
       let lastUserMsg: (typeof messages)[0] | undefined;
-      let botRespondedAfter = false;
       for (const msg of messages) {
         if (isLifecycle(msg.content)) continue;
-        if (msg.author.bot || msg.author.id === botId) {
-          botRespondedAfter = true;
-          break;
-        }
-        if (!lastUserMsg) lastUserMsg = msg;
+        if (msg.author.bot || msg.author.id === botId) break; // bot responded
+        lastUserMsg = msg;
+        break; // found the user's unanswered message
       }
 
-      if (!lastUserMsg || botRespondedAfter) continue;
+      if (!lastUserMsg) continue;
       const content = lastUserMsg.content?.trim();
       if (!content) continue;
 
