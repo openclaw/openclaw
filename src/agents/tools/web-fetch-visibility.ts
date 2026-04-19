@@ -26,10 +26,24 @@ const HIDDEN_CLASS_NAMES = new Set([
   "offscreen",
 ]);
 
-let parseHtmlPromise: Promise<typeof import("linkedom").parseHTML> | null = null;
+type ParsedHtml = {
+  document: Document;
+};
 
-async function loadParseHTML(): Promise<typeof import("linkedom").parseHTML> {
-  parseHtmlPromise ??= import("linkedom").then(({ parseHTML }) => parseHTML);
+type ParseHtml = (html: string) => ParsedHtml;
+
+type LinkedomModule = {
+  parseHTML: ParseHtml;
+};
+
+const LINKEDOM_MODULE = "linkedom";
+
+let parseHtmlPromise: Promise<ParseHtml> | null = null;
+
+async function loadParseHTML(): Promise<ParseHtml> {
+  parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
+    ({ parseHTML }) => parseHTML,
+  );
   return parseHtmlPromise;
 }
 
