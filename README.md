@@ -212,21 +212,34 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
 
+For the dev loop:
+
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
-pnpm build
 
-pnpm openclaw onboard --install-daemon
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
+
+# Optional: prebuild Control UI before first startup
+pnpm ui:build
 
 # Dev loop (auto-reload on source/config changes)
 pnpm gateway:watch
 ```
 
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
+If you need a built `dist/` from the checkout (for Node, packaging, or release validation), run:
+
+```bash
+pnpm build
+pnpm ui:build
+```
+
+`pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
+
+Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary, while `pnpm gateway:watch` rebuilds the runtime on demand during the dev loop.
 
 ## Development channels
 
