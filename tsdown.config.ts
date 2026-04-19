@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
 import {
@@ -81,13 +82,37 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   };
 }
 
+function resolveGitCommit(): string | undefined {
+  const envCommit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim();
+  if (envCommit) {
+    return envCommit.slice(0, 7);
+  }
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return undefined;
+  }
+}
+
 function nodeBuildConfig(config: UserConfig): UserConfig {
+  const gitCommit = resolveGitCommit();
+  const define: Record<string, string> = {};
+  if (gitCommit) {
+    define["__OPENCLAW_GIT_COMMIT__"] = JSON.stringify(gitCommit);
+  }
+
   return {
     ...config,
     env,
     fixedExtension: false,
     platform: "node",
     inputOptions: buildInputOptions,
+    define,
   };
 }
 

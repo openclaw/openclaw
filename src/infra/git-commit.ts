@@ -6,6 +6,8 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveGitHeadPath } from "./git-root.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
+declare const __OPENCLAW_GIT_COMMIT__: string | undefined;
+
 const formatCommit = (value?: string | null) => {
   if (!value) {
     return null;
@@ -225,6 +227,14 @@ export const resolveCommitHash = (
   const normalized = formatCommit(envCommit);
   if (normalized) {
     return normalized;
+  }
+  // Check for injected build-time commit (from tsdown define)
+  const injectedCommit = typeof __OPENCLAW_GIT_COMMIT__ === "string" ? __OPENCLAW_GIT_COMMIT__ : undefined;
+  if (injectedCommit) {
+    const formatted = formatCommit(injectedCommit);
+    if (formatted) {
+      return formatted;
+    }
   }
   const searchDir = resolveCommitSearchDir(options);
   if (cachedGitCommitBySearchDir.has(searchDir)) {
