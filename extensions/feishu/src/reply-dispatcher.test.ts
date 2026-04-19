@@ -1535,7 +1535,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     // Final delivery still strips directive tags before sending.
     expect(streamingInstances[0].close).toHaveBeenCalledWith(
-      "hello final",
+      "  hello final",
       expect.objectContaining({
         note: "Agent: agent",
         dropThinkingPanel: true,

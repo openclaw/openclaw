@@ -30,18 +30,25 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
 });
 
 describe("stripInlineDirectiveTagsForDelivery", () => {
-  test("removes directives and surrounding whitespace for outbound text", () => {
+  test("replaces directives with a single space without touching surrounding newlines", () => {
     const input = "hello [[reply_to_current]] world [[audio_as_voice]]";
     const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(true);
-    expect(result.text).toBe("hello world");
+    expect(result.text).toBe("hello   world  ");
+  });
+
+  test("preserves newlines adjacent to directives", () => {
+    const input = "[[reply_to_current]]\nbody";
+    const result = stripInlineDirectiveTagsForDelivery(input);
+    expect(result.changed).toBe(true);
+    expect(result.text).toBe(" \nbody");
   });
 
   test("preserves intentional multi-space formatting away from directives", () => {
     const input = "a  b [[reply_to:123]] c   d";
     const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(true);
-    expect(result.text).toBe("a  b c   d");
+    expect(result.text).toBe("a  b   c   d");
   });
 
   test("does not trim plain text when no directive tags are present", () => {

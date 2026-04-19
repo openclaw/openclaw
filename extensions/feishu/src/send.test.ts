@@ -42,12 +42,10 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   convertMarkdownTables: mockConvertMarkdownTables,
   stripInlineDirectiveTagsForDelivery: vi.fn((text: string) => ({
-    text: text
-      .replace(
-        /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi,
-        " ",
-      )
-      .trim(),
+    text: text.replace(
+      /(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])/gi,
+      " ",
+    ),
     changed: true,
   })),
 }));
@@ -423,7 +421,7 @@ describe("sendMessageFeishu", () => {
         data: expect.objectContaining({
           content: JSON.stringify({
             zh_cn: {
-              content: [[{ tag: "md", text: "hello" }]],
+              content: [[{ tag: "md", text: "  hello" }]],
             },
           }),
         }),
@@ -702,7 +700,7 @@ describe("editMessageFeishu", () => {
               [
                 {
                   tag: "md",
-                  text: "updated body",
+                  text: "  updated body",
                 },
               ],
             ],
@@ -774,7 +772,7 @@ describe("buildStructuredCard", () => {
     expect(card).toEqual(
       expect.objectContaining({
         body: {
-          elements: [{ tag: "markdown", content: "hello" }],
+          elements: [{ tag: "markdown", content: "  hello" }],
         },
       }),
     );
@@ -897,7 +895,7 @@ describe("buildMarkdownCard", () => {
         width_mode: "fill",
       },
       body: {
-        elements: [{ tag: "markdown", content: "hello" }],
+        elements: [{ tag: "markdown", content: "  hello" }],
       },
     });
   });
