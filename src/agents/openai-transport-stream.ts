@@ -1502,10 +1502,8 @@ export function buildOpenAICompletionsParams(
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
     stream: true,
+    stream_options: { include_usage: true },
   };
-  if (compat.supportsUsageInStreaming) {
-    params.stream_options = { include_usage: true };
-  }
   if (compat.supportsStore) {
     params.store = false;
   }
