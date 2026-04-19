@@ -1,9 +1,18 @@
 /**
  * Plan mode types for the GPT 5.4 parity sprint.
  *
- * Plan mode is an opt-in feature (never auto-enabled) that lets users
- * explicitly request a plan-first workflow. When active, mutation tools
- * are blocked until the user approves the agent's plan.
+ * Plan mode is an opt-in feature that lets users explicitly request a
+ * plan-first workflow. (Future config knobs: `planMode.autoEnableFor`
+ * is SCHEMA-RESERVED for model-pattern auto-enable; the corresponding
+ * runtime wiring is deferred per the consolidation pass — see
+ * `types.agent-defaults.ts` for the SCHEMA-RESERVED contract.) When
+ * active, mutation tools are blocked until the user approves the
+ * agent's plan.
+ *
+ * Copilot review #68939 (2026-04-19): header used to claim "never
+ * auto-enabled" — that contradicts the documented `autoEnableFor`
+ * config field. Updated to scope the claim to "today, runtime
+ * wiring deferred" so the doc matches the schema surface.
  *
  * ## Rejection/Edit UX (Decision 4 from adversarial audit)
  *
@@ -99,12 +108,29 @@ export function newPlanApprovalId(): string {
   if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
     return `plan-${cryptoApi.randomUUID()}`;
   }
-  // Fallback: stitch two Math.random() draws + timestamp. Still better
-  // than the original 8-char slice; only used on hosts without webcrypto.
-  return (
-    `plan-${Date.now().toString(36)}-` +
-    `${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
-  );
+  // Copilot review #68939 (2026-04-19): replaced the Math.random()
+  // fallback with `node:crypto.randomUUID()`. The `approvalId` is
+  // the security boundary token used by the answer-guard / plan-
+  // approval-guard for staleness protection — `Math.random()` is
+  // not cryptographically secure (predictable from a few prior
+  // outputs) and shouldn't be used here even as a "host without
+  // webcrypto" fallback. Modern Node always exposes node:crypto;
+  // the dynamic import keeps this isomorphic-safe (the function
+  // also runs in browser-like contexts via the globalThis.crypto
+  // path above, which we already prefer when available).
+  try {
+    const nodeCrypto = require("node:crypto") as { randomUUID: () => string };
+    return `plan-${nodeCrypto.randomUUID()}`;
+  } catch {
+    // Last-resort defensive fallback if even node:crypto can't be
+    // resolved (extremely unusual — would mean a non-Node host with
+    // no webcrypto). Throwing here is safer than emitting a
+    // predictable token: the caller should fail loudly so operators
+    // notice the broken environment.
+    throw new Error(
+      "buildApprovalId: no cryptographically secure RNG available (neither globalThis.crypto.randomUUID nor node:crypto.randomUUID). Refusing to mint a non-secure approvalId — this would weaken the answer-guard / plan-approval staleness protection.",
+    );
+  }
 }
 
 /**

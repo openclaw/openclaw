@@ -259,7 +259,19 @@ export const SessionsPatchParamsSchema = Type.Object(
         Type.Object(
           {
             action: Type.Literal("reject"),
-            feedback: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+            // Copilot review #68939 (2026-04-19): made `feedback`
+            // REQUIRED for the reject variant (was Optional). The
+            // /plan revise <feedback> text-command path already
+            // requires feedback (commands-plan.ts validates
+            // non-empty at parse time), and the documented UX
+            // (`[Reject + Feedback]` button at types.ts:21-23)
+            // implies feedback is the whole point of rejection
+            // (otherwise the agent has no signal to revise
+            // toward). Schema-level requirement closes the
+            // loophole where a malformed client / future UI
+            // change could submit "reject with no guidance" and
+            // leave the agent stuck.
+            feedback: Type.String({ minLength: 1, maxLength: 8192 }),
             approvalId: Type.Optional(NonEmptyString),
           },
           { additionalProperties: false },
@@ -297,7 +309,22 @@ export const SessionsPatchParamsSchema = Type.Object(
         Type.Object(
           {
             step: NonEmptyString,
-            status: NonEmptyString,
+            // Copilot review #68939 (2026-04-19): tightened from
+            // `NonEmptyString` to a closed enum matching the
+            // `PlanStepStatus` runtime type (defined in
+            // `src/agents/tools/plan-step-status.ts` and validated
+            // by `update_plan`/`exit_plan_mode` at parse time).
+            // Pre-fix, an arbitrary status string could be
+            // persisted into SessionEntry and rendered by the UI
+            // — risking protocol drift, broken close-on-complete
+            // detection (which checks `status === "completed"`),
+            // and inconsistent plan-card rendering.
+            status: Type.Union([
+              Type.Literal("pending"),
+              Type.Literal("in_progress"),
+              Type.Literal("completed"),
+              Type.Literal("cancelled"),
+            ]),
             activeForm: Type.Optional(NonEmptyString),
             // PR-9 Wave B1 — closure-gate fields (optional, backwards-compatible).
             acceptanceCriteria: Type.Optional(Type.Array(NonEmptyString)),

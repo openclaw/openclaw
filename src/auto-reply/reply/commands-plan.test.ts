@@ -155,7 +155,15 @@ describe("/plan handler — parser dispatch", () => {
       key: "agent:main:main",
       planApproval: { action: "approve", approvalId: "a1" },
     });
-    expect(result?.reply?.text).toContain("**accepted**");
+    // Codex P1 review #68939 (2026-04-19): /plan accept now returns
+    // shouldContinue:true so the agent-runner pipeline resumes the
+    // agent immediately to consume the [PLAN_DECISION] injection.
+    // Pre-fix, the handler returned a reply text but no run trigger,
+    // so non-web channels reported success while the agent stayed
+    // idle. The agent's own first-action message provides the
+    // implicit "approval received" signal to the user.
+    expect(result?.shouldContinue).toBe(true);
+    expect(result?.reply).toBeUndefined();
   });
 
   it("/plan accept edits patches with action=edit", async () => {
@@ -177,7 +185,10 @@ describe("/plan handler — parser dispatch", () => {
     );
     const args = callGatewayMock.mock.calls[0][0];
     expect(args.params.planApproval).toMatchObject({ action: "edit", approvalId: "a2" });
-    expect(result?.reply?.text).toContain("accepted with edits");
+    // See the /plan accept test above for the rationale on
+    // shouldContinue:true + no reply (Codex P1 review #68939).
+    expect(result?.shouldContinue).toBe(true);
+    expect(result?.reply).toBeUndefined();
   });
 
   it("/plan revise <feedback> patches with action=reject + feedback", async () => {
@@ -203,7 +214,12 @@ describe("/plan handler — parser dispatch", () => {
       feedback: "add error handling for the websocket reconnect",
       approvalId: "a1",
     });
-    expect(result?.reply?.text).toContain("revision");
+    // Codex P1 review #68939 (2026-04-19): /plan revise also
+    // returns shouldContinue:true so the agent runs immediately
+    // to consume the [PLAN_DECISION]: rejected injection and
+    // start the revise-and-resubmit loop. See /plan accept above.
+    expect(result?.shouldContinue).toBe(true);
+    expect(result?.reply).toBeUndefined();
   });
 
   it("/plan revise without feedback rejects with usage error (review H2)", async () => {
@@ -423,11 +439,16 @@ describe("/plan handler — parser dispatch", () => {
     expect(callGatewayMock.mock.calls[0][0].params.planApproval.feedback).toBe(
       "@everyone please review by EOD <@!12345>",
     );
-    // But the BOT'S reply to the channel must have the mentions
-    // neutralized so the bot doesn't ping the channel itself.
-    expect(result?.reply?.text).not.toMatch(/@everyone\b/);
-    expect(result?.reply?.text).toContain("@\uFE6Beveryone"); // ﹫-style neutralization
-    expect(result?.reply?.text).toContain("<\u200B@!12345>"); // zero-width-space inside Discord raw mention
+    // Codex P1 review #68939 (2026-04-19): the deep-dive M8 ping-
+    // vector concern was that the BOT'S reply could ping the
+    // channel via @-mention echo. With shouldContinue:true and no
+    // reply, the ping vector is GONE entirely — the bot doesn't
+    // emit a confirmation reply at all; the agent's own next
+    // response provides the implicit confirmation. This is
+    // strictly safer than the prior neutralization approach:
+    // there's no echo to neutralize.
+    expect(result?.shouldContinue).toBe(true);
+    expect(result?.reply).toBeUndefined();
   });
 
   it("/plan restate truncates output above the channel size cap (deep-dive M7)", async () => {
