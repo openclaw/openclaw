@@ -232,7 +232,7 @@ async function readTextFileStreaming(
   });
 }
 
-// Helper function for bridge mode - reads entire file but respects maxChars after
+// Helper function for bridge mode - reads file with byte limit to protect memory
 async function readTextFileBridge(
   bridge: SandboxFsBridge,
   filePath: string,
@@ -242,12 +242,10 @@ async function readTextFileBridge(
   maxChars: number,
   signal?: AbortSignal,
 ): Promise<{ content: string; truncated: boolean; totalLines: number }> {
-  const buffer = await bridge.readFile({
-    filePath,
-    cwd,
-    signal,
-  });
-  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
+  // FIXED: Read with byte limit to protect memory
+  const maxBytesForText = maxChars * 4; // UTF-8 can be up to 4 bytes per char
+  const buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForText, signal);
+  const text = buffer.toString("utf-8");
   
   // Apply character limit after reading
   let truncatedText = text;
@@ -288,6 +286,53 @@ async function readFileBytesWithLimit(
   return buffer.slice(0, maxBytes);
 }
 
+// Helper function to read limited bytes from local file without failing on large files
+async function readLocalFileBytesWithLimit(
+  filePath: string,
+  maxBytes: number,
+  signal?: AbortSignal
+): Promise<Buffer> {
+  // FIXED: Use createReadStream to read only the first maxBytes instead of failing on large files
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Read operation aborted"));
+      return;
+    }
+    
+    const stream = createReadStream(filePath, { start: 0, end: maxBytes - 1 });
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    
+    const onAbort = () => {
+      stream.destroy();
+      reject(new Error("Read operation aborted"));
+    };
+    
+    signal?.addEventListener("abort", onAbort, { once: true });
+    
+    stream.on("data", (chunk: Buffer) => {
+      if (totalBytes + chunk.length > maxBytes) {
+        const remaining = maxBytes - totalBytes;
+        chunks.push(chunk.slice(0, remaining));
+        stream.destroy();
+        return;
+      }
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+    });
+    
+    stream.on("end", () => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(Buffer.concat(chunks));
+    });
+    
+    stream.on("error", (error) => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+
 // Helper function to detect if a WebM file is audio-only using bridge-aware reads
 async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?: string): Promise<boolean> {
   try {
@@ -297,9 +342,8 @@ async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?:
       // Read only first 8KB for MIME detection
       buffer = await readFileBytesWithLimit(bridge, filePath, cwd, 8192);
     } else {
-      // Use local filesystem with byte limit
-      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
-      buffer = localBuffer;
+      // FIXED: Use bounded header reads for host WebM audio detection
+      buffer = await readLocalFileBytesWithLimit(filePath, 8192);
     }
     
     const detectedMime = await detectMime({ buffer, filePath });
@@ -738,9 +782,17 @@ function mapContainerPathToWorkspaceRoot(params: {
       if (host && host !== "localhost") {
         return params.filePath;
       }
+      
+      // FIXED: Reject encoded separators before remapping
+      const rawPathname = parsed.pathname;
+      if (rawPathname.includes("%2F") || rawPathname.includes("%2f")) {
+        // Contains encoded slash - reject as potentially malicious
+        return params.filePath;
+      }
+      
       let normalizedPathname: string;
       try {
-        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+        normalizedPathname = decodeURIComponent(rawPathname).replace(/\\/g, "/");
       } catch {
         return params.filePath;
       }
@@ -777,6 +829,14 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
+  
+  // FIXED: Restore Windows-drive absolute path handling
+  // Check if this is a Windows absolute path (e.g., C:\ or D:\)
+  const isWindowsAbsolutePath = /^[a-zA-Z]:[\\/]/.test(candidate);
+  if (isWindowsAbsolutePath) {
+    return path.resolve(candidate);
+  }
+  
   return path.isAbsolute(candidate)
     ? path.resolve(candidate)
     : path.resolve(params.root, candidate || ".");
@@ -1061,11 +1121,10 @@ async function detectMediaTypeFromBytes(
     let buffer: Buffer;
     
     if (useBridge && bridge) {
-      // FIXED: Use helper that reads only first maxBytesForSniffing bytes
       buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForSniffing, signal);
     } else {
-      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: maxBytesForSniffing });
-      buffer = localBuffer;
+      // FIXED: Use bounded header reads that don't reject large files
+      buffer = await readLocalFileBytesWithLimit(filePath, maxBytesForSniffing, signal);
     }
     
     const detectedMime = await detectMime({ buffer, filePath });
@@ -1259,7 +1318,7 @@ export function createOpenClawReadTool(
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
           } else {
-            // Add pre-read size cap to prevent OOM on host-side image reads
+            // FIXED: Cap host image reads before sanitization to prevent OOM
             if (fileSize > MAX_IMAGE_BYTES_BEFORE_SANITIZATION) {
               // Image is too large to safely read into memory - return error
               const errorResult = {

@@ -1668,7 +1668,7 @@ function renderGroupedMessage(
               if (details.open) {
                 setTimeout(() => {
                   details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }, 150);
+                }, 250);
               }
             }}
           >
