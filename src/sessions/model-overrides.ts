@@ -120,6 +120,10 @@ export function applyModelOverrideToSessionEntry(params: {
     delete entry.fallbackNoticeSelectedModel;
     delete entry.fallbackNoticeActiveModel;
     delete entry.fallbackNoticeReason;
+    // An explicit user model switch supersedes any active failover state.
+    if (selectionSource === "user") {
+      delete entry.failoverState;
+    }
     entry.updatedAt = Date.now();
   }
 

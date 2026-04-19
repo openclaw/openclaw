@@ -602,6 +602,13 @@ export async function performGatewaySessionReset(params: {
       // Resets should keep the user's explicit selection, but clear any
       // temporary fallback model that was pinned during the previous run.
       ...resetPreservedSelection,
+      // Always clear transient failover state on /new and /reset
+      failoverState: undefined,
+      // `/new` creates a fresh LCM conversation; `/reset` preserves continuity
+      memoryConversationKey:
+        params.reason === "new"
+          ? randomUUID()
+          : (currentEntry?.memoryConversationKey ?? randomUUID()),
       groupActivation: currentEntry?.groupActivation,
       groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
       chatType: currentEntry?.chatType,

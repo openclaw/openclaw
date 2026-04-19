@@ -286,6 +286,10 @@ export async function runEmbeddedPiAgent(
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
       const resolvedSessionKey = normalizedSessionKey;
+      // Context engine calls use memoryConversationKey when present so LCM
+      // conversation identity is decoupled from runtime session identity.
+      const contextEngineSessionKey =
+        normalizeOptionalString(params.memoryConversationKey) ?? resolvedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
@@ -677,6 +681,7 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
+            memoryConversationKey: params.memoryConversationKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -928,7 +933,7 @@ export async function runEmbeddedPiAgent(
                 };
                 timeoutCompactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
+                  sessionKey: contextEngineSessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   force: true,
@@ -993,6 +998,34 @@ export async function runEmbeddedPiAgent(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+
+            // Structured overflow diagnostic event (Patch 3A).
+            // One JSON event per overflow attempt with enough detail to compare
+            // runtime assembled prompt size with compaction estimate.
+            const toolResultMessages =
+              attempt.messagesSnapshot?.filter((m: { role?: string }) => m.role === "tool") ?? [];
+            const overflowDiagnostic = {
+              event: "context_overflow_diagnostic",
+              diagId: overflowDiagId,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              runtimeModel: `${provider}/${modelId}`,
+              contextWindowTokens: ctxInfo.tokens,
+              contextWindowSource: ctxInfo.source,
+              assembledPromptTokenEstimate: observedOverflowTokens ?? null,
+              messageCount: msgCount,
+              toolResultCount: toolResultMessages.length,
+              overflowSource: contextOverflowError.source,
+              compactionAttemptedBefore: overflowCompactionAttempts > 0,
+              compactionAttemptsSoFar: overflowCompactionAttempts,
+              attemptLevelCompactionCount: attemptCompactionCount,
+              preflightRecoveryRoute: preflightRecovery?.route ?? null,
+              preflightRecoveryHandled: preflightRecovery?.handled ?? false,
+              sessionFile: params.sessionFile,
+              error: errorText.slice(0, 500),
+              timestamp: new Date().toISOString(),
+            };
+            log.warn(`[context-overflow-event] ${JSON.stringify(overflowDiagnostic)}`);
+
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
@@ -1073,7 +1106,7 @@ export async function runEmbeddedPiAgent(
                 };
                 compactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
-                  sessionKey: params.sessionKey,
+                  sessionKey: contextEngineSessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
@@ -1087,7 +1120,7 @@ export async function runEmbeddedPiAgent(
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: params.sessionId,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     sessionFile: params.sessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
@@ -1104,6 +1137,23 @@ export async function runEmbeddedPiAgent(
                 };
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+
+              // Structured compaction result diagnostic (Patch 3A)
+              const compactionDiagnostic = {
+                event: "overflow_compaction_result",
+                diagId: overflowDiagId,
+                sessionKey: params.sessionKey ?? params.sessionId,
+                compactOk: compactResult.ok,
+                compacted: compactResult.compacted,
+                compactReason: compactResult.reason ?? null,
+                tokensBefore: compactResult.result?.tokensBefore ?? null,
+                tokensAfter: compactResult.result?.tokensAfter ?? null,
+                contextWindowTokens: ctxInfo.tokens,
+                attempt: overflowCompactionAttempts,
+                timestamp: new Date().toISOString(),
+              };
+              log.warn(`[overflow-compaction-event] ${JSON.stringify(compactionDiagnostic)}`);
+
               if (compactResult.compacted) {
                 if (preflightRecovery?.route === "compact_then_truncate") {
                   const truncResult = await truncateOversizedToolResultsInSession({
@@ -1136,6 +1186,53 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
+
+              // Circuit breaker (Patch 3B): if compaction explicitly says context
+              // is already under target but runtime still overflows AND tool result
+              // truncation has already been attempted, there is a confirmed budget
+              // mismatch. Hard-stop the retry loop instead of endlessly resetting.
+              const compactionSaysUnderTarget =
+                !compactResult.compacted &&
+                typeof compactResult.reason === "string" &&
+                /under.target|below.threshold|nothing.to.compact/i.test(compactResult.reason);
+              if (compactionSaysUnderTarget && toolResultTruncationAttempted) {
+                log.warn(
+                  `[circuit-breaker] compaction reports under target and truncation already attempted ` +
+                    `but runtime still overflows for ${provider}/${modelId}. Stopping retry loop.`,
+                );
+                attempt.setTerminalLifecycleMeta?.({
+                  replayInvalid: resolveReplayInvalidForAttempt(),
+                  livenessState: "blocked",
+                });
+                return {
+                  payloads: [
+                    {
+                      text:
+                        "⚠️ Context overflow: compaction reports context is within budget, but the assembled " +
+                        "prompt still exceeds the model's limit. This indicates a budget mismatch between " +
+                        "compaction and runtime assembly. Try /reset or /new, or use a larger-context model.\n\n" +
+                        "Diagnostic: check `openclaw logs --follow` for `[context-overflow-event]` entries.",
+                      isError: true,
+                    },
+                  ],
+                  meta: {
+                    durationMs: Date.now() - started,
+                    agentMeta: buildErrorAgentMeta({
+                      sessionId: sessionIdUsed,
+                      provider,
+                      model: model.id,
+                      usageAccumulator,
+                      lastRunPromptUsage,
+                      lastAssistant,
+                      lastTurnTotal,
+                    }),
+                    error: {
+                      message: "Circuit breaker: compaction/assembly budget mismatch",
+                      kind: "context_overflow",
+                    },
+                  },
+                };
+              }
             }
             if (!toolResultTruncationAttempted) {
               const contextWindowTokens = ctxInfo.tokens;
