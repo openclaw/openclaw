@@ -597,6 +597,11 @@ export function buildCronPayload(form: CronFormState) {
   return payload;
 }
 
+function normalizePersistedDeliveryChannel(value: string) {
+  const channel = value.trim();
+  return channel && channel !== CRON_CHANNEL_LAST ? channel : undefined;
+}
+
 function buildFailureAlert(form: CronFormState) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
@@ -615,15 +620,13 @@ function buildFailureAlert(form: CronFormState) {
   const accountId = form.failureAlertAccountId.trim();
   const patch: Record<string, unknown> = {
     after: after > 0 ? Math.floor(after) : undefined,
-    channel: form.failureAlertChannel.trim() || undefined,
+    channel: normalizePersistedDeliveryChannel(form.failureAlertChannel),
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
   };
-  // Always include mode and accountId so users can switch/clear them
   if (deliveryMode) {
     patch.mode = deliveryMode;
   }
-  // Include accountId if explicitly set, or send undefined to allow clearing
   patch.accountId = accountId || undefined;
   return patch;
 }
@@ -663,7 +666,7 @@ export async function addCronJob(state: CronState) {
             mode: selectedDeliveryMode,
             channel:
               selectedDeliveryMode === "announce"
-                ? form.deliveryChannel.trim() || undefined
+                ? normalizePersistedDeliveryChannel(form.deliveryChannel)
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
             accountId:
