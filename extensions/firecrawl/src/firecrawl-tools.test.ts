@@ -181,6 +181,59 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
   });
 
+  it("classifies private/local endpoints for trusted fetch routing", () => {
+    expect(firecrawlClientTesting.isPrivateOrLocalEndpoint("http://127.0.0.1:3002/v2/search")).toBe(
+      true,
+    );
+    expect(
+      firecrawlClientTesting.isPrivateOrLocalEndpoint("http://192.168.1.100:3002/v2/scrape"),
+    ).toBe(true);
+    expect(
+      firecrawlClientTesting.isPrivateOrLocalEndpoint("http://myhost.local:3002/v2/search"),
+    ).toBe(true);
+    expect(firecrawlClientTesting.isPrivateOrLocalEndpoint("http://[fd12::1]:3002/v2/scrape")).toBe(
+      true,
+    );
+    expect(
+      firecrawlClientTesting.isPrivateOrLocalEndpoint("https://api.firecrawl.dev/v2/search"),
+    ).toBe(false);
+    expect(
+      firecrawlClientTesting.isPrivateOrLocalEndpoint(
+        "https://firecrawl.internal.corp:8443/v2/scrape",
+      ),
+    ).toBe(false);
+  });
+
+  it("reaches a self-hosted private-network Firecrawl baseUrl through the trusted fetch guard", async () => {
+    // Point the pinned resolver at a private IPv4 so the strict SSRF guard
+    // would reject the request. If routing picks the trusted guard, the
+    // dangerouslyAllowPrivateNetwork policy permits the fetch.
+    ssrfMock?.mockRestore();
+    ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    global.fetch = fetchSpy as typeof fetch;
+
+    const result = await firecrawlClientTesting.postFirecrawlJson(
+      {
+        url: "http://127.0.0.1:3002/v2/search",
+        timeoutSeconds: 5,
+        apiKey: "firecrawl-key",
+        body: { query: "openclaw" },
+        errorLabel: "Firecrawl search",
+      },
+      async (response) => (await response.json()) as Record<string, unknown>,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ success: true });
+  });
+
   it("normalizes Firecrawl authorization headers before requests", async () => {
     let capturedInit: RequestInit | undefined;
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

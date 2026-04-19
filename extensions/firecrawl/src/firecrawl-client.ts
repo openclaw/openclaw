@@ -8,6 +8,7 @@ import {
   resolveCacheTtlMs,
   truncateText,
   withStrictWebToolsEndpoint,
+  withTrustedWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
@@ -127,6 +128,14 @@ function resolveEndpoint(baseUrl: string, pathname: "/v2/search" | "/v2/scrape")
   return url.toString();
 }
 
+function isPrivateOrLocalEndpoint(url: string): boolean {
+  try {
+    return isPrivateOrLocalHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 async function postFirecrawlJson<T>(
   params: {
     url: string;
@@ -138,7 +147,13 @@ async function postFirecrawlJson<T>(
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
   const apiKey = normalizeSecretInput(params.apiKey);
-  return await withStrictWebToolsEndpoint(
+  // Admin-configured private/local Firecrawl baseUrl (loopback, RFC 1918, mDNS,
+  // IPv6 ULA/link-local) goes through the trusted fetch guard so the strict
+  // SSRF policy does not block the outbound request to the configured host.
+  const guardedFetch = isPrivateOrLocalEndpoint(params.url)
+    ? withTrustedWebToolsEndpoint
+    : withStrictWebToolsEndpoint;
+  return await guardedFetch(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
@@ -543,6 +558,7 @@ export async function runFirecrawlScrape(
 }
 
 export const __testing = {
+  isPrivateOrLocalEndpoint,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
   resolveEndpoint,
