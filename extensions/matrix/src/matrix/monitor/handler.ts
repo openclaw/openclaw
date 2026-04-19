@@ -1,19 +1,19 @@
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
+import {
+  evaluateSupplementalContextVisibility,
+  resolveChannelContextVisibilityMode,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   loadSessionStore,
-  resolveChannelContextVisibilityMode,
   resolveSessionStoreEntry,
-} from "openclaw/plugin-sdk/config-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
-import { createMatrixDraftStream } from "../draft-stream.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -31,13 +31,6 @@ import {
   parsePollStartContent,
 } from "../poll-types.js";
 import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
-import {
-  editMessageMatrix,
-  reactMatrixMessage,
-  sendMessageMatrix,
-  sendReadReceiptMatrix,
-  sendTypingMatrix,
-} from "../send.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
@@ -47,7 +40,6 @@ import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
-import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
@@ -57,7 +49,6 @@ import { resolveMatrixInboundRoute } from "./route.js";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
-  ensureConfiguredAcpBindingReady,
   formatAllowlistMatchMeta,
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
@@ -80,9 +71,57 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
+let matrixSendModulePromise: Promise<typeof import("../send.js")> | undefined;
+let acpBindingRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/acp-binding-runtime")>
+  | undefined;
+let sessionBindingRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/session-binding-runtime")>
+  | undefined;
+let matrixReactionEventsPromise: Promise<typeof import("./reaction-events.js")> | undefined;
+let matrixDraftStreamPromise: Promise<typeof import("../draft-stream.js")> | undefined;
+
+function loadMatrixSendModule(): Promise<typeof import("../send.js")> {
+  matrixSendModulePromise ??= import("../send.js");
+  return matrixSendModulePromise;
+}
+
+function loadAcpBindingRuntime(): Promise<
+  typeof import("openclaw/plugin-sdk/acp-binding-runtime")
+> {
+  acpBindingRuntimePromise ??= import("openclaw/plugin-sdk/acp-binding-runtime");
+  return acpBindingRuntimePromise;
+}
+
+function loadSessionBindingRuntime(): Promise<
+  typeof import("openclaw/plugin-sdk/session-binding-runtime")
+> {
+  sessionBindingRuntimePromise ??= import("openclaw/plugin-sdk/session-binding-runtime");
+  return sessionBindingRuntimePromise;
+}
+
+function loadMatrixReactionEvents(): Promise<typeof import("./reaction-events.js")> {
+  matrixReactionEventsPromise ??= import("./reaction-events.js");
+  return matrixReactionEventsPromise;
+}
+
+function loadMatrixDraftStream(): Promise<typeof import("../draft-stream.js")> {
+  matrixDraftStreamPromise ??= import("../draft-stream.js");
+  return matrixDraftStreamPromise;
+}
+
 const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
+type MatrixDraftStreamHandle = {
+  update: (text: string) => void;
+  stop: () => Promise<string | undefined>;
+  eventId: () => string | undefined;
+  mustDeliverFinalNormally: () => boolean;
+  matchesPreparedText: (text: string) => boolean;
+  finalizeLive: () => Promise<boolean>;
+  reset: () => void;
+};
 
 export class MatrixRetryableInboundError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -426,7 +465,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let claimedInboundEvent = false;
-    let draftStreamRef: ReturnType<typeof createMatrixDraftStream> | undefined;
+    let draftStreamRef: MatrixDraftStreamHandle | undefined;
     let draftConsumed = false;
     try {
       const eventType = event.type;
@@ -645,6 +684,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
                   );
                   try {
+                    const { sendMessageMatrix } = await loadMatrixSendModule();
                     await sendMessageMatrix(
                       `room:${roomId}`,
                       created
@@ -712,6 +752,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         if (isReactionEvent) {
           const senderName = await getSenderName();
+          const { handleInboundMatrixReaction } = await loadMatrixReactionEvents();
           await handleInboundMatrixReaction({
             client,
             core,
@@ -957,6 +998,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         const senderName = await getSenderName();
         if (_configuredBinding) {
+          const { ensureConfiguredAcpBindingReady } = await loadAcpBindingRuntime();
           const ensured = await ensureConfiguredAcpBindingReady({
             cfg,
             configuredBinding: _configuredBinding,
@@ -972,6 +1014,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }
         }
         if (_runtimeBindingId) {
+          const { getSessionBindingService } = await loadSessionBindingRuntime();
           getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
         }
         const preparedTrigger =
@@ -1270,17 +1313,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }),
         );
       if (shouldAckReaction() && _messageId) {
-        reactMatrixMessage(roomId, _messageId, ackReaction, client).catch((err) => {
-          logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
-        });
+        loadMatrixSendModule()
+          .then(({ reactMatrixMessage }) =>
+            reactMatrixMessage(roomId, _messageId, ackReaction, client),
+          )
+          .catch((err) => {
+            logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
+          });
       }
 
       if (_messageId) {
-        sendReadReceiptMatrix(roomId, _messageId, client).catch((err) => {
-          logVerboseMessage(
-            `matrix: read receipt failed room=${roomId} id=${_messageId}: ${String(err)}`,
-          );
-        });
+        loadMatrixSendModule()
+          .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, _messageId, client))
+          .catch((err) => {
+            logVerboseMessage(
+              `matrix: read receipt failed room=${roomId} id=${_messageId}: ${String(err)}`,
+            );
+          });
       }
 
       const tableMode = core.channel.text.resolveMarkdownTableMode({
@@ -1299,8 +1348,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         accountId: _route.accountId,
       });
       const typingCallbacks = createTypingCallbacks({
-        start: () => sendTypingMatrix(roomId, true, undefined, client),
-        stop: () => sendTypingMatrix(roomId, false, undefined, client),
+        start: async () => {
+          const { sendTypingMatrix } = await loadMatrixSendModule();
+          await sendTypingMatrix(roomId, true, undefined, client);
+        },
+        stop: async () => {
+          const { sendTypingMatrix } = await loadMatrixSendModule();
+          await sendTypingMatrix(roomId, false, undefined, client);
+        },
         onStartError: (err) => {
           logTypingFailure({
             log: logVerboseMessage,
@@ -1323,18 +1378,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const draftStreamingEnabled = streaming !== "off";
       const quietDraftStreaming = streaming === "quiet";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
-      const draftStream = draftStreamingEnabled
-        ? createMatrixDraftStream({
-            roomId,
-            client,
-            cfg,
-            mode: quietDraftStreaming ? "quiet" : "partial",
-            threadId: threadTarget,
-            replyToId: draftReplyToId,
-            preserveReplyId: replyToMode === "all",
-            accountId: _route.accountId,
-            log: logVerboseMessage,
-          })
+      const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
+        ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
+            createMatrixDraftStream({
+              roomId,
+              client,
+              cfg,
+              mode: quietDraftStreaming ? "quiet" : "partial",
+              threadId: threadTarget,
+              replyToId: draftReplyToId,
+              preserveReplyId: replyToMode === "all",
+              accountId: _route.accountId,
+              log: logVerboseMessage,
+            }),
+          )
         : undefined;
       draftStreamRef = draftStream;
       type PendingDraftBoundary = {
@@ -1458,6 +1515,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   const requiresFinalEdit =
                     quietDraftStreaming || !draftStream.matchesPreparedText(payload.text);
                   if (requiresFinalEdit) {
+                    const { editMessageMatrix } = await loadMatrixSendModule();
                     await editMessageMatrix(roomId, draftEventId, payload.text, {
                       client,
                       cfg,
@@ -1500,6 +1558,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   quietDraftStreaming ||
                   (typeof payloadText === "string" && !payloadTextMatchesDraft);
                 if (textEditOk && payloadText && requiresFinalTextEdit) {
+                  const { editMessageMatrix } = await loadMatrixSendModule();
                   textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
                     client,
                     cfg,
@@ -1568,6 +1627,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
                 // Re-assert typing so the user still sees the indicator while
                 // the next block generates.
+                const { sendTypingMatrix } = await loadMatrixSendModule();
                 await sendTypingMatrix(roomId, true, undefined, client).catch(() => {});
               }
             } else {

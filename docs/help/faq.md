@@ -160,7 +160,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     cd openclaw
     pnpm install
     pnpm build
-    pnpm ui:build # auto-installs UI deps on first run
+    pnpm ui:build
     openclaw onboard
     ```
 
@@ -1258,7 +1258,7 @@ for usage/billing and raise limits as needed.
     openclaw browser --browser-profile chrome-live tabs
     ```
 
-    This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
+    This path can use the local host browser or a connected browser node. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
 
     Current limits on `existing-session` / `user`:
 
