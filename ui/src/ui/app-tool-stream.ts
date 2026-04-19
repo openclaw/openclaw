@@ -265,6 +265,24 @@ export type FallbackStatus = {
   occurredAt: number;
 };
 
+/**
+ * Live-test iteration 1 Bug 3: bottom-of-chat toast surface for the
+ * "subagents still running" feedback when the user clicks Approve on
+ * a plan while subagents are in flight. Mirrors `FallbackStatus` so
+ * the chat-controls render path can use the same toast region (the
+ * only toast surface the user has actually seen working in webchat).
+ *
+ * Set by `app.ts:handlePlanApprovalDecision()` when the gateway
+ * returns error code `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS`. Auto-
+ * dismisses after 8 seconds (matches model-fallback toast cadence).
+ */
+export type SubagentBlockingStatus = {
+  message: string;
+  /** In-flight subagent runIds the gateway reported (for tooltip). */
+  openSubagentRunIds: string[];
+  occurredAt: number;
+};
+
 type CompactionHost = ToolStreamHost & {
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;

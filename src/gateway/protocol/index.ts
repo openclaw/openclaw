@@ -143,6 +143,7 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type ErrorCode,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -690,6 +691,10 @@ export {
   ErrorCodes,
   errorShape,
 };
+// Live-test iteration 1 Bug 3: re-export the closed `ErrorCode` union
+// type so server-method modules can construct typed error responses
+// (e.g. `invalid(message, ErrorCodes.PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS, details)`).
+export type { ErrorCode } from "./schema/error-codes.js";
 
 export type {
   GatewayFrame,

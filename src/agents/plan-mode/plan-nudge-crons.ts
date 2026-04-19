@@ -81,8 +81,11 @@ export async function schedulePlanNudges(params: {
       // been exited / completed by the time this fires, the
       // heartbeat-runner's `buildActivePlanNudge` returns null and
       // the turn degrades to standard heartbeat behavior (no-op).
+      // Live-test iteration 1 Bug 1: `[PLAN_NUDGE]:` prefix matches the
+      // family of plan-mode synthetic messages so channel renderers
+      // can identify + future PRs can hide them from user-visible chat.
       const message =
-        `Plan-nudge wake-up (+${minutes}min): if your plan is still active, ` +
+        `[PLAN_NUDGE]: Plan-nudge wake-up (+${minutes}min): if your plan is still active, ` +
         "advance the next step. If you're blocked on an external wait, schedule " +
         "another resume via cron sessionTarget:'current'. If the plan is " +
         "complete, exit_plan_mode (or update_plan with all steps marked " +

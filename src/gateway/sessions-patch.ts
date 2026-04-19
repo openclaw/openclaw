@@ -7,6 +7,7 @@ import {
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolvePlanApproval } from "../agents/plan-mode/index.js";
+import { logPlanModeDebug } from "../agents/plan-mode/plan-mode-debug-log.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -20,6 +21,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentRunContext } from "../infra/agent-events.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
@@ -41,14 +43,34 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  type ErrorCode,
   ErrorCodes,
   type ErrorShape,
   errorShape,
   type SessionsPatchParams,
 } from "./protocol/index.js";
 
-function invalid(message: string): { ok: false; error: ErrorShape } {
-  return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+function invalid(
+  message: string,
+  /**
+   * Live-test iteration 1 Bug 3: optional override for the error code
+   * + details payload. Defaults to `INVALID_REQUEST` (existing
+   * behavior) so callers passing only `message` work unchanged.
+   * Specific failures that the UI treats differently (e.g.
+   * `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS` triggers a bottom toast)
+   * pass an explicit code so the client can branch on it.
+   */
+  code?: ErrorCode,
+  details?: unknown,
+): { ok: false; error: ErrorShape } {
+  return {
+    ok: false,
+    error: errorShape(
+      code ?? ErrorCodes.INVALID_REQUEST,
+      message,
+      details !== undefined ? { details } : {},
+    ),
+  };
 }
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
@@ -394,6 +416,20 @@ export async function applySessionsPatchToStore(params: {
   if ("planMode" in patch) {
     const raw = patch.planMode;
     const planModeEnabled = cfg.agents?.defaults?.planMode?.enabled === true;
+    // Live-test iteration 1 Bug 4: trace state transitions.
+    if (raw !== undefined) {
+      const fromMode = next.planMode?.mode ?? "normal";
+      const toMode = raw === null ? "normal" : raw === "normal" || raw === "plan" ? raw : fromMode;
+      if (fromMode !== toMode) {
+        logPlanModeDebug({
+          kind: "state_transition",
+          sessionKey: storeKey,
+          from: fromMode,
+          to: toMode,
+          trigger: "sessions.patch.planMode",
+        });
+      }
+    }
     // "normal" / null clears state — always allowed (prevents getting
     // stranded in plan mode if the operator turns the feature off).
     if (raw === null || raw === "normal") {
@@ -566,6 +602,50 @@ export async function applySessionsPatchToStore(params: {
           `planApproval action="${action}" requires a pending approval (current state: ${next.planMode.approval}); call exit_plan_mode first`,
         );
       }
+      // Live-test iteration 1 Bug 3: approval-side subagent gate. The
+      // tool-side gate at `exit-plan-mode-tool.ts:230` blocks the
+      // submission when subagents are in flight at submission time,
+      // but a NEW subagent spawned during the user's approval window
+      // bypasses that check entirely — the agent's plan would proceed
+      // with subagents still mid-flight, leading to mutations against
+      // partial subagent results.
+      //
+      // Gate: when `approve` or `edit` is requested, look up the parent
+      // run's ctx via `getAgentRunContext(approvalRunId)` and reject
+      // if any subagents are still open. `reject` is NOT gated — the
+      // user can reject regardless of subagent state (negative
+      // feedback should always be accepted). The runId is captured by
+      // the plan-snapshot-persister at exit_plan_mode time and
+      // persisted on `planMode.approvalRunId`.
+      if (action === "approve" || action === "edit") {
+        const approvalRunId = (next.planMode as { approvalRunId?: string }).approvalRunId;
+        if (approvalRunId) {
+          const parentCtx = getAgentRunContext(approvalRunId);
+          const open = parentCtx?.openSubagentRunIds;
+          if (open && open.size > 0) {
+            // Live-test iteration 1 Bug 4: log the gate rejection so
+            // debug tail can correlate UI toast firings with server
+            // gate decisions.
+            logPlanModeDebug({
+              kind: "approval_event",
+              sessionKey: storeKey,
+              action,
+              openSubagentCount: open.size,
+              result: "rejected_by_subagent_gate",
+            });
+            const ids = [...open].slice(0, 5).join(", ");
+            const more = open.size > 5 ? ` and ${open.size - 5} more` : "";
+            return invalid(
+              `Cannot ${action} plan: ${open.size} subagent(s) you spawned during this ` +
+                `plan-mode cycle are still running (${ids}${more}). Wait for their ` +
+                `results to return before approving so the agent can incorporate them ` +
+                `before executing.`,
+              "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS",
+              { openSubagentRunIds: [...open] },
+            );
+          }
+        }
+      }
       const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
       const expectedApprovalId =
         normalizeOptionalString(patch.planApproval.approvalId) || undefined;
@@ -604,6 +684,22 @@ export async function applySessionsPatchToStore(params: {
         next.recentlyApprovedAt = now;
         const decisionLabel = action === "approve" ? "approved" : "edited";
         next.pendingAgentInjection = `[PLAN_DECISION]: ${decisionLabel}`;
+        // Live-test iteration 1 Bug 4: log the successful approval +
+        // synthetic injection write. Pair-up with the rejection log
+        // above so debug tail shows the full approval lifecycle.
+        logPlanModeDebug({
+          kind: "approval_event",
+          sessionKey: storeKey,
+          action,
+          openSubagentCount: 0,
+          result: "accepted",
+        });
+        logPlanModeDebug({
+          kind: "synthetic_injection",
+          sessionKey: storeKey,
+          tag: "[PLAN_DECISION]",
+          preview: decisionLabel,
+        });
       } else if (action === "reject") {
         // On reject, agent stays in plan mode and revises.
         const safeFeedback = (feedback ?? "")

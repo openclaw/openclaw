@@ -56,6 +56,21 @@ export interface PlanModeSessionState {
    * rejected → approved flips on a stale event.
    */
   approvalId?: string;
+  /**
+   * Live-test iteration 1 Bug 2: plan title from the agent's most-recent
+   * `exit_plan_mode(title=..., plan=[...])` call. Persisted so UI side
+   * panel + channel renderers can ANCHOR on the actual plan name
+   * throughout the lifecycle. See `SessionEntry.planMode.title` doc for
+   * the full lifecycle semantics.
+   */
+  title?: string;
+  /**
+   * Live-test iteration 1 Bug 3: parent run id captured from the
+   * `exit_plan_mode` tool call so the gateway-side approval handler
+   * can look up the parent's `openSubagentRunIds` and reject
+   * `approve` / `edit` actions while subagents are in flight.
+   */
+  approvalRunId?: string;
 }
 
 export const DEFAULT_PLAN_MODE_STATE: PlanModeSessionState = {

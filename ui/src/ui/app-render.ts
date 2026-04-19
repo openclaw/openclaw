@@ -2242,6 +2242,7 @@ export function renderApp(state: AppViewState) {
               sending: state.chatSending,
               compactionStatus: state.compactionStatus,
               fallbackStatus: state.fallbackStatus,
+              subagentBlockingStatus: state.subagentBlockingStatus,
               assistantAvatarUrl: chatAvatarUrl,
               messages: state.chatMessages,
               sideResult: state.chatSideResult,

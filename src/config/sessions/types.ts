@@ -197,6 +197,36 @@ export type SessionEntry = {
     rejectionCount: number;
     approvalId?: string;
     /**
+     * Live-test iteration 1 Bug 2: persisted plan title from the
+     * agent's most-recent `exit_plan_mode(title=..., plan=[...])`
+     * call. Kept here so the Control UI side panel + future channel
+     * renderers can ANCHOR on the actual plan name throughout the
+     * lifecycle (planning → submitted → approved → executing →
+     * completed) instead of falling back to a generic "Active plan"
+     * label. Cleared on the next `enter_plan_mode` cycle.
+     *
+     * Pre-`exit_plan_mode` (only `update_plan` has fired): undefined.
+     * The UI shows `(planning)` until a real title arrives.
+     *
+     * Written by `plan-snapshot-persister.ts` on
+     * `agent_approval_event` ingest (where the title is in
+     * `evt.data.title` from the tool result).
+     */
+    title?: string;
+    /**
+     * Live-test iteration 1 Bug 3: parent run id captured from the
+     * `exit_plan_mode` tool call so the gateway-side approval handler
+     * (`sessions-patch.ts`) can look up the parent's
+     * `openSubagentRunIds` and reject `approve` / `edit` actions
+     * while subagents are still in flight. Cleared on the next
+     * `enter_plan_mode` cycle.
+     *
+     * Distinct from `approvalId` (which identifies the approval
+     * request itself for plugin-level routing) — `approvalRunId`
+     * identifies the agent run that owns the in-flight subagent set.
+     */
+    approvalRunId?: string;
+    /**
      * PR-8 follow-up: most-recent plan snapshot written by `update_plan`.
      * Persisted here so the Control UI can rebuild the live-plan sidebar
      * after a hard refresh (in-memory `@state()` is lost otherwise). The

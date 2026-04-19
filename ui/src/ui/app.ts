@@ -52,6 +52,7 @@ import {
   type ToolStreamEntry,
   type CompactionStatus,
   type FallbackStatus,
+  type SubagentBlockingStatus,
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
@@ -243,6 +244,16 @@ function buildPlanViewMarkdown(
     verification?: string[];
     references?: string[];
   },
+  /**
+   * Live-test iteration 1 Bug 2: plan title persisted on
+   * SessionEntry.planMode.title (set by plan-snapshot-persister when
+   * `exit_plan_mode` fires). Takes precedence over `summary` for the
+   * header so the side panel ANCHORS on the actual plan name through
+   * the entire lifecycle (planning → submitted → approved → executing
+   * → completed). Pre-`exit_plan_mode` (only `update_plan` has fired):
+   * undefined → header falls back to `(planning)`.
+   */
+  title?: string,
 ): string {
   const stepLines = plan
     .map((step, i) => {
@@ -267,7 +278,13 @@ function buildPlanViewMarkdown(
     .join("\n");
   const allTerminal =
     plan.length > 0 && plan.every((s) => s.status === "completed" || s.status === "cancelled");
-  const header = summary ?? (allTerminal ? "Plan complete \u2713" : "Active plan");
+  // Live-test iteration 1 Bug 2: title (the persisted plan name) wins
+  // over summary so the side panel ANCHORS on the actual plan name. The
+  // pre-submission state shows `(planning)` (honest signal that a real
+  // title hasn't been set yet) instead of the misleading `Active plan`
+  // generic label that previously made every mid-investigation plan
+  // look like the same nameless thing.
+  const header = title ?? summary ?? (allTerminal ? "Plan complete \u2713" : "(planning)");
   const sections: string[] = [`# ${header}`, ""];
   // PR-10 archetype: render rich plan sections when present. Markdown
   // structure mirrors the persisted file format (title → analysis →
@@ -374,6 +391,18 @@ export class OpenClawApp extends LitElement {
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
+  /**
+   * Live-test iteration 1 Bug 3: bottom-of-chat toast state for the
+   * "subagents still running" feedback when the user clicks Approve
+   * on a plan while subagents are mid-flight. Set in
+   * `handlePlanApprovalDecision()` when the gateway returns error
+   * code `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS`. Auto-cleared after 8s
+   * (matches `FALLBACK_TOAST_DURATION_MS`) — render-time check
+   * compares occurredAt; the timer below schedules a re-render so
+   * the toast disappears even if no other state changes.
+   */
+  @state() subagentBlockingStatus: SubagentBlockingStatus | null = null;
+  subagentBlockingClearTimer: number | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
@@ -1189,12 +1218,59 @@ export class OpenClawApp extends LitElement {
       // Without this, the user is stuck with an undismissable dialog
       // and forced to refresh the page.
       const errMsg = String(err);
+      const errCode =
+        err && typeof err === "object" && "code" in err
+          ? (err as { code?: unknown }).code
+          : undefined;
+      const errDetails =
+        err && typeof err === "object" && "details" in err
+          ? (err as { details?: unknown }).details
+          : undefined;
       const staleStateError =
         errMsg.includes("requires a pending approval") ||
         errMsg.includes("current state: none") ||
         errMsg.includes("stale approvalId") ||
         errMsg.includes("terminal approval state");
-      if (staleStateError) {
+      // Live-test iteration 1 Bug 3: detect the approval-side
+      // subagent gate. Error code is the canonical signal; the
+      // message-substring fallback handles transports that flatten
+      // the error to a string (no structured code surfaced).
+      const subagentBlockedError =
+        errCode === "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS" ||
+        errMsg.includes("PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS") ||
+        errMsg.includes("subagent(s) you spawned");
+      if (subagentBlockedError) {
+        // Restore the card so the user can re-click Approve once the
+        // subagents return (the agent's plan-mode session keeps
+        // running in the background). Surface the message via the
+        // bottom toast region (mirroring the model-fallback toast)
+        // so it's visible without blocking the card.
+        this.planApprovalRequest = snapshotRequest;
+        this.planApprovalReviseDraft = snapshotReviseDraft;
+        this.planApprovalError = null;
+        const openIds =
+          errDetails && typeof errDetails === "object" && "openSubagentRunIds" in errDetails
+            ? ((errDetails as { openSubagentRunIds?: unknown }).openSubagentRunIds ?? [])
+            : [];
+        const openIdsArr = Array.isArray(openIds)
+          ? openIds.filter((s) => typeof s === "string")
+          : [];
+        this.subagentBlockingStatus = {
+          message: "Subagents still running — try again after subagent results return",
+          openSubagentRunIds: openIdsArr,
+          occurredAt: Date.now(),
+        };
+        // Schedule a re-render so the toast disappears at the 8s
+        // mark even if nothing else changes. Mirror of the
+        // fallback-status pattern in app-tool-stream.ts.
+        if (this.subagentBlockingClearTimer != null) {
+          window.clearTimeout(this.subagentBlockingClearTimer);
+        }
+        this.subagentBlockingClearTimer = window.setTimeout(() => {
+          this.subagentBlockingStatus = null;
+          this.subagentBlockingClearTimer = null;
+        }, 8000);
+      } else if (staleStateError) {
         // Clear the dialog + show a transient toast-style message.
         // The plan was already resolved on another surface (or was
         // structurally closed by a plan-event race); don't fight it,
@@ -1415,7 +1491,18 @@ export class OpenClawApp extends LitElement {
     plan: import("./app-tool-stream.ts").PlanApprovalRequest["plan"],
     summary?: string,
   ): void {
-    const md = buildPlanViewMarkdown(plan, summary);
+    // Live-test iteration 1 Bug 2: read the persisted plan title for
+    // the active session so the live-update render keeps the title
+    // sticky. Without this, every `update_plan` tick would re-render
+    // the sidebar with header `(planning)` instead of the actual
+    // submitted plan name.
+    const activeSessionKey = this.sessionKey;
+    const row = activeSessionKey
+      ? this.sessionsResult?.sessions.find((s) => s.key === activeSessionKey)
+      : undefined;
+    const persistedTitle = (row?.planMode as { title?: unknown } | undefined)?.title;
+    const titleForView = typeof persistedTitle === "string" ? persistedTitle : undefined;
+    const md = buildPlanViewMarkdown(plan, summary, undefined, titleForView);
     // ALWAYS track latest plan so the chat-controls "Plan view" button
     // and `/plan view` slash command can re-open the sidebar with current
     // content. Sidebar content is only updated if it's already showing
@@ -1448,7 +1535,13 @@ export class OpenClawApp extends LitElement {
     if (!snapshot || snapshot.length === 0) {
       return;
     }
-    const md = buildPlanViewMarkdown(snapshot);
+    // Live-test iteration 1 Bug 2: pass the persisted plan title so
+    // the sidebar header anchors on the actual plan name (not "Active
+    // plan"). Title is undefined pre-`exit_plan_mode` — the markdown
+    // builder falls back to "(planning)".
+    const persistedTitle = (row?.planMode as { title?: unknown } | undefined)?.title;
+    const titleForView = typeof persistedTitle === "string" ? persistedTitle : undefined;
+    const md = buildPlanViewMarkdown(snapshot, undefined, undefined, titleForView);
     if (md === this.latestPlanMarkdown) {
       return;
     }
@@ -1516,13 +1609,26 @@ export class OpenClawApp extends LitElement {
     // PR-10: pass archetype fields so the sidebar markdown shows the
     // full plan structure (analysis / assumptions / risks / verification
     // / references) instead of just the step checklist.
-    const md = buildPlanViewMarkdown(request.plan, headerCandidate, {
-      ...(request.analysis ? { analysis: request.analysis } : {}),
-      ...(request.assumptions ? { assumptions: request.assumptions } : {}),
-      ...(request.risks ? { risks: request.risks } : {}),
-      ...(request.verification ? { verification: request.verification } : {}),
-      ...(request.references ? { references: request.references } : {}),
-    });
+    // Live-test iteration 1 Bug 2: pass the trimmed agent-supplied
+    // title as the title param too (and keep the existing `summary`
+    // fallback path). The new param takes precedence in the markdown
+    // builder so the side panel header anchors on the actual plan
+    // name as soon as the approval card opens. `headerCandidate` is
+    // kept as the `summary` arg for backward-compat with pre-Tier-1
+    // agents whose request.title is generic.
+    const titleForView = !isGenericTitle && rawTitle ? rawTitle : undefined;
+    const md = buildPlanViewMarkdown(
+      request.plan,
+      headerCandidate,
+      {
+        ...(request.analysis ? { analysis: request.analysis } : {}),
+        ...(request.assumptions ? { assumptions: request.assumptions } : {}),
+        ...(request.risks ? { risks: request.risks } : {}),
+        ...(request.verification ? { verification: request.verification } : {}),
+        ...(request.references ? { references: request.references } : {}),
+      },
+      titleForView,
+    );
     this.handleOpenSidebar({ kind: "markdown", content: md });
   }
 

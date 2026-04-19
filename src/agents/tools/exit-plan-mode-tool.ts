@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { getAgentRunContext } from "../../infra/agent-events.js";
+import { logPlanModeDebug } from "../plan-mode/plan-mode-debug-log.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeExitPlanModeTool,
@@ -230,6 +231,18 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
       if (runId) {
         const ctx = getAgentRunContext(runId);
         const open = ctx?.openSubagentRunIds;
+        // Live-test iteration 1 Bug 4: log the gate decision so debug
+        // tail shows tool-call gate firings alongside the eventual
+        // approval-side gate (in sessions-patch.ts) — both can fire
+        // for the same plan submission cycle.
+        logPlanModeDebug({
+          kind: "gate_decision",
+          sessionKey: ctx?.sessionKey ?? "unknown",
+          tool: "exit_plan_mode",
+          allowed: !open || open.size === 0,
+          planMode: "plan",
+          ...(open && open.size > 0 ? { reason: `${open.size} subagent(s) in flight` } : {}),
+        });
         if (open && open.size > 0) {
           const ids = [...open].slice(0, 5).join(", ");
           const more = open.size > 5 ? ` and ${open.size - 5} more` : "";

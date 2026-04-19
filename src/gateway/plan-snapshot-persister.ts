@@ -14,9 +14,11 @@
  * The listener is wired in `server-runtime-subscriptions.ts` alongside
  * the existing agent/heartbeat/transcript/lifecycle subscriptions.
  */
+import { logPlanModeDebug } from "../agents/plan-mode/plan-mode-debug-log.js";
 import { loadConfig } from "../config/io.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { updateSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   clearInPlanModeForSession,
   getAgentRunContext,
@@ -31,6 +33,69 @@ const log = createSubsystemLogger("gateway/plan-snapshot-persister");
 export function startPlanSnapshotPersister(params: {
   emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
 }): () => void {
+  // Live-test iteration 1 Bug 2 + Bug 3: also listen to "approval"
+  // stream events (where `exit_plan_mode` emits the title + approvalId
+  // + plan + archetype fields). Persist `title` + parent `runId` onto
+  // SessionEntry.planMode so:
+  //   • The Control UI side panel can ANCHOR on the actual plan name
+  //     for the entire lifecycle (Bug 2).
+  //   • `sessions-patch.ts` can look up the parent's
+  //     `openSubagentRunIds` via `getAgentRunContext(approvalRunId)`
+  //     to gate `approve`/`edit` actions while subagents are in
+  //     flight (Bug 3).
+  // This is a fire-and-forget side effect; the event still propagates
+  // to all other subscribers normally.
+  const unsubscribeApproval = onAgentEvent((evt) => {
+    if (evt.stream !== "approval") {
+      return;
+    }
+    const sessionKey = evt.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    const data = evt.data as Record<string, unknown> | undefined;
+    if (!data) {
+      return;
+    }
+    // Only fire on the request phase of plan submissions (kind="plugin"
+    // means tool-driven, the title field is set, and we have an
+    // approvalId to track). Updates / completions don't carry a fresh
+    // title; skip them.
+    const phase = typeof data.phase === "string" ? data.phase : undefined;
+    const kind = typeof data.kind === "string" ? data.kind : undefined;
+    const title = typeof data.title === "string" ? data.title : undefined;
+    const approvalId = typeof data.approvalId === "string" ? data.approvalId : undefined;
+    const isPlanSubmission =
+      phase === "request" &&
+      kind === "plugin" &&
+      title !== undefined &&
+      title.length > 0 &&
+      Array.isArray(data.plan);
+    if (!isPlanSubmission) {
+      return;
+    }
+    // Live-test iteration 1 Bug 4: log the metadata persist trigger
+    // so debug tail can correlate exit_plan_mode tool calls with
+    // SessionEntry.planMode.title writes.
+    logPlanModeDebug({
+      kind: "tool_call",
+      sessionKey,
+      tool: "exit_plan_mode",
+      runId: evt.runId,
+      details: { title, approvalId },
+    });
+    void persistApprovalMetadata({
+      sessionKey,
+      title,
+      approvalRunId: evt.runId,
+      approvalId,
+      emitSessionsChanged: params.emitSessionsChanged,
+    }).catch((err) => {
+      log.warn(
+        `plan approval metadata persist failed: sessionKey=${sessionKey} runId=${evt.runId} err=${String(err)}`,
+      );
+    });
+  });
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.stream !== "plan") {
       return;
@@ -70,7 +135,72 @@ export function startPlanSnapshotPersister(params: {
       );
     });
   });
-  return unsubscribe;
+  // Live-test iteration 1: combine the two unsubscribes so callers
+  // get a single shutdown handle that tears down both listeners.
+  return () => {
+    unsubscribe();
+    unsubscribeApproval();
+  };
+}
+
+/**
+ * Live-test iteration 1 Bug 2 + Bug 3: persist plan title + parent
+ * runId from the `agent_approval_event` onto SessionEntry.planMode.
+ *
+ * Title (Bug 2): UI side panel + future channel renderers read this
+ * to display the actual plan name throughout the lifecycle.
+ *
+ * approvalRunId (Bug 3): the gateway-side approval handler in
+ * `sessions-patch.ts` reads this to look up the parent's
+ * `openSubagentRunIds` via `getAgentRunContext` and reject
+ * `approve`/`edit` actions while subagents are in flight.
+ *
+ * Fire-and-forget. Failure logs a warn but doesn't block the event
+ * stream — the approval still propagates to the UI which can render
+ * the card; the only loss is the persisted title/runId for the
+ * post-approval window.
+ */
+async function persistApprovalMetadata(params: {
+  sessionKey: string;
+  title: string;
+  approvalRunId: string;
+  approvalId?: string;
+  emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
+}) {
+  const cfg = loadConfig();
+  const target = resolveGatewaySessionStoreTarget({ cfg, key: params.sessionKey });
+  // Direct in-place write rather than going through `applySessionsPatchToStore`
+  // because (a) these fields are server-internal metadata captured from
+  // an in-process agent event, not a client RPC, and (b) wire-schema
+  // changes for purely internal persistence add bureaucracy without
+  // benefit (per `src/gateway/protocol/CLAUDE.md` data-first / additive
+  // protocol rules — extending the public contract for internal-only
+  // metadata isn't justified). The existing planMode object is mutated
+  // in place; if no planMode exists yet, the write is a no-op (the
+  // approval event implies enter_plan_mode already created the entry).
+  await updateSessionStore(target.storePath, async (store) => {
+    const entry = store[params.sessionKey];
+    if (!entry || !entry.planMode) {
+      return { ok: false as const };
+    }
+    const nextEntry: SessionEntry = {
+      ...entry,
+      planMode: {
+        ...entry.planMode,
+        title: params.title,
+        approvalRunId: params.approvalRunId,
+        ...(params.approvalId ? { approvalId: params.approvalId } : {}),
+        updatedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    };
+    store[params.sessionKey] = nextEntry;
+    return { ok: true as const };
+  });
+  params.emitSessionsChanged?.({
+    sessionKey: params.sessionKey,
+    reason: "plan_approval_metadata_persist",
+  });
 }
 
 async function persistSnapshot(params: {

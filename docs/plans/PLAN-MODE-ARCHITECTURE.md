@@ -1,10 +1,32 @@
 # Plan-Mode Rollout — Architecture & Status
 
-**Last updated:** commit `ef56f0f2cf` (PR-10/11 review pass 2 complete; Wave 1/2/3 triage scoped for next sprint)
-**Live install:** `OpenClaw 2026.4.15` from `feat/plan-channel-parity` @ `ef56f0f2cf`
+**Last updated:** live-test iteration 1 fixes complete on `feat/plan-channel-parity` (post `9fb82673ac`, see iteration-1 section below)
+**Live install:** `OpenClaw 2026.4.15` from `feat/plan-channel-parity`
 **Total PRs:** 10 (excluding deprecated #67518 Gemini)
 
 This document is the **single source of truth** for the plan-mode rollout. It survives Claude Code session compactions and is referenced by the umbrella issue + every PR's series-overview comment.
+
+---
+
+## Live testing iteration 1 — fixes (latest sprint)
+
+Live webchat testing of the `9fb82673ac` build surfaced 4 issues. All fixed in the next commit on `feat/plan-channel-parity`:
+
+| Bug | Surface                                     | Root cause                                                                                                                                                                                                                                                        | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Synthetic message tagging                   | 5 retry constants in `incomplete-turn.ts` and the plan-nudge wake-up in `plan-nudge-crons.ts` lacked the `[PLAN_*]:` prefix that `[PLAN_DECISION]:` / `[QUESTION_ANSWER]:` / `[PLAN_COMPLETE]:` already used                                                      | Prefixed: `[PLAN_ACK_ONLY]:`, `[PLAN_YIELD]:`, `[PLAN_NUDGE]:`, `[PLANNING_RETRY]:` — sets up a future PR to hide them from user-visible chat with a single regex                                                                                                                                                                                                                                                                                                                                             |
+| 2   | Plan side panel header showed "Active plan" | `SessionEntry.planMode` had NO `title` field; `exit_plan_mode` carried it transiently in event payload but persister never captured it. UI fell back to a generic label                                                                                           | Added `planMode.title` + `planMode.approvalRunId` to `SessionEntry`. Persister captures from `agent_approval_event`. UI `buildPlanViewMarkdown` accepts `title` param + 3 call sites read `row.planMode.title`. Pre-`exit_plan_mode` shows `(planning)` honest signal                                                                                                                                                                                                                                         |
+| 3   | Approve race when subagents in flight       | `sessions-patch.ts:572` approval handler had NO subagent check. If subagent return drained `openSubagentRunIds` between two `exit_plan_mode` retries, approval card showed; a NEW subagent during the user's approval window bypassed the tool-side gate entirely | Server: approval handler reads `getAgentRunContext(approvalRunId).openSubagentRunIds`, throws `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS` (new ErrorCode) if non-empty for `approve`/`edit` (`reject` not gated). UI: catches the code, restores card + sets `subagentBlockingStatus` for a bottom-of-chat toast (mirrors `FallbackStatus` pattern at `chat.ts:renderFallbackIndicator`)                                                                                                                             |
+| 4   | No way to debug plan-mode lifecycle live    | Sparse logs across `[gateway]` / `[agent/embedded]` / `[plugins]` made plan-mode debugging require manual run-id correlation across multiple files                                                                                                                | New `src/agents/plan-mode/plan-mode-debug-log.ts` helper + `OPENCLAW_DEBUG_PLAN_MODE=1` env-var gate. Discriminated event union: state_transition, gate_decision, tool_call, synthetic_injection, nudge_event, subagent_event, approval_event, toast_event. Instrumented at sessions-patch (state transitions + approval gates), exit-plan-mode-tool (gate decisions), plan-snapshot-persister (tool_call). Events tagged `[plan-mode/<kind>]` for `tail -F gateway.err.log \| grep '\[plan-mode/'` debugging |
+
+**Activation for live debug session:**
+
+```bash
+OPENCLAW_DEBUG_PLAN_MODE=1 launchctl kickstart -k gui/$UID/ai.openclaw.gateway
+tail -F ~/.openclaw/logs/gateway.err.log | grep '\[plan-mode/'
+```
+
+**Test coverage added:** 7 tests in `sessions-patch.subagent-gate.test.ts`, 12 tests in `plan-mode-debug-log.test.ts`. Pre-existing test suites (`incomplete-turn`, `mutation-gate`, `exit-plan-mode-tool`, `fresh-session-entry`) all still pass after the prefix changes (constants are imported by reference, not literal-asserted).
 
 ---
 

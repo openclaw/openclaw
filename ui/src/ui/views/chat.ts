@@ -1,7 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type {
+  CompactionStatus,
+  FallbackStatus,
+  SubagentBlockingStatus,
+} from "../app-tool-stream.ts";
 import type { PlanApprovalRequest } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -75,6 +80,9 @@ export type ChatProps = {
   canAbort?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
+  /** Live-test iteration 1 Bug 3: bottom-toast for "subagents still running"
+   * when user clicks Approve while subagents are mid-flight. */
+  subagentBlockingStatus?: SubagentBlockingStatus | null;
   messages: unknown[];
   sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
@@ -262,6 +270,162 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+}
+
+function syncToolCardExpansionState(
+  sessionKey: string,
+  items: Array<ChatItem | MessageGroup>,
+  autoExpandToolCalls: boolean,
+) {
+  const expanded = getExpandedToolCards(sessionKey);
+  const initialized = getInitializedToolCards(sessionKey);
+  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const currentToolCardIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const entry of item.messages) {
+      const cards = extractToolCards(entry.message, entry.key);
+      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
+        currentToolCardIds.add(disclosureId);
+        if (initialized.has(disclosureId)) {
+          continue;
+        }
+        expanded.set(disclosureId, autoExpandToolCalls);
+        initialized.add(disclosureId);
+      }
+      const messageRecord = entry.message as Record<string, unknown>;
+      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
+      const normalizedRole = normalizeRoleForGrouping(role);
+      const isToolMessage =
+        isToolResultMessage(entry.message) ||
+        normalizedRole === "tool" ||
+        role.toLowerCase() === "toolresult" ||
+        role.toLowerCase() === "tool_result" ||
+        typeof messageRecord.toolCallId === "string" ||
+        typeof messageRecord.tool_call_id === "string";
+      if (!isToolMessage) {
+        continue;
+      }
+      const disclosureId = `toolmsg:${entry.key}`;
+      currentToolCardIds.add(disclosureId);
+      if (initialized.has(disclosureId)) {
+        continue;
+      }
+      expanded.set(disclosureId, autoExpandToolCalls);
+      initialized.add(disclosureId);
+    }
+  }
+  if (autoExpandToolCalls && !previousAutoExpand) {
+    for (const toolCardId of currentToolCardIds) {
+      expanded.set(toolCardId, true);
+    }
+  }
+  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+}
+
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  if (status.phase === "active" || status.phase === "retrying") {
+    return html`
+      <div
+        class="compaction-indicator compaction-indicator--active"
+        role="status"
+        aria-live="polite"
+      >
+        ${icons.loader} Compacting context...
+      </div>
+    `;
+  }
+  if (status.completedAt) {
+    const elapsed = Date.now() - status.completedAt;
+    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
+      return html`
+        <div
+          class="compaction-indicator compaction-indicator--complete"
+          role="status"
+          aria-live="polite"
+        >
+          ${icons.check} Context compacted
+        </div>
+      `;
+    }
+  }
+  return nothing;
+}
+
+/**
+ * Live-test iteration 1 Bug 3: bottom-of-chat toast that fires when
+ * the user clicks Approve on a plan while the parent agent run still
+ * has open subagents. Mirrors the model-fallback toast pattern (CSS
+ * class `compaction-indicator--fallback`, 8s auto-dismiss, polite
+ * aria-live) so the user sees it in the same region as the fallback
+ * toast they already recognize.
+ */
+function renderSubagentBlockingIndicator(status: SubagentBlockingStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const tooltip =
+    status.openSubagentRunIds.length > 0
+      ? `Open subagents: ${status.openSubagentRunIds.slice(0, 5).join(", ")}${
+          status.openSubagentRunIds.length > 5
+            ? ` and ${status.openSubagentRunIds.length - 5} more`
+            : ""
+        }`
+      : status.message;
+  return html`
+    <div
+      class="compaction-indicator compaction-indicator--fallback"
+      role="status"
+      aria-live="polite"
+      title=${tooltip}
+    >
+      ${icons.brain} ${status.message}
+    </div>
+  `;
+}
+
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const phase = status.phase ?? "active";
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const details = [
+    `Selected: ${status.selected}`,
+    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
+    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
+    status.reason ? `Reason: ${status.reason}` : null,
+    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  const message =
+    phase === "cleared"
+      ? `Fallback cleared: ${status.selected}`
+      : `Fallback active: ${status.active}`;
+  const className =
+    phase === "cleared"
+      ? "compaction-indicator compaction-indicator--fallback-cleared"
+      : "compaction-indicator compaction-indicator--fallback";
+  const icon = phase === "cleared" ? icons.check : icons.brain;
+  return html`
+    <div class=${className} role="status" aria-live="polite" title=${details}>
+      ${icon} ${message}
+    </div>
+  `;
 }
 
 function generateAttachmentId(): string {
@@ -1266,6 +1430,7 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
+      ${renderSubagentBlockingIndicator(props.subagentBlockingStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
         compactBusy,

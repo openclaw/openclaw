@@ -1,5 +1,9 @@
 import type { EventLogEntry } from "./app-events.ts";
-import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type {
+  CompactionStatus,
+  FallbackStatus,
+  SubagentBlockingStatus,
+} from "./app-tool-stream.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
@@ -92,6 +96,10 @@ export type AppViewState = {
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
+  /** Live-test iteration 1 Bug 3: bottom-toast state for the
+   * "subagents still running" feedback when user clicks Approve while
+   * subagents are in flight. */
+  subagentBlockingStatus: SubagentBlockingStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;

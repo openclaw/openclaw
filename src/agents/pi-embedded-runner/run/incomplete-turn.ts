@@ -145,12 +145,15 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
 
+// Live-test iteration 1 Bug 1: outside plan mode but same family of
+// nudges (agent narrated a plan instead of acting). Tagged so the
+// future "hide PLAN_* in webchat" filter can be a single regex.
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
+  "[PLANNING_RETRY]: The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
 export const PLANNING_ONLY_RETRY_INSTRUCTION_FIRM =
-  "CRITICAL: You have described the plan multiple times without acting. You MUST call a tool in this turn. No more planning or narration. If a real blocker prevents action, state the exact blocker in one sentence. Otherwise, call the first tool NOW.";
+  "[PLANNING_RETRY]: CRITICAL: You have described the plan multiple times without acting. You MUST call a tool in this turn. No more planning or narration. If a real blocker prevents action, state the exact blocker in one sentence. Otherwise, call the first tool NOW.";
 export const PLANNING_ONLY_RETRY_INSTRUCTION_FINAL =
-  "Final reminder: this is the third planning-only turn. Please call a tool now to make progress. If a real blocker prevents action, state the exact blocker in one sentence so the user can unblock you.";
+  "[PLANNING_RETRY]: Final reminder: this is the third planning-only turn. Please call a tool now to make progress. If a real blocker prevents action, state the exact blocker in one sentence so the user can unblock you.";
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
@@ -213,8 +216,15 @@ const PLAN_MODE_INVESTIGATIVE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "enter_plan_mode",
 ]);
 
+// Live-test iteration 1 Bug 1: every plan-mode synthetic message
+// gets a `[PLAN_*]:` first-line tag so (a) channel renderers can
+// identify them as system-generated, (b) future PRs can hide them
+// from user-visible chat when in webchat plan mode, and (c) debug
+// log greps can correlate them with `[plan-mode/synthetic_injection]`
+// events. Pattern matches `[PLAN_DECISION]:`, `[QUESTION_ANSWER]:`,
+// `[PLAN_COMPLETE]:` already in use by sessions-patch.ts.
 export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION =
-  "Plan mode is active and you're still in the PLANNING phase (no user " +
+  "[PLAN_ACK_ONLY]: Plan mode is active and you're still in the PLANNING phase (no user " +
   "approval yet). Your previous response stopped without calling " +
   "exit_plan_mode OR a read-only investigative tool. Brief progress " +
   "updates are fine, but they must NOT end the turn — keep calling tools " +
@@ -227,7 +237,7 @@ export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION =
   "without acting.";
 
 export const PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM =
-  "CRITICAL: plan mode is active and you have acknowledged twice without calling " +
+  "[PLAN_ACK_ONLY]: CRITICAL: plan mode is active and you have acknowledged twice without calling " +
   "exit_plan_mode. You MUST call exit_plan_mode(plan=[...]) in this turn. No more " +
   "chat-only acknowledgements. If a real blocker prevents producing a plan, state " +
   "the exact blocker in one sentence so the user can unblock you.";
@@ -242,14 +252,14 @@ export const DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT = 2;
 // explicit "do not pause between steps" rule from the approval
 // injection.
 export const PLAN_APPROVED_YIELD_RETRY_INSTRUCTION =
-  "Your plan was just approved and mutating tools were unlocked. You yielded the turn " +
+  "[PLAN_YIELD]: Your plan was just approved and mutating tools were unlocked. You yielded the turn " +
   "without taking any main-lane action — but the approval flow explicitly told you to " +
   "continue through every step without pausing. Continue executing the plan now. Only " +
   "yield if you actually need a subagent's result for the next step you are about to " +
   "take, AND state in one sentence which step is blocked on which result.";
 
 export const PLAN_APPROVED_YIELD_RETRY_INSTRUCTION_FIRM =
-  "CRITICAL: you yielded again immediately after plan approval. Continue main-lane " +
+  "[PLAN_YIELD]: CRITICAL: you yielded again immediately after plan approval. Continue main-lane " +
   "execution of the approved plan. If a subagent result is genuinely required for the " +
   "next step, perform that step's prerequisite reads inline instead of orchestrating. " +
   "Do not yield unless a real blocker requires the user to intervene.";
