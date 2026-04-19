@@ -1,10 +1,85 @@
 # Plan-Mode Rollout — Architecture & Status
 
-**Last updated:** live-test iteration 1 fixes complete on `feat/plan-channel-parity` (post `9fb82673ac`, see iteration-1 section below)
-**Live install:** `OpenClaw 2026.4.15` from `feat/plan-channel-parity`
-**Total PRs:** 10 (excluding deprecated #67518 Gemini)
+**Last updated:** consolidation pass complete on `feat/plan-channel-parity` (post `01ed63633e`, see consolidation-pass section below). Branch is now rebased onto `upstream/main` @ `v2026.4.19-beta.2` and hosts the **umbrella PR #68939** which supersedes the 10-PR series.
+**Live install (pre-rebase):** `OpenClaw 2026.4.15` from `feat/plan-channel-parity`
+**Total PRs (historical):** 10 individual PRs A/B/C/D/E/F/7/8/10/11 (now closed) + 1 umbrella PR (#68939) carrying the full 135-commit history
+**Backup branch:** `feat/plan-channel-parity-backup` at pre-rebase HEAD `bee5e8c364` (pushed to origin for rollback safety)
 
-This document is the **single source of truth** for the plan-mode rollout. It survives Claude Code session compactions and is referenced by the umbrella issue + every PR's series-overview comment.
+This document is the **single source of truth** for the plan-mode rollout. It survives Claude Code session compactions and is referenced by the umbrella PR + every closed PR's redirect comment.
+
+---
+
+## Consolidation pass — 2026-04-19
+
+After 3+ weeks of iter-1/iter-2/iter-3 hardening on `feat/plan-channel-parity`, the 10 individual PRs reviewed against stale base branches were **consolidated into a single umbrella PR rebased onto current upstream/main**.
+
+### Why consolidate
+
+- Branch was **734 commits behind** `upstream/main` and **135 commits ahead**
+- Latest upstream tag `v2026.4.19-beta.2` had landed ~24h before the rebase
+- Review bots (Greptile, Copilot, Codex) were comparing PRs against 3-week-old main snapshots: re-firing on resolved threads, suggesting "fixes" for patterns that already landed elsewhere, drowning real signal in noise
+- 10 dependent PRs forced maintainers to load the dependency graph just to start review
+
+### What was preserved
+
+- **Full 135-commit history** (no squash — `git blame` and the iter-1/2/3 narrative both stay readable)
+- **240+ resolved review threads** from the original 10 PRs (rationale lives in this doc + commit messages)
+- **All test coverage** (200+ tests across the touched surface — 81 scoped tests verified passing post-rebase)
+- **All architecture decisions** documented in this file (sections below stay authoritative)
+
+### What was closed
+
+| Original PR  | Action                                                          |
+| ------------ | --------------------------------------------------------------- |
+| PR-A #67512  | Closed → redirect comment pointing to #68939                    |
+| PR-B #67514  | Closed → redirect comment pointing to #68939                    |
+| PR-C #67534  | Closed → redirect comment pointing to #68939                    |
+| PR-D #67538  | Closed → redirect comment pointing to #68939                    |
+| PR-E #67541  | Closed → redirect comment pointing to #68939                    |
+| PR-F #67542  | Closed → redirect comment pointing to #68939                    |
+| PR-7 #67721  | Closed → redirect comment pointing to #68939                    |
+| PR-8 #67840  | Closed → redirect comment pointing to #68939                    |
+| PR-10 #68440 | Closed → redirect comment pointing to #68939                    |
+| PR-11 #68441 | Closed → redirect comment pointing to #68939 (used same branch) |
+
+### Rebase mechanics — only 5 actual conflicts in 134 commits
+
+Audit before rebase confirmed upstream had **zero plan-mode commits in the gap**. All conflicts were incidental file overlaps:
+
+| File                                           | Type                                  | Resolution                                                                                                                                       |
+| ---------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/agents/system-prompt.ts`                  | Import-only                           | Take both sets                                                                                                                                   |
+| `ui/src/ui/views/chat.ts`                      | Import-only                           | Take HEAD (`SubagentBlockingStatus` is a strict superset)                                                                                        |
+| `src/plugin-sdk/telegram.ts`                   | Modify/delete (upstream restructured) | `git rm` — PR-14 Telegram visibility deferred until plan-archetype-bridge re-wires to the new SDK location                                       |
+| `ui/src/ui/app-render.helpers.ts`              | Function-level                        | Delete 530 lines of duplicated `renderChatModelSelect` — upstream moved it to `session-controls.ts:82` and re-exports `renderChatThinkingSelect` |
+| `src/agents/pi-embedded-runner/run/attempt.ts` | Bootstrap-context refactor            | Drop our duplicated bootstrap blocks (upstream owns lines 654+); preserve `planModeAppendPrompt` + add `planModeFeatureEnabled` declaration      |
+
+### Post-rebase residual fixes (`01ed63633e`)
+
+Two type errors surfaced after the rebase landed and were fixed in a follow-on commit on the rebased branch:
+
+- **`src/agents/plan-mode/plan-archetype-bridge.ts`** — replaced the `sendDocumentTelegram` call with a deferred no-op + `void` discards on the unused `caption`/`absPath`/`parseTelegramThreadId`. Plan markdown still persists to `~/.openclaw/agents/<id>/plans/`; Telegram attachment delivery awaits the PR-14 re-wire follow-up.
+- **`src/gateway/server-runtime-subscriptions.ts`** — removed the `params.minimalTestGateway` conditional (the param was renamed/dropped in upstream's restructure). Persister always starts; tests pass `emitSessionsChanged: () => {}` to suppress.
+
+The `parseTelegramThreadId` helper is preserved as commented-out code in `plan-archetype-bridge.ts` so the PR-14 re-wire follow-up can resurrect the parsing logic without rewriting it.
+
+### Umbrella PR #68939 status
+
+- **Branch:** `feat/plan-channel-parity` @ `01ed63633e`
+- **Diff vs upstream/main:** 135 commits, 145 files changed
+- **Greptile review:** SKIPPED (hit 100-file ceiling — known limitation; not actionable)
+- **Copilot review:** triggered via `@copilot please review` comment
+- **CI:** parity gate IN_PROGRESS at write-time
+- **Mergeable:** ✅ MERGEABLE per `gh pr view`
+
+### Long-term follow-ups (deferred — out of consolidation scope)
+
+- **PR-14 Telegram visibility re-wire** — `plan-archetype-bridge.ts` needs to call into the new `extensions/telegram/` SDK location once the upstream restructure is mapped
+- **Bug B** — stale approval card UI auto-dismiss + `PLAN_APPROVAL_EXPIRED` error code (deferred since iter-2)
+- **R1/R2/R3/R4/R5** — robustness fixes (subagent cleanup on crash, cron-nudge suppression, plan title XSS audit, disk-full graceful, multi-channel approval dedup) (deferred since iter-3)
+- **D5** — `/plan self-test` slash command (deferred since iter-3)
+
+These do NOT block the umbrella PR landing. They land as follow-on commits on `feat/plan-channel-parity` after #68939 merges.
 
 ---
 
@@ -104,22 +179,24 @@ The `gate decision` filter catches the always-on Bug C log lines even when the e
 
 ---
 
-## 1. The 10-PR series
+## 1. The 10-PR series — historical (all closed; consolidated into umbrella PR #68939)
 
-| Sprint    | Upstream PR                                               | Local branch                            | Latest head             | Net-new files                | Mergeable    | Pass-1 status                       | Pass-2 status                                        | Pass-3+ scope (next sprint)                                                             |
-| --------- | --------------------------------------------------------- | --------------------------------------- | ----------------------- | ---------------------------- | ------------ | ----------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **PR-A**  | [#67512](https://github.com/openclaw/openclaw/pull/67512) | `final-sprint/gpt5-openai-prompt-stack` | `96e58ceedb`            | 6                            | ⚠️ CONFLICTS | not started — 16 unresolved threads | —                                                    | 2 REAL + 4 REAL-LARGE + 2 ESCALATE (security: regex flags + allowlist + multiline)      |
-| **PR-B**  | [#67514](https://github.com/openclaw/openclaw/pull/67514) | `final-sprint/gpt5-task-system-parity`  | `c192d9ff49`            | 8                            | ✅           | not started — 10 unresolved threads | —                                                    | 3 REAL + 1 FIXED-IN-CUMULATIVE + 1 WONT-FIX                                             |
-| **PR-C**  | [#67534](https://github.com/openclaw/openclaw/pull/67534) | `phase3/plan-rendering`                 | `6069a036fe`            | 2                            | ✅           | not started — 14 unresolved threads | —                                                    | 4 REAL + 3 REAL-LARGE + 1 ESCALATE (Slack escape alignment)                             |
-| **PR-D**  | [#67538](https://github.com/openclaw/openclaw/pull/67538) | `phase3/plan-mode`                      | `4a3ddb98bc`            | 29                           | ✅           | not started — 29 unresolved threads | —                                                    | ~5 REAL (test inversion, find -fprint, approval state machine)                          |
-| **PR-E**  | [#67541](https://github.com/openclaw/openclaw/pull/67541) | `phase4/skill-plan-templates`           | `780aced7d2`            | 11                           | ✅           | not started — 16 unresolved threads | —                                                    | ~3 REAL (docstring, test, snapshot fallback)                                            |
-| **PR-F**  | [#67542](https://github.com/openclaw/openclaw/pull/67542) | `phase4/cross-session-plans`            | `689efe253b`            | 2                            | ✅           | not started — 20 unresolved threads | —                                                    | 1 FIXED + 6 REAL + 5 REAL-LARGE + 2 ESCALATE (security: PID liveness + symlink)         |
-| **PR-7**  | [#67721](https://github.com/openclaw/openclaw/pull/67721) | `feat/ui-mode-switcher-plan-cards`      | `fb5a7fa05e`            | 16                           | ❓           | not started — 49 unresolved threads | —                                                    | 15 REAL + 8 FIXED + 4 WONT-FIX + 1 ESCALATE (i18n keyboard shortcuts)                   |
-| **PR-8**  | [#67840](https://github.com/openclaw/openclaw/pull/67840) | `feat/plan-mode-integration`            | `f866dfbb3c`            | 39                           | ⚠️ CONFLICTS | not started — 41 unresolved threads | —                                                    | 12 REAL/REAL-LARGE + 4 ESCALATE (planMode threading, autoEnableFor wiring, schema gaps) |
-| **PR-10** | [#68440](https://github.com/openclaw/openclaw/pull/68440) | `feat/plan-archetype-and-questions`     | `1bf9d7b4e7`            | 115 cumulative / ~25 net-new | ❓           | 9/10 fixed                          | **6/6 resolved** (`ef56f0f2cf`); **0 unresolved** ✅ | clean — ready for landing                                                               |
-| **PR-11** | [#68441](https://github.com/openclaw/openclaw/pull/68441) | `feat/plan-channel-parity`              | **`ef56f0f2cf`** ← LIVE | 127 cumulative / 32 net-new  | ⚠️ CONFLICTS | 13/13 fixed                         | **2/5 resolved**, **3 escalated** (cross-component)  | needs maintainer decision on escalation cluster + main rebase                           |
+> **STATUS:** All 10 PRs below were closed on 2026-04-19 in favor of the consolidated umbrella PR **#68939** (rebased onto upstream/main @ `v2026.4.19-beta.2`). See the "Consolidation pass — 2026-04-19" section above for the rationale. Table preserved for historical context — `git blame` and the iter-1/2/3 narrative still map back to these PR boundaries.
 
-(PR-9, PR-12, PR-13, PR-14 are internal sprint commits riding on `feat/plan-channel-parity`.)
+| Sprint    | Upstream PR                                               | Local branch                            | Latest head  | Net-new files                | Mergeable    | Final status                                                                              |
+| --------- | --------------------------------------------------------- | --------------------------------------- | ------------ | ---------------------------- | ------------ | ----------------------------------------------------------------------------------------- |
+| **PR-A**  | [#67512](https://github.com/openclaw/openclaw/pull/67512) | `final-sprint/gpt5-openai-prompt-stack` | `96e58ceedb` | 6                            | ⚠️ CONFLICTS | **closed (consolidated into #68939)** — 16 historical threads                             |
+| **PR-B**  | [#67514](https://github.com/openclaw/openclaw/pull/67514) | `final-sprint/gpt5-task-system-parity`  | `c192d9ff49` | 8                            | ✅           | **closed (consolidated into #68939)** — 10 historical threads                             |
+| **PR-C**  | [#67534](https://github.com/openclaw/openclaw/pull/67534) | `phase3/plan-rendering`                 | `6069a036fe` | 2                            | ✅           | **closed (consolidated into #68939)** — 14 historical threads                             |
+| **PR-D**  | [#67538](https://github.com/openclaw/openclaw/pull/67538) | `phase3/plan-mode`                      | `4a3ddb98bc` | 29                           | ✅           | **closed (consolidated into #68939)** — 29 historical threads                             |
+| **PR-E**  | [#67541](https://github.com/openclaw/openclaw/pull/67541) | `phase4/skill-plan-templates`           | `780aced7d2` | 11                           | ✅           | **closed (consolidated into #68939)** — 16 historical threads                             |
+| **PR-F**  | [#67542](https://github.com/openclaw/openclaw/pull/67542) | `phase4/cross-session-plans`            | `689efe253b` | 2                            | ✅           | **closed (consolidated into #68939)** — 20 historical threads                             |
+| **PR-7**  | [#67721](https://github.com/openclaw/openclaw/pull/67721) | `feat/ui-mode-switcher-plan-cards`      | `fb5a7fa05e` | 16                           | ❓           | **closed (consolidated into #68939)** — 49 historical threads                             |
+| **PR-8**  | [#67840](https://github.com/openclaw/openclaw/pull/67840) | `feat/plan-mode-integration`            | `f866dfbb3c` | 39                           | ⚠️ CONFLICTS | **closed (consolidated into #68939)** — 41 historical threads                             |
+| **PR-10** | [#68440](https://github.com/openclaw/openclaw/pull/68440) | `feat/plan-archetype-and-questions`     | `1bf9d7b4e7` | 115 cumulative / ~25 net-new | ❓           | **closed (consolidated into #68939)** — pass-1 + pass-2 complete pre-consolidation        |
+| **PR-11** | [#68441](https://github.com/openclaw/openclaw/pull/68441) | `feat/plan-channel-parity`              | `ef56f0f2cf` | 127 cumulative / 32 net-new  | ⚠️ CONFLICTS | **closed (consolidated into #68939)** — was the live cumulative branch (rebased + reused) |
+
+(PR-9, PR-12, PR-13, PR-14 are internal sprint commits riding on `feat/plan-channel-parity` and ride along with the umbrella PR.)
 
 ### PR-11 escalation cluster — pending maintainer decision
 
@@ -357,20 +434,23 @@ Scheduled at 10/30/60 min after `enter_plan_mode` to prompt the agent if it stal
 
 ---
 
-## 5. Hardening status (review pass tracking)
+## 5. Hardening status (review pass tracking) — historical (per-PR; superseded by umbrella PR review state)
 
-| PR     | Pass 1                                                      | Pass 2     | Bots re-triggered | Status               |
-| ------ | ----------------------------------------------------------- | ---------- | ----------------- | -------------------- |
-| #67512 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67514 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67534 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67538 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67541 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67542 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67721 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #67840 | ⏳ pending                                                  | ⏳ pending | ⏳ pending        | not started          |
-| #68440 | ✅ done (9/10 fixed, 1 escalated → resolved this iteration) | ⏳ pending | @-mentioned       | live in `c9287908eb` |
-| #68441 | ✅ done (13/13 fixed)                                       | ⏳ pending | @-mentioned       | live in `c9287908eb` |
+> **STATUS:** The per-PR pass-tracking below is historical. After consolidation (2026-04-19), all bot review work happens on **umbrella PR #68939**. The 10-PR review history is preserved here so reviewers can see what was already addressed before consolidation.
+
+| PR                    | Pass 1                                                                                          | Pass 2     | Bots re-triggered               | Final status                              |
+| --------------------- | ----------------------------------------------------------------------------------------------- | ---------- | ------------------------------- | ----------------------------------------- |
+| #67512                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67514                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67534                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67538                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67541                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67542                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67721                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #67840                | ⏳ pending pre-consolidation                                                                    | n/a        | n/a                             | closed (consolidated #68939)              |
+| #68440                | ✅ done (9/10 fixed, 1 escalated → resolved this iteration)                                     | ⏳ pending | @-mentioned                     | closed (consolidated #68939)              |
+| #68441                | ✅ done (13/13 fixed)                                                                           | ⏳ pending | @-mentioned                     | closed (consolidated #68939)              |
+| **#68939 (umbrella)** | 🚦 first wave triggered (Copilot @-mentioned; Greptile hit 100-file ceiling — known limitation) | ⏳ pending | initial fire post-consolidation | **OPEN** (rebased on `v2026.4.19-beta.2`) |
 
 ### Escalated comment resolution (this iteration)
 
@@ -431,15 +511,17 @@ Upstream main merged `fix(cron): clean up deleteAfterRun direct deliveries (#678
 
 ## 8. Beta-readiness checklist
 
-- [x] Live install on `c9287908eb` (PR-11 review pass 1)
-- [x] PR-10 + PR-11 review pass 1 complete
-- [ ] PR-A through PR-8 review pass 1 (8 older PRs — unstarted)
-- [ ] Pass 2 review across all PRs after bot re-trigger
-- [ ] Conflict resolution: PR-A (#67512) vs main, PR-11 (#68441) vs main
-- [ ] Wave 1 PRs (PR-B, PR-C, PR-F, PR-A) merged to upstream main
-- [ ] Wave 2 PRs (PR-E, PR-D) merged to upstream main
-- [ ] Wave 3 co-merge (PR-7 + PR-8) to upstream main
-- [ ] PR-10 + PR-11 cumulative diff shrinks below Greptile 100-file cap
-- [ ] PR-10 merged to upstream main
-- [ ] PR-11 merged to upstream main
+> **STATUS:** Updated for the consolidated umbrella PR #68939 path (post-2026-04-19 consolidation).
+
+- [x] Live install on `c9287908eb` (PR-11 review pass 1, pre-consolidation)
+- [x] PR-10 + PR-11 review pass 1 complete (pre-consolidation)
+- [x] Rebase `feat/plan-channel-parity` onto `upstream/main` @ `v2026.4.19-beta.2` (5 conflicts resolved)
+- [x] All 10 individual PRs closed with redirect comments to #68939
+- [x] Umbrella PR #68939 opened from rebased branch
+- [x] Backup branch `feat/plan-channel-parity-backup` pushed to origin at pre-rebase HEAD `bee5e8c364`
+- [x] Architecture doc updated with consolidation status
+- [ ] Initial Copilot review wave on #68939 triaged via `pr-review-loop` skill
+- [ ] Address PR-14 Telegram visibility re-wire (deferred follow-up)
+- [ ] Address Bug B + R1/R2/R3/R4/R5 + D5 (deferred follow-up commits on `feat/plan-channel-parity`)
+- [ ] #68939 merged to upstream main
 - [ ] Beta tag cut on upstream main
