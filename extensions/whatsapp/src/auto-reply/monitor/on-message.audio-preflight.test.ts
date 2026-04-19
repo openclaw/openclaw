@@ -1,0 +1,149 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const events: string[] = [];
+const transcribeFirstAudioMock = vi.fn();
+const maybeSendAckReactionMock = vi.fn();
+const processMessageMock = vi.fn();
+
+vi.mock("./audio-preflight.runtime.js", () => ({
+  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+}));
+
+vi.mock("./ack-reaction.js", () => ({
+  maybeSendAckReaction: (...args: unknown[]) => maybeSendAckReactionMock(...args),
+}));
+
+vi.mock("./process-message.js", () => ({
+  processMessage: (...args: unknown[]) => processMessageMock(...args),
+}));
+
+vi.mock("./broadcast.js", () => ({
+  maybeBroadcastMessage: vi.fn(async () => false),
+}));
+
+vi.mock("./group-gating.js", () => ({
+  applyGroupGating: vi.fn(async () => ({ shouldProcess: true })),
+}));
+
+vi.mock("./last-route.js", () => ({
+  updateLastRouteInBackground: () => {},
+}));
+
+vi.mock("./peer.js", () => ({
+  resolvePeerId: (msg: { from: string }) => msg.from,
+}));
+
+vi.mock("../config.runtime.js", () => ({
+  loadConfig: () => ({
+    channels: {
+      whatsapp: {
+        ackReaction: { enabled: true },
+      },
+    },
+  }),
+}));
+
+vi.mock("../../group-session-key.js", () => ({
+  resolveWhatsAppGroupSessionRoute: (route: unknown) => route,
+}));
+
+vi.mock("../../identity.js", () => ({
+  getPrimaryIdentityId: () => undefined,
+  getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
+}));
+
+vi.mock("../../text-runtime.js", () => ({
+  normalizeE164: (value: string) => value,
+}));
+
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  buildGroupHistoryKey: () => "group-key",
+  resolveAgentRoute: () => ({
+    agentId: "main",
+    accountId: "default",
+    sessionKey: "agent:main:whatsapp:+15550000002",
+    mainSessionKey: "agent:main:main",
+  }),
+}));
+
+import type { WebInboundMsg } from "../types.js";
+import { createWebOnMessageHandler } from "./on-message.js";
+
+function makeAudioMsg(): WebInboundMsg {
+  return {
+    id: "msg-1",
+    from: "+15550000002",
+    to: "+15550000001",
+    body: "<media:audio>",
+    chatType: "direct",
+    mediaType: "audio/ogg; codecs=opus",
+    mediaPath: "/tmp/voice.ogg",
+    timestamp: 1700000000,
+    accountId: "default",
+  } as WebInboundMsg;
+}
+
+function makeEchoTracker() {
+  return {
+    has: () => false,
+    forget: () => {},
+    rememberText: () => {},
+    buildCombinedKey: (p: { combinedBody: string }) => p.combinedBody,
+  };
+}
+
+describe("createWebOnMessageHandler audio preflight", () => {
+  beforeEach(() => {
+    events.length = 0;
+    maybeSendAckReactionMock.mockReset();
+    maybeSendAckReactionMock.mockImplementation(async () => {
+      events.push("ack");
+    });
+    transcribeFirstAudioMock.mockReset();
+    transcribeFirstAudioMock.mockImplementation(async () => {
+      events.push("stt");
+      return "transcribed voice note";
+    });
+    processMessageMock.mockReset();
+    processMessageMock.mockResolvedValue(true);
+  });
+
+  it("sends ack reaction before audio preflight for voice notes", async () => {
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeAudioMsg());
+
+    expect(events).toEqual(["ack", "stt"]);
+    expect(processMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preflightAudioTranscript: "transcribed voice note",
+        ackAlreadySent: true,
+      }),
+    );
+  });
+});

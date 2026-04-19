@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the lazy-loaded audio preflight runtime boundary
 const transcribeFirstAudioMock = vi.fn();
+const maybeSendAckReactionMock = vi.fn();
 
 vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -43,7 +44,7 @@ vi.mock("../loggers.js", () => ({
 }));
 
 vi.mock("./ack-reaction.js", () => ({
-  maybeSendAckReaction: () => {},
+  maybeSendAckReaction: (...args: unknown[]) => maybeSendAckReactionMock(...args),
 }));
 
 vi.mock("./inbound-context.js", () => ({
@@ -161,6 +162,8 @@ function makeParams(msgOverrides: Partial<WebInboundMsg> = {}) {
 describe("processMessage audio preflight transcription", () => {
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
+    maybeSendAckReactionMock.mockReset();
+    maybeSendAckReactionMock.mockResolvedValue(undefined);
     shouldComputeCommandResult = false;
     vi.mocked(dispatchWhatsAppBufferedReply).mockClear();
   });
@@ -285,6 +288,16 @@ describe("processMessage audio preflight transcription", () => {
       Body: "pre-computed transcript from fan-out caller",
       BodyForAgent: "pre-computed transcript from fan-out caller",
     });
+  });
+
+  it("does not send a duplicate ack when caller already sent it", async () => {
+    await processMessage({
+      ...makeParams(),
+      preflightAudioTranscript: "pre-computed transcript from caller",
+      ackAlreadySent: true,
+    });
+
+    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
   });
 
   it("skips internal STT when preflightAudioTranscript is null (failed preflight sentinel)", async () => {

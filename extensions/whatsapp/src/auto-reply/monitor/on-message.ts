@@ -9,6 +9,7 @@ import { normalizeE164 } from "../../text-runtime.js";
 import { loadConfig } from "../config.runtime.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
+import { maybeSendAckReaction } from "./ack-reaction.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
@@ -40,6 +41,7 @@ export function createWebOnMessageHandler(params: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
       preflightAudioTranscript?: string | null;
+      ackAlreadySent?: boolean;
     },
   ) =>
     processMessage({
@@ -62,6 +64,7 @@ export function createWebOnMessageHandler(params: {
       groupHistory: opts?.groupHistory,
       suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
       preflightAudioTranscript: opts?.preflightAudioTranscript,
+      ackAlreadySent: opts?.ackAlreadySent,
     });
 
   return async (msg: WebInboundMsg) => {
@@ -168,7 +171,20 @@ export function createWebOnMessageHandler(params: {
     let preflightAudioTranscript: string | null | undefined;
     const hasAudioBody =
       msg.mediaType?.startsWith("audio/") === true && msg.body === "<media:audio>";
+    let ackAlreadySent = false;
     if (hasAudioBody && msg.mediaPath) {
+      await maybeSendAckReaction({
+        cfg: params.cfg,
+        msg,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        conversationId,
+        verbose: params.verbose,
+        accountId: route.accountId,
+        info: params.replyLogger.info.bind(params.replyLogger),
+        warn: params.replyLogger.warn.bind(params.replyLogger),
+      });
+      ackAlreadySent = true;
       try {
         const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
         // transcribeFirstAudio returns undefined on failure/disabled; store null so
@@ -198,12 +214,16 @@ export function createWebOnMessageHandler(params: {
         groupHistoryKey,
         groupHistories: params.groupHistories,
         preflightAudioTranscript,
+        ackAlreadySent,
         processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
       })
     ) {
       return;
     }
 
-    await processForRoute(msg, route, groupHistoryKey, { preflightAudioTranscript });
+    await processForRoute(msg, route, groupHistoryKey, {
+      preflightAudioTranscript,
+      ackAlreadySent,
+    });
   };
 }

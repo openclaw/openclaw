@@ -191,6 +191,7 @@ export async function processMessage(params: {
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
+  ackAlreadySent?: boolean;
   /** Pre-computed audio transcript from a caller-level preflight, used to avoid
    * re-transcribing the same voice note once per broadcast agent.
    * - string  → transcript obtained; use it directly, skip internal STT
@@ -314,18 +315,22 @@ export async function processMessage(params: {
     return false;
   }
 
-  // Send ack reaction immediately upon message receipt (post-gating)
-  await maybeSendAckReaction({
-    cfg: params.cfg,
-    msg: params.msg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-    conversationId,
-    verbose: params.verbose,
-    accountId: account.accountId,
-    info: params.replyLogger.info.bind(params.replyLogger),
-    warn: params.replyLogger.warn.bind(params.replyLogger),
-  });
+  // Send ack reaction immediately upon message receipt (post-gating). Callers
+  // that do preflight work before processMessage can send it first and set
+  // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
+  if (params.ackAlreadySent !== true) {
+    await maybeSendAckReaction({
+      cfg: params.cfg,
+      msg: params.msg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      conversationId,
+      verbose: params.verbose,
+      accountId: account.accountId,
+      info: params.replyLogger.info.bind(params.replyLogger),
+      warn: params.replyLogger.warn.bind(params.replyLogger),
+    });
+  }
 
   const correlationId = params.msg.id ?? newConnectionId();
   params.replyLogger.info(
