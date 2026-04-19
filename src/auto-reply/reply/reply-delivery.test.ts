@@ -6,6 +6,7 @@ import {
   createBlockReplyDeliveryHandler,
   normalizeReplyPayloadDirectives,
 } from "./reply-delivery.js";
+import { ReplyMediaNormalizationError } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type BlockReplyPipelineLike = NonNullable<
@@ -172,6 +173,38 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: false,
       replyToTag: false,
       audioAsVoice: false,
+    });
+  });
+
+  it("sends a visible error block reply when media normalization fails loudly", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      normalizeMediaPaths: async () => {
+        throw new ReplyMediaNormalizationError({
+          attemptedMedia: ["./image.png"],
+          failedMedia: ["./image.png"],
+          cause: new Error("Path escapes sandbox root"),
+        });
+      },
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "Result\nMEDIA: ./image.png", replyToCurrent: true });
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: expect.stringContaining("I couldn't attach the requested media"),
+      isError: true,
+      replyToCurrent: true,
+      replyToId: undefined,
+      replyToTag: false,
     });
   });
 

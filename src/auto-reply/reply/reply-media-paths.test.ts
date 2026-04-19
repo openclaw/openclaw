@@ -17,7 +17,10 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess,
 }));
 
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import {
+  createReplyMediaPathNormalizer,
+  ReplyMediaNormalizationError,
+} from "./reply-media-paths.js";
 
 describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
@@ -94,7 +97,7 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
-  it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
+  it("fails fast when sandbox-mapped media staging fails", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -106,14 +109,14 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["./out/photo.png"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    await expect(
+      normalize({
+        mediaUrls: ["./out/photo.png"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["./out/photo.png"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
     expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
     expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
@@ -122,25 +125,25 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
-  it("drops host file URLs when no sandbox mapping applies", async () => {
+  it("fails fast for host file URLs when no sandbox mapping applies", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    await expect(
+      normalize({
+        mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["file:///Users/peter/Documents/report.pdf"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
-  it("drops host file URLs even when sandbox exists", async () => {
+  it("fails fast for host file URLs even when sandbox exists", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -151,18 +154,18 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    await expect(
+      normalize({
+        mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["file:///Users/peter/Documents/report.pdf"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
-  it("drops absolute host-local media paths when sandbox mapping fails", async () => {
+  it("fails fast for absolute host-local media paths when sandbox mapping fails", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -173,15 +176,42 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
+    await expect(
+      normalize({
+        mediaUrls: ["/Users/peter/Documents/report.pdf"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["/Users/peter/Documents/report.pdf"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("maps absolute workspace media paths into the host sandbox workspace before staging", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const absolutePath = "/Users/peter/.openclaw/workspace/exports/images/chart.png";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
+      sessionKey: "session-key",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+
     const result = await normalize({
-      mediaUrls: ["/Users/peter/Documents/report.pdf"],
+      mediaUrls: [absolutePath],
     });
 
     expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
+      mediaUrl: "/tmp/outbound-media/chart.png",
+      mediaUrls: ["/tmp/outbound-media/chart.png"],
     });
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
+      "/tmp/sandboxes/session-1/exports/images/chart.png",
+      8 * 1024 * 1024,
+      expect.any(Object),
+    );
   });
 
   it("stages absolute workspace media paths so the PR scenario now works", async () => {
@@ -240,25 +270,25 @@ describe("createReplyMediaPathNormalizer", () => {
     );
   });
 
-  it("drops workspace-relative media paths that escape the agent workspace", async () => {
+  it("fails fast when workspace-relative media paths escape the agent workspace", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["../../etc/passwd"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    await expect(
+      normalize({
+        mediaUrls: ["../../etc/passwd"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["../../etc/passwd"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
-  it("drops sandbox-relative media paths that escape both sandbox and workspace", async () => {
+  it("fails fast when sandbox-relative media paths escape both sandbox and workspace", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
@@ -269,14 +299,14 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["../../etc/passwd"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    await expect(
+      normalize({
+        mediaUrls: ["../../etc/passwd"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["../../etc/passwd"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -299,7 +329,7 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
-  it("drops host-local media when shared outbound attachment policy rejects it", async () => {
+  it("fails fast when shared outbound attachment policy rejects host-local media", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
       new Error("Local media path is not under an allowed directory"),
     );
@@ -309,14 +339,14 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/secrets/photo.png"],
-    });
-
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    await expect(
+      normalize({
+        mediaUrls: ["/Users/peter/secrets/photo.png"],
+      }),
+    ).rejects.toMatchObject({
+      name: "ReplyMediaNormalizationError",
+      failedMedia: ["/Users/peter/secrets/photo.png"],
+    } satisfies Partial<ReplyMediaNormalizationError>);
   });
 
   it("threads requester context into shared outbound media access", async () => {

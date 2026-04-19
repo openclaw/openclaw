@@ -14,6 +14,10 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import {
+  buildReplyMediaNormalizationFailurePayload,
+  ReplyMediaNormalizationError,
+} from "./reply-media-paths.js";
 import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
 
 let replyPayloadsDedupeRuntimePromise: Promise<
@@ -37,6 +41,9 @@ async function normalizeReplyPayloadMedia(params: {
     return await params.normalizeMediaPaths(params.payload);
   } catch (err) {
     logVerbose(`reply payload media normalization failed: ${String(err)}`);
+    if (err instanceof ReplyMediaNormalizationError) {
+      return buildReplyMediaNormalizationFailurePayload(params.payload, err);
+    }
     return {
       ...params.payload,
       mediaUrl: undefined,

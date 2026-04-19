@@ -6,6 +6,10 @@ import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
+import {
+  buildReplyMediaNormalizationFailurePayload,
+  ReplyMediaNormalizationError,
+} from "./reply-media-paths.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -116,9 +120,29 @@ export function createBlockReplyDeliveryHandler(params: {
       parseMode: "auto",
     });
 
-    const mediaNormalizedPayload = params.normalizeMediaPaths
-      ? await params.normalizeMediaPaths(normalized.payload)
-      : normalized.payload;
+    let mediaNormalizedPayload: ReplyPayload;
+    try {
+      mediaNormalizedPayload = params.normalizeMediaPaths
+        ? await params.normalizeMediaPaths(normalized.payload)
+        : normalized.payload;
+    } catch (err) {
+      if (err instanceof ReplyMediaNormalizationError) {
+        const failurePayload = carryReplyPayloadMetadata(
+          payload,
+          params.applyReplyToMode(
+            buildReplyMediaNormalizationFailurePayload(normalized.payload, err),
+          ),
+        );
+        await sendDirectBlockReply({
+          onBlockReply: params.onBlockReply,
+          directlySentBlockKeys: params.directlySentBlockKeys,
+          trackingPayload: failurePayload,
+          payload: failurePayload,
+        });
+        return;
+      }
+      throw err;
+    }
     const blockPayload = carryReplyPayloadMetadata(
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),

@@ -48,6 +48,56 @@ function getPayloadMediaList(payload: ReplyPayload): string[] {
   return resolveSendableOutboundReplyParts(payload).mediaUrls;
 }
 
+export class ReplyMediaNormalizationError extends Error {
+  readonly attemptedMedia: string[];
+  readonly failedMedia: string[];
+
+  constructor(params: { attemptedMedia: string[]; failedMedia: string[]; cause?: unknown }) {
+    const count = params.failedMedia.length;
+    super(`Failed to normalize ${count} reply media item${count === 1 ? "" : "s"}.`, {
+      cause: params.cause,
+    });
+    this.name = "ReplyMediaNormalizationError";
+    this.attemptedMedia = [...params.attemptedMedia];
+    this.failedMedia = [...params.failedMedia];
+  }
+}
+
+function describeReplyMediaNormalizationFailure(err: unknown): string {
+  const cause = err instanceof ReplyMediaNormalizationError ? err.cause : err;
+  const message =
+    cause instanceof Error ? cause.message.trim() : typeof cause === "string" ? cause.trim() : "";
+  if (/host-local media file urls are blocked/i.test(message)) {
+    return "Host file URLs are blocked in normal replies.";
+  }
+  if (/sandbox root/i.test(message)) {
+    return "The requested file path resolves outside the allowed sandbox.";
+  }
+  if (/allowed directory|allowed media/i.test(message)) {
+    return "The requested file path is outside the allowed media directories.";
+  }
+  if (/enoent|no such file/i.test(message)) {
+    return "The requested file no longer exists.";
+  }
+  if (/too large|exceeds|larger than/i.test(message)) {
+    return "The requested file is larger than the allowed attachment limit.";
+  }
+  return "OpenClaw couldn't stage the attachment.";
+}
+
+export function buildReplyMediaNormalizationFailurePayload(
+  payload: ReplyPayload,
+  err: unknown,
+): ReplyPayload {
+  return {
+    text: `⚠️ I couldn't attach the requested media, so I didn't send a text-only fallback. ${describeReplyMediaNormalizationFailure(err)}`,
+    isError: true,
+    replyToId: payload.replyToId,
+    replyToTag: payload.replyToTag,
+    replyToCurrent: payload.replyToCurrent,
+  };
+}
+
 function resolveReplyMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -150,6 +200,23 @@ export function createReplyMediaPathNormalizer(params: {
     return resolvePathFromInput(relativeWorkspacePath, params.workspaceDir);
   };
 
+  const resolveWorkspaceAbsoluteMediaInSandbox = (
+    media: string,
+    sandboxRoot: string,
+  ): string | undefined => {
+    if (FILE_URL_RE.test(media) || media.startsWith("~")) {
+      return undefined;
+    }
+    const isAbsoluteLocalMedia = path.isAbsolute(media) || WINDOWS_DRIVE_RE.test(media);
+    if (!isAbsoluteLocalMedia) {
+      return undefined;
+    }
+    const relativeWorkspacePath = toRelativeWorkspacePath(params.workspaceDir, media, {
+      cwd: params.workspaceDir,
+    });
+    return resolvePathFromInput(relativeWorkspacePath, sandboxRoot);
+  };
+
   const normalizeMediaSource = async (raw: string): Promise<string> => {
     const media = raw.trim();
     if (!media) {
@@ -167,6 +234,10 @@ export function createReplyMediaPathNormalizer(params: {
       !WINDOWS_DRIVE_RE.test(media);
     const sandboxRoot = await resolveSandboxRoot();
     if (sandboxRoot) {
+      const sandboxWorkspaceMedia = resolveWorkspaceAbsoluteMediaInSandbox(media, sandboxRoot);
+      if (sandboxWorkspaceMedia) {
+        return await persistLocalReplyMedia(sandboxWorkspaceMedia);
+      }
       let sandboxResolvedMedia: string;
       try {
         sandboxResolvedMedia = await resolveSandboxedMediaSource({
@@ -212,7 +283,11 @@ export function createReplyMediaPathNormalizer(params: {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
         logVerbose(`dropping blocked reply media ${media}: ${String(err)}`);
-        continue;
+        throw new ReplyMediaNormalizationError({
+          attemptedMedia: mediaList,
+          failedMedia: [media],
+          cause: err,
+        });
       }
       if (!normalized || seen.has(normalized)) {
         continue;
