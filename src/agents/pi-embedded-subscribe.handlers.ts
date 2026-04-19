@@ -14,6 +14,7 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import { handleTurnEnd, handleTurnStart } from "./pi-embedded-subscribe.handlers.turn.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeEvent,
@@ -46,6 +47,12 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         handleToolExecutionEnd(ctx, evt as never).catch((err) => {
           ctx.log.debug(`tool_execution_end handler failed: ${String(err)}`);
         });
+        return;
+      case "turn_start":
+        handleTurnStart(ctx);
+        return;
+      case "turn_end":
+        handleTurnEnd(ctx, evt as never);
         return;
       case "agent_start":
         handleAgentStart(ctx);
