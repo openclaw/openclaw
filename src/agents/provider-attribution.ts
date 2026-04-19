@@ -133,6 +133,12 @@ const OPENAI_RESPONSES_APIS = new Set([
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
 const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>(["xai-native"]);
+type ManifestProviderEndpointCacheEntry = {
+  endpointClass: ProviderEndpointClass;
+  hosts: readonly string[];
+  normalizedBaseUrls: readonly string[];
+};
+let manifestProviderEndpointCache: ManifestProviderEndpointCacheEntry[] | null = null;
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
@@ -192,27 +198,42 @@ function isManifestProviderEndpointClass(value: string): value is ProviderEndpoi
   return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
 }
 
+function loadManifestProviderEndpointCache(): ManifestProviderEndpointCacheEntry[] {
+  if (!manifestProviderEndpointCache) {
+    const registry = loadPluginManifestRegistry({ cache: true });
+    const entries: ManifestProviderEndpointCacheEntry[] = [];
+    for (const plugin of registry.plugins) {
+      for (const endpoint of plugin.providerEndpoints ?? []) {
+        if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
+          continue;
+        }
+        entries.push({
+          endpointClass: endpoint.endpointClass,
+          hosts: (endpoint.hosts ?? []).map((host) => host.toLowerCase()),
+          normalizedBaseUrls: (endpoint.baseUrls ?? [])
+            .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
+            .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
+        });
+      }
+    }
+    manifestProviderEndpointCache = entries;
+  }
+  return manifestProviderEndpointCache;
+}
+
 function resolveManifestProviderEndpoint(params: {
   host: string;
   normalizedBaseUrl?: string;
 }): ProviderEndpointResolution | undefined {
-  const registry = loadPluginManifestRegistry({ cache: true });
-  for (const plugin of registry.plugins) {
-    for (const endpoint of plugin.providerEndpoints ?? []) {
-      if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
-        continue;
-      }
-      if (endpoint.hosts?.some((host) => host.toLowerCase() === params.host)) {
-        return { endpointClass: endpoint.endpointClass, hostname: params.host };
-      }
-      if (
-        params.normalizedBaseUrl &&
-        endpoint.baseUrls?.some(
-          (baseUrl) => normalizeComparableBaseUrl(baseUrl) === params.normalizedBaseUrl,
-        )
-      ) {
-        return { endpointClass: endpoint.endpointClass, hostname: params.host };
-      }
+  for (const endpoint of loadManifestProviderEndpointCache()) {
+    if (endpoint.hosts.includes(params.host)) {
+      return { endpointClass: endpoint.endpointClass, hostname: params.host };
+    }
+    if (
+      params.normalizedBaseUrl &&
+      endpoint.normalizedBaseUrls.includes(params.normalizedBaseUrl)
+    ) {
+      return { endpointClass: endpoint.endpointClass, hostname: params.host };
     }
   }
   return undefined;

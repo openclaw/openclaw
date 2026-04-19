@@ -34,6 +34,32 @@ const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 const QA_CHANNEL_RUNTIME_API = bundledDistPluginFile("qa-channel", "runtime-api.js");
 const QA_LAB_RUNTIME_API = bundledDistPluginFile("qa-lab", "runtime-api.js");
 
+async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
+  await fs.writeFile(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version }),
+    "utf-8",
+  );
+}
+
+async function writeCompatSidecars(packageRoot: string) {
+  for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
+    const absolutePath = path.join(packageRoot, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+  }
+}
+
+async function writeBundledPluginPackageJson(
+  packageRoot: string,
+  pluginId: string,
+  packageName: string,
+) {
+  const packageJsonPath = path.join(packageRoot, "dist", "extensions", pluginId, "package.json");
+  await fs.mkdir(path.dirname(packageJsonPath), { recursive: true });
+  await fs.writeFile(packageJsonPath, JSON.stringify({ name: packageName }), "utf-8");
+}
+
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
@@ -374,16 +400,8 @@ describe("update global helpers", () => {
 
   it("checks installed dist against the packaged inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-pkg-" }, async (packageRoot) => {
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-        "utf-8",
-      );
-      for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-        const absolutePath = path.join(packageRoot, relativePath);
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-      }
+      await writeGlobalPackageJson(packageRoot);
+      await writeCompatSidecars(packageRoot);
       for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
         const absolutePath = path.join(packageRoot, relativePath);
         await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -411,16 +429,8 @@ describe("update global helpers", () => {
 
   it("falls back to legacy sidecar verification when the inventory is missing", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-        "utf-8",
-      );
-      for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-        const absolutePath = path.join(packageRoot, relativePath);
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-        await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-      }
+      await writeGlobalPackageJson(packageRoot);
+      await writeCompatSidecars(packageRoot);
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
 
@@ -441,16 +451,8 @@ describe("update global helpers", () => {
     await withTempDir(
       { prefix: "openclaw-update-global-missing-inventory-new-" },
       async (packageRoot) => {
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
-          "utf-8",
-        );
-        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-          const absolutePath = path.join(packageRoot, relativePath);
-          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-        }
+        await writeGlobalPackageJson(packageRoot, "2026.4.15");
+        await writeCompatSidecars(packageRoot);
 
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
           `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
@@ -463,11 +465,7 @@ describe("update global helpers", () => {
     await withTempDir(
       { prefix: "openclaw-update-global-invalid-inventory-" },
       async (packageRoot) => {
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
-          "utf-8",
-        );
+        await writeGlobalPackageJson(packageRoot, "2026.4.15");
         await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
         await fs.writeFile(
           path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
@@ -484,20 +482,8 @@ describe("update global helpers", () => {
 
   it("verifies legacy sidecars for installed bundled plugins without inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-plugin-" }, async (packageRoot) => {
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-        "utf-8",
-      );
-      const matrixPackageJson = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "matrix",
-        "package.json",
-      );
-      await fs.mkdir(path.dirname(matrixPackageJson), { recursive: true });
-      await fs.writeFile(matrixPackageJson, JSON.stringify({ name: "@openclaw/matrix" }), "utf-8");
+      await writeGlobalPackageJson(packageRoot);
+      await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
         `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
@@ -509,29 +495,9 @@ describe("update global helpers", () => {
     await withTempDir(
       { prefix: "openclaw-update-global-critical-sidecars-" },
       async (packageRoot) => {
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
-          "utf-8",
-        );
-        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-          const absolutePath = path.join(packageRoot, relativePath);
-          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-        }
-        const matrixPackageJson = path.join(
-          packageRoot,
-          "dist",
-          "extensions",
-          "matrix",
-          "package.json",
-        );
-        await fs.mkdir(path.dirname(matrixPackageJson), { recursive: true });
-        await fs.writeFile(
-          matrixPackageJson,
-          JSON.stringify({ name: "@openclaw/matrix" }),
-          "utf-8",
-        );
+        await writeGlobalPackageJson(packageRoot, "2026.4.15");
+        await writeCompatSidecars(packageRoot);
+        await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
         await writePackageDistInventory(packageRoot);
 
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
@@ -545,29 +511,9 @@ describe("update global helpers", () => {
     await withTempDir(
       { prefix: "openclaw-update-global-stale-private-qa-" },
       async (packageRoot) => {
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
-          "utf-8",
-        );
-        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
-          const absolutePath = path.join(packageRoot, relativePath);
-          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
-        }
-        const staleQaLabPackageJson = path.join(
-          packageRoot,
-          "dist",
-          "extensions",
-          "qa-lab",
-          "package.json",
-        );
-        await fs.mkdir(path.dirname(staleQaLabPackageJson), { recursive: true });
-        await fs.writeFile(
-          staleQaLabPackageJson,
-          JSON.stringify({ name: "@openclaw/qa-lab" }),
-          "utf-8",
-        );
+        await writeGlobalPackageJson(packageRoot, "2026.4.15");
+        await writeCompatSidecars(packageRoot);
+        await writeBundledPluginPackageJson(packageRoot, "qa-lab", "@openclaw/qa-lab");
         await writePackageDistInventory(packageRoot);
 
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);

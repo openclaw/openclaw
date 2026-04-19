@@ -1,10 +1,20 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
+import "./oauth-file-lock-passthrough.test-support.js";
+import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
+  createExpiredOauthStore,
+  removeOAuthTestTempRoot,
+  resolveApiKeyForProfileInTest,
+  resetOAuthProviderRuntimeMocks,
+} from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -13,28 +23,10 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-function resolveApiKeyForProfileInTest(
-  params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
-) {
-  return resolveApiKeyForProfile({ cfg: {}, ...params });
-}
-
 const {
   refreshProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
-} = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
-  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
-}));
-
-vi.mock("../cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
-  resetCliCredentialCachesForTest: () => undefined,
-  writeCodexCliCredentials: () => true,
-}));
+} = getOAuthProviderRuntimeMocks();
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
@@ -49,95 +41,27 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   }),
 }));
 
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
-    formatProviderAuthProfileApiKeyWithPluginMock() ?? params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
-}));
-
-vi.mock("../../infra/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
-
-vi.mock("../../plugin-sdk/file-lock.js", () => ({
-  resetFileLockStateForTest: () => undefined,
-  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
-}));
-
-vi.mock("./doctor.js", () => ({
-  formatAuthDoctorHint: async () => undefined,
-}));
-
-vi.mock("./external-cli-sync.js", () => ({
-  areOAuthCredentialsEquivalent: (a: unknown, b: unknown) => a === b,
-  hasUsableOAuthCredential: (credential: OAuthCredential | undefined, now = Date.now()) =>
-    credential?.type === "oauth" &&
-    credential.access.trim().length > 0 &&
-    Number.isFinite(credential.expires) &&
-    credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
-  readExternalCliBootstrapCredential: () => null,
-  readManagedExternalCliCredential: () => null,
-  resolveExternalCliAuthProfiles: () => [],
-  shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
-}));
-
-function createExpiredOauthStore(params: {
-  profileId: string;
-  provider: string;
-  access?: string;
-  refresh?: string;
-  accountId?: string;
-  email?: string;
-}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      [params.profileId]: {
-        type: "oauth",
-        provider: params.provider,
-        access: params.access ?? "cached-access-token",
-        refresh: params.refresh ?? "refresh-token",
-        expires: Date.now() - 60_000,
-        accountId: params.accountId,
-        email: params.email,
-      } satisfies OAuthCredential,
-    },
-  };
-}
-
 describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let caseIndex = 0;
   let mainAgentDir = "";
 
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-mirror-"));
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-mirror-");
   });
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    refreshProviderOAuthCredentialWithPluginMock.mockReset();
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
-    formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
     externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
     clearRuntimeAuthProfileStoreSnapshots();
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
-    process.env.OPENCLAW_STATE_DIR = caseRoot;
-    mainAgentDir = path.join(caseRoot, "agents", "main", "agent");
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
-    await fs.mkdir(mainAgentDir, { recursive: true });
+    mainAgentDir = await createOAuthMainAgentDir(caseRoot);
     resetOAuthRefreshQueuesForTest();
   });
 
@@ -150,9 +74,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
   });
 
   afterAll(async () => {
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
+    await removeOAuthTestTempRoot(tempRoot);
   });
 
   it("mirrors refreshed credentials into the main store so peers skip refresh", async () => {
@@ -178,7 +100,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -222,7 +144,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     // Main-agent refresh uses undefined agentDir; the mirror path is a no-op
     // (local == main). Just make sure the main store still reflects the refresh
     // and no double-write happens.
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(undefined),
       profileId,
       agentDir: undefined,
@@ -274,7 +196,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
 
     // Refresh mock intentionally left as default-undefined — it should not
     // be called, the pre-refresh adopt wins.
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -337,7 +259,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
       throw new Error("upstream 503 service unavailable");
     });
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,
@@ -380,7 +302,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
         }) as never,
     );
 
-    const result = await resolveApiKeyForProfileInTest({
+    const result = await resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
       store: ensureAuthProfileStore(subAgentDir),
       profileId,
       agentDir: subAgentDir,

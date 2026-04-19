@@ -1,4 +1,5 @@
 import { streamSimple } from "@mariozechner/pi-ai";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 
 type SimpleStream = ReturnType<typeof streamSimple>;
 
@@ -10,21 +11,16 @@ export function wrapStreamObjectEvents(
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {
       const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
+      return createStreamIteratorWrapper({
+        iterator,
+        next: async (streamIterator) => {
+          const result = await streamIterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             await onEvent(result.value as Record<string, unknown>);
           }
           return result;
         },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
+      });
     };
   return stream;
 }

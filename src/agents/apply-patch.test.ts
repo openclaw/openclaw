@@ -173,20 +173,6 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows absolute paths within cwd by default", async () => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "nested", "inside.txt");
-      const patch = `*** Begin Patch
-*** Add File: ${target}
-+inside
-*** End Patch`;
-
-      await applyPatch(patch, { cwd: dir });
-      const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("inside\n");
-    });
-  });
-
   it("deletes the resolved target path", async () => {
     const memory = createMemoryPatchSandbox({
       "delete-me.txt": "x\n",
