@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { hasBinaryMock, runCommandWithTimeoutMock } from "./skills-install.test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills.js";
@@ -79,6 +79,10 @@ describe("skills-install fallback edge cases", () => {
       makeSkillEntry(workspaceDir, "py-tool", {
         kind: "uv",
         package: "example-package",
+      }),
+      makeSkillEntry(workspaceDir, "brew-tool", {
+        kind: "brew",
+        formula: "jq",
       }),
     ]);
     await loadSkillsInstallModulesForTest();
@@ -163,6 +167,164 @@ describe("skills-install fallback edge cases", () => {
 
     // Verify NO curl command was attempted (no auto-install)
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  describe("brew fallback to native package managers on Linux", () => {
+    let platformSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    });
+
+    afterEach(() => {
+      platformSpy.mockRestore();
+    });
+
+    it("falls back to apt-get when brew is missing and apt-get is available (root)", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(0);
+      mockAvailableBinaries(["apt-get"]);
+      // apt-get update (best effort)
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      // apt-get install -y jq
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "installed", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain("apt-get");
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+        ["apt-get", "install", "-y", "jq"],
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+    });
+
+    it("falls back to apk when brew is missing and apk is available (root)", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(0);
+      mockAvailableBinaries(["apk"]);
+      // apk add --no-cache jq
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "installed", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain("apk");
+    });
+
+    it("falls back to dnf when brew is missing and dnf is available (root)", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(0);
+      mockAvailableBinaries(["dnf"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "installed", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain("dnf");
+    });
+
+    it("uses sudo for apt-get when not root", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(1000);
+      mockAvailableBinaries(["apt-get", "sudo"]);
+      // sudo -n true
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      // sudo apt-get update
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      // sudo apt-get install -y jq
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "installed", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+        ["sudo", "apt-get", "install", "-y", "jq"],
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+    });
+
+    it("returns failure when native package manager install fails", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(0);
+      mockAvailableBinaries(["apt-get"]);
+      // apt-get update
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      // apt-get install fails
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "E: Unable to locate package jq",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("Failed to install");
+      expect(result.message).toContain("apt-get");
+    });
+
+    it("falls through to brew-missing error when no native package manager is available", async () => {
+      mockAvailableBinaries([]);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("brew not installed");
+    });
+
+    it("returns failure when sudo is unavailable for non-root", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(1000);
+      mockAvailableBinaries(["apt-get"]);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("sudo is not installed");
+    });
+
+    it("returns failure when sudo requires a password for non-root", async () => {
+      vi.spyOn(process, "getuid").mockReturnValue(1000);
+      mockAvailableBinaries(["apt-get", "sudo"]);
+      // sudo -n true fails
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "sudo: a password is required",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("sudo requires a password");
+    });
   });
 
   it("preserves system uv/python env vars when running uv installs", async () => {

@@ -284,6 +284,104 @@ function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
   return createInstallFailure({ message: `brew not installed — ${hint}` });
 }
 
+type NativePackageManager = {
+  name: string;
+  bin: string;
+  installArgv: (pkg: string) => string[];
+  updateArgv?: () => string[];
+};
+
+const NATIVE_PACKAGE_MANAGERS: NativePackageManager[] = [
+  {
+    name: "apt-get",
+    bin: "apt-get",
+    installArgv: (pkg) => ["apt-get", "install", "-y", pkg],
+    updateArgv: () => ["apt-get", "update", "-qq"],
+  },
+  {
+    name: "apk",
+    bin: "apk",
+    installArgv: (pkg) => ["apk", "add", "--no-cache", pkg],
+  },
+  {
+    name: "dnf",
+    bin: "dnf",
+    installArgv: (pkg) => ["dnf", "install", "-y", pkg],
+  },
+  {
+    name: "yum",
+    bin: "yum",
+    installArgv: (pkg) => ["yum", "install", "-y", pkg],
+  },
+];
+
+async function installBrewFormulaViaNativePackageManager(
+  formula: string,
+  timeoutMs: number,
+): Promise<SkillInstallResult | undefined> {
+  const deps = getSkillsInstallDeps();
+
+  const pm = NATIVE_PACKAGE_MANAGERS.find((m) => deps.hasBinary(m.bin));
+  if (!pm) {
+    return undefined;
+  }
+
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+
+  if (isRoot) {
+    if (pm.updateArgv) {
+      await runBestEffortCommand(pm.updateArgv(), { timeoutMs });
+    }
+    const result = await runCommandSafely(pm.installArgv(formula), { timeoutMs });
+    if (result.code === 0) {
+      return {
+        ok: true,
+        message: `Installed "${formula}" via ${pm.name}`,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        code: result.code,
+      };
+    }
+    return createInstallFailure({
+      message: `Failed to install "${formula}" via ${pm.name}. Install manually using your system package manager.`,
+      ...result,
+    });
+  }
+
+  if (!deps.hasBinary("sudo")) {
+    return createInstallFailure({
+      message: `${pm.name} is available but sudo is not installed. Install "${formula}" manually.`,
+    });
+  }
+
+  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], { timeoutMs: 5_000 });
+  if (sudoCheck.code !== 0) {
+    return createInstallFailure({
+      message: `${pm.name} is available but sudo requires a password. Install "${formula}" manually.`,
+      ...sudoCheck,
+    });
+  }
+
+  if (pm.updateArgv) {
+    await runBestEffortCommand(["sudo", ...pm.updateArgv()], { timeoutMs });
+  }
+  const result = await runCommandSafely(["sudo", ...pm.installArgv(formula)], { timeoutMs });
+  if (result.code === 0) {
+    return {
+      ok: true,
+      message: `Installed "${formula}" via sudo ${pm.name}`,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      code: result.code,
+    };
+  }
+
+  return createInstallFailure({
+    message: `Failed to install "${formula}" via ${pm.name}. Install manually using your system package manager.`,
+    ...result,
+  });
+}
+
 async function ensureUvInstalled(params: {
   spec: SkillInstallSpec;
   brewExe?: string;
@@ -505,6 +603,12 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    if (process.platform === "linux" && spec.formula) {
+      const nativeResult = await installBrewFormulaViaNativePackageManager(spec.formula, timeoutMs);
+      if (nativeResult) {
+        return withWarnings(nativeResult, warnings);
+      }
+    }
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
