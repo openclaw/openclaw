@@ -69,6 +69,18 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
+  it("sets maxRequestConcurrency to 1 by default for write client", () => {
+    const options = resolveSlackWriteClientOptions();
+
+    expect(options.maxRequestConcurrency).toBe(1);
+  });
+
+  it("allows overriding maxRequestConcurrency in write client options", () => {
+    const options = resolveSlackWriteClientOptions({ maxRequestConcurrency: 5 });
+
+    expect(options.maxRequestConcurrency).toBe(5);
+  });
+
   it("passes no-retry config into the write client by default", () => {
     createSlackWriteClient("xoxb-test", { timeout: 4321 });
 
