@@ -5,6 +5,7 @@ import {
 } from "./pi-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 
 function makeToolRuntime(
   params: {
@@ -168,5 +169,18 @@ describe("createBundleMcpToolRuntime", () => {
       "multi__mu",
       "multi__zeta",
     ]);
+  });
+
+  it("attaches plugin metadata to materialized MCP tools", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime(),
+    });
+
+    expect(runtime.tools).toHaveLength(1);
+    const tool = runtime.tools[0];
+    const meta = getPluginToolMeta(tool as any);
+    expect(meta).toBeDefined();
+    expect(meta?.pluginId).toBe("bundle-mcp");
+    expect(meta?.optional).toBe(false);
   });
 });

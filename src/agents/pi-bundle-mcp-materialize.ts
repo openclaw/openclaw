@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -96,7 +97,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       );
     }
     reservedNames.add(normalizeLowercaseStringOrEmpty(safeToolName));
-    tools.push({
+    const agentTool = {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
@@ -109,7 +110,12 @@ export async function materializeBundleMcpToolsForRun(params: {
           result,
         });
       },
+    };
+    setPluginToolMeta(agentTool as any, {
+      pluginId: "bundle-mcp",
+      optional: false,
     });
+    tools.push(agentTool);
   }
 
   // Sort tools deterministically by name so the tools block in API requests is stable across
