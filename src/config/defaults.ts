@@ -11,6 +11,19 @@ type WarnState = { warned: boolean };
 
 let defaultWarnState: WarnState = { warned: false };
 
+/**
+ * Default debounce window (ms) for batching rapid inbound messages from the
+ * same sender when the user has not explicitly configured
+ * `messages.inbound.debounceMs`.
+ *
+ * Rationale: without a non-zero default, each inbound message immediately
+ * triggers a separate agent turn, so a user sending two messages in quick
+ * succession gets two independent replies that cannot be merged. A 2s window
+ * coalesces rapid bursts without adding perceptible latency to single
+ * messages. Users can still override via `openclaw.json`.
+ */
+export const DEFAULT_INBOUND_DEBOUNCE_MS = 2000;
+
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-4-6",
@@ -89,12 +102,21 @@ export type SessionDefaultsOptions = {
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
   const hasAckScope = messages?.ackReactionScope !== undefined;
-  if (hasAckScope) {
+  const hasInboundDebounceMs = messages?.inbound?.debounceMs !== undefined;
+  if (hasAckScope && hasInboundDebounceMs) {
     return cfg;
   }
 
   const nextMessages = messages ? { ...messages } : {};
-  nextMessages.ackReactionScope = "group-mentions";
+  if (!hasAckScope) {
+    nextMessages.ackReactionScope = "group-mentions";
+  }
+  if (!hasInboundDebounceMs) {
+    nextMessages.inbound = {
+      ...messages?.inbound,
+      debounceMs: DEFAULT_INBOUND_DEBOUNCE_MS,
+    };
+  }
   return {
     ...cfg,
     messages: nextMessages,

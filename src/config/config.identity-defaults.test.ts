@@ -51,6 +51,7 @@ describe("config identity defaults", () => {
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
       expect(cfg.messages?.ackReaction).toBeUndefined();
       expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+      expect(cfg.messages?.inbound?.debounceMs).toBe(2000);
     });
   });
 
@@ -60,12 +61,33 @@ describe("config identity defaults", () => {
 
       expect(cfg.messages?.ackReaction).toBeUndefined();
       expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+      expect(cfg.messages?.inbound?.debounceMs).toBe(2000);
       expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
       expect(cfg.agents?.list).toBeUndefined();
       expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
       expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
       expect(cfg.session).toBeUndefined();
+    });
+  });
+
+  it("preserves explicit messages.inbound.debounceMs override", async () => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
+      const cfg = await writeAndLoadConfig(home, {
+        messages: { inbound: { debounceMs: 500 } },
+      });
+
+      expect(cfg.messages?.inbound?.debounceMs).toBe(500);
+    });
+  });
+
+  it("respects explicit messages.inbound.debounceMs=0 to disable debouncing", async () => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
+      const cfg = await writeAndLoadConfig(home, {
+        messages: { inbound: { debounceMs: 0 } },
+      });
+
+      expect(cfg.messages?.inbound?.debounceMs).toBe(0);
     });
   });
 
