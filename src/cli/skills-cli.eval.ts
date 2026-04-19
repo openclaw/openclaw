@@ -119,7 +119,7 @@ function loadTestCases(skillPath: string): TestCase[] {
 async function runTestCase(testCase: TestCase): Promise<TestResult> {
   const startTime = Date.now();
 
-  if (testCase.context && Object.keys(testCase.context).length > 0) {
+  if (testCase.context && Object.keys(testCase.context).length > 0 && !opts.json) {
     defaultRuntime.log(theme.warn(`Test "${testCase.name}": context field is not yet applied (LLM integration pending)`));
   }
 
@@ -371,7 +371,7 @@ export async function analyzeSkillTrigger(
     try {
       const fm = yaml.parse(frontmatterMatch[1]);
       if (fm && typeof fm === "object" && !Array.isArray(fm)) {
-        description = fm.description || "No description found";
+        description = typeof fm.description === "string" ? fm.description : "No description found";
       }
     } catch {
       // Fall back to regex for malformed frontmatter
