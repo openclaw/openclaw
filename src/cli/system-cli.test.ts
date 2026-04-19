@@ -61,6 +61,46 @@ describe("system-cli", () => {
     expect(runtimeLogs).toEqual([JSON.stringify({ id: "wake-1" }, null, 2)]);
   });
 
+  it("passes --agent-id to gateway params", async () => {
+    await runCli(["system", "event", "--text", "hello", "--agent-id", "my-agent"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "wake",
+      expect.objectContaining({ text: "hello", agentId: "my-agent" }),
+      { mode: "next-heartbeat", text: "hello", agentId: "my-agent" },
+      { expectFinal: false },
+    );
+  });
+
+  it("passes --session-key to gateway params", async () => {
+    await runCli([
+      "system",
+      "event",
+      "--text",
+      "hello",
+      "--agent-id",
+      "coding",
+      "--session-key",
+      "agent:coding:discord:direct:123",
+    ]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "wake",
+      expect.objectContaining({
+        text: "hello",
+        agentId: "coding",
+        sessionKey: "agent:coding:discord:direct:123",
+      }),
+      {
+        mode: "next-heartbeat",
+        text: "hello",
+        agentId: "coding",
+        sessionKey: "agent:coding:discord:direct:123",
+      },
+      { expectFinal: false },
+    );
+  });
+
   it("handles invalid wake mode as runtime error", async () => {
     await runCli(["system", "event", "--text", "hello", "--mode", "later"]);
 
