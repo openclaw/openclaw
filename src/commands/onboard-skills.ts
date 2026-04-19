@@ -109,7 +109,7 @@ export async function setupSkills(
       .filter((item): item is (typeof installable)[number] => Boolean(item));
 
     const needsBrewPrompt =
-      process.platform !== "win32" &&
+      process.platform !== "win32" && process.platform !== "freebsd" &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
       !(await detectBinary("brew"));
 
