@@ -70,7 +70,25 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
    - Linux: `ss -ltnup` (or `ss -ltnp` if `-u` unsupported).
    - macOS: `lsof -nP -iTCP -sTCP:LISTEN`.
 3. Firewall status:
-   - Linux: `ufw status`, `firewall-cmd --state`, `nft list ruleset` (pick what is installed).
+   - Linux:
+     - Firewall binaries live in `sbin` paths that are typically absent from a non-root user's `PATH` (Debian/Ubuntu default), so a bare `ufw status` can print "command not found" even when the firewall is installed and active. Probe with an explicit safe `PATH`, and corroborate with the on-disk config before concluding the firewall is absent. A single fallback chain:
+       ```bash
+       PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH" \
+         sh -c '
+           if command -v ufw >/dev/null 2>&1; then
+             sudo -n ufw status verbose 2>/dev/null || ufw status verbose 2>/dev/null || echo "ufw: installed, status requires sudo"
+           elif [ -x /usr/sbin/ufw ] || [ -x /sbin/ufw ] || [ -x /usr/local/sbin/ufw ]; then
+             echo "ufw: installed (binary not on PATH)"
+             [ -r /etc/ufw/ufw.conf ] && grep -E "^ENABLED=" /etc/ufw/ufw.conf
+           elif command -v firewall-cmd >/dev/null 2>&1; then
+             firewall-cmd --state 2>/dev/null; firewall-cmd --list-all 2>/dev/null
+           elif command -v nft >/dev/null 2>&1; then
+             sudo -n nft list ruleset 2>/dev/null || nft list ruleset 2>/dev/null || echo "nft: installed, ruleset requires sudo"
+           else
+             echo "no supported linux firewall detected"
+           fi'
+       ```
+     - Report "installed (not on PATH)" or "installed, status requires sudo" rather than "not found" when the binary is present but status cannot be read — a missing `PATH` entry or missing sudo capability is not the same as the firewall being absent.
    - macOS: `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate` and `pfctl -s info`.
 4. Backups (macOS): `tmutil status` (if Time Machine is used).
 
