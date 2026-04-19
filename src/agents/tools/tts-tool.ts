@@ -14,6 +14,20 @@ const TtsToolSchema = Type.Object({
   ),
 });
 
+/**
+ * Defuse reply-directive tokens inside spoken transcripts before they flow
+ * through tool-result content. When verbose tool output is enabled,
+ * `emitToolOutput` passes the content through `parseReplyDirectives`
+ * (`src/media/parse.ts` / `src/utils/directive-tags.ts`), and unfiltered
+ * `MEDIA:` or `[[audio_as_voice]]`-shaped tokens in the transcript would be
+ * rewritten into actual media URLs and audio-as-voice flags. Insert a
+ * zero-width word joiner so the regex patterns stop matching without
+ * changing the visible text.
+ */
+function sanitizeTranscriptForToolContent(text: string): string {
+  return text.replace(/^([ \t]*)MEDIA:/gim, "$1\u2060MEDIA:").replace(/\[\[/g, "[\u2060[");
+}
+
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
@@ -36,8 +50,13 @@ export function createTtsTool(opts?: {
       });
 
       if (result.success && result.audioPath) {
+        // Preserve the spoken text in the tool result content so the session
+        // transcript retains what was said across turns. The audio itself is
+        // still delivered via details.media. Sanitize first so a crafted
+        // utterance cannot inject reply directives when the tool output is
+        // rendered in verbose mode.
         return {
-          content: [{ type: "text", text: "Generated audio reply." }],
+          content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
           details: {
             audioPath: result.audioPath,
             provider: result.provider,
