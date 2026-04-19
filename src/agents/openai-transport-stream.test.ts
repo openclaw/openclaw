@@ -1,5 +1,5 @@
 import type { Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
@@ -2016,5 +2016,303 @@ describe("openai transport stream", () => {
       { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
       { type: "thinking", thinking: " Still thinking.", thinkingSignature: "reasoning_details" },
     ]);
+  });
+});
+
+describe("buildOpenAIResponsesParams with session (llmStateful)", () => {
+  const createMockModel = (providerOptions?: Record<string, unknown>): Model<"openai-responses"> =>
+    ({
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      ...(providerOptions ? { providerOptions } : {}),
+    }) as Model<"openai-responses">;
+
+  const createMockContext = () => ({
+    systemPrompt: "You are helpful",
+    messages: [
+      { role: "user", content: "Hello", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hi" }],
+        model: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    ],
+  });
+
+  it("adds previous_response_id when session is provided", () => {
+    const model = createMockModel();
+    const context = createMockContext();
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      { previousResponseId: "resp_abc123", lastContextLength: 1, systemPromptDigest: null },
+    ) as { previous_response_id?: string; store?: boolean };
+
+    expect(params.previous_response_id).toBe("resp_abc123");
+    expect(params.store).toBe(true);
+  });
+
+  it("does not add previous_response_id when session is not provided", () => {
+    const model = createMockModel();
+    const context = createMockContext();
+
+    const params = buildOpenAIResponsesParams(model, context as never, undefined, undefined) as {
+      previous_response_id?: string;
+      store?: boolean;
+    };
+
+    expect(params.previous_response_id).toBeUndefined();
+  });
+
+  it("sets store=true when session is provided", () => {
+    const model = createMockModel();
+    const context = createMockContext();
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      { previousResponseId: "resp_abc123", lastContextLength: 1, systemPromptDigest: null },
+    ) as { store?: boolean };
+
+    expect(params.store).toBe(true);
+  });
+
+  it("passes providerOptions to enable llmStateful mode", () => {
+    const model = createMockModel({ llmStateful: true });
+    const context = createMockContext();
+
+    // When providerOptions has llmStateful, it should work
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      { previousResponseId: "resp_abc123", lastContextLength: 1, systemPromptDigest: null },
+    ) as { previous_response_id?: string; store?: boolean };
+
+    expect(params.previous_response_id).toBe("resp_abc123");
+    expect(params.store).toBe(true);
+  });
+
+  it("omits previous_response_id on restart turn (no new messages)", () => {
+    const model = createMockModel();
+    const context = createMockContext(); // 2 messages total
+
+    // lastContextLength === messages.length means no new messages → restart path
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      { previousResponseId: "resp_abc123", lastContextLength: 2, systemPromptDigest: null },
+    ) as { previous_response_id?: string };
+
+    expect(params.previous_response_id).toBeUndefined();
+  });
+
+  it("omits previous_response_id on initial turn (no previousResponseId)", () => {
+    const model = createMockModel();
+    const context = createMockContext();
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      { previousResponseId: null, lastContextLength: 0, systemPromptDigest: null },
+    ) as { previous_response_id?: string };
+
+    expect(params.previous_response_id).toBeUndefined();
+  });
+
+  it("omits previous_response_id when system prompt changed", () => {
+    const model = createMockModel();
+    const context = createMockContext(); // systemPrompt: "You are helpful"
+
+    // digest was computed for a different prompt → systemPromptChanged → restart
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      {
+        previousResponseId: "resp_abc123",
+        lastContextLength: 1,
+        systemPromptDigest: "stale_digest",
+      },
+    ) as { previous_response_id?: string };
+
+    expect(params.previous_response_id).toBeUndefined();
+  });
+
+  it("does not set store=true when model compat disables store", () => {
+    const model = {
+      ...createMockModel(),
+      compat: { supportsStore: false },
+    } as never;
+    const context = createMockContext();
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      context as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+      { previousResponseId: "resp_abc123", lastContextLength: 1, systemPromptDigest: null },
+    ) as { store?: boolean };
+
+    expect(params.store).toBeUndefined();
+  });
+});
+
+describe("llmStateful session isolation (getOrCreateLlmSession)", () => {
+  const { getOrCreateLlmSession, llmSessionRegistry } = __testing;
+  const TTL = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    llmSessionRegistry.clear();
+  });
+
+  it("same params return the same session object", () => {
+    const a = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+    const b = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+    expect(a).toBe(b);
+  });
+
+  it("different modelId yields an independent session", () => {
+    const a = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+    a.previousResponseId = "resp_from_gpt54";
+
+    const b = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4-mini",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+
+    expect(b).not.toBe(a);
+    expect(b.previousResponseId).toBeNull();
+  });
+
+  it("different provider yields an independent session", () => {
+    const a = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+    a.previousResponseId = "resp_openai";
+
+    const b = getOrCreateLlmSession(
+      "sid",
+      "azure",
+      "gpt-5.4",
+      "openai-responses",
+      "https://my-az.openai.azure.com",
+      TTL,
+    );
+
+    expect(b).not.toBe(a);
+    expect(b.previousResponseId).toBeNull();
+  });
+
+  it("different sessionId yields an independent session", () => {
+    const a = getOrCreateLlmSession(
+      "sid-1",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+    a.previousResponseId = "resp_sid1";
+
+    const b = getOrCreateLlmSession(
+      "sid-2",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      TTL,
+    );
+
+    expect(b).not.toBe(a);
+    expect(b.previousResponseId).toBeNull();
+  });
+
+  it("expired session is replaced with a fresh one", () => {
+    const shortTtl = 1;
+    const a = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      shortTtl,
+    );
+    a.previousResponseId = "resp_old";
+    // Force expiry by backdating lastAccessedAt beyond TTL
+    a.lastAccessedAt = Date.now() - 1000;
+
+    const b = getOrCreateLlmSession(
+      "sid",
+      "openai",
+      "gpt-5.4",
+      "openai-responses",
+      "https://api.openai.com/v1",
+      shortTtl,
+    );
+
+    expect(b).not.toBe(a);
+    expect(b.previousResponseId).toBeNull();
   });
 });

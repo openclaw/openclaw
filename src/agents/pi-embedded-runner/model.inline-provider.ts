@@ -23,6 +23,7 @@ export type InlineProviderConfig = {
   headers?: unknown;
   authHeader?: boolean;
   request?: ModelProviderConfig["request"];
+  providerOptions?: Record<string, unknown>;
 };
 
 export function normalizeResolvedTransportApi(
@@ -119,6 +120,16 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
+export function withProviderOptions<TModel extends object>(
+  model: TModel,
+  providerOptions: Record<string, unknown> | undefined,
+): TModel & { providerOptions?: Record<string, unknown> } {
+  if (!providerOptions || Object.keys(providerOptions).length === 0) {
+    return model as TModel & { providerOptions?: Record<string, unknown> };
+  }
+  return { ...model, providerOptions };
+}
+
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
@@ -150,21 +161,24 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderRequestTransport(
-        {
-          ...model,
-          input: resolveProviderModelInput({
+      return withProviderOptions(
+        attachModelProviderRequestTransport(
+          {
+            ...model,
+            input: resolveProviderModelInput({
+              provider: trimmed,
+              modelId: model.id,
+              modelName: model.name,
+              input: model.input,
+            }),
             provider: trimmed,
-            modelId: model.id,
-            modelName: model.name,
-            input: model.input,
-          }),
-          provider: trimmed,
-          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-          api: requestConfig.api ?? model.api,
-          headers: requestConfig.headers,
-        },
-        providerRequest,
+            baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+            api: requestConfig.api ?? model.api,
+            headers: requestConfig.headers,
+          },
+          providerRequest,
+        ),
+        entry?.providerOptions,
       );
     });
   });

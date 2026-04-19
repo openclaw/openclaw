@@ -124,5 +124,26 @@ export function resolveEmbeddedAgentStreamFn(params: {
     }
   }
 
+  const providerOptions = (params.model as { providerOptions?: Record<string, unknown> })
+    .providerOptions;
+  if (providerOptions && Object.keys(providerOptions).length > 0) {
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    if (boundaryAwareStreamFn) {
+      if (params.authStorage || params.resolvedApiKey) {
+        const { authStorage, model, resolvedApiKey } = params;
+        return async (m, context, options) => {
+          const apiKey = await resolveEmbeddedAgentApiKey({
+            provider: model.provider,
+            resolvedApiKey,
+            authStorage,
+          });
+          return boundaryAwareStreamFn(m, context, {
+            ...options,
+            apiKey: apiKey ?? options?.apiKey,
+          });
+        };
+      }
+    }
+  }
   return currentStreamFn;
 }

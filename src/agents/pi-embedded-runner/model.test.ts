@@ -1509,4 +1509,34 @@ describe("resolveModel", () => {
       baseUrl: "https://api.x.ai/v1",
     });
   });
+
+  it("propagates providerOptions from provider config to registry-resolved model", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom-openai",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...makeModel("gpt-5.4"),
+        provider: "custom-openai",
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "custom-openai": {
+            baseUrl: "https://api.openai.com/v1",
+            providerOptions: { llmStateful: true },
+            models: [{ ...makeModel("gpt-5.4"), provider: "custom-openai" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(
+      (result.model as unknown as { providerOptions?: Record<string, unknown> }).providerOptions,
+    ).toEqual({ llmStateful: true });
+  });
 });

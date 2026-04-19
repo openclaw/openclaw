@@ -15,9 +15,7 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
-  ResponseFunctionCallOutputItemList,
   ResponseInput,
-  ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
@@ -33,6 +31,7 @@ import {
   type OpenAIApiReasoningEffort,
   type OpenAIReasoningEffort,
 } from "./openai-reasoning-effort.js";
+import { planResponsesTurnInput, shortHash } from "./openai-responses-message-conversion.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -44,10 +43,72 @@ import {
 } from "./openai-tool-schema.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
-import { transformTransportMessages } from "./transport-message-transform.js";
-import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+import { mergeTransportMetadata } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+
+interface LlmSession {
+  previousResponseId: string | null;
+  lastContextLength: number;
+  systemPromptDigest: string | null;
+  lastAccessedAt: number;
+  ttlMs: number;
+}
+
+const LLM_SESSION_TTL_MS_DEFAULT = 60 * 60 * 1000;
+const LLM_SESSION_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const llmSessionRegistry = new Map<string, LlmSession>();
+
+function evictExpiredLlmSessions(now: number): void {
+  for (const [key, session] of llmSessionRegistry) {
+    if (now - session.lastAccessedAt > session.ttlMs) {
+      llmSessionRegistry.delete(key);
+    }
+  }
+}
+
+const llmSessionSweepInterval = setInterval(
+  () => evictExpiredLlmSessions(Date.now()),
+  LLM_SESSION_SWEEP_INTERVAL_MS,
+);
+if (llmSessionSweepInterval.unref) {
+  llmSessionSweepInterval.unref();
+}
+
+function makeLlmSessionKey(
+  sessionId: string,
+  provider: string,
+  modelId: string,
+  api: string,
+  baseUrl: string,
+): string {
+  return `${sessionId}:${provider}:${modelId}:${api}:${baseUrl}`;
+}
+
+function getOrCreateLlmSession(
+  sessionId: string,
+  provider: string,
+  modelId: string,
+  api: string,
+  baseUrl: string,
+  ttlMs: number,
+): LlmSession {
+  const now = Date.now();
+  const key = makeLlmSessionKey(sessionId, provider, modelId, api, baseUrl);
+  let session = llmSessionRegistry.get(key);
+
+  if (!session || now - session.lastAccessedAt > session.ttlMs) {
+    session = {
+      previousResponseId: null,
+      lastContextLength: 0,
+      systemPromptDigest: null,
+      lastAccessedAt: now,
+      ttlMs,
+    };
+    llmSessionRegistry.set(key, session);
+  }
+  return session;
+}
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -108,6 +169,19 @@ type MutableAssistantOutput = {
 
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
+function getProviderOptions(model: Model<Api>): Record<string, unknown> | undefined {
+  return (model as { providerOptions?: Record<string, unknown> }).providerOptions;
+}
+
+function resolveProviderLlmStateful(model: Model<Api>): boolean {
+  return getProviderOptions(model)?.llmStateful === true;
+}
+
+function resolveProviderLlmStatefulTtlMs(model: Model<Api>): number {
+  const ttlMs = getProviderOptions(model)?.llmStatefulTtlMs;
+  return typeof ttlMs === "number" && ttlMs > 0 ? ttlMs : LLM_SESSION_TTL_MS_DEFAULT;
+}
+
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
@@ -162,189 +236,8 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
   return env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
 }
 
-function shortHash(value: string): string {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
-}
-
-function parseTextSignature(
-  signature: string | undefined,
-): { id: string; phase?: "commentary" | "final_answer" } | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  if (signature.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        return parsed.phase === "commentary" || parsed.phase === "final_answer"
-          ? { id: parsed.id, phase: parsed.phase }
-          : { id: parsed.id };
-      }
-    } catch {
-      // Keep legacy plain-string behavior below.
-    }
-  }
-  return { id: signature };
-}
-
-function convertResponsesMessages(
-  model: Model<Api>,
-  context: Context,
-  allowedToolCallProviders: Set<string>,
-  options?: { includeSystemPrompt?: boolean; supportsDeveloperRole?: boolean },
-): ResponseInput {
-  const messages: ResponseInput = [];
-  const normalizeIdPart = (part: string) => {
-    const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
-    return normalized.replace(/_+$/, "");
-  };
-  const buildForeignResponsesItemId = (itemId: string) => {
-    const normalized = `fc_${shortHash(itemId)}`;
-    return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
-  };
-  const normalizeToolCallId = (
-    id: string,
-    _targetModel: Model<Api>,
-    source: { provider: string; api: Api },
-  ) => {
-    if (!allowedToolCallProviders.has(model.provider)) {
-      return normalizeIdPart(id);
-    }
-    if (!id.includes("|")) {
-      return normalizeIdPart(id);
-    }
-    const [callId, itemId] = id.split("|");
-    const normalizedCallId = normalizeIdPart(callId);
-    const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
-    let normalizedItemId = isForeignToolCall
-      ? buildForeignResponsesItemId(itemId)
-      : normalizeIdPart(itemId);
-    if (!normalizedItemId.startsWith("fc_")) {
-      normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
-    }
-    return `${normalizedCallId}|${normalizedItemId}`;
-  };
-  const transformedMessages = transformTransportMessages(
-    context.messages,
-    model,
-    normalizeToolCallId,
-  );
-  const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-  if (includeSystemPrompt && context.systemPrompt) {
-    messages.push({
-      role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
-    });
-  }
-  let msgIndex = 0;
-  for (const msg of transformedMessages) {
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        messages.push({
-          role: "user",
-          content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-        });
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
-        if (content.length > 0) {
-          messages.push({ role: "user", content });
-        }
-      }
-    } else if (msg.role === "assistant") {
-      const output: ResponseInput = [];
-      const isDifferentModel =
-        msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
-      for (const block of msg.content) {
-        if (block.type === "thinking") {
-          if (block.thinkingSignature) {
-            output.push(JSON.parse(block.thinkingSignature));
-          }
-        } else if (block.type === "text") {
-          let msgId = parseTextSignature(block.textSignature)?.id ?? `msg_${msgIndex}`;
-          if (msgId.length > 64) {
-            msgId = `msg_${shortHash(msgId)}`;
-          }
-          output.push({
-            type: "message",
-            role: "assistant",
-            content: [
-              {
-                type: "output_text",
-                text: sanitizeTransportPayloadText(block.text),
-                annotations: [],
-              },
-            ],
-            status: "completed",
-            id: msgId,
-            phase: parseTextSignature(block.textSignature)?.phase,
-          });
-        } else if (block.type === "toolCall") {
-          const [callId, itemIdRaw] = block.id.split("|");
-          const itemId = isDifferentModel && itemIdRaw?.startsWith("fc_") ? undefined : itemIdRaw;
-          output.push({
-            type: "function_call",
-            id: itemId,
-            call_id: callId,
-            name: block.name,
-            arguments:
-              typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
-          });
-        }
-      }
-      if (output.length > 0) {
-        messages.push(...output);
-      }
-    } else if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
-      const hasImages = msg.content.some((item) => item.type === "image");
-      const [callId] = msg.toolCallId.split("|");
-      messages.push({
-        type: "function_call_output",
-        call_id: callId,
-        output:
-          hasImages && model.input.includes("image")
-            ? ([
-                ...(textResult
-                  ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
-                  : []),
-                ...msg.content
-                  .filter((item) => item.type === "image")
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
-              ] as ResponseFunctionCallOutputItemList)
-            : sanitizeTransportPayloadText(textResult || "(see attached image)"),
-      });
-    }
-    msgIndex += 1;
-  }
-  return messages;
 }
 
 function convertResponsesTools(
@@ -672,6 +565,22 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         stopReason: "stop",
         timestamp: Date.now(),
       };
+
+      const llmStateful = resolveProviderLlmStateful(model);
+
+      let session: LlmSession | null = null;
+      if (llmStateful && options?.sessionId) {
+        session = getOrCreateLlmSession(
+          options.sessionId,
+          model.provider,
+          model.id,
+          model.api,
+          model.baseUrl ?? "",
+          resolveProviderLlmStatefulTtlMs(model),
+        );
+      }
+      const capturedContextLength = context.messages.length;
+
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const turnState = resolveProviderTransportTurnState(model, {
@@ -692,6 +601,13 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           context,
           options as OpenAIResponsesOptions,
           turnState?.metadata,
+          session
+            ? {
+                previousResponseId: session.previousResponseId,
+                lastContextLength: session.lastContextLength,
+                systemPromptDigest: session.systemPromptDigest,
+              }
+            : undefined,
         );
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
@@ -713,11 +629,26 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
         }
+
+        if (session && output.responseId) {
+          session.previousResponseId = output.responseId;
+          // +1 accounts for the assistant reply that will be appended to context
+          // after this turn completes, so the next incremental slice starts after it.
+          session.lastContextLength = capturedContextLength + 1;
+          session.systemPromptDigest = shortHash(context.systemPrompt ?? "");
+          // Refresh TTL only on success so failed/aborted requests do not extend session lifetime.
+          session.lastAccessedAt = Date.now();
+        }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        if (session) {
+          session.previousResponseId = null;
+          session.lastContextLength = 0;
+          session.systemPromptDigest = null;
+        }
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -773,24 +704,36 @@ export function buildOpenAIResponsesParams(
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
+  session?: {
+    previousResponseId: string | null;
+    lastContextLength: number;
+    systemPromptDigest: string | null;
+  },
 ) {
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
-  const messages = convertResponsesMessages(
-    model,
+
+  const turnInput = planResponsesTurnInput({
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole },
-  );
-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+    model,
+    session,
+    options: { supportsDeveloperRole },
+  });
+
+  const messages = turnInput.inputItems;
+  const hasSession = !!session;
+
+  const cacheRetention = !hasSession ? resolveCacheRetention(options?.cacheRetention) : "none";
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
+    storeMode: hasSession ? "preserve" : "disable",
   });
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
+    previous_response_id:
+      turnInput.type === "incremental" ? (session?.previousResponseId ?? undefined) : undefined,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(metadata ? { metadata } : {}),
@@ -833,6 +776,9 @@ export function buildOpenAIResponsesParams(
     }
   }
   applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
+  if (hasSession && !payloadPolicy.shouldStripStore) {
+    params.store = true;
+  }
   return params;
 }
 
@@ -952,7 +898,7 @@ function buildAzureOpenAIResponsesParams(
   deploymentName: string,
   metadata?: Record<string, string>,
 ) {
-  const params = buildOpenAIResponsesParams(model, context, options, metadata);
+  const params = buildOpenAIResponsesParams(model, context, options, metadata, undefined);
   params.model = deploymentName;
   delete params.store;
   return params;
@@ -1310,6 +1256,7 @@ type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
+  previous_response_id?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
@@ -1470,4 +1417,6 @@ function mapStopReason(reason: string | null) {
 
 export const __testing = {
   processOpenAICompletionsStream,
+  getOrCreateLlmSession,
+  llmSessionRegistry,
 };

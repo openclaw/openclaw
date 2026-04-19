@@ -361,6 +361,7 @@ function applyConfiguredProviderOverrides(params: {
       maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
       compat: configuredModel?.compat ?? discoveredModel.compat,
+      providerOptions: providerConfig.providerOptions,
     },
     providerRequest,
   );

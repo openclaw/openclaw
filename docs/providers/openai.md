@@ -524,6 +524,41 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
     Azure OpenAI uses native transport and compat behavior but does not receive the hidden attribution headers.
 
   </Accordion>
+
+  <Accordion title="Stateful incremental transmission (llmStateful)">
+    When `providerOptions.llmStateful` is `true`, OpenClaw enables incremental input for the OpenAI Responses API.
+    Instead of resending the full conversation history on every turn, it attaches `previous_response_id` and sends only the new messages.
+    OpenAI stores the prior response server-side (`store: true`), so subsequent turns reference the existing context chain.
+
+    **Cost and latency impact**: input tokens per turn drop to the delta since the last turn.
+    For long multi-turn conversations this can be significant.
+    The tradeoff is that OpenAI retains the conversation on its servers for the lifetime of the response chain.
+
+    ```yaml
+    models:
+      providers:
+        openai:
+          providerOptions:
+            llmStateful: true          # enable incremental transmission
+            llmStatefulTtlMs: 3600000  # session TTL in ms (default: 1 hour)
+    ```
+
+    **Session semantics**:
+    - Sessions are keyed by `sessionId + provider + modelId + api + baseUrl`.
+      Switching models, API variants, or endpoints within the same provider always starts a fresh session.
+    - On the first turn (or after a session reset), the full context is sent with `stripAssistantIds: true`
+      so historical assistant message IDs do not collide with server-generated IDs.
+    - If the system prompt changes between turns, OpenClaw detects the change via a digest and forces a
+      full-context restart so the model always receives the updated instructions.
+    - If a turn fails, the session chain is reset so the next turn recovers with a full-context send
+      instead of repeatedly retrying a stale `previous_response_id`.
+    - Sessions idle longer than `llmStatefulTtlMs` are evicted automatically.
+
+    **Privacy note**: with `llmStateful: true`, OpenAI stores your conversation turns server-side.
+    Disable this feature if your deployment has data-residency or retention requirements that prohibit
+    server-side storage.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Related

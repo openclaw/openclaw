@@ -6,4 +6,5 @@ import type { Api, Model } from "@mariozechner/pi-ai";
  */
 export type ProviderRuntimeModel = Model<Api> & {
   contextTokens?: number;
+  providerOptions?: Record<string, unknown>;
 };

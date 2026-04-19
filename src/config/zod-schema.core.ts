@@ -339,6 +339,7 @@ export const ModelProviderSchema = z
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema),
+    providerOptions: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
