@@ -8,6 +8,13 @@ type SystemdUnavailableHintOptions = {
   wsl?: boolean;
   kind?: SystemdUnavailableKind | null;
   container?: boolean;
+  /**
+   * When true, the status pipeline already observed healthy OpenClaw units
+   * on the *system* bus (e.g. on headless hosts). In that case the "user
+   * bus unavailable" message is misleading — runtime is fine — so we skip
+   * the generic "systemd user services are unavailable" guidance.
+   */
+  systemServicesDetected?: boolean;
 };
 
 export function isSystemdUnavailableDetail(detail?: string): boolean {
@@ -24,6 +31,11 @@ function renderSystemdHeadlessServerHints(): string[] {
 export function renderSystemdUnavailableHints(
   options: SystemdUnavailableHintOptions = {},
 ): string[] {
+  if (options.systemServicesDetected) {
+    // Runtime is fine via system-level systemd units; don't tell the user
+    // the user bus is "required".
+    return [];
+  }
   if (options.wsl) {
     return [
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
@@ -32,7 +44,7 @@ export function renderSystemdUnavailableHints(
     ];
   }
   return [
-    "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
+    "systemd user services are unavailable; install/enable systemd, run the gateway under system-level systemd, or run it under your own supervisor.",
     ...(options.container || options.kind !== "user_bus_unavailable"
       ? []
       : renderSystemdHeadlessServerHints()),
