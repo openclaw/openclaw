@@ -692,7 +692,7 @@ async function wakeSlackReplySession(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId,
-    parentSessionKey: threadId ? route.sessionKey : undefined,
+    parentSessionKey: threadId && ctx.threadInheritParent ? route.sessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
   const parentSessionKey = threadKeys.parentSessionKey;

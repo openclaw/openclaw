@@ -104,6 +104,7 @@ function createContext(overrides?: {
   allowFrom?: string[];
   allowNameMatching?: boolean;
   channelsConfig?: Record<string, { users?: string[] }>;
+  threadInheritParent?: boolean;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   isChannelAllowed?: (params: {
     channelId?: string;
@@ -177,6 +178,7 @@ function createContext(overrides?: {
     channelsConfig: overrides?.channelsConfig ?? {},
     channelsConfigKeys: Object.keys(overrides?.channelsConfig ?? {}),
     defaultRequireMention: true,
+    threadInheritParent: overrides?.threadInheritParent ?? false,
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     isChannelAllowed,
@@ -2301,6 +2303,7 @@ describe("registerSlackInteractionEvents", () => {
   it("carries parentSessionKey into interaction context for thread inheritance", async () => {
     const { ctx, getHandler } = createContext({
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
+      threadInheritParent: true,
     });
     registerSlackInteractionEvents({ ctx: ctx as never });
 
