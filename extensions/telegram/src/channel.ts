@@ -508,12 +508,12 @@ function resolveTelegramOutboundSessionRoute(params: {
 async function resolveTelegramTargets(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  inputs: string[];
+  inputs: Array<string | number | null | undefined>;
   kind: "user" | "group";
 }) {
   if (params.kind !== "user") {
     return params.inputs.map((input) => ({
-      input,
+      input: input == null ? "" : String(input),
       resolved: false as const,
       note: "Telegram runtime target resolution only supports usernames for direct-message lookups.",
     }));
@@ -525,17 +525,18 @@ async function resolveTelegramTargets(params: {
   const token = account.token.trim();
   if (!token) {
     return params.inputs.map((input) => ({
-      input,
+      input: input == null ? "" : String(input),
       resolved: false as const,
       note: "Telegram bot token is required to resolve @username targets.",
     }));
   }
   return await Promise.all(
     params.inputs.map(async (input) => {
-      const trimmed = input.trim();
+      const rawInput = input == null ? "" : String(input);
+      const trimmed = rawInput.trim();
       if (!trimmed) {
         return {
-          input,
+          input: rawInput,
           resolved: false as const,
           note: "Telegram target is required.",
         };
@@ -549,20 +550,20 @@ async function resolveTelegramTargets(params: {
         });
         if (!id) {
           return {
-            input,
+            input: rawInput,
             resolved: false as const,
             note: "Telegram username could not be resolved by the configured bot.",
           };
         }
         return {
-          input,
+          input: rawInput,
           resolved: true as const,
           id,
           name: normalized,
         };
       } catch (error) {
         return {
-          input,
+          input: rawInput,
           resolved: false as const,
           note: formatErrorMessage(error),
         };
