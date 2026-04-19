@@ -9,9 +9,11 @@ import {
 } from "./send.test-harness.js";
 import {
   clearSentMessageCache,
+  getSentMessageRecordMetaForTest,
   recordSentMessage,
   resetSentMessageCacheForTest,
   wasSentByBot,
+  __testing as sentMessageCacheTesting,
 } from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
@@ -124,6 +126,52 @@ describe("sent-message-cache", () => {
     recordSentMessage("123", 1);
     expect(wasSentByBot("123", 1)).toBe(true);
     expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("stores sent-message metadata for delivery diagnostics", () => {
+    recordSentMessage(123, 1, undefined, {
+      accountId: "main",
+      kind: "message",
+      silent: true,
+    });
+
+    expect(getSentMessageRecordMetaForTest(123, 1)).toEqual({
+      accountId: "main",
+      kind: "message",
+      silent: true,
+    });
+    expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("stores sent-message metadata in the configured sent-message store", () => {
+    const customStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-custom-meta.json`;
+    const customCfg = { session: { store: customStorePath } };
+
+    try {
+      recordSentMessage(123, 1, customCfg, {
+        accountId: "secondary",
+        kind: "poll",
+        silent: false,
+      });
+
+      expect(getSentMessageRecordMetaForTest(123, 1)).toBeUndefined();
+      expect(getSentMessageRecordMetaForTest(123, 1, customCfg)).toEqual({
+        accountId: "secondary",
+        kind: "poll",
+        silent: false,
+      });
+    } finally {
+      fs.rmSync(customStorePath, { force: true });
+      fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
+    }
+  });
+
+  it("keeps legacy timestamp-only sent-message cache entries readable", () => {
+    const now = Date.now();
+
+    expect(sentMessageCacheTesting.normalizePersistedRecord(now, now)).toMatchObject({
+      timestamp: now,
+    });
   });
 
   it("clears cache", () => {
