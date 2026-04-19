@@ -45,6 +45,16 @@ export async function resolveProvidersForModelsJsonWithDeps(
 ): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
+  // `models.mode: "replace"` documents an intent to emit ONLY the explicit
+  // providers from config, excluding implicit providers discovered from
+  // bundled plugin catalog hooks (#68965). Skip the implicit fetch entirely
+  // in that case so bundled codex/etc. don't leak back into models.json.
+  if (cfg.models?.mode === "replace") {
+    return mergeProviders({
+      implicit: {},
+      explicit: explicitProviders,
+    });
+  }
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
