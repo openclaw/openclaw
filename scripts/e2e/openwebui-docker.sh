@@ -2,12 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 IMAGE_NAME="openclaw-openwebui-e2e"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
-PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
-MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.4}"
+# Keep the default on a broadly available non-reasoning OpenAI model for
+# Open WebUI compatibility smoke. Callers can still override this explicitly.
+MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-4.1-mini}"
 PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
 PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"
 PORT="${OPENCLAW_OPENWEBUI_GATEWAY_PORT:-18789}"
@@ -19,27 +20,18 @@ NET_NAME="openclaw-openwebui-e2e-$$"
 GW_NAME="openclaw-openwebui-gateway-$$"
 OW_NAME="openclaw-openwebui-$$"
 
-PROFILE_MOUNT=()
-if [[ -f "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/appuser/.profile:ro)
+OPENAI_API_KEY_VALUE="${OPENAI_API_KEY:-}"
+if [[ "$OPENAI_API_KEY_VALUE" == "undefined" || "$OPENAI_API_KEY_VALUE" == "null" ]]; then
+  OPENAI_API_KEY_VALUE=""
 fi
-
-AUTH_DIRS=()
-if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
-  while IFS= read -r auth_dir; do
-    [[ -n "$auth_dir" ]] || continue
-    AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs)
+OPENAI_BASE_URL_VALUE="${OPENAI_BASE_URL:-}"
+if [[ "$OPENAI_BASE_URL_VALUE" == "undefined" || "$OPENAI_BASE_URL_VALUE" == "null" ]]; then
+  OPENAI_BASE_URL_VALUE=""
 fi
-AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
-
-EXTERNAL_AUTH_MOUNTS=()
-for auth_dir in "${AUTH_DIRS[@]}"; do
-  host_path="$HOME/$auth_dir"
-  if [[ -d "$host_path" ]]; then
-    EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
-  fi
-done
+if [[ -z "$OPENAI_API_KEY_VALUE" ]]; then
+  echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
+  exit 2
+fi
 
 cleanup() {
   docker rm -f "$OW_NAME" >/dev/null 2>&1 || true
@@ -49,7 +41,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged openwebui-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
 docker pull "$OPENWEBUI_IMAGE" >/dev/null
@@ -61,42 +53,45 @@ echo "Starting gateway container..."
 docker run -d \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
-  -e "OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED=$AUTH_DIRS_CSV" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_OPENWEBUI_MODEL=$MODEL" \
-  -e "OPENCLAW_SKIP_CHANNELS=1" \
-  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
-  -e "OPENCLAW_SKIP_CRON=1" \
-  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
-  "${EXTERNAL_AUTH_MOUNTS[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  -e OPENAI_API_KEY \
+  ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
-    IFS="," read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-    for auth_dir in "${auth_dirs[@]}"; do
-      [ -n "$auth_dir" ] || continue
-      if [ -d "/host-auth/$auth_dir" ]; then
-        mkdir -p "$HOME/$auth_dir"
-        cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
-        chmod -R u+rwX "$HOME/$auth_dir" || true
-      fi
-    done
-
     entry=dist/index.mjs
     [ -f "$entry" ] || entry=dist/index.js
 
-    node "$entry" config set gateway.controlUi.enabled false >/dev/null
-    node "$entry" config set gateway.mode local >/dev/null
-    node "$entry" config set gateway.bind lan >/dev/null
-    node "$entry" config set gateway.auth.mode token >/dev/null
-    node "$entry" config set gateway.auth.token "$OPENCLAW_GATEWAY_TOKEN" >/dev/null
-    node "$entry" config set gateway.http.endpoints.chatCompletions.enabled true --strict-json >/dev/null
-    node "$entry" config set agents.defaults.model.primary "$OPENCLAW_OPENWEBUI_MODEL" >/dev/null
+    openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
+    batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
+    OPENCLAW_CONFIG_BATCH_PATH="$batch_file" node - <<'"'"'NODE'"'"' "$openai_api_key"
+const fs = require("node:fs");
+
+const openaiApiKey = process.argv[2];
+const batchPath = process.env.OPENCLAW_CONFIG_BATCH_PATH;
+const entries = [
+  { path: "models.providers.openai.apiKey", value: openaiApiKey },
+  {
+    path: "models.providers.openai.baseUrl",
+    value: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
+  },
+  { path: "models.providers.openai.models", value: [] },
+  { path: "gateway.controlUi.enabled", value: false },
+  { path: "gateway.mode", value: "local" },
+  { path: "gateway.bind", value: "lan" },
+  { path: "gateway.auth.mode", value: "token" },
+  { path: "gateway.auth.token", value: process.env.OPENCLAW_GATEWAY_TOKEN },
+  { path: "gateway.http.endpoints.chatCompletions.enabled", value: true },
+  { path: "agents.defaults.model.primary", value: process.env.OPENCLAW_OPENWEBUI_MODEL },
+];
+fs.writeFileSync(batchPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+NODE
+    node "$entry" config set --batch-file "$batch_file" >/dev/null
+    rm -f "$batch_file"
 
     exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
-  '
+  ' >/dev/null
 
 echo "Waiting for gateway HTTP surface..."
 gateway_ready=0
@@ -169,16 +164,20 @@ if [ "$ow_ready" -ne 1 ]; then
 fi
 
 echo "Running Open WebUI -> OpenClaw smoke..."
-docker exec \
+if ! docker exec \
   -e "OPENWEBUI_BASE_URL=http://$OW_NAME:$WEBUI_PORT" \
   -e "OPENWEBUI_ADMIN_EMAIL=$ADMIN_EMAIL" \
   -e "OPENWEBUI_ADMIN_PASSWORD=$ADMIN_PASSWORD" \
   -e "OPENWEBUI_EXPECTED_NONCE=$PROMPT_NONCE" \
   -e "OPENWEBUI_PROMPT=$PROMPT" \
   "$GW_NAME" \
-  node /app/scripts/e2e/openwebui-probe.mjs
-
-echo "Open WebUI container logs:"
-docker logs "$OW_NAME" 2>&1 | tail -n 80 || true
+  node /app/scripts/e2e/openwebui-probe.mjs >/tmp/openwebui-probe.log 2>&1; then
+  cat /tmp/openwebui-probe.log 2>/dev/null || true
+  echo "Open WebUI probe failed; gateway log tail:"
+  docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  echo "Open WebUI container logs:"
+  docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  exit 1
+fi
 
 echo "OK"

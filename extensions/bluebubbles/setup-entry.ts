@@ -1,6 +1,13 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { bluebubblesSetupPlugin } from "./src/channel.setup.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { bluebubblesSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(bluebubblesSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "bluebubblesSetupPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+});

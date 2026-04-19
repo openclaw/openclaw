@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
-import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
+import type {
+  OpenClawConfig,
+  ConfigFileSnapshot,
+  ConfigWriteNotification,
+  GatewayReloadMode,
+} from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
@@ -19,6 +25,29 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+
+/**
+ * Paths under `skills.*` always change the snapshot that sessions cache in
+ * sessions.json. Any prefix match here (for example `skills.allowBundled`,
+ * `skills.entries.X.enabled`, `skills.profile`) forces sessions to rebuild
+ * their snapshot on the next turn rather than silently advertising stale
+ * tools to the model.
+ */
+const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
+
+function matchesSkillsInvalidationPrefix(path: string): boolean {
+  return SKILLS_INVALIDATION_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+  );
+}
+
+function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
+  return changedPaths.find(matchesSkillsInvalidationPrefix);
+}
+
+export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
+  return firstSkillsChangedPath(changedPaths) !== undefined;
+}
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
@@ -71,9 +100,11 @@ export type GatewayConfigReloader = {
 
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
+  initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -89,6 +120,8 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let pendingInProcessConfig: OpenClawConfig | null = null;
+  let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -155,6 +188,16 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
+    // Invalidate cached skills snapshots (persisted in sessions.json) whenever
+    // the user touches skills.* config. Without this, sessions keep advertising
+    // tools that no longer exist in the allowlist, which causes infinite
+    // tool-not-found loops against the model.
+    const skillsChangedPath = firstSkillsChangedPath(changedPaths);
+    if (skillsChangedPath !== undefined) {
+      bumpSkillsSnapshotVersion({ reason: "config-change", changedPath: skillsChangedPath });
+      opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
+    }
+
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
     const plan = buildGatewayReloadPlan(changedPaths);
     if (settings.mode === "off") {
@@ -195,7 +238,20 @@ export function startGatewayConfigReloader(opts: {
       debounceTimer = null;
     }
     try {
+      if (pendingInProcessConfig) {
+        const nextConfig = pendingInProcessConfig;
+        pendingInProcessConfig = null;
+        missingConfigRetries = 0;
+        await applySnapshot(nextConfig);
+        return;
+      }
       const snapshot = await opts.readSnapshot();
+      if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
+        if (snapshot.hash === lastAppliedWriteHash) {
+          return;
+        }
+        lastAppliedWriteHash = null;
+      }
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
@@ -220,9 +276,23 @@ export function startGatewayConfigReloader(opts: {
     usePolling: Boolean(process.env.VITEST),
   });
 
-  watcher.on("add", schedule);
-  watcher.on("change", schedule);
-  watcher.on("unlink", schedule);
+  const scheduleFromWatcher = () => {
+    schedule();
+  };
+
+  const unsubscribeFromWrites =
+    opts.subscribeToWrites?.((event) => {
+      if (event.configPath !== opts.watchPath) {
+        return;
+      }
+      pendingInProcessConfig = event.runtimeConfig;
+      lastAppliedWriteHash = event.persistedHash;
+      scheduleAfter(0);
+    }) ?? (() => {});
+
+  watcher.on("add", scheduleFromWatcher);
+  watcher.on("change", scheduleFromWatcher);
+  watcher.on("unlink", scheduleFromWatcher);
   let watcherClosed = false;
   watcher.on("error", (err) => {
     if (watcherClosed) {
@@ -241,6 +311,7 @@ export function startGatewayConfigReloader(opts: {
       }
       debounceTimer = null;
       watcherClosed = true;
+      unsubscribeFromWrites();
       await watcher.close().catch(() => {});
     },
   };

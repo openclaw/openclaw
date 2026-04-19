@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+
 // CSS property values that indicate an element is hidden
 const HIDDEN_STYLE_PATTERNS: Array<[string, RegExp]> = [
   ["display", /^\s*none\s*$/i],
@@ -21,8 +26,29 @@ const HIDDEN_CLASS_NAMES = new Set([
   "offscreen",
 ]);
 
+type ParsedHtml = {
+  document: Document;
+};
+
+type ParseHtml = (html: string) => ParsedHtml;
+
+type LinkedomModule = {
+  parseHTML: ParseHtml;
+};
+
+const LINKEDOM_MODULE = "linkedom";
+
+let parseHtmlPromise: Promise<ParseHtml> | null = null;
+
+async function loadParseHTML(): Promise<ParseHtml> {
+  parseHtmlPromise ??= (import(LINKEDOM_MODULE) as Promise<LinkedomModule>).then(
+    ({ parseHTML }) => parseHTML,
+  );
+  return parseHtmlPromise;
+}
+
 function hasHiddenClass(className: string): boolean {
-  const classes = className.toLowerCase().split(/\s+/);
+  const classes = normalizeLowercaseStringOrEmpty(className).split(/\s+/);
   return classes.some((cls) => HIDDEN_CLASS_NAMES.has(cls));
 }
 
@@ -86,7 +112,7 @@ function isStyleHidden(style: string): boolean {
 }
 
 function shouldRemoveElement(element: Element): boolean {
-  const tagName = element.tagName.toLowerCase();
+  const tagName = normalizeLowercaseStringOrEmpty(element.tagName);
 
   // Always-remove tags
   if (["meta", "template", "svg", "canvas", "iframe", "object", "embed"].includes(tagName)) {
@@ -94,7 +120,10 @@ function shouldRemoveElement(element: Element): boolean {
   }
 
   // input type=hidden
-  if (tagName === "input" && element.getAttribute("type")?.toLowerCase() === "hidden") {
+  if (
+    tagName === "input" &&
+    normalizeOptionalLowercaseString(element.getAttribute("type")) === "hidden"
+  ) {
     return true;
   }
 
@@ -129,7 +158,7 @@ export async function sanitizeHtml(html: string): Promise<string> {
 
   let document: Document;
   try {
-    const { parseHTML } = await import("linkedom");
+    const parseHTML = await loadParseHTML();
     ({ document } = parseHTML(sanitized) as { document: Document });
   } catch {
     return sanitized;

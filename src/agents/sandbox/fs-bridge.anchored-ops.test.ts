@@ -111,7 +111,7 @@ describe("sandbox fs bridge anchored ops", () => {
       const opCall = mockedExecDockerRaw.mock.calls.find(
         ([args]) =>
           typeof args[5] === "string" &&
-          args[5].includes("python3 /dev/fd/3 \"$@\" 3<<'PY'") &&
+          args[5].includes('exec "$python_cmd" -c "$python_script" "$@"') &&
           getDockerArg(args, 1) === testCase.expectedArgs[0],
       );
       expect(opCall).toBeDefined();

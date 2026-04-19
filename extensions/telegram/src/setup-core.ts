@@ -1,16 +1,16 @@
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
-  DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
+import { isNumericTelegramSenderUserId } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 
 const channel = "telegram" as const;
@@ -41,7 +41,7 @@ export function normalizeTelegramAllowFromInput(raw: string): string {
 
 export function parseTelegramAllowFromId(raw: string): string | null {
   const stripped = normalizeTelegramAllowFromInput(raw);
-  return /^\d+$/.test(stripped) ? stripped : null;
+  return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
 export async function resolveTelegramAllowFromEntries(params: {

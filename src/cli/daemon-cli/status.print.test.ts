@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
+import { printDaemonStatus } from "./status.print.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
@@ -10,15 +11,16 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-vi.mock("../../terminal/theme.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../terminal/theme.js")>();
+vi.mock("../../terminal/theme.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../terminal/theme.js")>("../../terminal/theme.js");
   return {
     ...actual,
     colorize: (_rich: boolean, _theme: unknown, text: string) => text,
   };
 });
 
-vi.mock("../../commands/onboard-helpers.js", () => ({
+vi.mock("../../gateway/control-ui-links.js", () => ({
   resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
 }));
 
@@ -26,11 +28,13 @@ vi.mock("../../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: () => [],
 }));
 
-vi.mock("../../daemon/launchd.js", () => ({
+vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: () => ({
+    logDir: "/tmp",
     stdoutPath: "/tmp/gateway.out.log",
     stderrPath: "/tmp/gateway.err.log",
   }),
+  resolveGatewayRestartLogPath: () => "/tmp/gateway-restart.log",
 }));
 
 vi.mock("../../daemon/systemd-hints.js", () => ({
@@ -40,10 +44,6 @@ vi.mock("../../daemon/systemd-hints.js", () => ({
 
 vi.mock("../../infra/wsl.js", () => ({
   isWSLEnv: () => false,
-}));
-
-vi.mock("../../logging.js", () => ({
-  getResolvedLoggerSettings: () => ({ file: "/tmp/openclaw.log" }),
 }));
 
 vi.mock("./shared.js", () => ({
@@ -69,8 +69,6 @@ vi.mock("./status.gather.js", () => ({
   resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
 }));
 
-const { printDaemonStatus } = await import("./status.print.js");
-
 describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
@@ -87,6 +85,7 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
         },
+        logFile: "/tmp/openclaw.log",
         gateway: {
           bindMode: "loopback",
           bindHost: "127.0.0.1",

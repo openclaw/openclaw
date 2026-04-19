@@ -14,6 +14,7 @@ import {
   listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
+  resolveChannelMessageToolMediaSourceParamKeys,
   resolveChannelMessageToolSchemaProperties,
 } from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -22,13 +23,13 @@ import type { ChannelPlugin } from "./types.js";
 const emptyRegistry = createTestRegistry([]);
 
 function createMessageActionsPlugin(params: {
-  id: "discord" | "telegram";
+  id: "demo-buttons" | "demo-cards";
   capabilities: readonly ChannelMessageCapability[];
   aliases?: string[];
 }): ChannelPlugin {
   const base = createChannelTestPluginBase({
     id: params.id,
-    label: params.id === "discord" ? "Discord" : "Telegram",
+    label: params.id === "demo-buttons" ? "Demo Buttons" : "Demo Cards",
     capabilities: { chatTypes: ["direct", "group"] },
     config: {
       listAccountIds: () => ["default"],
@@ -50,20 +51,20 @@ function createMessageActionsPlugin(params: {
 }
 
 const buttonsPlugin = createMessageActionsPlugin({
-  id: "discord",
+  id: "demo-buttons",
   capabilities: ["interactive", "buttons"],
 });
 
 const cardsPlugin = createMessageActionsPlugin({
-  id: "telegram",
+  id: "demo-cards",
   capabilities: ["cards"],
 });
 
 function activateMessageActionTestRegistry() {
   setActivePluginRegistry(
     createTestRegistry([
-      { pluginId: "discord", source: "test", plugin: buttonsPlugin },
-      { pluginId: "telegram", source: "test", plugin: cardsPlugin },
+      { pluginId: "demo-buttons", source: "test", plugin: buttonsPlugin },
+      { pluginId: "demo-cards", source: "test", plugin: cardsPlugin },
     ]),
   );
 }
@@ -96,42 +97,42 @@ describe("message action capability checks", () => {
     expect(
       listChannelMessageCapabilitiesForChannel({
         cfg: {} as OpenClawConfig,
-        channel: "discord",
+        channel: "demo-buttons",
       }),
     ).toEqual(["interactive", "buttons"]);
     expect(
       listChannelMessageCapabilitiesForChannel({
         cfg: {} as OpenClawConfig,
-        channel: "telegram",
+        channel: "demo-cards",
       }),
     ).toEqual(["cards"]);
     expect(
       channelSupportsMessageCapabilityForChannel(
-        { cfg: {} as OpenClawConfig, channel: "discord" },
+        { cfg: {} as OpenClawConfig, channel: "demo-buttons" },
         "interactive",
       ),
     ).toBe(true);
     expect(
       channelSupportsMessageCapabilityForChannel(
-        { cfg: {} as OpenClawConfig, channel: "telegram" },
+        { cfg: {} as OpenClawConfig, channel: "demo-cards" },
         "interactive",
       ),
     ).toBe(false);
     expect(
       channelSupportsMessageCapabilityForChannel(
-        { cfg: {} as OpenClawConfig, channel: "discord" },
+        { cfg: {} as OpenClawConfig, channel: "demo-buttons" },
         "buttons",
       ),
     ).toBe(true);
     expect(
       channelSupportsMessageCapabilityForChannel(
-        { cfg: {} as OpenClawConfig, channel: "telegram" },
+        { cfg: {} as OpenClawConfig, channel: "demo-cards" },
         "buttons",
       ),
     ).toBe(false);
     expect(
       channelSupportsMessageCapabilityForChannel(
-        { cfg: {} as OpenClawConfig, channel: "telegram" },
+        { cfg: {} as OpenClawConfig, channel: "demo-cards" },
         "cards",
       ),
     ).toBe(true);
@@ -144,11 +145,11 @@ describe("message action capability checks", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "telegram",
+          pluginId: "demo-cards",
           source: "test",
           plugin: createMessageActionsPlugin({
-            id: "telegram",
-            aliases: ["tg"],
+            id: "demo-cards",
+            aliases: ["demo-cards-alias"],
             capabilities: ["cards"],
           }),
         },
@@ -158,7 +159,7 @@ describe("message action capability checks", () => {
     expect(
       listChannelMessageCapabilitiesForChannel({
         cfg: {} as OpenClawConfig,
-        channel: "tg",
+        channel: "demo-cards-alias",
       }),
     ).toEqual(["cards"]);
   });
@@ -166,8 +167,8 @@ describe("message action capability checks", () => {
   it("uses unified message tool discovery for actions, capabilities, and schema", () => {
     const unifiedPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
-        id: "discord",
-        label: "Discord",
+        id: "demo-unified",
+        label: "Demo Unified",
         capabilities: { chatTypes: ["direct", "group"] },
         config: {
           listAccountIds: () => ["default"],
@@ -186,7 +187,7 @@ describe("message action capability checks", () => {
       },
     };
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", source: "test", plugin: unifiedPlugin }]),
+      createTestRegistry([{ pluginId: "demo-unified", source: "test", plugin: unifiedPlugin }]),
     );
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast", "react"]);
@@ -194,16 +195,92 @@ describe("message action capability checks", () => {
     expect(
       resolveChannelMessageToolSchemaProperties({
         cfg: {} as OpenClawConfig,
-        channel: "discord",
+        channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("derives plugin-owned media-source params for the current action", () => {
+    const mediaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-media",
+        label: "Demo Media",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send", "set-profile"],
+          mediaSourceParams: {
+            "set-profile": ["avatarUrl", "avatarPath"],
+          },
+          schema: {
+            properties: {
+              avatarUrl: Type.Optional(Type.String({ description: "Remote avatar URL" })),
+              avatarPath: Type.Optional(Type.String({ description: "Local avatar path" })),
+              displayName: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "demo-media", source: "test", plugin: mediaPlugin }]),
+    );
+
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "set-profile",
+        channel: "demo-media",
+      }),
+    ).toEqual(["avatarUrl", "avatarPath"]);
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        channel: "demo-media",
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps flat media-source param discovery for backward compatibility", () => {
+    const mediaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-media-flat",
+        label: "Demo Media Flat",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["set-profile"],
+          mediaSourceParams: ["avatarUrl", "avatarPath"],
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "demo-media-flat", source: "test", plugin: mediaPlugin }]),
+    );
+
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "set-profile",
+        channel: "demo-media-flat",
+      }),
+    ).toEqual(["avatarUrl", "avatarPath"]);
   });
 
   it("skips crashing action/capability discovery paths and logs once", () => {
     const crashingPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
-        id: "discord",
-        label: "Discord",
+        id: "demo-crashing",
+        label: "Demo Crashing",
         capabilities: { chatTypes: ["direct", "group"] },
         config: {
           listAccountIds: () => ["default"],
@@ -216,7 +293,7 @@ describe("message action capability checks", () => {
       },
     };
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", source: "test", plugin: crashingPlugin }]),
+      createTestRegistry([{ pluginId: "demo-crashing", source: "test", plugin: crashingPlugin }]),
     );
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);

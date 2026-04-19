@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { writeConfigFile } from "../config/config.js";
+import { replaceConfigFile } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { type PluginInstallUpdate, recordPluginInstall } from "../plugins/installs.js";
@@ -14,6 +14,7 @@ import {
 
 export async function persistPluginInstall(params: {
   config: OpenClawConfig;
+  baseHash?: string;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
   successMessage?: string;
@@ -26,7 +27,10 @@ export async function persistPluginInstall(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await replaceConfigFile({
+    nextConfig: next,
+    ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+  });
   logSlotWarnings(slotResult.warnings);
   if (params.warningMessage) {
     defaultRuntime.log(theme.warn(params.warningMessage));
@@ -38,6 +42,7 @@ export async function persistPluginInstall(params: {
 
 export async function persistHookPackInstall(params: {
   config: OpenClawConfig;
+  baseHash?: string;
   hookPackId: string;
   hooks: string[];
   install: Omit<HookInstallUpdate, "hookId" | "hooks">;
@@ -49,7 +54,10 @@ export async function persistHookPackInstall(params: {
     hooks: params.hooks,
     ...params.install,
   });
-  await writeConfigFile(next);
+  await replaceConfigFile({
+    nextConfig: next,
+    ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+  });
   defaultRuntime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
   logHookPackRestartHint();
   return next;

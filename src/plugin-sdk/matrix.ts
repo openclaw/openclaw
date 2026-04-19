@@ -1,7 +1,24 @@
 // Private helper surface for the bundled matrix plugin.
-// Keep this list additive and scoped to symbols used under extensions/matrix.
+// Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
+import {
+  createLazyFacadeArrayValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "./facade-loader.js";
+
+type MatrixFacadeModule = {
+  singleAccountKeysToMove: readonly string[];
+  namedAccountPromotionKeys: readonly string[];
+  resolveSingleAccountPromotionTarget: (params: { channel: Record<string, unknown> }) => string;
+};
+
+function loadMatrixFacadeModule(): MatrixFacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<MatrixFacadeModule>({
+    dirName: "matrix",
+    artifactBasename: "contract-api.js",
+  });
+}
 
 export {
   createActionGate,
@@ -11,7 +28,8 @@ export {
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext } from "../auto-reply/get-reply-options.types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   compileAllowlist,
@@ -37,6 +55,7 @@ export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,
 } from "../channels/plugins/channel-config.js";
+export { getChatChannelMeta } from "./channel-plugin-common.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export {
   deleteAccountFromConfigSection,
@@ -44,6 +63,7 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
@@ -72,7 +92,7 @@ export type {
   ChannelResolveResult,
   ChannelSetupInput,
   ChannelToolSend,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
@@ -83,9 +103,10 @@ export {
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "../../extensions/matrix/thread-bindings-runtime.js";
+} from "./matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -94,6 +115,7 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type {
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   GroupToolPolicyConfig,
@@ -156,19 +178,36 @@ export {
   findMatrixAccountEntry,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixChannelConfig,
-} from "../../extensions/matrix/src/account-selection.js";
+} from "./matrix-helper.js";
 export {
   resolveMatrixAccountStorageRoot,
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../../extensions/matrix/helper-api.js";
-export { resolveMatrixAccountStringValues } from "../../extensions/matrix/src/auth-precedence.js";
-export { getMatrixScopedEnvVarNames } from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
+export { resolveMatrixAccountStringValues } from "./matrix-runtime-surface.js";
+export { getMatrixScopedEnvVarNames } from "./matrix-helper.js";
 export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
+export {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "./matrix-surface.js";
+export { setMatrixRuntime } from "./matrix-runtime-surface.js";
+
+export const singleAccountKeysToMove: MatrixFacadeModule["singleAccountKeysToMove"] =
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().singleAccountKeysToMove);
+
+export const namedAccountPromotionKeys: MatrixFacadeModule["namedAccountPromotionKeys"] =
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().namedAccountPromotionKeys);
+
+export const resolveSingleAccountPromotionTarget: MatrixFacadeModule["resolveSingleAccountPromotionTarget"] =
+  ((...args) =>
+    loadMatrixFacadeModule().resolveSingleAccountPromotionTarget(
+      ...args,
+    )) as MatrixFacadeModule["resolveSingleAccountPromotionTarget"];
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

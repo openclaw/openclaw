@@ -1,7 +1,15 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
+import {
+  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
+  createClientToolNameConflictError,
+  findClientToolNameConflicts,
+  isClientToolNameConflictError,
+  toClientToolDefinitions,
+  toToolDefinitions,
+} from "./pi-tool-definition-adapter.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -96,5 +104,109 @@ describe("pi tool definition adapter", () => {
     });
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toClientToolDefinitions – streaming tool-call argument coercion (#57009)
+// ---------------------------------------------------------------------------
+
+function makeClientTool(name: string): ClientToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name,
+      description: `${name} tool`,
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+    },
+  };
+}
+
+async function executeClientTool(
+  params: unknown,
+): Promise<{ calledWith: Record<string, unknown> | undefined }> {
+  let captured: Record<string, unknown> | undefined;
+  const [def] = toClientToolDefinitions([makeClientTool("search")], (_name, p) => {
+    captured = p;
+  });
+  if (!def) {
+    throw new Error("missing client tool definition");
+  }
+  await def.execute("call-c1", params, undefined, undefined, extensionContext);
+  return { calledWith: captured };
+}
+
+describe("toClientToolDefinitions – param coercion", () => {
+  it("passes plain object params through unchanged", async () => {
+    const { calledWith } = await executeClientTool({ query: "hello" });
+    expect(calledWith).toEqual({ query: "hello" });
+  });
+
+  it("parses a JSON string into an object (streaming delta accumulation)", async () => {
+    const { calledWith } = await executeClientTool('{"query":"hello","limit":10}');
+    expect(calledWith).toEqual({ query: "hello", limit: 10 });
+  });
+
+  it("parses a JSON string with surrounding whitespace", async () => {
+    const { calledWith } = await executeClientTool('  {"query":"hello"}  ');
+    expect(calledWith).toEqual({ query: "hello" });
+  });
+
+  it("falls back to empty object for invalid JSON string", async () => {
+    const { calledWith } = await executeClientTool("not-json");
+    expect(calledWith).toEqual({});
+  });
+
+  it("falls back to empty object for empty string", async () => {
+    const { calledWith } = await executeClientTool("");
+    expect(calledWith).toEqual({});
+  });
+
+  it("falls back to empty object for null", async () => {
+    const { calledWith } = await executeClientTool(null);
+    expect(calledWith).toEqual({});
+  });
+
+  it("falls back to empty object for undefined", async () => {
+    const { calledWith } = await executeClientTool(undefined);
+    expect(calledWith).toEqual({});
+  });
+
+  it("falls back to empty object for a JSON array string", async () => {
+    const { calledWith } = await executeClientTool("[1,2,3]");
+    expect(calledWith).toEqual({});
+  });
+
+  it("handles nested JSON string correctly", async () => {
+    const { calledWith } = await executeClientTool(
+      '{"action":"search","params":{"q":"test","page":1}}',
+    );
+    expect(calledWith).toEqual({ action: "search", params: { q: "test", page: 1 } });
+  });
+});
+
+describe("client tool name conflict checks", () => {
+  it("detects collisions with existing built-in names after normalization", () => {
+    expect(
+      findClientToolNameConflicts({
+        tools: [makeClientTool("Web_Search"), makeClientTool("exec")],
+        existingToolNames: ["web_search", "read"],
+      }),
+    ).toEqual(["Web_Search"]);
+  });
+
+  it("detects duplicate client tool names after normalization", () => {
+    expect(
+      findClientToolNameConflicts({
+        tools: [makeClientTool("Weather"), makeClientTool("weather")],
+      }),
+    ).toEqual(["Weather", "weather"]);
+  });
+
+  it("wraps conflict errors with a stable prefix", () => {
+    const err = createClientToolNameConflictError(["exec", "Web_Search"]);
+    expect(err.message).toBe(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} exec, Web_Search`);
+    expect(isClientToolNameConflictError(err)).toBe(true);
+    expect(isClientToolNameConflictError(new Error("other failure"))).toBe(false);
   });
 });

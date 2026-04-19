@@ -16,9 +16,12 @@ OpenAI-style models average ~4 characters per token for English text.
 OpenClaw assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
-- Skills list (only metadata; instructions are loaded on demand with `read`)
+- Skills list (only metadata; instructions are loaded on demand with `read`).
+  The compact skills block is bounded by `skills.limits.maxSkillsPromptChars`,
+  with optional per-agent override at
+  `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present or `memory.md` as a lowercase fallback). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 150000). `memory/*.md` files are on-demand via memory tools and are not auto-injected.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present or `memory.md` as a lowercase fallback). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but bare `/new` and `/reset` can prepend a one-shot startup-context block with recent daily memory for that first turn. That startup prelude is controlled by `agents.defaults.startupContext`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -35,6 +38,18 @@ Everything the model receives counts toward the context limit:
 - Attachments/transcripts (images, audio, files)
 - Compaction summaries and pruning artifacts
 - Provider wrappers or safety headers (not visible, but still counted)
+
+Some runtime-heavy surfaces have their own explicit caps:
+
+- `agents.defaults.contextLimits.memoryGetMaxChars`
+- `agents.defaults.contextLimits.memoryGetDefaultLines`
+- `agents.defaults.contextLimits.toolResultMaxChars`
+- `agents.defaults.contextLimits.postCompactionMaxChars`
+
+Per-agent overrides live under `agents.list[].contextLimits`. These knobs are
+for bounded runtime excerpts and injected runtime-owned blocks. They are
+separate from bootstrap limits, startup-context limits, and skills prompt
+limits.
 
 For images, OpenClaw downscales transcript/tool image payloads before provider calls.
 Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
@@ -59,7 +74,28 @@ Other surfaces:
 
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
-  provider quota windows (not per-response costs).
+  normalized provider quota windows (`X% left`, not per-response costs).
+  Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
+  OpenAI Codex, MiniMax, Xiaomi, and z.ai.
+
+Usage surfaces normalize common provider-native field aliases before display.
+For OpenAI-family Responses traffic, that includes both `input_tokens` /
+`output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
+field names do not change `/status`, `/usage`, or session summaries.
+Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
+`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
+used when the CLI omits an explicit `stats.input` field.
+For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
+normalized the same way, and totals fall back to normalized input + output when
+`total_tokens` is missing or `0`.
+When the current session snapshot is sparse, `/status` and `session_status` can
+also recover token/cache counters and the active runtime model label from the
+most recent transcript usage log. Existing nonzero live values still take
+precedence over transcript fallback values, and larger prompt-oriented
+transcript totals can win when stored totals are missing or smaller.
+Usage auth for provider quota windows comes from provider-specific hooks when
+available; otherwise OpenClaw falls back to matching OAuth/API-key credentials
+from auth profiles, env, or config.
 
 ## Cost estimation (when shown)
 
@@ -156,9 +192,8 @@ This maps to Anthropic's `context-1m-2025-08-07` beta header.
 
 This only applies when `context1m: true` is set on that model entry.
 
-Requirement: the credential must be eligible for long-context usage (API key
-billing, or subscription with Extra Usage enabled). If not, Anthropic responds
-with `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+Requirement: the credential must be eligible for long-context usage. If not,
+Anthropic responds with a provider-side rate limit error for that request.
 
 If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
 OpenClaw skips the `context-1m-*` beta header because Anthropic currently

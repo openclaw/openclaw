@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   createSignalToolResultConfig,
@@ -15,7 +15,6 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
-vi.resetModules();
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const {
@@ -29,12 +28,13 @@ const {
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
-type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
+type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     config: config as OpenClawConfig,
-    waitForTransportReady: waitForTransportReadyMock as any,
+    waitForTransportReady:
+      waitForTransportReadyMock as MonitorSignalProviderOptions["waitForTransportReady"],
     ...opts,
   });
 }

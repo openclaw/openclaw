@@ -92,43 +92,34 @@ describe("docker build cache layout", () => {
   it("copies only install inputs before pnpm install in the e2e image", async () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const expectPatternBeforeInstall = (pattern: RegExp) => {
+      const index = indexOfPattern(dockerfile, pattern);
+      expect(index).toBeGreaterThan(-1);
+      expect(index).toBeLessThan(installIndex);
+    };
+    const expectPatternAfterInstall = (pattern: RegExp) => {
+      const index = indexOfPattern(dockerfile, pattern);
+      expect(index).toBeGreaterThan(installIndex);
+    };
 
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
-      ),
-    ).toBeLessThan(installIndex);
-    expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts openclaw\.mjs \.\/$/m,
-      ),
-    ).toBeGreaterThan(installIndex);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m)).toBeGreaterThan(
-      installIndex,
+    expectPatternBeforeInstall(
+      /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
     );
-    expect(
-      indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+test \.\/test$/m),
-    ).toBeGreaterThan(installIndex);
-    expect(
-      indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+scripts \.\/scripts$/m),
-    ).toBeGreaterThan(installIndex);
-    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+ui \.\/ui$/m)).toBeGreaterThan(
-      installIndex,
+    expectPatternBeforeInstall(
+      /^COPY(?:\s+--chown=\S+)?\s+ui\/package\.json \.\/ui\/package\.json$/m,
     );
+    expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+extensions \.\/extensions$/m);
+    expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+patches \.\/patches$/m);
+    expectPatternBeforeInstall(
+      /^COPY(?:\s+--chown=\S+)?\s+scripts\/postinstall-bundled-plugins\.mjs scripts\/preinstall-package-manager-warning\.mjs scripts\/npm-runner\.mjs scripts\/windows-cmd-helpers\.mjs \.\/scripts\/$/m,
+    );
+    expectPatternAfterInstall(
+      /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts openclaw\.mjs \.\/$/m,
+    );
+    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m);
+    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+test \.\/test$/m);
+    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+scripts \.\/scripts$/m);
+    expectPatternAfterInstall(/^COPY(?:\s+--chown=\S+)?\s+ui \.\/ui$/m);
   });
 
   it("copies manifests before install in the qr-import image", async () => {
@@ -156,6 +147,21 @@ describe("docker build cache layout", () => {
         /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
       ),
     ).toBe(-1);
+    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
+      installIndex,
+    );
+  });
+
+  it("copies .npmrc before install in the cleanup smoke image", async () => {
+    const dockerfile = await readRepoFile("scripts/docker/cleanup-smoke/Dockerfile");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+
+    expect(
+      indexOfPattern(
+        dockerfile,
+        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
+      ),
+    ).toBeLessThan(installIndex);
     expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
       installIndex,
     );

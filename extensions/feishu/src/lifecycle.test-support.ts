@@ -1,31 +1,75 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 type BoundConversation = {
   bindingId: string;
   targetSessionKey: string;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type FinalizeInboundContextMock = Mock<
+  (ctx: Record<string, unknown>, opts?: unknown) => Record<string, unknown>
+>;
+type DispatchReplyCounts = {
+  final: number;
+  block?: number;
+  tool?: number;
+};
+type DispatchReplyContext = Record<string, unknown> & {
+  SessionKey?: string;
+};
+type DispatchReplyDispatcher = {
+  sendFinalReply: (payload: { text: string }) => unknown;
+};
+type DispatchReplyFromConfigMock = Mock<
+  (params: {
+    ctx: DispatchReplyContext;
+    dispatcher: DispatchReplyDispatcher;
+  }) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>
+>;
+type WithReplyDispatcherMock = Mock<(params: { run: () => unknown }) => Promise<unknown>>;
+type FeishuLifecycleTestMocks = {
+  createEventDispatcherMock: UnknownMock;
+  monitorWebSocketMock: AsyncUnknownMock;
+  monitorWebhookMock: AsyncUnknownMock;
+  createFeishuThreadBindingManagerMock: UnknownMock;
+  createFeishuReplyDispatcherMock: UnknownMock;
+  resolveBoundConversationMock: Mock<() => BoundConversation | null>;
+  touchBindingMock: UnknownMock;
+  resolveAgentRouteMock: UnknownMock;
+  resolveConfiguredBindingRouteMock: UnknownMock;
+  ensureConfiguredBindingRouteReadyMock: UnknownMock;
+  dispatchReplyFromConfigMock: DispatchReplyFromConfigMock;
+  withReplyDispatcherMock: WithReplyDispatcherMock;
+  finalizeInboundContextMock: FinalizeInboundContextMock;
+  getMessageFeishuMock: AsyncUnknownMock;
+  listFeishuThreadMessagesMock: AsyncUnknownMock;
+  sendMessageFeishuMock: AsyncUnknownMock;
+  sendCardFeishuMock: AsyncUnknownMock;
+};
 
-const feishuLifecycleTestMocks = vi.hoisted(() => ({
-  createEventDispatcherMock: vi.fn(),
-  monitorWebSocketMock: vi.fn(async () => {}),
-  monitorWebhookMock: vi.fn(async () => {}),
-  createFeishuThreadBindingManagerMock: vi.fn(() => ({ stop: vi.fn() })),
-  createFeishuReplyDispatcherMock: vi.fn(),
-  resolveBoundConversationMock: vi.fn<() => BoundConversation | null>(() => null),
-  touchBindingMock: vi.fn(),
-  resolveAgentRouteMock: vi.fn(),
-  resolveConfiguredBindingRouteMock: vi.fn(),
-  ensureConfiguredBindingRouteReadyMock: vi.fn(),
-  dispatchReplyFromConfigMock: vi.fn(),
-  withReplyDispatcherMock: vi.fn(),
-  finalizeInboundContextMock: vi.fn((ctx) => ctx),
-  getMessageFeishuMock: vi.fn(async () => null),
-  listFeishuThreadMessagesMock: vi.fn(async () => []),
-  sendMessageFeishuMock: vi.fn(async () => ({ messageId: "om_sent", chatId: "chat_default" })),
-  sendCardFeishuMock: vi.fn(async () => ({ messageId: "om_card", chatId: "chat_default" })),
-}));
+const feishuLifecycleTestMocks = vi.hoisted(
+  (): FeishuLifecycleTestMocks => ({
+    createEventDispatcherMock: vi.fn(),
+    monitorWebSocketMock: vi.fn(async () => {}),
+    monitorWebhookMock: vi.fn(async () => {}),
+    createFeishuThreadBindingManagerMock: vi.fn(() => ({ stop: vi.fn() })),
+    createFeishuReplyDispatcherMock: vi.fn(),
+    resolveBoundConversationMock: vi.fn<() => BoundConversation | null>(() => null),
+    touchBindingMock: vi.fn(),
+    resolveAgentRouteMock: vi.fn(),
+    resolveConfiguredBindingRouteMock: vi.fn(),
+    ensureConfiguredBindingRouteReadyMock: vi.fn(),
+    dispatchReplyFromConfigMock: vi.fn(),
+    withReplyDispatcherMock: vi.fn(),
+    finalizeInboundContextMock: vi.fn((ctx) => ctx),
+    getMessageFeishuMock: vi.fn(async () => null),
+    listFeishuThreadMessagesMock: vi.fn(async () => []),
+    sendMessageFeishuMock: vi.fn(async () => ({ messageId: "om_sent", chatId: "chat_default" })),
+    sendCardFeishuMock: vi.fn(async () => ({ messageId: "om_card", chatId: "chat_default" })),
+  }),
+);
 
-export function getFeishuLifecycleTestMocks() {
+export function getFeishuLifecycleTestMocks(): FeishuLifecycleTestMocks {
   return feishuLifecycleTestMocks;
 }
 
@@ -37,12 +81,8 @@ const {
   createFeishuReplyDispatcherMock,
   resolveBoundConversationMock,
   touchBindingMock,
-  resolveAgentRouteMock,
   resolveConfiguredBindingRouteMock,
   ensureConfiguredBindingRouteReadyMock,
-  dispatchReplyFromConfigMock,
-  withReplyDispatcherMock,
-  finalizeInboundContextMock,
   getMessageFeishuMock,
   listFeishuThreadMessagesMock,
   sendMessageFeishuMock,
@@ -77,8 +117,10 @@ vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
     resolveConfiguredBindingRoute: (

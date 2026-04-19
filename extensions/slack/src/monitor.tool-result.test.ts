@@ -1,11 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
+  getSlackHandlerOrThrow,
   getSlackClient,
   getSlackHandlers,
-  getSlackHandlerOrThrow,
   flush,
   resetSlackTestState,
   runSlackMessageOnce,
@@ -13,20 +13,20 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-let resetInboundDedupe: typeof import("../../../src/auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
-let HISTORY_CONTEXT_MARKER: typeof import("../../../src/auto-reply/reply/history.js").HISTORY_CONTEXT_MARKER;
-let CURRENT_MESSAGE_MARKER: typeof import("../../../src/auto-reply/reply/mentions.js").CURRENT_MESSAGE_MARKER;
-let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
+const [
+  { resetInboundDedupe },
+  { HISTORY_CONTEXT_MARKER },
+  { CURRENT_MESSAGE_MARKER },
+  { monitorSlackProvider },
+] = await Promise.all([
+  import("openclaw/plugin-sdk/reply-runtime"),
+  import("../../../src/auto-reply/reply/history.js"),
+  import("../../../src/auto-reply/reply/mentions.js"),
+  import("./monitor/provider.js"),
+]);
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
-
-beforeAll(async () => {
-  ({ resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js"));
-  ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
-  ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
-  ({ monitorSlackProvider } = await import("./monitor.js"));
-});
 
 beforeEach(() => {
   resetInboundDedupe();
@@ -220,6 +220,55 @@ describe("monitorSlackProvider tool results", () => {
     expect((sendMock.mock.calls[0]?.[2] as { threadTs?: string } | undefined)?.threadTs).toBe(
       threadTs,
     );
+  }
+
+  function setMentionGatedAckConfig(statusReactionsEnabled: boolean) {
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        removeAckAfterReply: true,
+        statusReactions: statusReactionsEnabled
+          ? { enabled: true, timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 } }
+          : { enabled: false },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+  }
+
+  function mockGeneralChannelInfo() {
+    const client = getSlackClient();
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
+    const conversations = client.conversations as {
+      info: ReturnType<typeof vi.fn>;
+    };
+    conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+  }
+
+  async function runMentionGatedChannelMessageAndFlush() {
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        text: "<@bot-user> hello",
+        ts: "456",
+        channel_type: "channel",
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flush();
+  }
+
+  function expectReactionNames(names: string[]) {
+    expect(reactMock.mock.calls.map(([args]) => (args as { name: string }).name)).toEqual(names);
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {
@@ -551,8 +600,48 @@ describe("monitorSlackProvider tool results", () => {
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
       timestamp: "456",
+      name: "eyes",
+    });
+  });
+
+  it("keeps ack reaction when no reply is delivered and status reactions are disabled", async () => {
+    replyMock.mockResolvedValue(undefined);
+    setMentionGatedAckConfig(false);
+    mockGeneralChannelInfo();
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
       name: "👀",
     });
+  });
+
+  it("keeps ack reaction when no reply is delivered and status reactions are enabled", async () => {
+    replyMock.mockResolvedValue(undefined);
+    setMentionGatedAckConfig(true);
+    mockGeneralChannelInfo();
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
+      name: "eyes",
+    });
+  });
+
+  it("restores ack reaction when dispatch fails before any reply is delivered", async () => {
+    replyMock.mockRejectedValue(new Error("boom"));
+    setMentionGatedAckConfig(true);
+    mockGeneralChannelInfo();
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expectReactionNames(["eyes", "scream", "eyes", "eyes", "scream"]);
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
@@ -565,7 +654,8 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+    const sentText = sendMock.mock.calls[0]?.[1];
+    expectPairingReplyText(typeof sentText === "string" ? sentText : "", {
       channel: "slack",
       idLine: "Your Slack user id: U1",
       code: "PAIRCODE",

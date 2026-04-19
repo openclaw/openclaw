@@ -1,11 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import { describe, expect, it } from "vitest";
+import {
+  isNumericTelegramSenderUserId,
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "./allow-from.js";
 import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
 } from "./group-policy.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
+import { installMaybePersistResolvedTelegramTargetTests } from "./target-writeback.test-shared.js";
 import {
   isNumericTelegramChatId,
   normalizeTelegramChatId,
@@ -13,24 +17,6 @@ import {
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
-
-const readConfigFileSnapshotForWrite = vi.fn();
-const writeConfigFile = vi.fn();
-const loadCronStore = vi.fn();
-const resolveCronStorePath = vi.fn();
-const saveCronStore = vi.fn();
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    readConfigFileSnapshotForWrite,
-    writeConfigFile,
-    loadCronStore,
-    resolveCronStorePath,
-    saveCronStore,
-  };
-});
 
 describe("stripTelegramInternalPrefixes", () => {
   it("strips telegram prefix", () => {
@@ -177,7 +163,6 @@ describe("telegram group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
@@ -187,6 +172,48 @@ describe("telegram group policy", () => {
         allow: ["message.send"],
       },
     );
+  });
+
+  it("honors account-scoped topic requireMention overrides", () => {
+    const telegramCfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              topics: {
+                "77": {
+                  requireMention: true,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              botToken: "telegram-work",
+              groups: {
+                "-1001": {
+                  topics: {
+                    "77": {
+                      requireMention: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as any;
+
+    expect(
+      resolveTelegramGroupRequireMention({
+        cfg: telegramCfg,
+        accountId: "work",
+        groupId: "-1001:topic:77",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -212,6 +239,17 @@ describe("telegram allow-from helpers", () => {
       expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
     }
   });
+
+  it("accepts only positive numeric sender user IDs", () => {
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: false },
+      { value: "@someone", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramSenderUserId(testCase.value)).toBe(testCase.expected);
+    }
+  });
 });
 
 describe("telegram target normalization", () => {
@@ -235,165 +273,4 @@ describe("telegram target normalization", () => {
   });
 });
 
-describe("maybePersistResolvedTelegramTarget", () => {
-  let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
-    readConfigFileSnapshotForWrite.mockReset();
-    writeConfigFile.mockReset();
-    loadCronStore.mockReset();
-    resolveCronStorePath.mockReset();
-    saveCronStore.mockReset();
-    resolveCronStorePath.mockReturnValue("/tmp/cron/jobs.json");
-  });
-
-  it("skips writeback when target is already numeric", async () => {
-    await maybePersistResolvedTelegramTarget({
-      cfg: {} as OpenClawConfig,
-      rawTarget: "-100123",
-      resolvedChatId: "-100123",
-    });
-
-    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-    expect(loadCronStore).not.toHaveBeenCalled();
-  });
-
-  it("writes back matching config and cron targets", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        config: {
-          channels: {
-            telegram: {
-              defaultTo: "t.me/mychannel",
-              accounts: {
-                alerts: {
-                  defaultTo: "@mychannel",
-                },
-              },
-            },
-          },
-        },
-      },
-      writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-    });
-    loadCronStore.mockResolvedValue({
-      version: 1,
-      jobs: [
-        { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
-        { id: "b", delivery: { channel: "slack", to: "C123" } },
-      ],
-    });
-
-    await maybePersistResolvedTelegramTarget({
-      cfg: {
-        cron: { store: "/tmp/cron/jobs.json" },
-      } as OpenClawConfig,
-      rawTarget: "t.me/mychannel",
-      resolvedChatId: "-100123",
-    });
-
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          telegram: {
-            defaultTo: "-100123",
-            accounts: {
-              alerts: {
-                defaultTo: "-100123",
-              },
-            },
-          },
-        },
-      }),
-      expect.objectContaining({ expectedConfigPath: "/tmp/openclaw.json" }),
-    );
-    expect(saveCronStore).toHaveBeenCalledTimes(1);
-    expect(saveCronStore).toHaveBeenCalledWith(
-      "/tmp/cron/jobs.json",
-      expect.objectContaining({
-        jobs: [
-          { id: "a", delivery: { channel: "telegram", to: "-100123" } },
-          { id: "b", delivery: { channel: "slack", to: "C123" } },
-        ],
-      }),
-    );
-  });
-
-  it("preserves topic suffix style in writeback target", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        config: {
-          channels: {
-            telegram: {
-              defaultTo: "t.me/mychannel:topic:9",
-            },
-          },
-        },
-      },
-      writeOptions: {},
-    });
-    loadCronStore.mockResolvedValue({ version: 1, jobs: [] });
-
-    await maybePersistResolvedTelegramTarget({
-      cfg: {} as OpenClawConfig,
-      rawTarget: "t.me/mychannel:topic:9",
-      resolvedChatId: "-100123",
-    });
-
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          telegram: {
-            defaultTo: "-100123:topic:9",
-          },
-        },
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("matches username targets case-insensitively", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        config: {
-          channels: {
-            telegram: {
-              defaultTo: "https://t.me/mychannel",
-            },
-          },
-        },
-      },
-      writeOptions: {},
-    });
-    loadCronStore.mockResolvedValue({
-      version: 1,
-      jobs: [{ id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } }],
-    });
-
-    await maybePersistResolvedTelegramTarget({
-      cfg: {} as OpenClawConfig,
-      rawTarget: "@MyChannel",
-      resolvedChatId: "-100123",
-    });
-
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          telegram: {
-            defaultTo: "-100123",
-          },
-        },
-      }),
-      expect.any(Object),
-    );
-    expect(saveCronStore).toHaveBeenCalledWith(
-      "/tmp/cron/jobs.json",
-      expect.objectContaining({
-        jobs: [{ id: "a", delivery: { channel: "telegram", to: "-100123" } }],
-      }),
-    );
-  });
-});
+installMaybePersistResolvedTelegramTargetTests();

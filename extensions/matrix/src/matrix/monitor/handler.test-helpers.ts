@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -26,10 +26,14 @@ type MatrixHandlerTestHarnessOptions = {
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: Set<string>;
-  mentionRegexes?: MatrixMonitorHandlerParams["mentionRegexes"];
+  mentionRegexes?: RegExp[];
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
+  dmThreadReplies?: "off" | "inbound" | "always";
+  dmSessionScope?: "per-user" | "per-room";
+  streaming?: MatrixStreamingMode;
+  blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   textLimit?: number;
@@ -39,6 +43,7 @@ type MatrixHandlerTestHarnessOptions = {
   dropPreStartupMessages?: boolean;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
+  historyLimit?: number;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
@@ -190,26 +195,31 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: (options.cfg ?? {}) as never,
     accountId: options.accountId ?? "ops",
-    runtime: (options.runtime ??
+    runtime:
+      options.runtime ??
       ({
         error: () => {},
-      } as RuntimeEnv)) as RuntimeEnv,
-    logger: (options.logger ??
+      } as RuntimeEnv),
+    logger:
+      options.logger ??
       ({
         info: () => {},
         warn: () => {},
         error: () => {},
-      } as RuntimeLogger)) as RuntimeLogger,
+      } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
     allowFrom: options.allowFrom ?? [],
     groupAllowFrom: options.groupAllowFrom ?? [],
     roomsConfig: options.roomsConfig,
     accountAllowBots: options.accountAllowBots,
     configuredBotUserIds: options.configuredBotUserIds,
-    mentionRegexes: options.mentionRegexes ?? [],
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
     threadReplies: options.threadReplies ?? "inbound",
+    dmThreadReplies: options.dmThreadReplies,
+    dmSessionScope: options.dmSessionScope,
+    streaming: options.streaming ?? "off",
+    blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy: options.dmPolicy ?? "open",
     textLimit: options.textLimit ?? 8_000,
@@ -224,6 +234,7 @@ export function createMatrixHandlerTestHarness(
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
+    historyLimit: options.historyLimit ?? 0,
   });
 
   return {
@@ -245,11 +256,13 @@ export function createMatrixTextMessageEvent(params: {
   originServerTs?: number;
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
+  unsigned?: MatrixRawEvent["unsigned"];
 }): MatrixRawEvent {
   return createMatrixRoomMessageEvent({
     eventId: params.eventId,
     sender: params.sender,
     originServerTs: params.originServerTs,
+    unsigned: params.unsigned,
     content: {
       msgtype: "m.text",
       body: params.body,
@@ -263,6 +276,7 @@ export function createMatrixRoomMessageEvent(params: {
   eventId: string;
   sender?: string;
   originServerTs?: number;
+  unsigned?: MatrixRawEvent["unsigned"];
   content: RoomMessageEventContent;
 }): MatrixRawEvent {
   return {
@@ -271,6 +285,7 @@ export function createMatrixRoomMessageEvent(params: {
     event_id: params.eventId,
     origin_server_ts: params.originServerTs ?? Date.now(),
     content: params.content,
+    ...(params.unsigned ? { unsigned: params.unsigned } : {}),
   } as MatrixRawEvent;
 }
 

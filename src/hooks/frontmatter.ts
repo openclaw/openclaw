@@ -10,6 +10,7 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../shared/frontmatter.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import type {
   OpenClawHookMetadata,
   HookEntry,
@@ -57,10 +58,10 @@ export function resolveOpenClawMetadata(
   const eventsRaw = normalizeStringList(metadataObj.events);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
-    emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
-    homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
-    hookKey: typeof metadataObj.hookKey === "string" ? metadataObj.hookKey : undefined,
-    export: typeof metadataObj.export === "string" ? metadataObj.export : undefined,
+    emoji: readStringValue(metadataObj.emoji),
+    homepage: readStringValue(metadataObj.homepage),
+    hookKey: readStringValue(metadataObj.hookKey),
+    export: readStringValue(metadataObj.export),
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
     requires: requires,

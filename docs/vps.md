@@ -23,6 +23,7 @@ tuning that applies everywhere.
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
   <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
+  <Card title="Hostinger" href="/install/hostinger">VPS with one-click setup</Card>
   <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
@@ -93,10 +94,10 @@ For VM hosts using `systemd`, consider:
   - `TimeoutStartSec=90`
 - Prefer SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
-Example:
+For the standard `openclaw onboard --install-daemon` path, edit the user unit:
 
 ```bash
-sudo systemctl edit openclaw
+systemctl --user edit openclaw-gateway.service
 ```
 
 ```ini
@@ -107,6 +108,9 @@ Restart=always
 RestartSec=2
 TimeoutStartSec=90
 ```
+
+If you deliberately installed a system unit instead, edit
+`openclaw-gateway.service` via `sudo systemctl edit openclaw-gateway.service`.
 
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).

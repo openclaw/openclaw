@@ -6,6 +6,7 @@ import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileFailure,
+  markAuthProfileUsed,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
@@ -15,18 +16,17 @@ const storeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
   updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
 }));
+const fetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./store.js")>();
-  return {
-    ...original,
-    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
-  };
-});
+vi.mock("./store.js", () => ({
+  updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+  saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fetchMock.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
   storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
   authProfileUsageTesting.setDepsForTest({
     saveAuthProfileStore: storeMocks.saveAuthProfileStore,
@@ -40,6 +40,14 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
     profiles: {
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
       "openai:default": { type: "api_key", provider: "openai", key: "sk-test-2" },
+      "openai-codex:default": {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "codex-access-token",
+        refresh: "codex-refresh-token",
+        expires: 4_102_444_800_000,
+        accountId: "acct_test_123",
+      },
       "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-or-test" },
       "kilocode:default": { type: "api_key", provider: "kilocode", key: "sk-kc-test" },
     },
@@ -591,6 +599,59 @@ describe("clearAuthProfileCooldown", () => {
   });
 });
 
+describe("markAuthProfileUsed", () => {
+  it("updates usage stats and persists through the fallback save path when lock update misses", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        errorCount: 3,
+        cooldownUntil: Date.now() + 60_000,
+      },
+    });
+
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
+
+    await markAuthProfileUsed({
+      store,
+      profileId: "anthropic:default",
+      agentDir: "/tmp/openclaw-auth-profiles-used",
+    });
+
+    expect(storeMocks.saveAuthProfileStore).toHaveBeenCalledWith(
+      store,
+      "/tmp/openclaw-auth-profiles-used",
+    );
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toEqual(expect.any(Number));
+  });
+
+  it("adopts locked store usage stats without saving locally when lock update succeeds", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        errorCount: 3,
+        cooldownUntil: Date.now() + 60_000,
+      },
+    });
+    const lockedStore = makeStore({
+      "anthropic:default": {
+        lastUsed: 123_456,
+        errorCount: 0,
+      },
+    });
+
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(lockedStore);
+
+    await markAuthProfileUsed({
+      store,
+      profileId: "anthropic:default",
+      agentDir: "/tmp/openclaw-auth-profiles-used",
+    });
+
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+    expect(store.usageStats).toEqual(lockedStore.usageStats);
+  });
+});
+
 describe("markAuthProfileFailure — active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516
   // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
@@ -642,7 +703,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       label: "disabledUntil(auth_permanent)",
       reason: "auth_permanent" as const,
       buildUsageStats: (now: number): WindowStats => ({
-        disabledUntil: now + 20 * 60 * 60 * 1000,
+        disabledUntil: now + 50 * 60 * 1000,
         disabledReason: "auth_permanent",
         errorCount: 5,
         failureCounts: { auth_permanent: 5 },
@@ -698,7 +759,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, billing count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
+      // calculateDisabledLaneBackoffMs(1, 5h, 24h) = 5h
       expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
@@ -713,8 +774,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, auth_permanent count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
-      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      // calculateDisabledLaneBackoffMs(1, 10m, 60m) = 10m
+      expectedUntil: (now: number) => now + 10 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
   ];
@@ -736,6 +797,192 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       expect(testCase.readUntil(stats)).toBe(testCase.expectedUntil(now));
     });
   }
+});
+
+describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
+  function mockWhamResponse(status: number, body?: unknown): void {
+    fetchMock.mockResolvedValueOnce(
+      new Response(body === undefined ? "{}" : JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  }
+
+  async function markCodexFailureAt(params: {
+    store: ReturnType<typeof makeStore>;
+    now: number;
+    reason?: "rate_limit" | "unknown";
+    useLock?: boolean;
+  }): Promise<void> {
+    vi.useFakeTimers();
+    vi.setSystemTime(params.now);
+    if (params.useLock) {
+      storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+        async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
+          const freshStore = structuredClone(params.store);
+          const changed = lockParams.updater(freshStore);
+          return changed ? freshStore : null;
+        },
+      );
+    }
+    try {
+      await markAuthProfileFailure({
+        store: params.store,
+        profileId: "openai-codex:default",
+        reason: params.reason ?? "rate_limit",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it.each([
+    {
+      label: "burst contention",
+      response: {
+        rate_limit: {
+          limit_reached: false,
+          primary_window: { used_percent: 45, reset_after_seconds: 9_000 },
+        },
+      },
+      expectedMs: 15_000,
+    },
+    {
+      label: "personal rolling window",
+      response: {
+        rate_limit: {
+          limit_reached: true,
+          primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+        },
+      },
+      expectedMs: 3_600_000,
+    },
+    {
+      label: "team rolling window",
+      response: {
+        rate_limit: {
+          limit_reached: true,
+          primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+          secondary_window: { used_percent: 85, reset_after_seconds: 201_600 },
+        },
+      },
+      expectedMs: 3_600_000,
+    },
+    {
+      label: "team weekly window",
+      response: {
+        rate_limit: {
+          limit_reached: true,
+          primary_window: { used_percent: 90, reset_after_seconds: 7_200 },
+          secondary_window: { used_percent: 100, reset_after_seconds: 28_800 },
+        },
+      },
+      expectedMs: 14_400_000,
+    },
+  ])("maps $label to the expected cooldown", async ({ response, expectedMs }) => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(200, response);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/wham/usage",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Authorization: "Bearer codex-access-token",
+          "ChatGPT-Account-Id": "acct_test_123",
+        }),
+      }),
+    );
+    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + expectedMs);
+  });
+
+  it("maps HTTP 401 to a 12h cooldown", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(401);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 43_200_000);
+  });
+
+  it("maps HTTP 403 to a 24h cooldown", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(403);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 86_400_000);
+  });
+
+  it("maps other HTTP errors to a 5m cooldown", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(500);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 300_000);
+  });
+
+  it("preserves a longer existing cooldown via max semantics", async () => {
+    const now = 1_700_000_000_000;
+    const existingCooldownUntil = now + 6 * 60 * 60 * 1000;
+    const store = makeStore({
+      "openai-codex:default": {
+        cooldownUntil: existingCooldownUntil,
+        cooldownReason: "rate_limit",
+        errorCount: 2,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: false,
+        primary_window: { used_percent: 25, reset_after_seconds: 300 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, useLock: true });
+
+    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(existingCooldownUntil);
+  });
+
+  it("falls back to a 30s cooldown when the WHAM probe fails", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+
+    await markCodexFailureAt({ store, now, reason: "unknown" });
+
+    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 30_000);
+  });
+
+  it("leaves non-codex providers on the normal stepped backoff path", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(now + 30_000);
+  });
 });
 
 describe("markAuthProfileFailure — per-model cooldown metadata", () => {

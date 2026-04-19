@@ -32,12 +32,18 @@ vi.mock("../../config/sessions.js", () => ({
   },
 }));
 
-vi.mock("../../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: async () => "/tmp/openclaw",
-}));
+vi.mock("../../infra/openclaw-root.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/openclaw-root.js")>(
+    "../../infra/openclaw-root.js",
+  );
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: async () => "/tmp/openclaw",
+  };
+});
 
-vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
-  const actual = await importOriginal();
+vi.mock("../../infra/restart-sentinel.js", async () => {
+  const actual = await vi.importActual("../../infra/restart-sentinel.js");
   return {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
@@ -90,7 +96,7 @@ beforeEach(() => {
 
 async function invokeUpdateRun(
   params: Record<string, unknown>,
-  respond: ((ok: boolean, response?: unknown) => void) | undefined = undefined,
+  respond?: (ok: boolean, response?: unknown) => void,
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});

@@ -1,22 +1,21 @@
-import "./lifecycle.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import "./lifecycle.test-support.js";
+import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
   createResolvedFeishuLifecycleAccount,
-  expectFeishuReplyPipelineDedupedAcrossReplay,
-  expectFeishuSingleEffectAcrossReplay,
   expectFeishuReplyDispatcherSentFinalReplyOnce,
+  expectFeishuReplyPipelineDedupedAcrossReplay,
+  expectFeishuReplyPipelineDedupedAfterPostSendFailure,
+  expectFeishuSingleEffectAcrossReplay,
   installFeishuLifecycleReplyRuntime,
   mockFeishuReplyOnceDispatch,
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
-} from "../../../test/helpers/extensions/feishu-lifecycle.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
-import type { ResolvedFeishuAccount } from "./types.js";
+} from "./test-support/lifecycle-test-support.js";
 
 const {
   createEventDispatcherMock,
@@ -30,8 +29,8 @@ const {
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime: RuntimeEnv | null = null;
+let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
   accountId: "acct-menu",
@@ -43,7 +42,7 @@ const lifecycleConfig = createFeishuLifecycleConfig({
   accountConfig: {
     dmPolicy: "open",
   },
-}) as ClawdbotConfig;
+});
 
 const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   accountId: "acct-menu",
@@ -52,7 +51,7 @@ const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   config: {
     dmPolicy: "open",
   },
-}) as ResolvedFeishuAccount;
+});
 
 function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
   return {
@@ -73,7 +72,7 @@ async function setupLifecycleMonitor() {
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
     onRegister: (registered) => {
-      handlers = registered;
+      _handlers = registered;
     },
     runtime: lastRuntime,
     cfg: lifecycleConfig,
@@ -87,7 +86,7 @@ describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    handlers = {};
+    _handlers = {};
     lastRuntime = null;
     setFeishuLifecycleStateDir("openclaw-feishu-bot-menu");
 
@@ -166,6 +165,7 @@ describe("Feishu bot-menu lifecycle", () => {
       event,
       dispatchReplyFromConfigMock,
       createFeishuReplyDispatcherMock,
+      waitTimeoutMs: 5_000,
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
@@ -188,6 +188,31 @@ describe("Feishu bot-menu lifecycle", () => {
     );
     expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
 
+    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
+  });
+
+  it("does not duplicate delivery when launcher fallback hits a post-send failure", async () => {
+    const onBotMenu = await setupLifecycleMonitor();
+    const event = createBotMenuEvent({
+      eventKey: "quick-actions",
+      timestamp: "1700000000002",
+    });
+    sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
+    dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
+      await dispatcher.sendFinalReply({ text: "menu reply once" });
+      throw new Error("post-send failure");
+    });
+
+    await expectFeishuReplyPipelineDedupedAfterPostSendFailure({
+      handler: onBotMenu,
+      event,
+      dispatchReplyFromConfigMock,
+      runtimeErrorMock: lastRuntime?.error as ReturnType<typeof vi.fn>,
+      waitTimeoutMs: 5_000,
+    });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
 });

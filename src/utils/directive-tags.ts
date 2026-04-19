@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -19,11 +21,47 @@ const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
   /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
 
+function replacementPreservesWordBoundary(source: string, offset: number, length: number): string {
+  const before = source[offset - 1];
+  const after = source[offset + length];
+  return before && after && !/\s/u.test(before) && !/\s/u.test(after) ? " " : "";
+}
+
+const BLOCK_SENTINEL_SEED = "\uE000";
+
+function createBlockSentinel(text: string): string {
+  let sentinel = BLOCK_SENTINEL_SEED;
+  while (text.includes(sentinel)) {
+    sentinel += BLOCK_SENTINEL_SEED;
+  }
+  return sentinel;
+}
+
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  // Extract → normalize prose → restore:
+  // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
+  // under a sentinel-delimited placeholder so the prose regexes never touch them.
+  const blockSentinel = createBlockSentinel(text);
+  const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
+  const blocks: string[] = [];
+  const masked = text.replace(
+    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[^\n]*|(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm,
+    (block) => {
+      blocks.push(block);
+      return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
+    },
+  );
+
+  const normalized = masked
+    .replace(/\r\n/g, "\n")
+    .replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2")
+    .replace(/^\n+/, "")
+    .replace(/^[ \t](?=\S)/, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+
+  return normalized.replace(blockPlaceholderRe, (_, i) => blocks[Number(i)]);
 }
 
 type StripInlineDirectiveTagsResult = {
@@ -127,13 +165,13 @@ export function parseInlineDirectives(
   let sawCurrent = false;
   let lastExplicitId: string | undefined;
 
-  cleaned = cleaned.replace(AUDIO_TAG_RE, (match) => {
+  cleaned = cleaned.replace(AUDIO_TAG_RE, (match, offset, source) => {
     audioAsVoice = true;
     hasAudioTag = true;
-    return stripAudioTag ? " " : match;
+    return stripAudioTag ? replacementPreservesWordBoundary(source, offset, match.length) : match;
   });
 
-  cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined) => {
+  cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined, offset, source) => {
     hasReplyTag = true;
     if (idRaw === undefined) {
       sawCurrent = true;
@@ -143,13 +181,13 @@ export function parseInlineDirectives(
         lastExplicitId = id;
       }
     }
-    return stripReplyTags ? " " : match;
+    return stripReplyTags ? replacementPreservesWordBoundary(source, offset, match.length) : match;
   });
 
   cleaned = normalizeDirectiveWhitespace(cleaned);
 
   const replyToId =
-    lastExplicitId ?? (sawCurrent ? currentMessageId?.trim() || undefined : undefined);
+    lastExplicitId ?? (sawCurrent ? normalizeOptionalString(currentMessageId) : undefined);
 
   return {
     text: cleaned,

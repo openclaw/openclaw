@@ -1,32 +1,37 @@
 import { Type } from "@sinclair/typebox";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 
-const handleDiscordMessageActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const handleDiscordMessageActionMock = vi.hoisted(() =>
+  vi.fn(async () => ({ content: [], details: { ok: true } })),
+);
 
-vi.mock("./actions/handle-action.js", () => ({
-  handleDiscordMessageAction: handleDiscordMessageActionMock,
-}));
-
-import { discordMessageActions } from "./channel-actions.js";
+const handleActionModule = await import("./actions/handle-action.js");
+vi.spyOn(handleActionModule, "handleDiscordMessageAction").mockImplementation(
+  handleDiscordMessageActionMock,
+);
+const { discordMessageActions } = await import("./channel-actions.js");
 
 describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            enabled: true,
+    withEnv({ DISCORD_BOT_TOKEN: undefined }, () => {
+      const discovery = discordMessageActions.describeMessageTool?.({
+        cfg: {
+          channels: {
+            discord: {
+              enabled: true,
+            },
           },
-        },
-      } as OpenClawConfig,
-    });
+        } as OpenClawConfig,
+      });
 
-    expect(discovery).toEqual({
-      actions: [],
-      capabilities: [],
-      schema: null,
+      expect(discovery).toEqual({
+        actions: [],
+        capabilities: [],
+        schema: null,
+      });
     });
   });
 
@@ -55,6 +60,45 @@ describe("discordMessageActions", () => {
     );
     expect(discovery?.actions).not.toContain("channel-create");
     expect(discovery?.actions).not.toContain("role-add");
+  });
+
+  it("honors account-scoped action gates during discovery", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot token-main",
+          actions: {
+            reactions: false,
+            polls: true,
+          },
+          accounts: {
+            work: {
+              token: "Bot token-work",
+              actions: {
+                reactions: true,
+                polls: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const defaultDiscovery = discordMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "default",
+    });
+    const workDiscovery = discordMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "work",
+    });
+
+    expect(defaultDiscovery?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
+    expect(defaultDiscovery?.actions).not.toContain("react");
+    expect(workDiscovery?.actions).toEqual(
+      expect.arrayContaining(["send", "react", "reactions", "emoji-list"]),
+    );
+    expect(workDiscovery?.actions).not.toContain("poll");
   });
 
   it("keeps components optional in the message tool schema", () => {
@@ -111,7 +155,7 @@ describe("discordMessageActions", () => {
     await discordMessageActions.handleAction?.({
       channel: "discord",
       action: "send",
-      params: { to: "channel:123", text: "hello" },
+      params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",
@@ -121,7 +165,7 @@ describe("discordMessageActions", () => {
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
       action: "send",
-      params: { to: "channel:123", text: "hello" },
+      params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",

@@ -1,11 +1,11 @@
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { setLoggerOverride } from "../../../src/logging.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import {
   createWebInboundDeliverySpies,
   createMockWebListener,
@@ -17,13 +17,14 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 
 installWebAutoReplyTestHomeHooks();
 
 async function startWatchdogScenario(params: {
-  monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 }) {
   const sleep = vi.fn(async () => {});
   const scripted = createScriptedWebListenerFactory();
@@ -36,8 +37,12 @@ async function startWatchdogScenario(params: {
     watchdogCheckMs: 5,
   });
 
-  await Promise.resolve();
-  expect(scripted.getListenerCount()).toBe(1);
+  await vi.waitFor(
+    () => {
+      expect(scripted.getListenerCount()).toBe(1);
+    },
+    { timeout: 250, interval: 2 },
+  );
   await vi.waitFor(
     () => {
       expect(scripted.getOnMessage()).toBeTypeOf("function");
@@ -61,9 +66,9 @@ async function startWatchdogScenario(params: {
 describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
 
-  let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
   beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply.js"));
+    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
   });
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
@@ -95,8 +100,12 @@ describe("web auto-reply connection", () => {
         reconnect: scenario.reconnect,
       });
 
-      await Promise.resolve();
-      expect(scripted.getListenerCount()).toBe(1);
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
 
       scripted.resolveClose(0);
       await vi.waitFor(
@@ -130,8 +139,12 @@ describe("web auto-reply connection", () => {
       reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
     });
 
-    await Promise.resolve();
-    expect(scripted.getListenerCount()).toBe(1);
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
     scripted.resolveClose(0, {
       status: 440,
       isLoggedOut: false,
@@ -188,7 +201,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("keeps watchdog message age across reconnects", async () => {
+  it("gives a reconnected listener a fresh watchdog window", async () => {
     vi.useFakeTimers();
     try {
       const { scripted, controller, run } = await startWatchdogScenario({
@@ -203,7 +216,11 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(scripted.getListenerCount()).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(20);
       await Promise.resolve();
       await vi.waitFor(
         () => {
@@ -223,6 +240,109 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            default: {
+              debounceMs: 250,
+            },
+            work: {
+              authDir: "/tmp/work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
+  });
+
+  it("matches per-account debounce overrides case-insensitively", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+              debounceMs: 250,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "Work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
+  });
+
+  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      messages: {
+        inbound: {
+          debounceMs: 250,
+        },
+      },
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    setRuntimeConfigSourceSnapshotMock(null);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

@@ -1,7 +1,7 @@
 import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
@@ -23,8 +23,25 @@ let timeoutMemberDiscord: typeof import("./send.js").timeoutMemberDiscord;
 let uploadEmojiDiscord: typeof import("./send.js").uploadEmojiDiscord;
 let uploadStickerDiscord: typeof import("./send.js").uploadStickerDiscord;
 
+function createCompatRateLimitError(
+  response: Response,
+  body: { message: string; retry_after: number; global: boolean },
+  request?: Request,
+): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/channels/789/messages", {
+      method: "POST",
+    });
+  const RateLimitErrorCtor = RateLimitError as unknown as new (
+    response: Response,
+    body: { message: string; retry_after: number; global: boolean },
+    request?: Request,
+  ) => RateLimitError;
+  return new RateLimitErrorCtor(response, body, compatRequest);
+}
+
 beforeAll(async () => {
-  vi.resetModules();
   ({
     addRoleDiscord,
     banMemberDiscord,
@@ -44,6 +61,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/web-media");
 });
 
 describe("sendMessageDiscord", () => {
@@ -413,6 +438,9 @@ describe("sendPollDiscord", () => {
 });
 
 function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
+  const request = new Request("https://discord.com/api/v10/channels/789/messages", {
+    method: "POST",
+  });
   const response = new Response(null, {
     status: 429,
     headers: {
@@ -420,11 +448,15 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
       "X-RateLimit-Bucket": "test-bucket",
     },
   });
-  return new RateLimitError(response, {
-    message: "You are being rate limited.",
-    retry_after: retryAfter,
-    global: false,
-  });
+  return createCompatRateLimitError(
+    response,
+    {
+      message: "You are being rate limited.",
+      retry_after: retryAfter,
+      global: false,
+    },
+    request,
+  );
 }
 
 describe("retry rate limits", () => {
@@ -451,29 +483,29 @@ describe("retry rate limits", () => {
   });
 
   it("uses retry_after delays when rate limited", async () => {
-    vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
-    const { rest, postMock } = makeDiscordRest();
-    const rateLimitError = createMockRateLimitError(0.5);
+    try {
+      const { rest, postMock } = makeDiscordRest();
+      const rateLimitError = createMockRateLimitError(0.001);
 
-    postMock
-      .mockRejectedValueOnce(rateLimitError)
-      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+      postMock
+        .mockRejectedValueOnce(rateLimitError)
+        .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
 
-    const promise = sendMessageDiscord("channel:789", "hello", {
-      rest,
-      token: "t",
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
-    });
+      const promise = sendMessageDiscord("channel:789", "hello", {
+        rest,
+        token: "t",
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+      });
 
-    await vi.runAllTimersAsync();
-    await expect(promise).resolves.toEqual({
-      messageId: "msg1",
-      channelId: "789",
-    });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
-    setTimeoutSpy.mockRestore();
-    vi.useRealTimers();
+      await expect(promise).resolves.toEqual({
+        messageId: "msg1",
+        channelId: "789",
+      });
+      expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("stops after max retry attempts", async () => {

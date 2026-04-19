@@ -17,9 +17,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Preflight: establish routing truth and planner-owned matrices once, then let
-  # real work fan out from a single source of truth.
+  # Preflight: establish routing truth and job matrices once, then let real
+  # work fan out from a single source of truth.
   preflight:
+    permissions:
+      contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
@@ -35,17 +37,19 @@ jobs:
       has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
       changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
-      run_release_check: ${{ steps.manifest.outputs.run_release_check }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
-      checks_fast_matrix: ${{ steps.manifest.outputs.checks_fast_matrix }}
+      checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
+      checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
+      checks_node_core_test_matrix: ${{ steps.manifest.outputs.checks_node_core_test_matrix }}
       run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
       extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
       checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
@@ -104,7 +108,7 @@ jobs:
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+          import { listChangedExtensionIds } from "./scripts/lib/changed-extensions.mjs";
 
           const extensionIds = listChangedExtensionIds({
             base: process.env.BASE_SHA,
@@ -128,13 +132,176 @@ jobs:
           OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
           OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
-        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import {
+            createNodeTestShards,
+          } from "./scripts/lib/ci-node-test-plan.mjs";
+          import {
+            createExtensionTestShards,
+            DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+          } from "./scripts/lib/extension-test-plan.mjs";
+
+          const parseBoolean = (value, fallback = false) => {
+            if (value === undefined) return fallback;
+            const normalized = value.trim().toLowerCase();
+            if (normalized === "true" || normalized === "1") return true;
+            if (normalized === "false" || normalized === "0" || normalized === "") return false;
+            return fallback;
+          };
+
+          const parseJson = (value, fallback) => {
+            try {
+              return value ? JSON.parse(value) : fallback;
+            } catch {
+              return fallback;
+            }
+          };
+
+          const createMatrix = (include) => ({ include });
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
+          const isPush = eventName === "push";
+          const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
+          const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
+          const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
+          const runMacos = parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly;
+          const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
+          const runWindows = parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly;
+          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
+          const runControlUiI18n =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
+          const hasChangedExtensions =
+            parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
+          const changedExtensionsMatrix = hasChangedExtensions
+            ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
+            : { include: [] };
+          const extensionShardMatrix = createMatrix(
+            runNode
+              ? createExtensionTestShards({
+                  shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+                }).map((shard) => ({
+                  check_name: shard.checkName,
+                  extensions_csv: shard.extensionIds.join(","),
+                  shard_index: shard.index + 1,
+                  task: "extensions-batch",
+                }))
+              : [],
+          );
+
+          const manifest = {
+            docs_only: docsOnly,
+            docs_changed: docsChanged,
+            run_node: runNode,
+            run_macos: runMacos,
+            run_android: runAndroid,
+            run_skills_python: runSkillsPython,
+            run_windows: runWindows,
+            has_changed_extensions: hasChangedExtensions,
+            changed_extensions_matrix: changedExtensionsMatrix,
+            run_build_artifacts: runNode,
+            run_checks_fast: runNode,
+            checks_fast_core_matrix: createMatrix(
+              runNode
+                ? [
+                    { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
+                    {
+                      check_name: "checks-fast-contracts-protocol",
+                      runtime: "node",
+                      task: "contracts",
+                    },
+                  ]
+                : [],
+            ),
+            checks_node_extensions_matrix: extensionShardMatrix,
+            run_checks: runNode,
+            checks_matrix: createMatrix(
+              runNode
+                ? [
+                    { check_name: "checks-node-channels", runtime: "node", task: "channels" },
+                    ...(isPush
+                      ? [
+                          {
+                            check_name: "checks-node-compat-node22",
+                            runtime: "node",
+                            task: "compat-node22",
+                            node_version: "22.18.0",
+                            cache_key_suffix: "node22",
+                          },
+                        ]
+                      : []),
+                  ]
+                : [],
+            ),
+            checks_node_core_test_matrix: createMatrix(
+              runNode
+                ? createNodeTestShards().map((shard) => ({
+                    check_name: shard.checkName,
+                    runtime: "node",
+                    task: "test-shard",
+                    shard_name: shard.shardName,
+                    configs: shard.configs,
+                    requires_dist: shard.requiresDist,
+                  }))
+                : [],
+            ),
+            run_extension_fast: hasChangedExtensions,
+            extension_fast_matrix: createMatrix(
+              hasChangedExtensions
+                ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
+                    check_name: `extension-fast-${entry.extension}`,
+                    extension: entry.extension,
+                  }))
+                : [],
+            ),
+            run_check: runNode,
+            run_check_additional: runNode,
+            run_build_smoke: runNode,
+            run_check_docs: docsChanged,
+            run_control_ui_i18n: runControlUiI18n,
+            run_skills_python_job: runSkillsPython,
+            run_checks_windows: runWindows,
+            checks_windows_matrix: createMatrix(
+              runWindows
+                ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
+                : [],
+            ),
+            run_macos_node: runMacos,
+            macos_node_matrix: createMatrix(
+              runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
+            ),
+            run_macos_swift: runMacos,
+            run_android_job: runAndroid,
+            android_matrix: createMatrix(
+              runAndroid
+                ? [
+                    { check_name: "android-test-play", task: "test-play" },
+                    { check_name: "android-test-third-party", task: "test-third-party" },
+                    { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-build-third-party", task: "build-third-party" },
+                  ]
+                : [],
+            ),
+          };
+
+          for (const [key, value] of Object.entries(manifest)) {
+            appendFileSync(
+              outputPath,
+              `${key}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
+              "utf8",
+            );
+          }
+          EOF
 
   # Run the fast security/SCM checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
   security-fast:
+    permissions:
+      contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
@@ -233,16 +400,60 @@ jobs:
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
   # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
+    permissions:
+      contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
@@ -258,16 +469,23 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Build dist
-        run: pnpm build
+        run: pnpm build:ci-artifacts
 
       - name: Build Control UI
         run: pnpm ui:build
+
+      - name: Cache dist build
+        uses: actions/cache@v5
+        with:
+          path: dist/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
           name: dist-build
           path: dist/
+          compression-level: 0
           retention-days: 1
 
       - name: Upload A2UI bundle artifact
@@ -278,49 +496,65 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
-  # Validate npm pack contents after build (only on push to main, not PRs).
-  release-check:
-    needs: [preflight, build-artifacts]
-    if: needs.preflight.outputs.run_release_check == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Check release contents
-        run: pnpm release:check
-
-  checks-fast:
+  checks-fast-core:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -330,17 +564,17 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
+          OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
-            extensions)
-              pnpm test:extensions
+            bundled)
+              pnpm test:bundled
               ;;
-            contracts|contracts-protocol)
+            contracts)
               pnpm test:contracts
-              pnpm protocol:check
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -348,12 +582,169 @@ jobs:
               ;;
           esac
 
+  checks-fast-protocol:
+    permissions:
+      contents: read
+    name: "checks-fast-protocol"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run protocol check
+        run: pnpm protocol:check
+
+  checks-node-extensions-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run extension shard
+        env:
+          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
+        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+
+  checks-node-extensions:
+    permissions:
+      contents: read
+    name: checks-node-extensions
+    needs: [preflight, checks-node-extensions-shard]
+    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Verify extension shards
+        env:
+          SHARD_RESULT: ${{ needs.checks-node-extensions-shard.result }}
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Extension shard checks failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
+
   checks:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
@@ -364,10 +755,52 @@ jobs:
 
       - name: Checkout
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
@@ -382,20 +815,14 @@ jobs:
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
           TASK: ${{ matrix.task }}
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
-          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-          if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
+          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+          if [ "$TASK" = "test" ]; then
+            echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
           fi
-          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+          if [ "$TASK" = "channels" ]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
@@ -416,6 +843,7 @@ jobs:
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         env:
           TASK: ${{ matrix.task }}
+          NODE_OPTIONS: --max-old-space-size=6144
         shell: bash
         run: |
           set -euo pipefail
@@ -432,8 +860,6 @@ jobs:
               node openclaw.mjs --help
               node openclaw.mjs status --json --timeout 1
               pnpm test:build:singleton
-              node scripts/stage-bundled-plugin-runtime-deps.mjs
-              node --import tsx scripts/release-check.ts
               ;;
             *)
               echo "Unsupported checks task: $TASK" >&2
@@ -441,21 +867,216 @@ jobs:
               ;;
           esac
 
+  checks-node-core-test-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_test_matrix) }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "${{ matrix.node_version || '24.x' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Configure Node test resources
+        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+
+      - name: Restore dist cache
+        id: dist-cache
+        if: matrix.requires_dist == true
+        uses: actions/cache@v5
+        with:
+          path: dist/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+
+      - name: Download dist artifact
+        if: matrix.requires_dist == true && steps.dist-cache.outputs.cache-hit != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Run Node test shard
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+          OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { spawnSync } from "node:child_process";
+          import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./scripts/run-vitest.mjs";
+
+          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
+          if (!Array.isArray(configs) || configs.length === 0) {
+            console.error("Missing node test shard configs");
+            process.exit(1);
+          }
+
+          for (const config of configs) {
+            console.error(`[test] starting ${config}`);
+            const result = spawnSync(
+              "pnpm",
+              [
+                "exec",
+                "node",
+                ...resolveVitestNodeArgs(process.env),
+                resolveVitestCliEntry(),
+                "run",
+                "--config",
+                config,
+              ],
+              {
+                env: process.env,
+                stdio: "inherit",
+              },
+            );
+            if ((result.status ?? 1) !== 0) {
+              process.exit(result.status ?? 1);
+            }
+          }
+          EOF
+
+  checks-node-core-test:
+    permissions:
+      contents: read
+    name: checks-node-core
+    needs: [preflight, checks-node-core-test-shard]
+    if: always() && needs.preflight.outputs.run_checks == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Verify node test shards
+        env:
+          SHARD_RESULT: ${{ needs.checks-node-core-test-shard.result }}
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Node test shards failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
+
   extension-fast:
+    permissions:
+      contents: read
     name: "extension-fast"
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -470,6 +1091,8 @@ jobs:
 
   # Types, lint, and format check.
   check:
+    permissions:
+      contents: read
     name: "check"
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check == 'true'
@@ -477,10 +1100,52 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -489,23 +1154,79 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 
-  check-additional:
-    name: "check-additional"
+  check-additional-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check_additional == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - check_name: check-additional-boundaries
+            group: boundaries
+          - check_name: check-additional-extension-surfaces
+            group: extension-surfaces
+          - check_name: check-additional-runtime-topology
+            group: runtime-topology
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -513,87 +1234,101 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
-      - name: Run plugin extension boundary guard
-        id: plugin_extension_boundary
-        continue-on-error: true
-        run: pnpm run lint:plugins:no-extension-imports
+      - name: Run additional check shard
+        env:
+          ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 4
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Run web search provider boundary guard
-        id: web_search_provider_boundary
-        continue-on-error: true
-        run: pnpm run lint:web-search-provider-boundaries
+          failures=0
 
-      - name: Run extension src boundary guard
-        id: extension_src_outside_plugin_sdk_boundary
-        continue-on-error: true
-        run: pnpm run lint:extensions:no-src-outside-plugin-sdk
+          run_check() {
+            local label="$1"
+            shift
 
-      - name: Run extension plugin-sdk-internal guard
-        id: extension_plugin_sdk_internal_boundary
-        continue-on-error: true
-        run: pnpm run lint:extensions:no-plugin-sdk-internal
+            echo "::group::${label}"
+            if "$@"; then
+              echo "[ok] ${label}"
+            else
+              echo "::error title=${label} failed::${label} failed"
+              failures=1
+            fi
+            echo "::endgroup::"
+          }
 
-      - name: Enforce safe external URL opening policy
-        id: no_raw_window_open
-        continue-on-error: true
-        run: pnpm lint:ui:no-raw-window-open
+          case "$ADDITIONAL_CHECK_GROUP" in
+            boundaries)
+              run_check "plugin-extension-boundary" pnpm run lint:plugins:no-extension-imports
+              run_check "lint:tmp:no-random-messaging" pnpm run lint:tmp:no-random-messaging
+              run_check "lint:tmp:channel-agnostic-boundaries" pnpm run lint:tmp:channel-agnostic-boundaries
+              run_check "lint:tmp:tsgo-core-boundary" pnpm run lint:tmp:tsgo-core-boundary
+              run_check "lint:tmp:no-raw-channel-fetch" pnpm run lint:tmp:no-raw-channel-fetch
+              run_check "lint:agent:ingress-owner" pnpm run lint:agent:ingress-owner
+              run_check "lint:plugins:no-register-http-handler" pnpm run lint:plugins:no-register-http-handler
+              run_check "lint:plugins:no-monolithic-plugin-sdk-entry-imports" pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
+              run_check "lint:plugins:no-extension-src-imports" pnpm run lint:plugins:no-extension-src-imports
+              run_check "lint:plugins:no-extension-test-core-imports" pnpm run lint:plugins:no-extension-test-core-imports
+              run_check "lint:plugins:plugin-sdk-subpaths-exported" pnpm run lint:plugins:plugin-sdk-subpaths-exported
+              run_check "web-search-provider-boundary" pnpm run lint:web-search-provider-boundaries
+              run_check "web-fetch-provider-boundary" pnpm run lint:web-fetch-provider-boundaries
+              run_check "extension-src-outside-plugin-sdk-boundary" pnpm run lint:extensions:no-src-outside-plugin-sdk
+              run_check "extension-plugin-sdk-internal-boundary" pnpm run lint:extensions:no-plugin-sdk-internal
+              run_check "extension-relative-outside-package-boundary" pnpm run lint:extensions:no-relative-outside-package
+              run_check "lint:ui:no-raw-window-open" pnpm lint:ui:no-raw-window-open
+              ;;
+            extension-surfaces)
+              run_check "lint:extensions:channels" pnpm run lint:extensions:channels
+              run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
+              run_check "test:extensions:package-boundary" pnpm run test:extensions:package-boundary
+              ;;
+            runtime-topology)
+              if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then
+                run_check "ui:i18n:check" pnpm ui:i18n:check
+              fi
+              run_check "gateway-watch-regression" pnpm test:gateway:watch-regression
+              run_check "check:import-cycles" pnpm check:import-cycles
+              run_check "check:madge-import-cycles" pnpm check:madge-import-cycles
+              ;;
+            *)
+              echo "Unsupported additional check group: $ADDITIONAL_CHECK_GROUP" >&2
+              exit 1
+              ;;
+          esac
 
-      - name: Run gateway watch regression harness
-        id: gateway_watch_regression
-        continue-on-error: true
-        run: pnpm test:gateway:watch-regression
-
-      - name: Check config docs drift statefile
-        id: config_docs_drift
-        continue-on-error: true
-        run: pnpm config:docs:check
-
-      - name: Check plugin SDK API baseline drift
-        id: plugin_sdk_api_drift
-        continue-on-error: true
-        run: pnpm plugin-sdk:api:check
+          exit "$failures"
 
       - name: Upload gateway watch regression artifacts
-        if: always()
+        if: always() && matrix.group == 'runtime-topology'
         uses: actions/upload-artifact@v7
         with:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
 
-      - name: Fail if any additional check failed
-        if: always()
+  check-additional:
+    permissions:
+      contents: read
+    name: "check-additional"
+    needs: [preflight, check-additional-shard]
+    if: always() && needs.preflight.outputs.run_check_additional == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Verify additional check shards
         env:
-          PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
-          WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
-          EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
-          EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
-          NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
-          GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
-          CONFIG_DOCS_DRIFT_OUTCOME: ${{ steps.config_docs_drift.outcome }}
-          PLUGIN_SDK_API_DRIFT_OUTCOME: ${{ steps.plugin_sdk_api_drift.outcome }}
+          SHARD_RESULT: ${{ needs.check-additional-shard.result }}
         run: |
-          failures=0
-          for result in \
-            "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
-            "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
-            "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
-            "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
-            "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
-            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
-            "config-docs-drift|$CONFIG_DOCS_DRIFT_OUTCOME" \
-            "plugin-sdk-api-drift|$PLUGIN_SDK_API_DRIFT_OUTCOME"; do
-            name="${result%%|*}"
-            outcome="${result#*|}"
-            if [ "$outcome" != "success" ]; then
-              echo "::error title=${name} failed::${name} outcome: ${outcome}"
-              failures=1
-            fi
-          done
-
-          exit "$failures"
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Additional check shards failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
 
   build-smoke:
+    permissions:
+      contents: read
     name: "build-smoke"
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
@@ -601,10 +1336,52 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -612,8 +1389,16 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
-      - name: Download dist artifact
+      - name: Restore dist cache
+        id: build-smoke-dist-cache
         if: github.event_name == 'push'
+        uses: actions/cache@v5
+        with:
+          path: dist/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+
+      - name: Download dist artifact
+        if: github.event_name == 'push' && steps.build-smoke-dist-cache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v8
         with:
           name: dist-build
@@ -632,21 +1417,68 @@ jobs:
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
 
+      - name: Smoke test built bundled runtime deps
+        run: pnpm test:build:bundled-runtime-deps
+
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
+    permissions:
+      contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/2 succeeded"
+          }
+
+          for attempt in 1 2; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/2 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 2 attempts" >&2
+          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -658,6 +1490,8 @@ jobs:
         run: pnpm check:docs
 
   skills-python:
+    permissions:
+      contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -686,16 +1520,18 @@ jobs:
         run: python -m pytest -q skills
 
   checks-windows:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
-      # Windows shard 2 has shown intermittent instability at 2 workers.
-      OPENCLAW_TEST_WORKERS: 1
+      OPENCLAW_VITEST_MAX_WORKERS: 1
+      OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
       run:
         shell: bash
@@ -737,7 +1573,7 @@ jobs:
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "10.23.0"
+          pnpm-version: "10.32.1"
           cache-key-suffix: "node24"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
@@ -768,15 +1604,6 @@ jobs:
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Configure test shard (Windows)
-        if: matrix.task == 'test'
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-
       - name: Download dist artifact
         if: matrix.task == 'test'
         uses: actions/download-artifact@v8
@@ -799,7 +1626,9 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              # Linux owns the full repo test suite. Keep the Windows runner focused on
+              # Windows-native process/path wrappers so platform regressions fail fast.
+              pnpm test:windows:ci
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2
@@ -808,10 +1637,12 @@ jobs:
           esac
 
   macos-node:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -840,24 +1671,43 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
-      - name: Configure test shard (macOS)
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
+      - name: Patch mlx-audio-swift manifest
         run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+          set -euo pipefail
+          swift package resolve --package-path apps/macos >/dev/null
+          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
+          text = path.read_text()
+          if "Models/Qwen3/README.md" in text:
+              print("mlx-audio-swift README excludes already present")
+              raise SystemExit(0)
+
+          needle = '            path: "Sources/MLXAudioTTS"\n'
+          replacement = """            path: \"Sources/MLXAudioTTS\",\n            exclude: [\n                \"Models/Llama/README.md\",\n                \"Models/Marvis/README.md\",\n                \"Models/PocketTTS/README.md\",\n                \"Models/Qwen3/README.md\",\n                \"Models/Soprano/README.md\",\n            ]\n"""
+
+          if needle not in text:
+              raise SystemExit("Could not find MLXAudioTTS target path in mlx-audio-swift Package.swift")
+
+          path.write_text(text.replace(needle, replacement, 1))
+          print(f"Patched {path}")
+          PY
 
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_VITEST_MAX_WORKERS: 2
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              # Linux owns the full repo test suite. Keep macOS CI focused on
+              # launchd/Homebrew/runtime path coverage and the process-group wrapper.
+              pnpm test:macos:ci
               ;;
             *)
               echo "Unsupported macOS node task: $TASK" >&2
@@ -866,10 +1716,12 @@ jobs:
           esac
 
   macos-swift:
+    permissions:
+      contents: read
     name: "macos-swift"
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    runs-on: macos-latest
+    runs-on: blacksmith-12vcpu-macos-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -878,13 +1730,17 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
-
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
+
+      - name: Detect Swift toolchain cache key
+        id: swift-toolchain
+        run: |
+          set -euo pipefail
+          xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
+          swift_version="$(swift --version | head -n 1)"
+          toolchain_key="$(printf '%s\n%s\n' "$xcode_version" "$swift_version" | shasum -a 256 | awk '{print $1}')"
+          echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM
         uses: actions/cache@v5
@@ -893,6 +1749,44 @@ jobs:
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
+
+      - name: Cache Swift build directory
+        uses: actions/cache@v5
+        with:
+          path: apps/macos/.build
+          key: ${{ runner.os }}-swift-build-v1-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/shared/OpenClawKit/Package.swift', 'Swabble/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-build-v1-${{ steps.swift-toolchain.outputs.key }}-
+
+      - name: Patch mlx-audio-swift manifest
+        run: |
+          set -euo pipefail
+          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
+            swift package resolve --package-path apps/macos >/dev/null
+          fi
+          if [ ! -f apps/macos/.build/checkouts/mlx-audio-swift/Package.swift ]; then
+            echo "mlx-audio-swift checkout missing after swift package resolve" >&2
+            exit 1
+          fi
+          chmod u+w apps/macos/.build/checkouts/mlx-audio-swift/Package.swift
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/macos/.build/checkouts/mlx-audio-swift/Package.swift")
+          text = path.read_text()
+          if "Models/Qwen3/README.md" in text:
+              print("mlx-audio-swift README excludes already present")
+              raise SystemExit(0)
+
+          needle = '            path: "Sources/MLXAudioTTS"\n'
+          replacement = """            path: \"Sources/MLXAudioTTS\",\n            exclude: [\n                \"Models/Llama/README.md\",\n                \"Models/Marvis/README.md\",\n                \"Models/PocketTTS/README.md\",\n                \"Models/Qwen3/README.md\",\n                \"Models/Soprano/README.md\",\n            ]\n"""
+
+          if needle not in text:
+              raise SystemExit("Could not find MLXAudioTTS target path in mlx-audio-swift Package.swift")
+
+          path.write_text(text.replace(needle, replacement, 1))
+          print(f"Patched {path}")
+          PY
 
       - name: Show toolchain
         run: |
@@ -909,7 +1803,10 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if swift build --package-path apps/macos --configuration release; then
+            # The macOS lane validates the desktop app build; the CLI product is
+            # intentionally left to its own narrower surfaces instead of making
+            # this lane rebuild the whole package graph.
+            if swift build --package-path apps/macos --product OpenClaw --configuration release; then
               exit 0
             fi
             echo "swift build failed (attempt $attempt/3). Retrying…"
@@ -930,6 +1827,8 @@ jobs:
           exit 1
 
   android:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'

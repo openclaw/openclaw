@@ -1,10 +1,11 @@
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
 
 function mockGoogleApiKeyAuth() {
-  vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+  vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
     apiKey: "google-test-key",
     source: "env",
     mode: "api-key",
@@ -48,7 +49,7 @@ describe("Google image-generation provider", () => {
   });
 
   it("generates image buffers from the Gemini generateContent API", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-test-key",
       source: "env",
       mode: "api-key",
@@ -118,7 +119,7 @@ describe("Google image-generation provider", () => {
   });
 
   it("accepts OAuth JSON auth and inline_data responses", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: JSON.stringify({ token: "oauth-token" }),
       source: "profile",
       mode: "token",
@@ -257,6 +258,26 @@ describe("Google image-generation provider", () => {
     );
   });
 
+  it("disables DNS pinning for Google image generation requests", async () => {
+    mockGoogleApiKeyAuth();
+    installGoogleFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a fox",
+      cfg: {},
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinDns: false,
+      }),
+    );
+  });
+
   it("normalizes a configured bare Google host to the v1beta API root", async () => {
     mockGoogleApiKeyAuth();
     const fetchMock = installGoogleFetchMock();
@@ -271,6 +292,33 @@ describe("Google image-generation provider", () => {
           providers: {
             google: {
               baseUrl: "https://generativelanguage.googleapis.com",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      expect.any(Object),
+    );
+  });
+
+  it("strips a configured /openai suffix before calling the native Gemini image API", async () => {
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      prompt: "draw a fox",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
               models: [],
             },
           },

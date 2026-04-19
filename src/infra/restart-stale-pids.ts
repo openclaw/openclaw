@@ -1,7 +1,19 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isGatewayArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import {
+  readWindowsListeningPidsOnPortSync,
+  readWindowsListeningPidsResultSync,
+  readWindowsProcessArgsResultSync,
+  readWindowsProcessArgsSync,
+  type WindowsProcessArgsResult,
+  type WindowsListeningPidsResult,
+} from "./windows-port-pids.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
 const STALE_SIGTERM_WAIT_MS = 600;
@@ -21,6 +33,14 @@ const STALE_SIGKILL_WAIT_MS = 400;
 const PORT_FREE_POLL_INTERVAL_MS = 50;
 const PORT_FREE_TIMEOUT_MS = 2000;
 const POLL_SPAWN_TIMEOUT_MS = 400;
+
+/**
+ * Upper bound on the ancestor-PID walk. A real-world chain is shallow
+ * (pid1 → systemd → gateway → plugin-host → sidecar ≈ 5); 32 generously covers
+ * nested-supervisor setups (k8s pod → containerd-shim → runc → …) while still
+ * providing a hard stop against corrupted process tables or ppid cycles.
+ */
+const MAX_ANCESTOR_WALK_DEPTH = 32;
 
 const restartLog = createSubsystemLogger("restart");
 let sleepSyncOverride: ((ms: number) => void) | null = null;
@@ -51,8 +71,102 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * Parse openclaw gateway PIDs from lsof -Fpc stdout.
- * Pure function — no I/O. Excludes the current process.
+ * Read a single ancestor PID from `/proc/<pid>/status` on Linux.
+ * Returns null on any failure (non-Linux platform, restricted /proc, race
+ * where the target pid exited between the walk step and the read); callers
+ * treat a null return as "stop walking" and proceed with the ancestor set
+ * collected so far.
+ */
+function readParentPidFromProc(pid: number): number | null {
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const match = status.match(/^PPid:\s*(\d+)/m);
+    if (!match) {
+      return null;
+    }
+    const parsed = Number.parseInt(match[1] ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    // Null truncates the walk at this hop. In hardened Linux (hidepid=2,
+    // gVisor, AppArmor-locked namespaces) /proc is unreadable beyond the
+    // caller, so the walk can stop at `process.ppid`. #68451's direct
+    // gateway→sidecar topology is covered (ppid is captured without a
+    // /proc read); 3-level chains (gateway→plugin-host→sidecar) are not
+    // — pinned by the "grandparent stays killable when /proc truncates
+    // the walk" regression test.
+    return null;
+  }
+}
+
+/**
+ * Collect the set of PIDs whose termination would cascade-kill the caller:
+ * the current process, its direct parent, and — where the platform permits
+ * — the full ancestor chain up to the top of the pid namespace.
+ *
+ * Rationale: `cleanStaleGatewayProcessesSync` already refuses to kill
+ * `process.pid` (see `parsePidsFromLsofOutput`), acknowledging the invariant
+ * "a cleanup step must never destroy its own caller." That invariant was
+ * applied only to the caller itself, not to its ancestors — which is how
+ * issue #68451 arises: a plugin sidecar calls the cleanup, `lsof` reports
+ * the parent gateway listening on 18789, the parent's PID passes the
+ * `pid !== process.pid` filter, it is SIGTERM'd, the sidecar is then reaped
+ * by the supervisor, the supervisor restarts the gateway, which re-spawns
+ * the sidecar, which runs the cleanup again — infinite restart loop.
+ *
+ * Completing the invariant here removes the loop at its source: killing any
+ * ancestor is exactly as fatal to the caller as killing itself, so ancestors
+ * must receive the same exclusion treatment. The check admits any positive
+ * ancestor PID (including 1), because inside a container — a first-class
+ * deployment target for this project — the gateway is frequently the
+ * entrypoint and therefore runs as PID 1 of its own namespace; excluding 1
+ * unconditionally would recreate the #68451 loop on every containerised
+ * install where the gateway spawns a direct-child sidecar.
+ *
+ * The walk is best-effort. `process.ppid` is provided by Node via a direct
+ * syscall and is always available; transitive ancestors are only read on
+ * Linux via `/proc`. macOS/Windows stop at ppid, which is sufficient for
+ * the direct-child sidecar topology this bug describes; extending those
+ * platforms can be done without touching the call sites.
+ *
+ * The function takes no parameters and exposes no hooks. Tests exercise
+ * the real walk by stubbing `process.ppid` (and, on Linux, by mocking
+ * `node:fs` to inject `/proc/<pid>/status` payloads) — there is no
+ * reachable override for runtime callers to mutate.
+ */
+function getSelfAndAncestorPidsSync(): Set<number> {
+  const pids = new Set<number>([process.pid]);
+  const immediateParent = process.ppid;
+  if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
+    return pids;
+  }
+  pids.add(immediateParent);
+  if (process.platform !== "linux") {
+    return pids;
+  }
+  // Transitive ancestor walk. Each hop's validity (positive pid, not already
+  // seen) is enforced by the per-iteration `parent` check below; the entry
+  // invariant `current > 0` is established above and preserved by `current =
+  // parent` after the same check, so no separate top-of-loop guard is needed.
+  let current = immediateParent;
+  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH; depth++) {
+    const parent = readParentPidFromProc(current);
+    if (parent == null || parent <= 0 || pids.has(parent)) {
+      break;
+    }
+    pids.add(parent);
+    current = parent;
+  }
+  return pids;
+}
+
+/**
+ * Parse openclaw gateway PIDs from lsof -Fpc stdout, excluding the current
+ * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
+ * rationale). On Linux the ancestor lookup reads up to
+ * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
+ * a virtual-filesystem access (no disk I/O, no external process), wrapped
+ * in try/catch and degrades silently. On macOS/Windows the lookup is
+ * in-memory via `process.ppid` only.
  */
 function parsePidsFromLsofOutput(stdout: string): number[] {
   const pids: number[] = [];
@@ -60,7 +174,11 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
   let currentCmd: string | undefined;
   for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
     if (line.startsWith("p")) {
-      if (currentPid != null && currentCmd && currentCmd.toLowerCase().includes("openclaw")) {
+      if (
+        currentPid != null &&
+        currentCmd &&
+        normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
+      ) {
         pids.push(currentPid);
       }
       const parsed = Number.parseInt(line.slice(1), 10);
@@ -70,12 +188,70 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
       currentCmd = line.slice(1);
     }
   }
-  if (currentPid != null && currentCmd && currentCmd.toLowerCase().includes("openclaw")) {
+  if (
+    currentPid != null &&
+    currentCmd &&
+    normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
+  ) {
     pids.push(currentPid);
   }
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
-  return [...new Set(pids)].filter((pid) => pid !== process.pid);
+  // Exclude self and ancestors — terminating any ancestor cascade-kills the
+  // caller via the supervisor, recreating the #68451 restart loop.
+  const excluded = getSelfAndAncestorPidsSync();
+  return [...new Set(pids)].filter((pid) => !excluded.has(pid));
+}
+
+/**
+ * Windows: find listening PIDs on the port, then verify each is an openclaw
+ * gateway process via command-line inspection. Excludes the current process
+ * and its ancestors (same invariant as the lsof path — see
+ * `getSelfAndAncestorPidsSync`).
+ */
+function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
+  const excluded = getSelfAndAncestorPidsSync();
+  return Array.from(new Set(rawPids))
+    .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
+    .filter((pid) => {
+      const args = readWindowsProcessArgsSync(pid);
+      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+    });
+}
+
+function filterVerifiedWindowsGatewayPidsResult(
+  rawPids: number[],
+  processArgsResult: (pid: number) => WindowsProcessArgsResult,
+): WindowsListeningPidsResult {
+  const excluded = getSelfAndAncestorPidsSync();
+  const verified: number[] = [];
+  for (const pid of Array.from(new Set(rawPids))) {
+    if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
+      continue;
+    }
+    const argsResult = processArgsResult(pid);
+    if (!argsResult.ok) {
+      return { ok: false, permanent: argsResult.permanent };
+    }
+    if (argsResult.args != null && isGatewayArgv(argsResult.args, { allowGatewayBinary: true })) {
+      verified.push(pid);
+    }
+  }
+  return { ok: true, pids: verified };
+}
+
+function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
+  return filterVerifiedWindowsGatewayPids(readWindowsListeningPidsOnPortSync(port));
+}
+
+function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsListeningPidsResult {
+  const result = readWindowsListeningPidsResultSync(port);
+  if (!result.ok) {
+    return result;
+  }
+  return filterVerifiedWindowsGatewayPidsResult(result.pids, (pid) =>
+    readWindowsProcessArgsResultSync(pid),
+  );
 }
 
 /**
@@ -87,7 +263,9 @@ export function findGatewayPidsOnPortSync(
   spawnTimeoutMs = SPAWN_TIMEOUT_MS,
 ): number[] {
   if (process.platform === "win32") {
-    return [];
+    // Use the shared Windows port inspection (PowerShell / netstat) with
+    // command-line verification to find only openclaw gateway processes.
+    return findVerifiedWindowsGatewayPidsOnPortSync(port);
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -139,6 +317,9 @@ export function findGatewayPidsOnPortSync(
 type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
+  if (process.platform === "win32") {
+    return pollPortOnceWindows(port);
+  }
   try {
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -179,11 +360,35 @@ function pollPortOnce(port: number): PollResult {
 }
 
 /**
+ * Windows-specific port poll.
+ * Uses a short timeout (POLL_SPAWN_TIMEOUT_MS) so a single slow PowerShell
+ * invocation cannot exceed the waitForPortFreeSync wall-clock budget.
+ * Only checks whether any process is listening — no gateway verification
+ * needed because we already killed the stale gateway in the prior step.
+ */
+function pollPortOnceWindows(port: number): PollResult {
+  try {
+    const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
+    if (!result.ok) {
+      return { free: null, permanent: result.permanent };
+    }
+    return result.pids.length === 0 ? { free: true } : { free: false };
+  } catch {
+    return { free: null, permanent: false };
+  }
+}
+
+/**
  * Synchronously terminate stale gateway processes.
  * Callers must pass a non-empty pids array.
- * Sends SIGTERM, waits briefly, then SIGKILL for survivors.
+ *
+ * On Unix: sends SIGTERM, waits briefly, then SIGKILL for survivors.
+ * On Windows: uses taskkill (graceful first, then /F for force-kill).
  */
 function terminateStaleProcessesSync(pids: number[]): number[] {
+  if (process.platform === "win32") {
+    return terminateStaleProcessesWindows(pids);
+  }
   const killed: number[] = [];
   for (const pid of pids) {
     try {
@@ -207,6 +412,58 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
   }
   sleepSync(STALE_SIGKILL_WAIT_MS);
   return killed;
+}
+
+/**
+ * Windows-specific process termination using taskkill.
+ * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
+ */
+function terminateStaleProcessesWindows(pids: number[]): number[] {
+  const taskkillPath = path.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "taskkill.exe",
+  );
+  const killed: number[] = [];
+  for (const pid of pids) {
+    const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      timeout: 5000,
+      windowsHide: true,
+    });
+    const gracefulFailed = graceful.error != null || (graceful.status ?? 0) !== 0;
+    if (!gracefulFailed && !isProcessAlive(pid)) {
+      killed.push(pid);
+      continue;
+    }
+    sleepSync(STALE_SIGTERM_WAIT_MS);
+    if (!isProcessAlive(pid)) {
+      killed.push(pid);
+      continue;
+    }
+    const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      timeout: 5000,
+      windowsHide: true,
+    });
+    if (forced.error != null || (forced.status ?? 0) !== 0) {
+      continue;
+    }
+    sleepSync(STALE_SIGKILL_WAIT_MS);
+    if (!isProcessAlive(pid)) {
+      killed.push(pid);
+    }
+  }
+  return killed;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 /**
@@ -259,7 +516,17 @@ export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] 
       typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
         ? Math.floor(portOverride)
         : resolveGatewayPort(undefined, process.env);
-    const stalePids = findGatewayPidsOnPortSync(port);
+    const stalePids =
+      process.platform === "win32"
+        ? (() => {
+            const result = findVerifiedWindowsGatewayPidsOnPortResultSync(port);
+            if (result.ok) {
+              return result.pids;
+            }
+            waitForPortFreeSync(port);
+            return [];
+          })()
+        : findGatewayPidsOnPortSync(port);
     if (stalePids.length === 0) {
       return [];
     }

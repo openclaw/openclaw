@@ -1,11 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { HookInstallRecord } from "../config/types.hooks.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
-import { buildPluginStatusReport } from "../plugins/status.js";
+import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
@@ -14,7 +13,7 @@ export function resolveFileNpmSpecToLocalPath(
   raw: string,
 ): { ok: true; path: string } | { ok: false; error: string } | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("file:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file:")) {
     return null;
   }
   const rest = trimmed.slice("file:".length);
@@ -40,7 +39,7 @@ export function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
-  const report = buildPluginStatusReport({ config });
+  const report = buildPluginDiagnosticsReport({ config });
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };
@@ -98,31 +97,6 @@ export function enableInternalHookEntries(
       },
     },
   };
-}
-
-export function extractInstalledNpmPackageName(install: PluginInstallRecord): string | undefined {
-  if (install.source !== "npm") {
-    return undefined;
-  }
-  const resolvedName = install.resolvedName?.trim();
-  if (resolvedName) {
-    return resolvedName;
-  }
-  return (
-    (install.spec ? parseRegistryNpmSpec(install.spec)?.name : undefined) ??
-    (install.resolvedSpec ? parseRegistryNpmSpec(install.resolvedSpec)?.name : undefined)
-  );
-}
-
-export function extractInstalledNpmHookPackageName(install: HookInstallRecord): string | undefined {
-  const resolvedName = install.resolvedName?.trim();
-  if (resolvedName) {
-    return resolvedName;
-  }
-  return (
-    (install.spec ? parseRegistryNpmSpec(install.spec)?.name : undefined) ??
-    (install.resolvedSpec ? parseRegistryNpmSpec(install.resolvedSpec)?.name : undefined)
-  );
 }
 
 export function formatPluginInstallWithHookFallbackError(

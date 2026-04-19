@@ -1,98 +1,62 @@
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
 import * as devicePairingModule from "../infra/device-pairing.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  issueOperatorToken,
+  loadDeviceIdentity,
+  openTrackedWs,
+} from "./device-authz.test-helpers.js";
 import {
   connectOk,
   connectReq,
   installGatewayTestHooks,
   onceMessage,
   startServerWithClient,
-  trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-function resolveDeviceIdentityPath(name: string): string {
-  const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.json`);
-}
-
-function loadDeviceIdentity(name: string): {
-  identityPath: string;
-  identity: DeviceIdentity;
-  publicKey: string;
-} {
-  const identityPath = resolveDeviceIdentityPath(name);
-  const identity = loadOrCreateDeviceIdentity(identityPath);
-  return {
-    identityPath,
-    identity,
-    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-  };
-}
-
-async function pairReadScopedOperator(name: string): Promise<{
+async function expectRejectedScopeUpgradeAttempt({
+  attempt,
+  requestedEvent,
+  deviceId,
+  token,
+}: {
+  attempt: { error?: { details?: unknown } };
+  requestedEvent: Promise<unknown>;
   deviceId: string;
-  identityPath: string;
-  deviceToken: string;
-}> {
-  const loaded = loadDeviceIdentity(name);
-  const request = await requestDevicePairing({
-    deviceId: loaded.identity.deviceId,
-    publicKey: loaded.publicKey,
-    role: "operator",
-    scopes: ["operator.read"],
-    clientId: GATEWAY_CLIENT_NAMES.TEST,
-    clientMode: GATEWAY_CLIENT_MODES.TEST,
-  });
-  await approveDevicePairing(request.request.requestId);
+  token: string;
+}) {
+  const pending = await devicePairingModule.listDevicePairing();
+  expect(pending.pending).toHaveLength(1);
+  expect(((attempt.error?.details ?? {}) as { requestId?: unknown }).requestId).toBe(
+    pending.pending[0]?.requestId,
+  );
 
-  const paired = await getPairedDevice(loaded.identity.deviceId);
-  const deviceToken = paired?.tokens?.operator?.token ?? "";
-  expect(deviceToken).toBeTruthy();
-  expect(paired?.approvedScopes).toEqual(["operator.read"]);
-
-  return {
-    deviceId: loaded.identity.deviceId,
-    identityPath: loaded.identityPath,
-    deviceToken,
+  const requested = (await requestedEvent) as {
+    payload?: { requestId?: string; deviceId?: string; scopes?: string[] };
   };
-}
+  expect(requested.payload?.requestId).toBe(pending.pending[0]?.requestId);
+  expect(requested.payload?.deviceId).toBe(deviceId);
+  expect(requested.payload?.scopes).toEqual(["operator.admin"]);
 
-async function openTrackedWs(port: number): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 5_000);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-  return ws;
+  const paired = await getPairedDevice(deviceId);
+  expect(paired?.approvedScopes).toEqual(["operator.read"]);
+  expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+  expect(paired?.tokens?.operator?.token).toBe(token);
 }
 
 describe("gateway silent scope-upgrade reconnect", () => {
   test("does not silently widen a read-scoped paired device to admin on shared-auth reconnect", async () => {
     const started = await startServerWithClient("secret");
-    const paired = await pairReadScopedOperator("silent-scope-upgrade-reconnect-poc");
+    const paired = await issueOperatorToken({
+      name: "silent-scope-upgrade-reconnect-poc",
+      approvedScopes: ["operator.read"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
 
     let watcherWs: WebSocket | undefined;
     let sharedAuthReconnectWs: WebSocket | undefined;
@@ -114,28 +78,17 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect(sharedAuthUpgradeAttempt.ok).toBe(false);
       expect(sharedAuthUpgradeAttempt.error?.message).toBe("pairing required");
 
-      const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toHaveLength(1);
-      expect(
-        (sharedAuthUpgradeAttempt.error?.details as { requestId?: unknown; code?: string })
-          ?.requestId,
-      ).toBe(pending.pending[0]?.requestId);
-      const requested = (await requestedEvent) as {
-        payload?: { requestId?: string; deviceId?: string; scopes?: string[] };
-      };
-      expect(requested.payload?.requestId).toBe(pending.pending[0]?.requestId);
-      expect(requested.payload?.deviceId).toBe(paired.deviceId);
-      expect(requested.payload?.scopes).toEqual(["operator.admin"]);
-
-      const afterUpgradeAttempt = await getPairedDevice(paired.deviceId);
-      expect(afterUpgradeAttempt?.approvedScopes).toEqual(["operator.read"]);
-      expect(afterUpgradeAttempt?.tokens?.operator?.scopes).toEqual(["operator.read"]);
-      expect(afterUpgradeAttempt?.tokens?.operator?.token).toBe(paired.deviceToken);
+      await expectRejectedScopeUpgradeAttempt({
+        attempt: sharedAuthUpgradeAttempt,
+        requestedEvent,
+        deviceId: paired.deviceId,
+        token: paired.token,
+      });
 
       postAttemptDeviceTokenWs = await openTrackedWs(started.port);
       const afterUpgrade = await connectReq(postAttemptDeviceTokenWs, {
         skipDefaultAuth: true,
-        deviceToken: paired.deviceToken,
+        deviceToken: paired.token,
         deviceIdentityPath: paired.identityPath,
         scopes: ["operator.admin"],
       });
@@ -144,6 +97,57 @@ describe("gateway silent scope-upgrade reconnect", () => {
       watcherWs?.close();
       sharedAuthReconnectWs?.close();
       postAttemptDeviceTokenWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("does not let backend reconnect bypass the paired scope baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const paired = await issueOperatorToken({
+      name: "backend-scope-upgrade-reconnect-poc",
+      approvedScopes: ["operator.read"],
+      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
+
+    let watcherWs: WebSocket | undefined;
+    let backendReconnectWs: WebSocket | undefined;
+
+    try {
+      watcherWs = await openTrackedWs(started.port);
+      await connectOk(watcherWs, { scopes: ["operator.admin"] });
+      const requestedEvent = onceMessage(
+        watcherWs,
+        (obj) => obj.type === "event" && obj.event === "device.pair.requested",
+      );
+
+      backendReconnectWs = await openTrackedWs(started.port);
+      const reconnectAttempt = await connectReq(backendReconnectWs, {
+        token: "secret",
+        deviceIdentityPath: paired.identityPath,
+        client: {
+          id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          version: "1.0.0",
+          platform: "node",
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      expect(reconnectAttempt.ok).toBe(false);
+      expect(reconnectAttempt.error?.message).toBe("pairing required");
+
+      await expectRejectedScopeUpgradeAttempt({
+        attempt: reconnectAttempt,
+        requestedEvent,
+        deviceId: paired.deviceId,
+        token: paired.token,
+      });
+    } finally {
+      watcherWs?.close();
+      backendReconnectWs?.close();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
@@ -215,7 +219,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
         started.ws,
         (obj) => obj.type === "event" && obj.event === "device.pair.requested",
         300,
-      );
+      )
+        .then((event) => ({ ok: true as const, event }))
+        .catch((error: unknown) => ({ ok: false as const, error }));
 
       ws = await openTrackedWs(started.port);
       const res = await connectReq(ws, {
@@ -228,7 +234,13 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBeUndefined();
-      await expect(requestedEvent).rejects.toThrow("timeout");
+      const requested = await requestedEvent;
+      expect(requested.ok).toBe(false);
+      if (requested.ok) {
+        throw new Error("expected pairing request watcher to time out");
+      }
+      expect(requested.error).toBeInstanceOf(Error);
+      expect((requested.error as Error).message).toContain("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
       expect(pending.pending).toEqual([]);

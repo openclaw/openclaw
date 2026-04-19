@@ -1,18 +1,17 @@
-import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
+import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { isWSLEnv } from "../../infra/wsl.js";
-import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -67,11 +66,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     ? okText(service.loadedText)
     : warnText(service.notLoadedText);
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
-  try {
-    const logFile = getResolvedLoggerSettings().file;
-    defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(logFile))}`);
-  } catch {
-    // ignore missing config/log resolution
+  if (status.logFile) {
+    defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
   }
   if (service.command?.programArguments?.length) {
     defaultRuntime.log(
@@ -189,9 +185,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       if (rpc.url) {
         defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       }
-      const lines = String(rpc.error ?? "unknown")
-        .split(/\r?\n/)
-        .filter(Boolean);
+      const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
@@ -237,7 +231,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
-    for (const hint of renderRuntimeHints(service.runtime)) {
+    for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
@@ -247,6 +241,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     for (const hint of renderRuntimeHints(
       service.runtime,
       service.command?.environment ?? process.env,
+      status.logFile,
     )) {
       defaultRuntime.error(errorText(hint));
     }
@@ -293,20 +288,23 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     defaultRuntime.error(
       errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),
     );
+    const serviceEnv = { ...process.env, ...service.command?.environment };
     if (status.lastError) {
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = service.command?.environment ?? process.env;
-      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+      const unit = resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE);
       defaultRuntime.error(
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(service.command?.environment ?? process.env);
+      const logs = resolveGatewayLogPaths(serviceEnv);
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
       defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
     }
+    defaultRuntime.error(
+      `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,
+    );
     spacer();
   }
 

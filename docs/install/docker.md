@@ -62,8 +62,10 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
   </Step>
 
   <Step title="Open the Control UI">
-    Open `http://127.0.0.1:18789/` in your browser and paste the token into
-    Settings.
+    Open `http://127.0.0.1:18789/` in your browser and paste the configured
+    shared secret into Settings. The setup script writes a token to `.env` by
+    default; if you switch the container config to password auth, use that
+    password instead.
 
     Need the URL again?
 
@@ -101,12 +103,7 @@ docker build -t openclaw:local -f Dockerfile .
 docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
   dist/index.js onboard --mode local --no-install-daemon
 docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
-  dist/index.js config set gateway.mode local
-docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
-  dist/index.js config set gateway.bind lan
-docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
-  dist/index.js config set gateway.controlUi.allowedOrigins \
-  '["http://localhost:18789","http://127.0.0.1:18789"]' --strict-json
+  dist/index.js config set --batch-json '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]'
 docker compose up -d openclaw-gateway
 ```
 
@@ -176,6 +173,12 @@ Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
 survive container replacement.
 
+That mounted config directory is where OpenClaw keeps:
+
+- `openclaw.json` for behavior config
+- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
+
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
@@ -187,13 +190,15 @@ and rolling file logs under `/tmp/openclaw/`.
 For easier day-to-day Docker management, install `ClawDock`:
 
 ```bash
-mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/shell-helpers/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
+mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/clawdock/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
 echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 ```
 
+If you installed ClawDock from the older `scripts/shell-helpers/clawdock-helpers.sh` raw path, rerun the install command above so your local helper file tracks the new location.
+
 Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run
 `clawdock-help` for all commands.
-See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/main/scripts/shell-helpers/README.md).
+See [ClawDock](/install/clawdock) for the full helper guide.
 
 <AccordionGroup>
   <Accordion title="Enable agent sandbox for Docker gateway">
@@ -385,10 +390,17 @@ scripts/sandbox-setup.sh
     Reset gateway mode and bind:
 
     ```bash
-    docker compose run --rm openclaw-cli config set gateway.mode local
-    docker compose run --rm openclaw-cli config set gateway.bind lan
+    docker compose run --rm openclaw-cli config set --batch-json '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"}]'
     docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
     ```
 
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [Install Overview](/install) — all installation methods
+- [Podman](/install/podman) — Podman alternative to Docker
+- [ClawDock](/install/clawdock) — Docker Compose community setup
+- [Updating](/install/updating) — keeping OpenClaw up to date
+- [Configuration](/gateway/configuration) — gateway configuration after install

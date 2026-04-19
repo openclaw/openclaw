@@ -2,12 +2,13 @@ import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedba
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSenderIdentity } from "../../identity.js";
+import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
-export function maybeSendAckReaction(params: {
+export async function maybeSendAckReaction(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
   agentId: string;
@@ -22,6 +23,16 @@ export function maybeSendAckReaction(params: {
     return;
   }
 
+  // Keep ackReaction as the emoji/scope control, while letting reactionLevel
+  // suppress all automatic reactions when it is explicitly set to "off".
+  const reactionLevel = resolveWhatsAppReactionLevel({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (reactionLevel.level === "off") {
+    return;
+  }
+
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
   const emoji = (ackConfig?.emoji ?? "").trim();
   const directEnabled = ackConfig?.direct ?? true;
@@ -30,8 +41,9 @@ export function maybeSendAckReaction(params: {
 
   const activation =
     params.msg.chatType === "group"
-      ? resolveGroupActivationFor({
+      ? await resolveGroupActivationFor({
           cfg: params.cfg,
+          accountId: params.accountId,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,

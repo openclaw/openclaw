@@ -1942,6 +1942,11 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+to_lowercase_ascii() {
+    # macOS still ships Bash 3.2, so avoid `${value,,}` here.
+    printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 is_explicit_package_install_spec() {
     local value="${1:-}"
     [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
@@ -1949,10 +1954,12 @@ is_explicit_package_install_spec() {
 
 can_resolve_registry_package_version() {
     local value="${1:-}"
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
     if [[ -z "$value" ]]; then
         return 0
     fi
-    if [[ "${value,,}" == "main" ]]; then
+    if [[ "$normalized_value" == "main" ]]; then
         return 1
     fi
     if is_explicit_package_install_spec "$value"; then
@@ -1964,7 +1971,9 @@ can_resolve_registry_package_version() {
 resolve_package_install_spec() {
     local package_name="$1"
     local value="$2"
-    if [[ "${value,,}" == "main" ]]; then
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
+    if [[ "$normalized_value" == "main" ]]; then
         echo "github:openclaw/openclaw#main"
         return 0
     fi
@@ -2074,7 +2083,7 @@ run_bootstrap_onboarding_if_needed() {
     fi
 
     local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
         return
     fi
 
@@ -2466,15 +2475,13 @@ main() {
                 return 0
             fi
             local -a doctor_args=()
-            if [[ "$NO_ONBOARD" == "1" ]]; then
-                if "$claw" doctor --help 2>/dev/null | grep -q -- "--non-interactive"; then
-                    doctor_args+=("--non-interactive")
-                fi
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                doctor_args+=("--non-interactive")
             fi
             ui_info "Running openclaw doctor"
             local doctor_ok=0
             if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
             else
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
             fi
@@ -2492,7 +2499,7 @@ main() {
             ui_info "Skipping onboard (requested); run openclaw onboard later"
         else
             local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" || -f "$HOME/.moltbot/moltbot.json" || -f "$HOME/.moldbot/moldbot.json" ]]; then
+            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true

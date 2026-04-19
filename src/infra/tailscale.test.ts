@@ -6,6 +6,7 @@ const {
   ensureGoInstalled,
   ensureTailscaledInstalled,
   getTailnetHostname,
+  getTestTailscaleBinaryOverride,
   enableTailscaleServe,
   disableTailscaleServe,
   ensureFunnel,
@@ -33,8 +34,9 @@ describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY"]);
+    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY", "NODE_ENV", "VITEST"]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
+    process.env.VITEST ??= "true";
   });
 
   afterEach(() => {
@@ -67,6 +69,22 @@ describe("tailscale helpers", () => {
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it("allows the test binary override in explicit test environments", () => {
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/test-tailscale";
+    process.env.NODE_ENV = "test";
+    delete process.env.VITEST;
+
+    expect(getTestTailscaleBinaryOverride()).toBe("/tmp/test-tailscale");
+  });
+
+  it("ignores the test binary override outside test environments", () => {
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/attacker-tailscale";
+    process.env.NODE_ENV = "production";
+    delete process.env.VITEST;
+
+    expect(getTestTailscaleBinaryOverride()).toBeNull();
   });
 
   it.each([

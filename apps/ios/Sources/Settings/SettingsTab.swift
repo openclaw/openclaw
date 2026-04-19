@@ -53,6 +53,7 @@ struct SettingsTab: View {
     @State private var selectedAgentPickerId: String = ""
 
     @State private var showResetOnboardingAlert: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
     @State private var activeFeatureHelp: FeatureHelp?
     @State private var suppressCredentialPersist: Bool = false
 
@@ -63,6 +64,20 @@ struct SettingsTab: View {
             Form {
                 Section {
                     DisclosureGroup(isExpanded: self.$gatewayExpanded) {
+                        if let gatewayProblem = self.appModel.lastGatewayProblem,
+                           !self.isGatewayConnected
+                        {
+                            GatewayProblemBanner(
+                                problem: gatewayProblem,
+                                primaryActionTitle: "Retry connection",
+                                onPrimaryAction: {
+                                    Task { await self.retryGatewayConnectionFromProblem() }
+                                },
+                                onShowDetails: {
+                                    self.showGatewayProblemDetails = true
+                                })
+                        }
+
                         if !self.isGatewayConnected {
                             Text(
                                 "1. Open a chat with your OpenClaw agent and send /pair\n"
@@ -123,7 +138,7 @@ struct SettingsTab: View {
                         if self.appModel.gatewayServerName == nil {
                             LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
                         }
-                        LabeledContent("Status", value: self.appModel.gatewayStatusText)
+                        LabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
                         Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
 
                         if let serverName = self.appModel.gatewayServerName {
@@ -402,6 +417,16 @@ struct SettingsTab: View {
                     .accessibilityLabel("Close")
                 }
             }
+            .sheet(isPresented: self.$showGatewayProblemDetails) {
+                if let gatewayProblem = self.appModel.lastGatewayProblem {
+                    GatewayProblemDetailsSheet(
+                        problem: gatewayProblem,
+                        primaryActionTitle: "Retry",
+                        onPrimaryAction: {
+                            Task { await self.retryGatewayConnectionFromProblem() }
+                        })
+                }
+            }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button("Reset", role: .destructive) {
                     self.resetOnboarding()
@@ -593,6 +618,9 @@ struct SettingsTab: View {
         if let server = self.appModel.gatewayServerName, self.isGatewayConnected {
             return server
         }
+        if let problem = self.appModel.lastGatewayProblem {
+            return problem.statusText
+        }
         let trimmed = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Not connected" : trimmed
     }
@@ -642,7 +670,7 @@ struct SettingsTab: View {
 
     private func gatewayDebugText() -> String {
         var lines: [String] = [
-            "gateway: \(self.appModel.gatewayStatusText)",
+            "gateway: \(self.appModel.gatewayDisplayStatusText)",
             "discovery: \(self.gatewayController.discoveryStatusText)",
         ]
         lines.append("server: \(self.appModel.gatewayServerName ?? "—")")
@@ -889,6 +917,9 @@ struct SettingsTab: View {
     }
 
     private var setupStatusLine: String? {
+        if let problem = self.appModel.lastGatewayProblem {
+            return problem.message
+        }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
@@ -987,6 +1018,14 @@ struct SettingsTab: View {
         SettingsNetworkingHelpers.httpURLString(host: host, port: port, fallback: fallback)
     }
 
+    private func retryGatewayConnectionFromProblem() async {
+        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
+            await self.connectManual()
+            return
+        }
+        await self.connectLastKnown()
+    }
+
     private func resetOnboarding() {
         // Disconnect first so RootCanvas doesn't instantly mark onboarding complete again.
         self.appModel.disconnectGateway()
@@ -1008,6 +1047,11 @@ struct SettingsTab: View {
 
         // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
         GatewaySettingsStore.clearLastGatewayConnection()
+        GatewaySettingsStore.clearPreferredGatewayStableID()
+        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
+        // Resetting onboarding should also forget trusted gateway TLS fingerprints.
+        // Otherwise a restarted dev gateway can stay stuck in a local TLS cancel loop.
+        GatewayTLSStore.clearAllFingerprints()
         OnboardingStateStore.reset()
 
         // RootCanvas also short-circuits onboarding when these are true.

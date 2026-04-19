@@ -5,6 +5,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
@@ -14,6 +15,7 @@ import type {
 } from "../../infra/session-cost-usage.js";
 import {
   loadCostUsageSummary,
+  loadSessionLogs,
   loadSessionCostSummary,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
@@ -22,6 +24,7 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -65,7 +68,7 @@ function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
 ): {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
@@ -278,7 +281,7 @@ function buildStoreBySessionId(
 }
 
 async function discoverAllSessionsForUsage(params: {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
@@ -290,7 +293,7 @@ async function discoverAllSessionsForUsage(params: {
         startMs: params.startMs,
         endMs: params.endMs,
       });
-      return sessions.map((session) => ({ ...session, agentId: agent.id }));
+      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
@@ -299,7 +302,7 @@ async function discoverAllSessionsForUsage(params: {
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
   const cacheKey = `${params.startMs}-${params.endMs}`;
   const now = Date.now();
@@ -404,7 +407,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
-    const specificKey = typeof p.key === "string" ? p.key.trim() : null;
+    const specificKey = normalizeOptionalString(p.key) ?? null;
 
     // Load session store for named sessions
     const { storePath, store } = loadCombinedSessionStoreForGateway(config);
@@ -824,7 +827,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "sessions.usage.timeseries": async ({ respond, params }) => {
-    const key = typeof params?.key === "string" ? params.key.trim() : null;
+    const key = normalizeOptionalString(params?.key) ?? null;
     if (!key) {
       respond(
         false,
@@ -861,7 +864,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, timeseries, undefined);
   },
   "sessions.usage.logs": async ({ respond, params }) => {
-    const key = typeof params?.key === "string" ? params.key.trim() : null;
+    const key = normalizeOptionalString(params?.key) ?? null;
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key is required for logs"));
       return;
@@ -878,7 +881,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
-    const { loadSessionLogs } = await import("../../infra/session-cost-usage.js");
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,

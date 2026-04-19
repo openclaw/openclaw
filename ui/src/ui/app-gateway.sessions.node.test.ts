@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
+const loadChatHistoryMock = vi.fn();
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
@@ -24,7 +25,7 @@ vi.mock("./controllers/assistant-identity.ts", () => ({
   loadAssistantIdentity: vi.fn(),
 }));
 vi.mock("./controllers/chat.ts", () => ({
-  loadChatHistory: vi.fn(),
+  loadChatHistory: loadChatHistoryMock,
   handleChatEvent: vi.fn(() => "idle"),
 }));
 vi.mock("./controllers/devices.ts", () => ({
@@ -44,11 +45,14 @@ vi.mock("./controllers/sessions.ts", () => ({
   subscribeSessions: vi.fn(),
 }));
 vi.mock("./gateway.ts", () => ({
-  GatewayBrowserClient: class {},
+  GatewayBrowserClient: function GatewayBrowserClient() {},
   resolveGatewayErrorDetailCode: () => null,
 }));
 
 const { handleGatewayEvent } = await import("./app-gateway.ts");
+const { addExecApproval } = await vi.importActual<typeof import("./controllers/exec-approval.ts")>(
+  "./controllers/exec-approval.ts",
+);
 
 function createHost() {
   return {
@@ -118,5 +122,79 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+});
+
+describe("handleGatewayEvent session.message", () => {
+  it("reloads chat history for the active session", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("skips history reload while a chat run is active", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+    host.chatRunId = "run-123";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores transcript updates for other sessions", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:other" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("addExecApproval", () => {
+  it("keeps the newest approval at the front of the queue", () => {
+    const queue = addExecApproval(
+      [
+        {
+          id: "approval-old",
+          kind: "exec",
+          request: { command: "echo old" },
+          createdAtMs: 1,
+          expiresAtMs: Date.now() + 120_000,
+        },
+      ],
+      {
+        id: "approval-new",
+        kind: "exec",
+        request: { command: "echo new" },
+        createdAtMs: 2,
+        expiresAtMs: Date.now() + 120_000,
+      },
+    );
+
+    expect(queue.map((entry) => entry.id)).toEqual(["approval-new", "approval-old"]);
   });
 });
