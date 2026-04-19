@@ -42,7 +42,7 @@ import type { MatrixResolvedAllowlistEntry } from "./config.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
-import { resolveMentions } from "./mentions.js";
+import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
@@ -266,28 +266,6 @@ function resolveMatrixMentionPrecheckText(params: {
     }
   }
   return "";
-}
-
-/**
- * Strip mention prefixes from text for slash command detection.
- * This ensures that messages like "@bot:server /new" are recognized as slash commands.
- * Similar to Feishu's normalizeMentions and Mattermost's stripMentionPrefix.
- */
-export function stripMatrixMentionPrefixes(text: string, mentionRegexes: RegExp[]): string {
-  if (!text || mentionRegexes.length === 0) {
-    return text;
-  }
-  let result = text;
-  for (const pattern of mentionRegexes) {
-    // Match mention at the start of the text, followed by optional whitespace
-    // Preserve the original regex flags (e.g., "i" for case-insensitive)
-    const match = result.match(new RegExp(`^(${pattern.source})\\s*`, pattern.flags));
-    if (match) {
-      result = result.slice(match[0].length).trimStart();
-      break; // Only strip the first mention prefix
-    }
-  }
-  return result;
 }
 
 function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
@@ -957,12 +935,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           surface: "matrix",
         });
         const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-        // Strip mention prefixes before checking for slash commands so that messages
-        // like "@bot:server /new" are recognized as slash commands (#68547)
-        const commandCheckText = stripMatrixMentionPrefixes(
-          mentionPrecheckText,
-          agentMentionRegexes,
-        );
+        // Keep this scoped to command precheck so mention/history/body semantics
+        // continue to see the original Matrix message.
+        const commandCheckText = stripMatrixMentionPrefix({
+          text: mentionPrecheckText,
+          userId: selfUserId,
+          displayName: selfDisplayName,
+          mentionRegexes: agentMentionRegexes,
+        });
         const hasControlCommandInMessage = core.channel.text.hasControlCommand(
           commandCheckText,
           cfg,

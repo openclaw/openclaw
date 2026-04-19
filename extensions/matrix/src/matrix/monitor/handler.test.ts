@@ -512,6 +512,29 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
+  it("strips the Matrix self user id before room slash command detection", async () => {
+    const hasControlCommand = vi.fn((text?: string) => text === "/new");
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      cfg: { commands: { useAccessGroups: false } },
+      isDirectMessage: false,
+      mentionRegexes: [],
+      shouldHandleTextCommands: () => true,
+      hasControlCommand,
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$mxid-command",
+        body: "@bot:example.org /new",
+      }),
+    );
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/new", expect.anything());
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({

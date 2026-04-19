@@ -62,6 +62,84 @@ function resolveMatrixUserLocalpart(userId: string): string | null {
   return trimmed.slice(1, colonIndex).trim() || null;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function appendUniqueMentionCandidate(
+  candidates: string[],
+  seen: Set<string>,
+  candidate?: string | null,
+) {
+  const trimmed = candidate?.trim();
+  if (!trimmed) {
+    return;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  if (seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  candidates.push(trimmed);
+}
+
+function stripNativeMatrixMentionPrefix(text: string, candidate: string): string | null {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(candidate)}(?:\\s*[:,])?(?:\\s+|$)`, "i");
+  const match = text.match(pattern);
+  if (!match) {
+    return null;
+  }
+  return text.slice(match[0].length).trimStart();
+}
+
+function stripRegexMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
+  const flags = pattern.flags.replace(/[gy]/g, "");
+  const anchored = new RegExp(`^\\s*(?:${pattern.source})(?:\\s*[:,])?(?:\\s+|$)`, flags);
+  const match = text.match(anchored);
+  if (!match) {
+    return null;
+  }
+  return text.slice(match[0].length).trimStart();
+}
+
+export function stripMatrixMentionPrefix(params: {
+  text: string;
+  userId?: string | null;
+  displayName?: string | null;
+  mentionRegexes?: RegExp[];
+}): string {
+  const text = params.text;
+  if (!text) {
+    return text;
+  }
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  appendUniqueMentionCandidate(candidates, seen, params.userId);
+  const localpart = params.userId ? resolveMatrixUserLocalpart(params.userId) : null;
+  appendUniqueMentionCandidate(candidates, seen, localpart ? `@${localpart}` : null);
+  appendUniqueMentionCandidate(candidates, seen, params.displayName);
+  appendUniqueMentionCandidate(
+    candidates,
+    seen,
+    params.displayName ? `@${params.displayName}` : null,
+  );
+
+  for (const candidate of candidates) {
+    const stripped = stripNativeMatrixMentionPrefix(text, candidate);
+    if (stripped !== null) {
+      return stripped;
+    }
+  }
+  for (const pattern of params.mentionRegexes ?? []) {
+    const stripped = stripRegexMatrixMentionPrefix(text, pattern);
+    if (stripped !== null) {
+      return stripped;
+    }
+  }
+  return text;
+}
+
 function isVisibleMentionLabel(params: {
   text: string;
   userId: string;

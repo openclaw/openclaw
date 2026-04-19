@@ -50,7 +50,7 @@ type MatrixHandlerTestHarnessOptions = {
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
   shouldHandleTextCommands?: () => boolean;
-  hasControlCommand?: () => boolean;
+  hasControlCommand?: MatrixMonitorHandlerParams["core"]["channel"]["text"]["hasControlCommand"];
   resolveMarkdownTableMode?: () => string;
   resolveAgentRoute?: () => typeof DEFAULT_ROUTE;
   resolveStorePath?: () => string;
