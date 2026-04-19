@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "b-fia"
+version = "0.1.0"
+description = "Biggo Financial Intelligence Agent - orchestrates OpenBB, FinGPT, and QuantAgent"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
+  "python-dotenv>=1.0.0",
+  "pandas>=2.0.0",
+  "ta>=0.11.0",
+  "yfinance>=0.2.30",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0", "httpx"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/b_fia"]

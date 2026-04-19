@@ -1,0 +1,21 @@
+{
+  "id": "b-fia",
+  "contracts": {
+    "tools": [
+      "bfia_analyze_stock",
+      "bfia_get_market_data",
+      "bfia_get_sentiment",
+      "bfia_get_signals",
+      "bfia_full_report"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "backendUrl": {
+        "type": "string"
+      }
+    }
+  }
+}
