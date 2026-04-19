@@ -18,6 +18,83 @@ type ToolWithParameters = {
 
 const optionalString = readStringValue;
 
+const OPENAI_OBJECT_REQUIRED_ARRAY_SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+const OPENAI_OBJECT_REQUIRED_ARRAY_NESTED_KEYS = new Set([
+  "additionalProperties",
+  "allOf",
+  "anyOf",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "oneOf",
+  "prefixItems",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+function normalizeOpenAIObjectRequiredArraysSchemaMap(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    const next = normalizeOpenAIObjectRequiredArraysRecursive(value);
+    normalized[key] = next;
+    changed ||= next !== value;
+  }
+
+  return changed ? normalized : schema;
+}
+
+function normalizeOpenAIObjectRequiredArraysRecursive(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const normalized = schema.map((entry) => {
+      const next = normalizeOpenAIObjectRequiredArraysRecursive(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? normalized : schema;
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const record = schema as Record<string, unknown>;
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    let next = value;
+    if (OPENAI_OBJECT_REQUIRED_ARRAY_SCHEMA_MAP_KEYS.has(key)) {
+      next = normalizeOpenAIObjectRequiredArraysSchemaMap(value);
+    } else if (OPENAI_OBJECT_REQUIRED_ARRAY_NESTED_KEYS.has(key)) {
+      next = normalizeOpenAIObjectRequiredArraysRecursive(value);
+    }
+    normalized[key] = next;
+    changed ||= next !== value;
+  }
+
+  if (normalized.type === "object" && !Array.isArray(normalized.required)) {
+    normalized.required = [];
+    changed = true;
+  }
+
+  return changed ? normalized : schema;
+}
+
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
   return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
 }
@@ -63,7 +140,9 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
 
 export function normalizeOpenAIStrictToolParameters<T>(schema: T, strict: boolean): T {
   if (!strict) {
-    return normalizeToolParameterSchema(schema ?? {}) as T;
+    return normalizeOpenAIObjectRequiredArraysRecursive(
+      normalizeToolParameterSchema(schema ?? {}),
+    ) as T;
   }
   return normalizeStrictOpenAIJsonSchema(schema) as T;
 }
