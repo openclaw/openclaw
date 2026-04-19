@@ -467,7 +467,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
             host: "gateway",
             command: "npm view diver name version description",
             cwd: "/tmp/work",
-            warningText: "Warning: heredoc execution requires explicit approval in allowlist mode.",
+            warningText: "Warning: unquoted heredoc may expand $()/` commands; explicit approval required in allowlist mode.",
           },
         },
       } as never,
