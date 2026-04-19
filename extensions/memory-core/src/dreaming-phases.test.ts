@@ -2090,6 +2090,56 @@ describe("memory-core dreaming phases", () => {
     expect(estimateCronIntervalMs("invalid")).toBeNull();
   });
 
+  it("skips REM subagent when a REM run occurred within the last few days under default config", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-cooldown-");
+    const { writePhaseCooldownStore, readPhaseCooldownStore } = __testing;
+    const nowMs = DREAMING_TEST_BASE_TIME.getTime();
+
+    // Seed a REM run 3 days ago — well within the 7-day cooldown (80% = 5.6 days).
+    const remRunMs = nowMs - 3 * 24 * 60 * 60 * 1000;
+    await writePhaseCooldownStore(workspaceDir, {
+      version: 1,
+      phases: {
+        rem: { lastRunAtMs: remRunMs, lastRunAtIso: new Date(remRunMs).toISOString() },
+      },
+    });
+
+    const logMessages: string[] = [];
+    const logger = {
+      info: (msg: string) => logMessages.push(msg),
+      warn: (msg: string) => logMessages.push(msg),
+      error: (msg: string) => logMessages.push(msg),
+      debug: (msg: string) => logMessages.push(msg),
+    };
+
+    // Run sweep with default plugin config (no explicit cron overrides).
+    // REM should be skipped because the fixed DEFAULT_REM_COOLDOWN_MS (7 days)
+    // has not elapsed. Light is disabled by limit=0 to isolate the REM path.
+    await runDreamingSweepPhases({
+      workspaceDir,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            light: { enabled: true, limit: 0 },
+            rem: { enabled: true, limit: 5 },
+          },
+        },
+      },
+      logger: logger as never,
+      nowMs,
+    });
+
+    // The cooldown store should NOT have been updated (REM did not run).
+    const storeAfter = await readPhaseCooldownStore(workspaceDir);
+    expect(storeAfter.phases.rem?.lastRunAtMs).toBe(remRunMs);
+
+    // Logger should have captured the REM skip message.
+    expect(
+      logMessages.some((m) => m.includes("rem dreaming skipped") && m.includes("cooldown")),
+    ).toBe(true);
+  });
+
   it("records phase run and persists cooldown state", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-cooldown-");
     const { readPhaseCooldownStore, recordPhaseRun } = __testing;

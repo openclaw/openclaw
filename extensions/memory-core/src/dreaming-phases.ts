@@ -1793,8 +1793,7 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
   });
   if (light.enabled && light.limit > 0) {
-    const lightCooldownMs = estimateCronIntervalMs(light.cron) ?? DEFAULT_LIGHT_COOLDOWN_MS;
-    if (isPhaseOnCooldown(cooldownStore, "light", sweepNowMs, lightCooldownMs)) {
+    if (isPhaseOnCooldown(cooldownStore, "light", sweepNowMs, DEFAULT_LIGHT_COOLDOWN_MS)) {
       params.logger.info(
         `memory-core: light dreaming skipped — still within cooldown period [workspace=${params.workspaceDir}].`,
       );
@@ -1826,8 +1825,7 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
   });
   if (rem.enabled && rem.limit > 0) {
-    const remCooldownMs = estimateCronIntervalMs(rem.cron) ?? DEFAULT_REM_COOLDOWN_MS;
-    if (isPhaseOnCooldown(cooldownStore, "rem", sweepNowMs, remCooldownMs)) {
+    if (isPhaseOnCooldown(cooldownStore, "rem", sweepNowMs, DEFAULT_REM_COOLDOWN_MS)) {
       params.logger.info(
         `memory-core: rem dreaming skipped — still within cooldown period [workspace=${params.workspaceDir}].`,
       );
