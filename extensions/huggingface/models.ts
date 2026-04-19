@@ -99,7 +99,8 @@ function isReasoningModelHeuristic(modelId: string): boolean {
     lower.includes("thinking") ||
     lower.includes("reasoner") ||
     lower.includes("grok") ||
-    lower.includes("qwq")
+    lower.includes("qwq") ||
+    /gemma[_-]?4/.test(lower)
   );
 }
 
