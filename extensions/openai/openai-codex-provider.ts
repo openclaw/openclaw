@@ -5,9 +5,10 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
+  type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
@@ -94,6 +95,25 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
+
+function normalizeCodexTransportFields(params: {
+  api?: ProviderRuntimeModel["api"] | null;
+  baseUrl?: string;
+}): {
+  api?: ProviderRuntimeModel["api"];
+  baseUrl?: string;
+} {
+  const useCodexTransport =
+    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
+  const api =
+    useCodexTransport && (!params.api || params.api === "openai-responses")
+      ? "openai-codex-responses"
+      : (params.api ?? undefined);
+  const baseUrl =
+    api === "openai-codex-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : params.baseUrl;
+  return { api, baseUrl };
+}
+
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const lowerModelId = normalizeLowercaseStringOrEmpty(model.id);
   const canonicalModelId =
@@ -102,14 +122,12 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
     normalizeLowercaseStringOrEmpty(model.name) === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
       ? OPENAI_CODEX_GPT_54_MODEL_ID
       : model.name;
-  const useCodexTransport =
-    !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
-  const api =
-    useCodexTransport && model.api === "openai-responses" ? "openai-codex-responses" : model.api;
-  const baseUrl =
-    api === "openai-codex-responses" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl))
-      ? OPENAI_CODEX_BASE_URL
-      : model.baseUrl;
+  const normalizedTransport = normalizeCodexTransportFields({
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
+  const api = normalizedTransport.api ?? model.api;
+  const baseUrl = normalizedTransport.baseUrl ?? model.baseUrl;
   if (
     api === model.api &&
     baseUrl === model.baseUrl &&
@@ -265,6 +283,51 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   });
 }
 
+async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
+  const profile = readOpenAICodexCliOAuthProfile({
+    env: ctx.env ?? process.env,
+    store: ensureAuthProfileStoreForLocalUpdate(ctx.agentDir),
+  });
+  if (!profile) {
+    throw new Error(
+      "No compatible Codex CLI OAuth login found. Sign in with `codex` first or use ChatGPT OAuth instead.",
+    );
+  }
+
+  return {
+    profiles: [{ profileId: profile.profileId, credential: profile.credential }],
+    configPatch: {
+      agents: {
+        defaults: {
+          models: {
+            [OPENAI_CODEX_DEFAULT_MODEL]: {},
+          },
+        },
+      },
+    },
+    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    notes: ["Imported existing Codex CLI login into OpenClaw canonical auth."],
+  } satisfies ProviderAuthResult;
+}
+
+function ensureOpenAICodexCatalogAuthStore(ctx: { agentDir?: string; env?: NodeJS.ProcessEnv }) {
+  const store = ensureAuthProfileStoreForLocalUpdate(ctx.agentDir);
+  const profile = readOpenAICodexCliOAuthProfile({
+    env: ctx.env ?? process.env,
+    store,
+  });
+  if (!profile) {
+    return store;
+  }
+  return {
+    ...store,
+    profiles: {
+      ...store.profiles,
+      [profile.profileId]: profile.credential,
+    },
+  };
+}
+
 function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
     return undefined;
@@ -285,6 +348,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         kind: "oauth",
         run: async (ctx) => await runOpenAICodexOAuth(ctx),
       },
+      {
+        id: "import-codex-cli",
+        label: "Import Codex CLI login",
+        hint: "Use existing .codex auth once",
+        kind: "oauth",
+        run: async (ctx) => await runImportOpenAICodexCliAuth(ctx),
+      },
     ],
     wizard: {
       setup: {
@@ -297,9 +367,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     catalog: {
       order: "profile",
       run: async (ctx) => {
-        const authStore = ensureAuthProfileStore(ctx.agentDir, {
-          allowKeychainPrompt: false,
-        });
+        const authStore = ensureOpenAICodexCatalogAuthStore(ctx);
         if (listProfilesForProvider(authStore, PROVIDER_ID).length === 0) {
           return null;
         }
@@ -310,13 +378,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveExternalAuthProfiles: (ctx) => {
-      const profile = readOpenAICodexCliOAuthProfile({
-        env: ctx.env,
-        store: ctx.store,
-      });
-      return profile ? [{ ...profile, persistence: "runtime-only" }] : undefined;
-    },
     supportsXHighThinking: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
@@ -335,10 +396,27 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       }
       return normalizeCodexTransport(ctx.model);
     },
+    normalizeTransport: ({ provider, api, baseUrl }) => {
+      if (normalizeProviderId(provider) !== PROVIDER_ID) {
+        return undefined;
+      }
+      const normalized = normalizeCodexTransportFields({ api, baseUrl });
+      if (normalized.api === api && normalized.baseUrl === baseUrl) {
+        return undefined;
+      }
+      return normalized;
+    },
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>
       await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
     refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
+    resolveExternalAuthProfiles: (ctx) => {
+      const profile = readOpenAICodexCliOAuthProfile({
+        env: ctx.env,
+        store: ctx.store,
+      });
+      return profile ? [{ ...profile, persistence: "runtime-only" }] : [];
+    },
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,

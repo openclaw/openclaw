@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaReportCheck } from "../../report.js";
 import { renderQaMarkdownReport } from "../../report.js";
 import { type QaProviderModeInput } from "../../run-config.js";
@@ -160,7 +160,7 @@ function writeMatrixQaProgress(message: string) {
   process.stderr.write(`[matrix-qa] ${message}\n`);
 }
 
-function countMatrixQaStatuses<T extends { status: "fail" | "pass" | "skip" }>(entries: T[]) {
+function countMatrixQaStatuses(entries: Array<{ status: "fail" | "pass" | "skip" }>) {
   return {
     failed: entries.filter((entry) => entry.status === "fail").length,
     passed: entries.filter((entry) => entry.status === "pass").length,
@@ -609,6 +609,8 @@ export async function runMatrixQaLive(params: {
               baseUrl: harness.baseUrl,
               canary: canaryArtifact,
               driverAccessToken: provisioning.driver.accessToken,
+              driverDeviceId: provisioning.driver.deviceId,
+              driverPassword: provisioning.driver.password,
               driverUserId: provisioning.driver.userId,
               interruptTransport: async () => {
                 writeMatrixQaProgress(`transport interrupt start ${scenario.id}`);
@@ -626,7 +628,10 @@ export async function runMatrixQaLive(params: {
               },
               observedEvents,
               observerAccessToken: provisioning.observer.accessToken,
+              observerDeviceId: provisioning.observer.deviceId,
+              observerPassword: provisioning.observer.password,
               observerUserId: provisioning.observer.userId,
+              outputDir,
               restartGateway: async () => {
                 if (!gatewayHarness) {
                   throw new Error("Matrix restart scenario requires a live gateway");
@@ -642,8 +647,27 @@ export async function runMatrixQaLive(params: {
                   `gateway restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
                 );
               },
+              restartGatewayWithQueuedMessage: async (queueMessage) => {
+                if (!gatewayHarness) {
+                  throw new Error("Matrix restart catchup scenario requires a live gateway");
+                }
+                writeMatrixQaProgress(`gateway restart+queue start ${scenario.id}`);
+                const measuredRestart = await measureMatrixQaStep(async () => {
+                  await scenarioGateway.harness.gateway.restart();
+                  await sleep(250);
+                  await queueMessage();
+                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                });
+                gatewayRestartMs += measuredRestart.durationMs;
+                scenarioRestartGatewayMs += measuredRestart.durationMs;
+                writeMatrixQaProgress(
+                  `gateway restart+queue done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
+                );
+              },
               roomId: provisioning.roomId,
               sutAccessToken: provisioning.sut.accessToken,
+              sutDeviceId: provisioning.sut.deviceId,
+              sutPassword: provisioning.sut.password,
               syncState,
               syncStreams,
               sutUserId: provisioning.sut.userId,

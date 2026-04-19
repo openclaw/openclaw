@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -186,6 +186,7 @@ export function registerMatrixMonitorEvents(params: {
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
   runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
+  sasNoticeRetryDelayMs?: number;
 }): void {
   const {
     cfg,
@@ -205,6 +206,7 @@ export function registerMatrixMonitorEvents(params: {
     formatNativeDependencyHint,
     onRoomMessage,
     runDetachedTask,
+    sasNoticeRetryDelayMs,
   } = params;
   const postHealthySyncDecryptFailureTracker = createMatrixPostHealthySyncDecryptFailureTracker({
     getHealthySyncSinceMs,
@@ -217,6 +219,8 @@ export function registerMatrixMonitorEvents(params: {
     dmPolicy,
     readStoreAllowFrom,
     logVerboseMessage,
+    runDetachedTask,
+    sasNoticeRetryDelayMs,
   });
 
   const runMonitorTask = (label: string, task: () => Promise<void>) => {
