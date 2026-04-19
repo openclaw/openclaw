@@ -58,28 +58,96 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
   };
 }
 
-type AcpxRuntimeLike = AcpRuntime & {
-  probeAvailability(): Promise<void>;
-  isHealthy(): boolean;
-  doctor(): Promise<AcpRuntimeDoctorReport>;
-};
+const OPENCLAW_BRIDGE_COMMAND = "openclaw acp";
 
-export class AcpxRuntime implements AcpxRuntimeLike {
+function normalizeAgentName(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function readAgentFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const normalized = sessionKey?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const match = /^agent:(?<agent>[^:]+):/i.exec(normalized);
+  return normalizeAgentName(match?.groups?.agent);
+}
+
+function readAgentFromHandle(handle: AcpRuntimeHandle): string | undefined {
+  const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+  if (typeof decoded === "object" && decoded !== null) {
+    const { agent } = decoded as { agent?: unknown };
+    if (typeof agent === "string") {
+      return normalizeAgentName(agent) ?? readAgentFromSessionKey(handle.sessionKey);
+    }
+  }
+  return readAgentFromSessionKey(handle.sessionKey);
+}
+
+function resolveAgentCommand(params: {
+  agentName: string | undefined;
+  agentRegistry: AcpAgentRegistry;
+}): string | undefined {
+  const normalizedAgentName = normalizeAgentName(params.agentName);
+  if (!normalizedAgentName) {
+    return undefined;
+  }
+  const resolvedCommand = params.agentRegistry.resolve(normalizedAgentName);
+  return typeof resolvedCommand === "string" ? resolvedCommand.trim() || undefined : undefined;
+}
+
+function shouldUseBridgeSafeDelegate(params: {
+  agentName: string | undefined;
+  agentRegistry: AcpAgentRegistry;
+}): boolean {
+  return resolveAgentCommand(params) === OPENCLAW_BRIDGE_COMMAND;
+}
+
+function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
+  const { mcpServers } = options as { mcpServers?: unknown };
+  return Array.isArray(mcpServers) && mcpServers.length > 0;
+}
+
+export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
+  private readonly agentRegistry: AcpAgentRegistry;
   private readonly delegate: BaseAcpxRuntime;
+  private readonly bridgeSafeDelegate: BaseAcpxRuntime;
 
   constructor(
     options: AcpRuntimeOptions,
     testOptions?: ConstructorParameters<typeof BaseAcpxRuntime>[1],
   ) {
     this.sessionStore = createResetAwareSessionStore(options.sessionStore);
-    this.delegate = new BaseAcpxRuntime(
-      {
-        ...options,
-        sessionStore: this.sessionStore,
-      },
-      testOptions,
-    );
+    this.agentRegistry = options.agentRegistry;
+    const sharedOptions = {
+      ...options,
+      sessionStore: this.sessionStore,
+    };
+    this.delegate = new BaseAcpxRuntime(sharedOptions, testOptions);
+    this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
+      ? new BaseAcpxRuntime(
+          {
+            ...sharedOptions,
+            mcpServers: [],
+          },
+          testOptions,
+        )
+      : this.delegate;
+  }
+
+  private resolveDelegateForAgent(agentName: string | undefined): BaseAcpxRuntime {
+    return shouldUseBridgeSafeDelegate({
+      agentName,
+      agentRegistry: this.agentRegistry,
+    })
+      ? this.bridgeSafeDelegate
+      : this.delegate;
+  }
+
+  private resolveDelegateForHandle(handle: AcpRuntimeHandle): BaseAcpxRuntime {
+    return this.resolveDelegateForAgent(readAgentFromHandle(handle));
   }
 
   isHealthy(): boolean {
@@ -95,11 +163,11 @@ export class AcpxRuntime implements AcpxRuntimeLike {
   }
 
   ensureSession(input: Parameters<AcpRuntime["ensureSession"]>[0]): Promise<AcpRuntimeHandle> {
-    return this.delegate.ensureSession(input);
+    return this.resolveDelegateForAgent(input.agent).ensureSession(input);
   }
 
   runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
-    return this.delegate.runTurn(input);
+    return this.resolveDelegateForHandle(input.handle).runTurn(input);
   }
 
   getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
@@ -107,19 +175,19 @@ export class AcpxRuntime implements AcpxRuntimeLike {
   }
 
   getStatus(input: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0]): Promise<AcpRuntimeStatus> {
-    return this.delegate.getStatus(input);
+    return this.resolveDelegateForHandle(input.handle).getStatus(input);
   }
 
   setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
-    return this.delegate.setMode(input);
+    return this.resolveDelegateForHandle(input.handle).setMode(input);
   }
 
   setConfigOption(input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]): Promise<void> {
-    return this.delegate.setConfigOption(input);
+    return this.resolveDelegateForHandle(input.handle).setConfigOption(input);
   }
 
   cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
-    return this.delegate.cancel(input);
+    return this.resolveDelegateForHandle(input.handle).cancel(input);
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
@@ -127,7 +195,7 @@ export class AcpxRuntime implements AcpxRuntimeLike {
   }
 
   close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    return this.delegate
+    return this.resolveDelegateForHandle(input.handle)
       .close({
         handle: input.handle,
         reason: input.reason,
