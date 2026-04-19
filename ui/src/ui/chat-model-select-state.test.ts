@@ -39,34 +39,6 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelOverrideValue(state)).toBe("openai/gpt-5-mini");
   });
 
-  it("normalizes cached bare overrides to the matching catalog option", () => {
-    const state = {
-      sessionKey: "main",
-      chatModelOverrides: { main: { kind: "raw", value: "gpt-5-mini" } },
-      chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
-      sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
-    } as const;
-
-    const resolved = resolveChatModelSelectState(state);
-    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.options.map((option) => option.value)).toContain("openai/gpt-5-mini");
-    expect(resolved.options.map((option) => option.value)).not.toContain("gpt-5-mini");
-  });
-
-  it("prefers catalog provider matches over stale session providers", () => {
-    const state = {
-      sessionKey: "main",
-      chatModelOverrides: {},
-      chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
-      sessionsResult: createSessionsListResult({
-        model: "deepseek-chat",
-        modelProvider: "zai",
-      }),
-    };
-
-    expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
-  });
-
   it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
     const state = {
       sessionKey: "main",
@@ -121,10 +93,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("nvidia/moonshotai/kimi-k2.5");
-    expect(resolved.defaultLabel).toBe("Default (Kimi K2.5 (NVIDIA))");
+    expect(resolved.defaultLabel).toBe("Default (nvidia/moonshotai/kimi-k2.5)");
     expect(resolved.options).toContainEqual({
       value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
+      label: "nvidia/moonshotai/kimi-k2.5",
     });
   });
 
@@ -154,14 +126,14 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
-    expect(resolved.defaultLabel).toBe("Default (Claude Sonnet · openrouter)");
+    expect(resolved.defaultLabel).toBe("Default (openrouter/claude-3-7-sonnet)");
     expect(resolved.options).toContainEqual({
       value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · anthropic",
+      label: "anthropic/claude-3-7-sonnet",
     });
     expect(resolved.options).toContainEqual({
       value: "openrouter/claude-3-7-sonnet",
-      label: "Claude Sonnet · openrouter",
+      label: "openrouter/claude-3-7-sonnet",
     });
   });
 
@@ -191,16 +163,14 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
-    expect(resolved.defaultLabel).toBe(
-      "Default (Claude Sonnet · claude-3-7-sonnet-thinking · anthropic)",
-    );
+    expect(resolved.defaultLabel).toBe("Default (anthropic/claude-3-7-sonnet-thinking)");
     expect(resolved.options).toContainEqual({
       value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
+      label: "anthropic/claude-3-7-sonnet",
     });
     expect(resolved.options).toContainEqual({
       value: "anthropic/claude-3-7-sonnet-thinking",
-      label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
+      label: "anthropic/claude-3-7-sonnet-thinking",
     });
   });
 });

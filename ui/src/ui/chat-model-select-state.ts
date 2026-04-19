@@ -2,7 +2,6 @@ import type { AppViewState } from "./app-view-state.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
-  formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
@@ -83,13 +82,10 @@ function buildChatModelOptions(
   }
 
   if (currentOverride) {
-    addOption(
-      currentOverride,
-      formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
-    );
+    addOption(currentOverride, currentOverride);
   }
   if (defaultModel) {
-    addOption(defaultModel, formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup));
+    addOption(defaultModel, defaultModel);
   }
   return options;
 }
@@ -101,13 +97,11 @@ export function resolveChatModelSelectState(
   const displayLookup = buildCatalogDisplayLookup(catalog);
   const currentOverride = resolveChatModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
-
   return {
     currentOverride,
     defaultModel,
-    defaultDisplay,
-    defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
+    defaultDisplay: defaultModel,
+    defaultLabel: defaultModel ? `Default (${defaultModel})` : "Default model",
     options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
   };
 }
