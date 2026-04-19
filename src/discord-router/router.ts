@@ -335,6 +335,31 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             if (state === "greeted") {
               // User is responding with their name
               content = `[System: The user just told you their name. Acknowledge it warmly in ONE short sentence only (e.g. "Nice to meet you, Horse! 🐴"). Do NOT ask any questions or offer help. Just the name acknowledgment.]\n${content}`;
+            } else if (state === "named") {
+              // Named but auth link wasn't sent (e.g. router restarted mid-flow).
+              // Re-send the Google auth link now.
+              void (async () => {
+                try {
+                  const { authUrl } = oauth.requestAuth({
+                    discordUserId: authorId,
+                    email: "user",
+                  });
+                  pendingGoogleAuth.set(authorId, { channelId, authUrl });
+                  await discordSend(
+                    discordToken,
+                    channelId,
+                    `Would you like to connect your Google account? This lets me help with your calendar, email, files, and more.\n\nClick [here](${authUrl}) to connect your Google account.`,
+                  );
+                  setOnboardingState(instance, "google_pending");
+                  runtime.log(
+                    `[router] re-sent Google auth link to ${authorId} (was in named state)`,
+                  );
+                } catch (err) {
+                  runtime.log(`[router] failed to send Google auth link: ${err}`);
+                  setOnboardingState(instance, "complete");
+                }
+              })();
+              // Still route the message to the agent
             } else if (state === "google_pending") {
               // User responding to Google auth prompt — check if they declined
               const declined = /no|nah|skip|later|not now|don't|dont/i.test(content.trim());
