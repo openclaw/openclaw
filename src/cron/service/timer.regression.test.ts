@@ -320,6 +320,10 @@ describe("cron service timer regressions", () => {
 
     const deletedJob = state.store?.jobs.find((j) => j.id === "cron-delete-after-run");
     expect(deletedJob).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs?: Array<{ id: string }>;
+    };
+    expect(persisted.jobs?.some((j) => j.id === "cron-delete-after-run")).toBe(false);
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
