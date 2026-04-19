@@ -260,7 +260,6 @@ export function createSessionsHistoryTool(opts?: {
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
-      const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
       const cappedMessages = capArrayByJsonBytes(
         sanitizedMessages.map((entry) => entry.message),
         SESSIONS_HISTORY_MAX_BYTES,
@@ -271,6 +270,14 @@ export function createSessionsHistoryTool(opts?: {
         bytes: cappedMessages.bytes,
         maxBytes: SESSIONS_HISTORY_MAX_BYTES,
       });
+      // Derive contentRedacted from the payload we are *returning* (post-cap + hard-cap),
+      // not from the full sanitized set. Otherwise the notice fires for redactions that
+      // happened in messages that were dropped by byte-cap or replaced by the hard-cap
+      // placeholder — a false positive for agents consuming the final payload.
+      const hardenedItemSet = new Set(hardened.items);
+      const contentRedacted = sanitizedMessages.some(
+        (entry) => hardenedItemSet.has(entry.message) && entry.redacted,
+      );
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,

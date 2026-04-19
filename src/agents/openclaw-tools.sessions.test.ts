@@ -731,6 +731,62 @@ describe("sessions tools", () => {
     expect(details.notice).toBeUndefined();
   });
 
+  it("sessions_history omits the redaction notice when redacted messages are dropped by the byte cap", async () => {
+    // Regression for Codex P2 on #68483: contentRedacted + notice must be derived from the
+    // payload that is actually returned, not from the full pre-cap history. Otherwise an
+    // older redacted message that the byte cap dropped still flips the flag and the notice
+    // fires with "in this output" even though nothing in the final output is redacted.
+    callGatewayMock.mockReset();
+    const padding = "y".repeat(8_000);
+    // First message contains a secret and will be redacted; later messages push it out past
+    // the sessions_history byte cap so the returned payload only contains non-redacted ones.
+    const oldMessages = Array.from({ length: 30 }, (_, idx) => ({
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text",
+          text:
+            idx === 0
+              ? `leaking sk-1234567890abcdef1234 ${padding}`
+              : `safe message ${idx} ${padding}`,
+        },
+      ],
+    }));
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return { messages: oldMessages };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-cap-drops-redacted", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+      truncated?: boolean;
+      contentRedacted?: boolean;
+      notice?: string;
+    };
+
+    expect(details.truncated).toBe(true);
+    // The redacted message was dropped; the returned payload has no redaction marker.
+    expect(details.contentRedacted).toBe(false);
+    expect(details.notice).toBeUndefined();
+    // Sanity check: the kept messages don't contain the redacted placeholder from the dropped message.
+    const allKeptText = JSON.stringify(details.messages ?? []);
+    expect(allKeptText).not.toContain("sk-12");
+    expect(allKeptText).not.toContain("leaking");
+  });
+
   it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {
     callGatewayMock.mockReset();
     const longPrefix = "safe text ".repeat(420);
