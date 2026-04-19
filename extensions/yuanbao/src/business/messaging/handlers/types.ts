@@ -50,12 +50,10 @@ export type MentionItem = {
 export type ExtractTextFromMsgBodyResult = {
   rawBody: string;
   isAtBot: boolean;
-  /** Media resource list (images, files, etc.) */
   medias: MediaItem[];
   mentions: MentionItem[];
-  /** Bot display name extracted from @mention text (without @ prefix) */
+  /** Without @ prefix */
   botUsername?: string;
-  /** URL list extracted from link cards (for LinkUnderstanding) */
   linkUrls: string[];
 };
 
@@ -94,7 +92,6 @@ export type OutboundContentItem =
  * - buildMsgBody: output construction — build sendable MsgBody elements from business data (optional)
  */
 export interface MessageElemHandler {
-  /** Message type identifier */
   readonly msgType: string;
 
   /**

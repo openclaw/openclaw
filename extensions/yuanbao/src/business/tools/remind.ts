@@ -12,9 +12,9 @@ import { type OpenClawPluginToolContext, json } from "../utils/utils.js";
 
 interface RemindParams {
   action: "add" | "list" | "remove";
-  /** Semantic type: remind=reminder, task=task; default remind */
+  /** Default remind */
   intent?: "remind" | "task";
-  /** Reminder content (required when action=add) */
+  /** Required when action=add */
   content?: string;
   /**
    * Time description (required when action=add)
@@ -22,9 +22,7 @@ interface RemindParams {
    * - Recurring: cron, e.g. 0 8 * * *
    */
   time?: string;
-  /** Timezone for recurring reminders, default Asia/Shanghai */
   timezone?: string;
-  /** Job name (optional) */
   name?: string;
   /** Required when action=remove */
   jobId?: string;

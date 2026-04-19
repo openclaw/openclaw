@@ -7,30 +7,23 @@
 
 import type { YuanbaoMsgBodyElement } from "../../types.js";
 
-/** WebSocket connection configuration */
 export type WsConnectionConfig = {
-  /** WebSocket gateway URL */
   gatewayUrl: string;
-  /** Authentication info */
   auth: {
-    /** Business tenant ID (e.g. "yuanbao") */
+    /** e.g. "yuanbao" */
     bizId: string;
-    /** User UID */
     uid: string;
-    /** Source (app / web / miniprogram) */
+    /** app / web / miniprogram */
     source: string;
-    /** Auth token */
     token: string;
-    /** Internal routing environment identifier */
     routeEnv?: string;
   };
 };
 
-/** WebSocket client configuration */
 export type WsClientConfig = {
-  /** Max reconnect attempts (default 100) */
+  /** Default 100 */
   maxReconnectAttempts?: number;
-  /** Custom reconnect delay sequence (ms); values are used in order, last one repeats */
+  /** Values are used in order, last one repeats */
   reconnectDelays?: number[];
 };
 
@@ -41,8 +34,6 @@ export type WsClientState =
   | "authenticating"
   | "connected"
   | "reconnecting";
-
-// --- Client event callbacks ---
 
 /** Auth success event data */
 export type WsAuthBindResult = {

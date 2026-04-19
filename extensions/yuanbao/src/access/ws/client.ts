@@ -1,9 +1,6 @@
 /**
- * WebSocket client
- *
- * Implements connection management, auth, heartbeat, and auto-reconnect
- * based on the Yuanbao long-connection ConnMsg protobuf protocol.
- * Adapted from chatbot-web's chat-web-socket.ts for Node.js server-side use.
+ * WebSocket client — connection management, auth, heartbeat, and auto-reconnect
+ * based on the Yuanbao ConnMsg protobuf protocol.
  */
 
 import { randomUUID } from "node:crypto";
@@ -126,8 +123,6 @@ const AUTH_RETRYABLE_CODES = new Set([
 /** Number of consecutive heartbeat timeouts before triggering reconnect */
 const HEARTBEAT_TIMEOUT_THRESHOLD = 2;
 
-// --- Helpers ---
-
 function generateMsgId(): string {
   return randomUUID().replace(/-/g, "");
 }
@@ -138,57 +133,37 @@ export const BIZ_CMD = {
   SendC2CMessage: "send_c2c_message",
   /** Send group message */
   SendGroupMessage: "send_group_message",
-  /** Query group info */
   QueryGroupInfo: "query_group_info",
-  /** Get group member list */
   GetGroupMemberList: "get_group_member_list",
-  /** Direct-chat reply status heartbeat */
   SendPrivateHeartbeat: "send_private_heartbeat",
-  /** Group-chat reply status heartbeat */
   SendGroupHeartbeat: "send_group_heartbeat",
-  /** Sync information (command list, etc.) */
   SyncInformation: "sync_information",
 } as const;
 
 const BIZ_MODULE = "yuanbao_openclaw_proxy";
 
-// --- Client class ---
-
 /**
- * Yuanbao WebSocket client
- *
- * Implements connection management, auth, heartbeat, and auto-reconnect
- * based on the ConnMsg protobuf protocol.
- * Provides send/receive, request-response matching, and other core capabilities.
+ * Yuanbao WebSocket client.
+ * Implements connection lifecycle, auth, heartbeat, auto-reconnect,
+ * send/receive, and request-response matching via msgId.
  */
 export class YuanbaoWsClient {
-  // --- Config ---
   private connectionConfig: WsConnectionConfig;
   private readonly clientConfig: Required<WsClientConfig>;
   private readonly callbacks: WsClientCallbacks;
   private readonly log: ModuleLog;
-
-  // --- Connection state ---
   private ws: WebSocket | null = null;
   private state: WsClientState = "disconnected";
   private connectId: string | null = null;
-
-  // --- Heartbeat ---
   private heartbeatIntervalS: number = DEFAULT_HEARTBEAT_INTERVAL_S;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatAckReceived = true;
   private lastHeartbeatAt = 0;
   private heartbeatTimeoutCount = 0;
-
-  // ---- Reconnect ----
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // ---- Lifecycle ----
   private abortController: AbortController | null = null;
   private disposed = false;
-
-  // --- Request / response matching (via msgId) ---
   private pendingRequests = new Map<
     string,
     {
@@ -218,9 +193,7 @@ export class YuanbaoWsClient {
     this.callbacks = params.callbacks ?? {};
   }
 
-  /**
-   * Update auth info (used for reconnect after token refresh).
-   */
+  /** Update auth info (used for reconnect after token refresh). */
   updateAuth(auth: WsConnectionConfig["auth"]): void {
     this.connectionConfig = {
       ...this.connectionConfig,
@@ -249,9 +222,7 @@ export class YuanbaoWsClient {
     return this.connectId;
   }
 
-  /**
-   * Send raw binary data.
-   */
+  /** Send raw binary data. */
   sendBinary(data: Uint8Array): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.log.error(
@@ -263,9 +234,7 @@ export class YuanbaoWsClient {
     return true;
   }
 
-  /**
-   * Send a business request and wait for the response matching the same msgId.
-   */
+  /** Send a business request and wait for the response matching the same msgId. */
   sendAndWait(
     cmd: string,
     module: string,
@@ -321,15 +290,7 @@ export class YuanbaoWsClient {
     return this.sendAndWait(BIZ_CMD.SendGroupMessage, BIZ_MODULE, encoded);
   }
 
-  /**
-   * Send a business request and wait for the response (supports custom decoders).
-   *
-   * Internally generates a unique msgId, encodes the request as a binary frame,
-   * sends it over WebSocket, and uses the `decoder` to decode the response
-   * matching the same msgId into target type T.
-   * Auto-rejects if no response arrives within `timeoutMs`.
-   *
-   */
+  /** Send a business request and wait for the response (supports custom decoders). */
   sendAndWaitWith<T>(
     cmd: string,
     module: string,
@@ -365,9 +326,7 @@ export class YuanbaoWsClient {
     });
   }
 
-  /**
-   * Query group info.
-   */
+  /** Query group info. */
   queryGroupInfo(data: WsQueryGroupInfoData): Promise<WsQueryGroupInfoResponse> {
     this.log.debug("[group-info] querying group info", { group_code: data.group_code });
     const encoded = encodeQueryGroupInfoReq(data);
@@ -382,9 +341,7 @@ export class YuanbaoWsClient {
     );
   }
 
-  /**
-   * Get group member list.
-   */
+  /** Get group member list. */
   getGroupMemberList(data: WsGetGroupMemberListData): Promise<WsGetGroupMemberListResponse> {
     this.log.debug("[group-member] fetching group member list", { group_code: data.group_code });
     const encoded = encodeGetGroupMemberListReq(data);
@@ -399,9 +356,7 @@ export class YuanbaoWsClient {
     );
   }
 
-  /**
-   * Send direct-chat reply status heartbeat.
-   */
+  /** Send direct-chat reply status heartbeat. */
   sendPrivateHeartbeat(data: WsSendPrivateHeartbeatData): Promise<WsHeartbeatResponse> {
     this.log.debug("[C2C] sending reply heartbeat", {
       from_account: data.from_account,
@@ -420,9 +375,7 @@ export class YuanbaoWsClient {
     );
   }
 
-  /**
-   * Send group-chat reply status heartbeat.
-   */
+  /** Send group-chat reply status heartbeat. */
   sendGroupHeartbeat(data: WsSendGroupHeartbeatData): Promise<WsHeartbeatResponse> {
     this.log.debug("[group] sending reply heartbeat", {
       from_account: data.from_account,
@@ -443,9 +396,7 @@ export class YuanbaoWsClient {
     );
   }
 
-  /**
-   * Sync information to the backend (command list, etc.).
-   */
+  /** Sync information to the backend (command list, etc.). */
   syncInformation(data: WsSyncInformationData): Promise<WsSyncInformationResponse> {
     this.log.info("[sync] sending SyncInformation request", {
       syncType: data.syncType,
@@ -464,10 +415,7 @@ export class YuanbaoWsClient {
     );
   }
 
-  /**
-   * Establish WebSocket connection and bind event handlers.
-   * Auto-sends auth on connect; schedules reconnect on close.
-   */
+  /** Establish WebSocket connection and bind event handlers. */
   private doConnect(): void {
     if (this.disposed) {
       return;
@@ -614,8 +562,8 @@ export class YuanbaoWsClient {
   }
 
   /**
-   * Try triggering the onAuthFailed callback for token refresh and reconnect.
-   * Uses the same scheduleReconnect delay strategy and counter as close events.
+   * Try triggering onAuthFailed callback for token refresh and reconnect.
+   * Uses the same scheduleReconnect delay strategy as close events.
    */
   private tryAuthFailedRefresh(errorCode: number, source: string): boolean {
     if (!AUTH_FAILED_CODES.has(errorCode) || !this.callbacks.onAuthFailed) {
@@ -659,10 +607,6 @@ export class YuanbaoWsClient {
   /**
    * After token signing failure, consume one reconnect attempt and retry after a delay.
    * Avoids wasting a reconnect attempt on a connection with a known-expired token.
-   *
-   * Flow: increment reconnectAttempts → wait → call onAuthFailed to re-sign
-   * - Success: updateAuth + scheduleReconnect with new token
-   * - Failure: recursively call self to keep retrying until attempts exhausted
    */
   private retryAuthRefreshAfterDelay(errorCode: number, source: string): void {
     if (this.disposed) {
@@ -724,10 +668,7 @@ export class YuanbaoWsClient {
     }, delay);
   }
 
-  /**
-   * Handle auth response: verify status code, decode response, start heartbeat.
-   * Fires the onReady callback on auth success.
-   */
+  /** Handle auth response: verify status code, start heartbeat, fire onReady. */
   private onAuthBindResponse(head: PBConnMsg["head"], data: Uint8Array): void {
     const rsp = decodePB(PB_MSG_TYPES.AuthBindRsp, data) as PBAuthBindRsp | null;
 
@@ -888,10 +829,7 @@ export class YuanbaoWsClient {
     this.startHeartbeat(false);
   }
 
-  /**
-   * Handle a downstream push (cmdType=2).
-   * Sends ACK if needed, handles kickout, decodes DirectedPush/PushMsg, and dispatches.
-   */
+  /** Handle a downstream push (cmdType=2). Sends ACK, handles kickout, dispatches events. */
   private onPush(connMsg: PBConnMsg): void {
     const { head, data } = connMsg;
 
@@ -956,12 +894,7 @@ export class YuanbaoWsClient {
     });
   }
 
-  // --- Business response (cmdType=1, non-auth/ping) ---
-
-  /**
-   * Handle a business response (cmdType=1, non-auth/ping).
-   * Matches pending requests by msgId and resolves the Promise.
-   */
+  /** Handle a business response (cmdType=1, non-auth/ping). Matches pending requests by msgId. */
   private onBusinessResponse(head: PBConnMsg["head"], data: Uint8Array): void {
     const { msgId } = head;
     if (!msgId) {

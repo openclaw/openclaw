@@ -12,10 +12,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getMember } from "../../infra/cache/member.js";
 import { extractGroupCode, type OpenClawPluginToolContext, json } from "../utils/utils.js";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 /** @mention hint text (used as JSON field value) */
 const MENTION_HINT_TEXT =
   'To @mention a user, you MUST use the format: space + @ + nickname + space (e.g. " @Alice ").';
@@ -27,10 +23,6 @@ const USER_TYPE_LABEL: Record<number, string> = {
   2: "yuanbao",
   3: "bot",
 };
-
-// ---------------------------------------------------------------------------
-// Member record types & mapping utilities
-// ---------------------------------------------------------------------------
 
 /** Single member record returned by queryMembers */
 type MemberRecord = { nickName: string; userId: string; userType?: number };
@@ -45,10 +37,6 @@ function toMembers(records: MemberRecord[]) {
       : {}),
   }));
 }
-
-// ---------------------------------------------------------------------------
-// Action handlers
-// ---------------------------------------------------------------------------
 
 /** List bots in the group (including Yuanbao AI assistants and other bots) */
 function handleListBots(allMembers: MemberRecord[], mention: boolean) {
@@ -97,7 +85,7 @@ function handleFind(allMembers: MemberRecord[], nameFilter: string, mention: boo
     });
   }
 
-    // No nameFilter for find, fallback to listing all members
+  // No nameFilter for find, fallback to listing all members
   return json({
     success: true,
     msg: `Found ${allMembers.length} member(s) in this group.`,
@@ -116,16 +104,12 @@ function handleListAll(allMembers: MemberRecord[], mention: boolean) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// query_session_members
-// ---------------------------------------------------------------------------
-
 /**
  * Create the query_session_members tool definition.
  *
  * Merges the original lookup_session_members and query_group_members into one tool.
  * Prefers API-fetched full member list; session cache as fallback.
- */function createQuerySessionMembersTool(ctx: OpenClawPluginToolContext) {
+ */ function createQuerySessionMembersTool(ctx: OpenClawPluginToolContext) {
   const sessionKey: string = ctx.sessionKey ?? "";
   const accountId: string = ctx.agentAccountId ?? "";
 
@@ -204,10 +188,6 @@ function handleListAll(allMembers: MemberRecord[], mention: boolean) {
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Registration entry
-// ---------------------------------------------------------------------------
 
 /**
  * Register all tools under the "member" category.

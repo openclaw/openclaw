@@ -37,7 +37,6 @@ export interface DebouncerItem {
 
 /** Message processing context — flows through the pipeline, readable/writable by each middleware */
 export interface PipelineContext {
-  // ---- Immutable inputs ----
   readonly raw: YuanbaoInboundMessage;
   readonly flushedItems: DebouncerItem[];
   readonly isGroup: boolean;
@@ -49,9 +48,7 @@ export interface PipelineContext {
   readonly abortSignal?: AbortSignal;
   readonly statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 
-  // ---- Mutable intermediate state (populated by each middleware) ----
-
-  /** Populated by extractContent */
+  // -- Populated by extractContent --
   fromAccount: string;
   senderNickname?: string;
   groupCode?: string;
@@ -59,25 +56,24 @@ export interface PipelineContext {
   medias: MediaItem[];
   isAtBot: boolean;
   mentions: MentionItem[];
-  /** URL list extracted from link cards (for LinkUnderstanding) */
   linkUrls: string[];
 
-  /** Populated by resolveQuote */
+  // -- Populated by resolveQuote --
   quoteInfo?: QuoteInfo;
 
-  /** Populated by guardCommand */
+  // -- Populated by guardCommand --
   commandAuthorized: boolean;
   rewrittenBody: string;
   hasControlCommand: boolean;
 
-  /** Populated by resolveMention */
+  // -- Populated by resolveMention --
   effectiveWasMentioned: boolean;
 
-  /** Populated by downloadMedia */
+  // -- Populated by downloadMedia --
   mediaPaths: string[];
   mediaTypes: string[];
 
-  /** Populated by resolveRoute */
+  // -- Populated by resolveRoute --
   route?: {
     agentId: string;
     sessionKey: string;
@@ -87,33 +83,26 @@ export interface PipelineContext {
   envelopeOptions?: EnvelopeFormatOptions;
   previousTimestamp?: number;
 
-  /** Populated by resolveTrace — trace context */
+  // -- Populated by resolveTrace --
   traceContext?: YuanbaoTraceContext;
 
-  /** Populated by buildContext */
+  // -- Populated by buildContext --
   ctxPayload?: FinalizedMsgContext;
 
-  /** Populated by prepareSender — message sender */
+  // -- Populated by prepareSender --
   sender?: MessageSender;
-
-  /** Populated by prepareSender — outbound queue session */
   queueSession?: QueueSession;
 
-  // ---- Action request (injected by actions adapter layer) ----
-
-  /** Action name (e.g. 'sticker', 'sticker-search', 'react'), undefined for non-action requests */
+  /** e.g. 'sticker', 'sticker-search', 'react'; undefined for non-action requests */
   action?: string;
 }
 
 /** Middleware function signature (onion model) */
 export type Middleware = (ctx: PipelineContext, next: () => Promise<void>) => Promise<void>;
 
-/** Middleware descriptor */
 export interface MiddlewareDescriptor {
-  /** Middleware name (for logging and debugging) */
   name: string;
-  /** Middleware handler function */
   handler: Middleware;
-  /** Conditional guard: skip this middleware when returning false */
+  /** Skip this middleware when returning false */
   when?: (ctx: PipelineContext) => boolean;
 }

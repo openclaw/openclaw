@@ -1,26 +1,4 @@
-/**
- * Yuanbao plugin shared logging module.
- *
- * Usage:
- * 1. Call initLogger(api) once during plugin registration.
- * 2. Use the exported convenience methods anywhere:
- *    - logger.info("msg")             // key events
- *    - logger.warn("msg")             // ignorable but noteworthy
- *    - logger.error("msg")            // real errors
- *    - logger.debug("msg")            // debug info (requires --verbose or level=debug)
- *    - logger.info("msg", { k: v })   // with structured meta
- * 3. Falls back to console output before runtime is initialized.
- *
- * Log levels:
- * - info:  key events (startup, message send/receive success)
- * - warn:  ignorable but noteworthy (missing config, skipped processing)
- * - error: real errors (send failure, signature error)
- * - debug: verbose debug info (only visible in verbose mode)
- *
- * View logs:
- * - openclaw logs --follow
- * - openclaw gateway --verbose (shows debug level)
- */
+/** Yuanbao plugin shared logging module. Falls back to console before runtime init. */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getPluginVersion } from "./infra/env.js";
@@ -61,11 +39,8 @@ const fallbackLogger: PluginLogger = {
 };
 
 /**
- * Initialize the plugin logger.
- *
- * Called during plugin registration. Creates a child logger tagged with the
- * plugin identifier via the OpenClaw API. After initialization, all exported
- * log methods automatically route to the OpenClaw logger.
+ * Initialize the plugin logger (called during plugin registration).
+ * Creates a child logger tagged with the plugin identifier via the OpenClaw API.
  */
 export function initLogger(api: OpenClawPluginApi): void {
   try {
@@ -78,10 +53,7 @@ export function initLogger(api: OpenClawPluginApi): void {
   }
 }
 
-/**
- * Return the currently active logger.
- * Uses the OpenClaw childLogger when initialized; otherwise falls back to console.
- */
+/** Return the currently active logger (childLogger when initialized, otherwise console fallback). */
 function getActiveLogger(): PluginLogger {
   if (initialized && childLogger) {
     const cl = childLogger;
@@ -99,19 +71,7 @@ function getActiveLogger(): PluginLogger {
   return fallbackLogger;
 }
 
-/**
- * Shared plugin logger instance.
- *
- * @example
- * ```ts
- * import { logger } from "../logger.js";
- *
- * logger.info("plugin loaded");
- * logger.warn("missing config", { key: "appSecret" });
- * logger.error("send failed", { error: err.message });
- * logger.debug("debug info");
- * ```
- */
+/** Shared plugin logger instance. */
 export const logger: PluginLogger = {
   info(message: string, meta?: Record<string, unknown>): void {
     getActiveLogger().info(message, meta);
@@ -127,19 +87,12 @@ export const logger: PluginLogger = {
   },
 };
 
-/**
- * Check whether verbose mode is enabled.
- *
- * Useful in hot paths to avoid unnecessary string concatenation overhead.
- */
+/** Check whether verbose mode is enabled. Useful to avoid unnecessary string concatenation in hot paths. */
 export function isVerbose(): boolean {
   return verboseEnabled;
 }
 
-/**
- * Parse debug bot IDs from the YUANBAO_DEBUG_BOT_IDS environment variable.
- * Supports comma-separated values, e.g. YUANBAO_DEBUG_BOT_IDS=bot_aaa,bot_bbb
- */
+/** Parse debug bot IDs from the YUANBAO_DEBUG_BOT_IDS environment variable. */
 function parseEnvDebugBotIds(): string[] {
   const raw = process.env.YUANBAO_DEBUG_BOT_IDS;
   if (!raw) {
@@ -156,14 +109,8 @@ const debugBotIds = new Set<string>(parseEnvDebugBotIds());
 
 /**
  * Set the debug whitelist bot IDs.
- *
- * Merges `channels.yuanbao.debugBotIds` from the YAML config with
- * the `YUANBAO_DEBUG_BOT_IDS` environment variable. Logs from
- * whitelisted bot IDs skip sanitization to ease debugging.
- *
- * Typically called from gateway.startAccount after reading the config.
- *
- * @param ids - Bot ID array from the YAML config (merged with env var whitelist)
+ * Merges YAML config `debugBotIds` with `YUANBAO_DEBUG_BOT_IDS` env var.
+ * Whitelisted bot IDs skip log sanitization.
  */
 export function setDebugBotIds(ids: string[]): void {
   debugBotIds.clear();
@@ -178,11 +125,7 @@ export function setDebugBotIds(ids: string[]): void {
   }
 }
 
-/**
- * Check whether a bot ID is in the debug whitelist.
- *
- * @param botId - Bot ID to check; returns false when empty
- */
+/** Check whether a bot ID is in the debug whitelist. */
 export function isDebugBotId(botId?: string): boolean {
   if (!botId) {
     return false;
@@ -207,15 +150,7 @@ export interface ModuleLog {
   debug(msg: string, data?: Record<string, unknown>): void;
 }
 
-/**
- * Format a log message: prefix with LOG_PREFIX + module, auto-sanitize data.
- *
- * @param module - Module identifier (e.g. 'ws', 'inbound', accountId)
- * @param msg - Log message body
- * @param data - Optional structured data (auto-sanitized unless skipSanitize is set)
- * @param skipSanitize - When true, skip sanitization and use raw JSON.stringify
- * @returns Formatted log string
- */
+/** Format a log message with LOG_PREFIX + module, auto-sanitizing data. */
 export function formatLog(
   module: string,
   msg: string,
@@ -230,23 +165,7 @@ export function formatLog(
   return `${prefix} ${msg} ${serialized}`;
 }
 
-/**
- * Create a module-scoped log helper.
- *
- * Automatically prefixes messages with LOG_PREFIX[module], sanitizes data,
- * and adapts to any log sink.
- *
- * @param module - Module identifier (e.g. 'ws', 'inbound', 'outbound', accountId)
- * @param sink - Log output target; defaults to the shared logger singleton
- * @returns Module log with info/warn/error/debug methods
- *
- * @example
- * ```ts
- * const log = createLog('inbound', ctx.log);
- * log.info('received message', { from: userId });
- * log.error('processing failed', { error: String(err) });
- * ```
- */
+/** Create a module-scoped log helper with auto-prefix and sanitization. */
 export function createLog(module: string, sink?: LogSink, options?: { botId?: string }): ModuleLog {
   const target = sink ?? logger;
   const skipSanitize = isDebugBotId(options?.botId);
@@ -282,12 +201,7 @@ const SENSITIVE_KEYS = new Set([
   "model_output",
 ]);
 
-/**
- * Mask a string value, keeping the first and last 3 characters.
- * Strings shorter than 8 characters are fully masked.
- *
- * @example maskValue("abcdefghij") => "abc****hij"
- */
+/** Mask a string value, keeping the first and last 3 characters. Strings < 8 chars are fully masked. */
 function maskValue(value: string): string {
   if (value.length < 8) {
     return "***";
@@ -295,17 +209,7 @@ function maskValue(value: string): string {
   return `${value.slice(0, 3)}****${value.slice(-3)}`;
 }
 
-/**
- * Sanitize sensitive fields before writing to logs.
- * Accepts objects, JSON strings, or primitive types.
- *
- * - Objects/arrays: recursively mask sensitive field values
- * - JSON strings: parse → sanitize → re-serialize
- * - Other types: return as-is
- *
- * @param value - Value to sanitize (object, JSON string, or primitive)
- * @returns Sanitized string representation
- */
+/** Sanitize sensitive fields before writing to logs. Accepts objects, JSON strings, or primitives. */
 export function sanitize(value: unknown): string {
   if (value === null || value === undefined) {
     return String(value);

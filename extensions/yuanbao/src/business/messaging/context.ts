@@ -19,7 +19,6 @@ export type MessageHandlerContext = {
     verbose: (msg: string) => void;
   };
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  /** WebSocket client reference for sending messages */
   wsClient: YuanbaoWsClient;
   abortSignal?: AbortSignal;
 };

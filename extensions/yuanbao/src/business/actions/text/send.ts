@@ -13,9 +13,7 @@ import type { SendResult } from "../../outbound/types.js";
 import { deliver, type DeliverTarget } from "../deliver.js";
 
 export interface SendTextParams {
-  /** Text content to send */
   text: string;
-  /** Delivery target context (isGroup / target / account, etc.) */
   dt: DeliverTarget;
 }
 

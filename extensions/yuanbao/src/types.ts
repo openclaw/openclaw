@@ -15,45 +15,41 @@ export type YuanbaoAccountConfig = {
   name?: string;
   enabled?: boolean;
 
-  /** Bot AppKey (used for signing and ticket generation) */
   appKey?: string;
-  /** Bot AppSecret (used for signing) */
   appSecret?: string;
   apiDomain?: string; // API domain
   logUploadApiUrl?: string; // issue-log upload API URL
   wsUrl?: string; // WebSocket URL
-  /** Pre-signed token (skips automatic ticket signing if provided) */
+  /** Skips automatic ticket signing if provided */
   token?: string;
 
   dm?: YuanbaoDmConfig;
   overflowPolicy?: YuanbaoOverflowPolicy;
-  /** Group chat reply-to strategy: off=no quote, first=quote only first reply per inbound message, all=quote every reply */
+  /** off=no quote, first=quote only first reply per inbound message, all=quote every reply */
   replyToMode?: YuanbaoReplyToMode;
-  /** Internal routing environment identifier */
   routeEnv?: string;
 
-  /** Max file size in MB (default 20) */
+  /** Default 20 */
   mediaMaxMb?: number;
 
-  /** Max group chat history context entries (defaults to SDK built-in value) */
+  /** 0=disabled, defaults to SDK built-in value */
   historyLimit?: number;
 
-  /** Whether to disable block streaming output (default false) */
+  /** Default false */
   disableBlockStreaming?: boolean;
-  /** Whether group chat requires @mention to reply (default true)*/
+  /** Default true */
   requireMention?: boolean;
-  /** Fallback reply text, automatically sent to the user when the AI model returns no reply content */
+  /** Automatically sent to the user when the AI model returns no reply content */
   fallbackReply?: string;
-  /** Whether to inject instructions in the system prompt to prevent markdown code blocks from wrapping the entire reply (default true) */
+  /** Default true; prevents model from wrapping entire reply in ```markdown fences */
   markdownHintEnabled?: boolean;
-  /** Debug whitelist Bot IDs; logs for whitelisted bots are not sanitized */
+  /** Logs for whitelisted bots are not sanitized */
   debugBotIds?: string[];
 };
 
 export type YuanbaoConfig = YuanbaoAccountConfig & {
   accounts?: Record<string, YuanbaoAccountConfig>;
   defaultAccount?: string;
-  /** Internal routing environment identifier */
   routeEnv?: string;
 };
 
@@ -72,20 +68,14 @@ export type ResolvedYuanbaoAccount = {
   wsHeartbeatInterval?: number;
   wsMaxReconnectAttempts: number;
   overflowPolicy: YuanbaoOverflowPolicy;
-  /** Group chat reply-to strategy */
   replyToMode: YuanbaoReplyToMode;
-  /** Internal routing environment identifier */
-  /** Max file size in MB */
   mediaMaxMb: number;
-  /** Max group chat history context entries */
   historyLimit: number;
-  /** Whether to disable block streaming output */
   disableBlockStreaming: boolean;
-  /** Whether group chat requires @mention to reply (default true)*/
+  /** Default true */
   requireMention: boolean;
-  /** Fallback reply text, automatically sent to the user when the AI model returns no reply content */
+  /** Automatically sent to the user when the AI model returns no reply content */
   fallbackReply?: string;
-  /** Whether to inject instructions in the system prompt to prevent markdown code blocks from wrapping the entire reply */
   markdownHintEnabled: boolean;
   config: YuanbaoAccountConfig;
 };
@@ -122,9 +112,7 @@ export type YuanbaoMsgBodyElement = {
 
 // Cloud IM message sequence number (used for message recall)
 export type ImMsgSeq = {
-  /** Message sequence number */
   msg_seq?: number;
-  /** Client message unique identifier */
   msg_id?: string;
 };
 
@@ -158,33 +146,25 @@ export type YuanbaoInboundMessage = {
   bot_owner_id?: string;
   /** Message sequence number list carried during recall (Group/C2C.CallbackAfterMsgWithDraw) */
   recall_msg_seq_list?: ImMsgSeq[];
-  /** Message type (group/direct) */
   claw_msg_type?: EnumCLawMsgType;
-  /** Source group code for direct messages (identifies which group the user initiated the DM from) */
+  /** Identifies which group the user initiated the DM from */
   private_from_group_code?: string;
-  /** Trace ID; plugin side generates a fallback when missing */
+  /** Plugin side generates a fallback when missing */
   trace_id?: string;
-  /** Sequence identifier for the current message; prefers real msg_seq, can serve as a trace correlation auxiliary field */
+  /** Prefers real msg_seq; serves as trace correlation auxiliary field */
   seq_id?: string;
 };
 
 // Quote message info (from cloud_custom_data.quote)
 export type QuoteInfo = {
-  /** ID of the quoted message */
   id?: string;
-  /** Sequence number of the quoted message */
   seq?: number;
-  /** Send time of the quoted message (Unix seconds) */
+  /** Unix seconds */
   time?: number;
-  /** Message type */
   type?: number;
-  /** Message status */
   status?: number;
-  /** Text summary of the quoted message */
   desc?: string;
-  /** Sender ID of the quoted message */
   sender_id?: string;
-  /** Sender nickname of the quoted message */
   sender_nickname?: string;
 };
 

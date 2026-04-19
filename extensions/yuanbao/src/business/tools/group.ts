@@ -11,10 +11,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getMember } from "../../infra/cache/member.js";
 import { extractGroupCode, type OpenClawPluginToolContext, json } from "../utils/utils.js";
 
-// ---------------------------------------------------------------------------
-// query_group_info
-// ---------------------------------------------------------------------------
-
 /**
  * Create the query_group_info tool definition.
  *
@@ -81,10 +77,6 @@ function createQueryGroupInfoTool(ctx: OpenClawPluginToolContext) {
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Registration entry
-// ---------------------------------------------------------------------------
 
 /**
  * Register all tools under the "group info" category.

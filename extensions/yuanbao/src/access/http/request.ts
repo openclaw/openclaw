@@ -1,9 +1,4 @@
-/**
- * Yuanbao HTTP request base layer.
- *
- * Type definitions, token cache, signature computation, auth headers, and HTTP utilities.
- * Business APIs (uploadInfo / downloadUrl) are in main.ts.
- */
+/** Yuanbao HTTP request base layer — token cache, signature, auth headers, and HTTP utilities. */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getOpenclawVersion, getOperationSystem, getPluginVersion } from "../../infra/env.js";
@@ -88,9 +83,7 @@ const tokenFetchPromises = new Map<string, Promise<SignTokenData>>();
 /** Token auto-refresh timers (isolated by accountId) */
 const tokenRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-/**
- * Clear the token cache for a given account (forces re-signing on next request).
- */
+/** Clear the token cache for a given account (forces re-signing on next request). */
 export function clearSignTokenCache(accountId: string): void {
   tokenCacheMap.delete(accountId);
   const timer = tokenRefreshTimers.get(accountId);
@@ -100,9 +93,7 @@ export function clearSignTokenCache(accountId: string): void {
   }
 }
 
-/**
- * Clear all accounts' token caches.
- */
+/** Clear all accounts' token caches. */
 export function clearAllSignTokenCache(): void {
   tokenCacheMap.clear();
   for (const timer of tokenRefreshTimers.values()) {
@@ -111,9 +102,7 @@ export function clearAllSignTokenCache(): void {
   tokenRefreshTimers.clear();
 }
 
-/**
- * Inspect token cache status (for monitoring/debugging).
- */
+/** Inspect token cache status (for monitoring/debugging). */
 export function getTokenStatus(accountId: string): {
   status: "valid" | "expired" | "refreshing" | "none";
   expiresAt: number | null;
@@ -131,9 +120,7 @@ export function getTokenStatus(accountId: string): {
   };
 }
 
-/**
- * Get bot_id from sign-token cache (sync, only returns when cache is valid).
- */
+/** Get bot_id from sign-token cache (sync, only returns when cache is valid). */
 export function getCachedBotId(accountId: string): string | undefined {
   const cached = tokenCacheMap.get(accountId);
   if (!cached || cached.expiresAt <= Date.now()) {
@@ -152,9 +139,7 @@ function computeSignature(params: {
   return createHmac("sha256", params.appSecret).update(plain).digest("hex");
 }
 
-/**
- * Verify HMAC signature using constant-time comparison to prevent timing attacks.
- */
+/** Verify HMAC signature using constant-time comparison to prevent timing attacks. */
 export function verifySignature(expected: string, actual: string): boolean {
   const expectedBuf = Buffer.from(expected, "hex");
   const actualBuf = Buffer.from(actual, "hex");
@@ -164,9 +149,7 @@ export function verifySignature(expected: string, actual: string): boolean {
   return timingSafeEqual(expectedBuf, actualBuf);
 }
 
-/**
- * Internal: issue a sign-token HTTP request with auto-retry (up to SIGN_MAX_RETRIES).
- */
+/** Issue a sign-token HTTP request with auto-retry (up to SIGN_MAX_RETRIES). */
 async function doFetchSignToken(
   account: ResolvedYuanbaoAccount,
   log?: Log,
@@ -237,12 +220,8 @@ async function doFetchSignToken(
 
 /**
  * Schedule token auto-refresh based on server-returned duration.
- *
- * Refreshes the token `CACHE_REFRESH_MARGIN_MS` before expiry.
- * On failure, retries once after 30s to avoid losing the refresh timer.
- *
- * Note: `setTimeout` delay is clamped to `MAX_SAFE_TIMEOUT_MS` to prevent
- * 32-bit integer overflow.
+ * Refreshes CACHE_REFRESH_MARGIN_MS before expiry. Retries once after 30s on failure.
+ * setTimeout delay is clamped to MAX_SAFE_TIMEOUT_MS to prevent 32-bit overflow.
  */
 function scheduleTokenRefresh(
   account: ResolvedYuanbaoAccount,
@@ -298,10 +277,7 @@ function scheduleTokenRefresh(
 
 /**
  * Get sign-token data (duration-based cache + singleflight concurrency safety).
- *
- * - Static token: returned directly without cache or API call.
- * - Cache hit: returned directly.
- * - Cache miss/expired: calls API; concurrent requests reuse the same Promise.
+ * Static token is returned directly; cache miss triggers API call with dedup.
  */
 export async function getSignToken(
   account: ResolvedYuanbaoAccount,
@@ -352,9 +328,7 @@ export async function getSignToken(
   return fetchPromise;
 }
 
-/**
- * Force-refresh token (clear cache then re-sign), used on auth failure.
- */
+/** Force-refresh token (clear cache then re-sign), used on auth failure. */
 export async function forceRefreshSignToken(
   account: ResolvedYuanbaoAccount,
   log?: Log,
@@ -367,9 +341,7 @@ export async function forceRefreshSignToken(
   return getSignToken(account, log);
 }
 
-/**
- * Get auth headers (X-ID / X-Token / X-Source) and back-fill account.botId.
- */
+/** Get auth headers (X-ID / X-Token / X-Source) and back-fill account.botId. */
 export async function getAuthHeaders(
   account: ResolvedYuanbaoAccount,
   log?: Log,
@@ -397,9 +369,7 @@ export async function getAuthHeaders(
   return authHeaders;
 }
 
-/**
- * POST request to Yuanbao API with auth headers and unified error handling.
- */
+/** POST request to Yuanbao API with auth headers and unified error handling. */
 export async function yuanbaoPost<T>(
   account: ResolvedYuanbaoAccount,
   path: string,
@@ -449,9 +419,7 @@ export async function yuanbaoPost<T>(
   throw new Error(`[yuanbao-api][POST] ${path} 401 retries exhausted`);
 }
 
-/**
- * GET request to Yuanbao API with auth headers and unified error handling.
- */
+/** GET request to Yuanbao API with auth headers and unified error handling. */
 export async function yuanbaoGet<T>(
   account: ResolvedYuanbaoAccount,
   path: string,

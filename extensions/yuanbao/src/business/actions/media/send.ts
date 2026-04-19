@@ -20,15 +20,11 @@ import {
 import { deliver, type DeliverTarget } from "../deliver.js";
 
 export interface SendMediaParams {
-  /** Media resource URL */
   mediaUrl: string;
-  /** Fallback text when send fails */
   fallbackText?: string;
-  /** OpenClaw PluginRuntime instance */
   core: PluginRuntime;
-  /** Delivery target context (account, etc.) */
   dt: DeliverTarget;
-  /** Text fallback send callback (used when media send fails) */
+  /** Used when media send fails */
   sendTextFallback: (text: string) => Promise<SendResult>;
 }
 

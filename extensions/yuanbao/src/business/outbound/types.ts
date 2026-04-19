@@ -37,7 +37,6 @@ export interface SendParams {
   wsClient: YuanbaoWsClient;
   config: OpenClawConfig;
   core: PluginRuntime;
-  /** Trace context, passed through to transport layer for injecting trace_id / msg_seq */
   traceContext?: YuanbaoTraceContext;
 }
 
@@ -47,8 +46,7 @@ export interface MessageSender {
   sendMedia(mediaUrl: string, fallbackText?: string): Promise<SendResult>;
   sendSticker(stickerId: string): Promise<SendResult>;
   sendRaw(msgBody: YuanbaoMsgBodyElement[]): Promise<SendResult>;
-  /** Auto-dispatch based on OutboundItem type */
   send(item: OutboundItem): Promise<SendResult>;
-  /** Auto-dispatch from SDK OutboundReplyPayload (used with dispatchInboundReplyWithBase deliver callback) */
+  /** Auto-dispatch from SDK OutboundReplyPayload */
   deliver(payload: OutboundReplyPayload): Promise<void>;
 }

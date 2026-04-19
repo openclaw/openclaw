@@ -39,7 +39,6 @@ export type StartWsGatewayParams = {
   config: OpenClawConfig;
   abortSignal: AbortSignal;
   log?: GatewayLog;
-  /** PluginRuntime instance for connecting to the OpenClaw message pipeline */
   runtime?: PluginRuntime;
   statusSink?: (patch: GatewayStatusPatch) => void;
 };
@@ -485,7 +484,9 @@ async function syncCommandsToServer(
   slog.info(`[${accountId}] SyncInformationRsp:`, { code: rsp.code, msg: rsp.msg });
 
   if (rsp.code !== 0) {
-    slog.warn(`[${accountId}] sync command list returned non-zero code: code=${rsp.code}, msg=${rsp.msg}`);
+    slog.warn(
+      `[${accountId}] sync command list returned non-zero code: code=${rsp.code}, msg=${rsp.msg}`,
+    );
   } else {
     slog.info(`[${accountId}] sync command list succeeded`);
   }

@@ -10,11 +10,9 @@ import type { YuanbaoMsgBodyElement } from "../../types.js";
 
 /** Mentioned user info in a message (non-bot) */
 export interface MentionedUser {
-  /** Raw text form (e.g. "@SomeUser") */
+  /** e.g. "@SomeUser" */
   raw: string;
-  /** Platform user ID (if extractable from message entity) */
   platformId?: string;
-  /** Display name */
   displayName?: string;
 }
 

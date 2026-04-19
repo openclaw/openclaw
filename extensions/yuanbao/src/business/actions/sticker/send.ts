@@ -16,9 +16,7 @@ import type { CachedSticker } from "./sticker-types.js";
 export type ActionResult = { ok: true; data?: unknown } | { ok: false; error: string };
 
 export interface SendStickerParams {
-  /** Sticker ID */
   stickerId: string;
-  /** Delivery target context */
   dt: DeliverTarget;
 }
 

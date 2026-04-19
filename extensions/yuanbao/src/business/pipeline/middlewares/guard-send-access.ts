@@ -8,13 +8,10 @@
 import type { MiddlewareDescriptor } from "../types.js";
 
 interface SendAccessPolicy {
-  /** Who can trigger messages sent through the bot */
   allowedSenders: "all" | "admin" | "allowlist";
-  /** Allowed sender ID list (effective when allowedSenders = "allowlist") */
+  /** Effective when allowedSenders = "allowlist" */
   senderAllowlist?: string[];
-  /** Max sends per user per hour */
   rateLimitPerHour: number;
-  /** Max message length (characters) */
   maxMessageLength: number;
 }
 

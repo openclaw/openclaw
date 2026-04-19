@@ -6,7 +6,7 @@ export type YuanbaoTraceContext = {
   traceId: string;
   traceparent: string;
   seqId?: string;
-  /** Return auto-incremented msg_seq based on inbound seqId */
+  /** Auto-incremented based on inbound seqId */
   nextMsgSeq: () => number | undefined;
 };
 
@@ -20,7 +20,7 @@ function generateHex(bytes: number): string {
 /**
  * Generate a random trace ID (32-char hex string).
  * Used as fallback when inbound message has no trace_id.
- */export function generateTraceId(): string {
+ */ export function generateTraceId(): string {
   return generateHex(16);
 }
 

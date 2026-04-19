@@ -50,33 +50,20 @@ export function decodePB(key: string, data: Uint8Array | ArrayBuffer): unknown {
 }
 
 export const PB_MSG_TYPES = {
-  /** Outer ConnMsg wrapper */
   ConnMsg: "trpc.yuanbao.conn_common.ConnMsg",
-  /** Auth request */
   AuthBindReq: "trpc.yuanbao.conn_common.AuthBindReq",
-  /** Auth response */
   AuthBindRsp: "trpc.yuanbao.conn_common.AuthBindRsp",
-  /** Heartbeat request */
   PingReq: "trpc.yuanbao.conn_common.PingReq",
-  /** Heartbeat response */
   PingRsp: "trpc.yuanbao.conn_common.PingRsp",
-  /** Kickout notification */
   KickoutMsg: "trpc.yuanbao.conn_common.KickoutMsg",
-  /** Directed push */
   DirectedPush: "trpc.yuanbao.conn_common.DirectedPush",
-  /** Business push */
   PushMsg: "trpc.yuanbao.conn_common.PushMsg",
 } as const;
 
-/** ConnMsg.Head.cmdType enum */
 export const CMD_TYPE = {
-  /** Upstream request */
   Request: 0,
-  /** Response to an upstream request */
   Response: 1,
-  /** Downstream push */
   Push: 2,
-  /** ACK for a downstream push */
   PushAck: 3,
 } as const;
 
@@ -125,8 +112,6 @@ export function nextSeqNo(): number {
   return next;
 }
 
-// --- Message construction helpers ---
-
 /**
  * Build a ConnMsg head.
  */
@@ -165,13 +150,9 @@ interface AuthBindParams {
   source: string;
   token: string;
   msgId: string;
-  /** Internal routing environment identifier */
   routeEnv?: string;
-  /** Current plugin version */
   appVersion: string;
-  /** Current operating system */
   operationSystem: string;
-  /** openclaw version */
   botVersion: string;
 }
 

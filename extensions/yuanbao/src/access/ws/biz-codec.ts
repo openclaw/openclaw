@@ -1,10 +1,4 @@
-/**
- * Business-layer Protobuf codec.
- *
- * Loads biz.json descriptor via protobufjs and provides
- * encode/decode for inbound/outbound business messages.
- * Handles PascalCase (TS) <-> camelCase (protobufjs) field mapping.
- */
+/** Business-layer Protobuf codec — encode/decode for inbound/outbound business messages. */
 
 import protobuf from "protobufjs";
 import { createLog } from "../../logger.js";
@@ -118,9 +112,7 @@ export const BIZ_MSG_TYPES = {
   SyncInformationRsp: `${PKG}.SyncInformationRsp`,
 } as const;
 
-/**
- * Encode a business-layer protobuf message.
- */
+/** Encode a business-layer protobuf message. */
 export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8Array | null {
   try {
     const type = getRoot().lookupType(key);
@@ -133,9 +125,7 @@ export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8A
   }
 }
 
-/**
- * Decode a business-layer protobuf message.
- */
+/** Decode a business-layer protobuf message. */
 export function decodeBizPB(key: string, data: Uint8Array | ArrayBuffer): unknown {
   try {
     const buf = data instanceof Uint8Array ? data : new Uint8Array(data);
@@ -147,9 +137,7 @@ export function decodeBizPB(key: string, data: Uint8Array | ArrayBuffer): unknow
   }
 }
 
-/**
- * Convert TS MsgBodyElement[] to protobuf format.
- */
+/** Convert TS MsgBodyElement[] to protobuf format. */
 export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): Record<string, unknown>[] {
   return elements.map((el) => {
     const c = el.msg_content;
@@ -173,9 +161,7 @@ export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): Record<string
   });
 }
 
-/**
- * Convert protobuf format message body back to TS MsgBodyElement[].
- */
+/** Convert protobuf format message body back to TS MsgBodyElement[]. */
 export function fromProtoMsgBody(
   elements: Array<Record<string, unknown>>,
 ): YuanbaoMsgBodyElement[] {
@@ -238,9 +224,7 @@ function toProtoLogExt(
   return resolvedTraceId ? { traceId: resolvedTraceId } : undefined;
 }
 
-/**
- * Encode a C2C send message request.
- */
+/** Encode a C2C send message request. */
 export function encodeSendC2CMessageReq(data: WsSendC2CMessageData): Uint8Array | null {
   const logExt = toProtoLogExt(undefined, data.trace_id);
   const log = createLog("biz-codec");
@@ -261,9 +245,7 @@ export function encodeSendC2CMessageReq(data: WsSendC2CMessageData): Uint8Array 
   });
 }
 
-/**
- * Encode group message send request.
- */
+/** Encode group message send request. */
 export function encodeSendGroupMessageReq(data: WsSendGroupMessageData): Uint8Array | null {
   const logExt = toProtoLogExt(undefined, data.trace_id);
   const log = createLog("biz-codec");
@@ -285,9 +267,7 @@ export function encodeSendGroupMessageReq(data: WsSendGroupMessageData): Uint8Ar
   });
 }
 
-/**
- * Encode direct chat reply status heartbeat request.
- */
+/** Encode direct chat reply status heartbeat request. */
 export function encodeSendPrivateHeartbeatReq(data: WsSendPrivateHeartbeatData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.SendPrivateHeartbeatReq, {
     // Dual-write fromAccount/fromtAccount for backward compatibility with old descriptor typo
@@ -298,9 +278,7 @@ export function encodeSendPrivateHeartbeatReq(data: WsSendPrivateHeartbeatData):
   });
 }
 
-/**
- * Encode group chat reply status heartbeat request.
- */
+/** Encode group chat reply status heartbeat request. */
 export function encodeSendGroupHeartbeatReq(data: WsSendGroupHeartbeatData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.SendGroupHeartbeatReq, {
     fromAccount: data.from_account,
@@ -311,9 +289,7 @@ export function encodeSendGroupHeartbeatReq(data: WsSendGroupHeartbeatData): Uin
   });
 }
 
-/**
- * Decode inbound message proto bytes into YuanbaoInboundMessage.
- */
+/** Decode inbound message proto bytes into YuanbaoInboundMessage. */
 export function decodeInboundMessage(data: Uint8Array | ArrayBuffer): YuanbaoInboundMessage | null {
   const decoded = decodeBizPB(BIZ_MSG_TYPES.InboundMessagePush, data) as PBInboundMessage | null;
   if (!decoded) {
@@ -358,9 +334,7 @@ export function decodeInboundMessage(data: Uint8Array | ArrayBuffer): YuanbaoInb
   };
 }
 
-/**
- * Decode C2C outbound response proto bytes into WsSendMessageResponse.
- */
+/** Decode C2C outbound response. */
 export function decodeSendC2CMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
@@ -377,9 +351,7 @@ export function decodeSendC2CMessageRsp(
   };
 }
 
-/**
- * Decode group message outbound response proto bytes into WsSendMessageResponse.
- */
+/** Decode group message outbound response. */
 export function decodeSendGroupMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
@@ -396,9 +368,7 @@ export function decodeSendGroupMessageRsp(
   };
 }
 
-/**
- * Decode outbound response (compatible with both C2C and group, same structure).
- */
+/** Decode outbound response (compatible with both C2C and group). */
 export function decodeSendMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
@@ -407,18 +377,14 @@ export function decodeSendMessageRsp(
   return decodeSendC2CMessageRsp(data, msgId) ?? decodeSendGroupMessageRsp(data, msgId);
 }
 
-/**
- * Encode query group info request.
- */
+/** Encode query group info request. */
 export function encodeQueryGroupInfoReq(data: WsQueryGroupInfoData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.QueryGroupInfoReq, {
     groupCode: data.group_code,
   });
 }
 
-/**
- * Decode query group info response proto bytes into WsQueryGroupInfoResponse.
- */
+/** Decode query group info response. */
 export function decodeQueryGroupInfoRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
@@ -445,18 +411,14 @@ export function decodeQueryGroupInfoRsp(
   };
 }
 
-/**
- * Encode get group member list request.
- */
+/** Encode get group member list request. */
 export function encodeGetGroupMemberListReq(data: WsGetGroupMemberListData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.GetGroupMemberListReq, {
     groupCode: data.group_code,
   });
 }
 
-/**
- * Decode get group member list response proto bytes into WsGetGroupMemberListResponse.
- */
+/** Decode get group member list response. */
 export function decodeGetGroupMemberListRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
@@ -487,9 +449,7 @@ export function decodeGetGroupMemberListRsp(
 
 /**
  * Decode direct chat reply status heartbeat response.
- *
- * Converts binary protobuf data into a unified `WsHeartbeatResponse`,
- * preserving the request-side `msgId` for stable request-response correlation.
+ * Preserves request-side msgId for stable request-response correlation.
  */
 export function decodeSendPrivateHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
@@ -509,9 +469,7 @@ export function decodeSendPrivateHeartbeatRsp(
 
 /**
  * Decode group chat reply status heartbeat response.
- *
- * Maps group heartbeat binary protobuf data to a unified response object,
- * carrying the original `msgId` for correct request-response matching.
+ * Carries original msgId for correct request-response matching.
  */
 export function decodeSendGroupHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
@@ -529,9 +487,7 @@ export function decodeSendGroupHeartbeatRsp(
   };
 }
 
-/**
- * Encode SyncInformationReq (sync command list to backend).
- */
+/** Encode SyncInformationReq (sync command list to backend). */
 export function encodeSyncInformationReq(data: WsSyncInformationData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.SyncInformationReq, {
     syncType: data.syncType,
@@ -541,9 +497,7 @@ export function encodeSyncInformationReq(data: WsSyncInformationData): Uint8Arra
   });
 }
 
-/**
- * Decode SyncInformationRsp.
- */
+/** Decode SyncInformationRsp. */
 export function decodeSyncInformationRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,

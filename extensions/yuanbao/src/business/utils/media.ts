@@ -1,12 +1,4 @@
-/**
- * Media file processing module.
- *
- * Supports image/file upload and download in the plugin environment.
- * - Upload: calls Yuanbao API for COS pre-signed config, then uploads via cos-js-sdk-v5
- * - Download: supports downloading from URL/local path to Buffer
- *
- * Note: runs in Node.js ESM environment, no browser API dependencies.
- */
+/** Media file processing — image/file upload (via COS) and download (URL/local path to Buffer). */
 
 import { randomBytes, createHash } from "node:crypto";
 import { createReadStream, statSync, existsSync } from "node:fs";
@@ -20,32 +12,30 @@ import type { CosUploadConfig } from "../../access/api.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
 
 /** Upload result */
-export type MediaUploadResult = {
-  /** Public URL */
+export type CosUploadResult = {
   url: string;
-  /** Filename */
   filename: string;
-  /** File size (bytes) */
   size: number;
-  /** MIME type */
   mimeType: string;
   /** File content MD5 (hex), usable as image UUID */
   uuid: string;
-  /** Image dimensions (only for image types) */
+  /** Only for image types */
   imageInfo?: { width: number; height: number };
-  /** Resource ID (if returned by server) */
   resourceId?: string;
 };
 
-/** Media file descriptor */
-export type MediaFile = {
-  /** Original filename (with extension) */
+/** @deprecated Use CosUploadResult */
+export type MediaUploadResult = CosUploadResult;
+
+type DownloadedFile = {
   filename: string;
-  /** File content (Buffer) */
   data: Buffer;
-  /** MIME type, e.g. image/jpeg, application/pdf */
+  /** e.g. image/jpeg, application/pdf */
   mimeType: string;
 };
+
+/** @deprecated Use DownloadedFile */
+type MediaFile = DownloadedFile;
 
 const DEFAULT_MAX_MB = 20;
 
@@ -62,9 +52,7 @@ export const IMAGE_EXTS = new Set([
   ".ico",
 ]);
 
-/**
- * Guess MIME type from filename.
- */
+/** Guess MIME type from filename extension. */
 export function guessMimeType(filename: string): string {
   const ext = extname(filename).toLowerCase();
   const mime: Record<string, string> = {
@@ -97,9 +85,7 @@ export function guessMimeType(filename: string): string {
   return mime[ext] ?? "application/octet-stream";
 }
 
-/**
- * Check if file is an image type (by MIME or extension).
- */
+/** Check if file is an image type (by MIME or extension). */
 function isImage(filename: string, mimeType?: string): boolean {
   if (mimeType?.startsWith("image/")) {
     return true;
@@ -121,10 +107,7 @@ function md5Hex(buffer: Buffer): string {
   return createHash("md5").update(buffer).digest("hex");
 }
 
-/**
- * Parse image dimensions from Buffer (supports JPEG/PNG/GIF/WebP), no extra dependencies.
- * Tries each format's magic number in order; returns undefined if none match.
- */
+/** Parse image dimensions from Buffer (supports JPEG/PNG/GIF/WebP), no extra dependencies. */
 export function parseImageSize(buf: Buffer): { width: number; height: number } | undefined {
   return parsePngSize(buf) ?? parseJpegSize(buf) ?? parseGifSize(buf) ?? parseWebpSize(buf);
 }
@@ -203,9 +186,7 @@ function parseWebpSize(buf: Buffer): { width: number; height: number } | undefin
   return undefined;
 }
 
-/**
- * Check if a string is a local file path (not a remote URL).
- */
+/** Check if a string is a local file path (not a remote URL). */
 function isLocalPath(s: string): boolean {
   return (
     s.startsWith("file://") ||
@@ -223,13 +204,7 @@ function isLocalPath(s: string): boolean {
   );
 }
 
-/**
- * Normalize local path:
- * 1. Trim whitespace
- * 2. Strip `file://` prefix and URI decode
- * 3. Expand tilde (`~`) to real home directory
- * 4. Resolve relative paths to absolute
- */
+/** Normalize local path: trim, strip file://, expand ~, resolve relative paths. */
 function normalizePath(s: string): string {
   let p = s.trim();
   if (p.startsWith("file://")) {
@@ -258,10 +233,7 @@ const MIME_TO_EXT: Record<string, string> = {
   "text/plain": ".txt",
 };
 
-/**
- * Extract filename from content-disposition header.
- * Supports both `filename=` and `filename*=UTF-8''` formats.
- */
+/** Extract filename from content-disposition header (supports filename and filename*=UTF-8'' formats). */
 function extractFilenameFromContentDisposition(contentDisp: string): string {
   const match = contentDisp.match(/filename\*?=(?:UTF-8'')?["']?([^;"'\r\n]+)/i);
   if (!match) {
@@ -270,10 +242,8 @@ function extractFilenameFromContentDisposition(contentDisp: string): string {
   return decodeURIComponent(match[1].replace(/"/g, "")).trim();
 }
 
-/**
- * Infer filename from HTTP response (fallback logic; callers should prefer message metadata).
- * Priority: content-disposition > URL path > random hex + extension
- */function inferFilenameFromResponse(
+/** Infer filename from HTTP response. Priority: content-disposition > URL path > random hex. */
+function inferFilenameFromResponse(
   response: Response,
   fetchUrl: string,
   contentType: string,
@@ -301,9 +271,7 @@ function extractFilenameFromContentDisposition(contentDisp: string): string {
   return `${randomBytes(8).toString("hex")}${inferredExt}`;
 }
 
-/**
- * Resolve actual download URL: if it contains a resourceId param, exchange for real download URL via Yuanbao API.
- */
+/** Resolve actual download URL: exchange resourceId param for real URL via Yuanbao API if present. */
 async function resolveFetchUrl(url: string, account?: ResolvedYuanbaoAccount): Promise<string> {
   const parsed = new URL(url);
   const resourceId = parsed.searchParams.get("resourceId");
@@ -313,15 +281,7 @@ async function resolveFetchUrl(url: string, account?: ResolvedYuanbaoAccount): P
   return url;
 }
 
-/**
- * Download file from URL to Buffer.
- *
- * Supports two sources:
- * - `file://` or absolute path — local file, read directly
- * - `http(s)://` — remote URL, auto-resolves Yuanbao download URL if `resourceId` param present
- *
- * Note: returned `filename` is a fallback; callers should prefer `mediaName` from message metadata.
- */
+/** Download file from URL or local path to Buffer. Supports file://, absolute path, http(s)://. */
 export async function downloadMediaForYuanbao(
   url: string,
   maxMb = DEFAULT_MAX_MB,
@@ -374,11 +334,7 @@ export async function downloadMediaForYuanbao(
   return { filename, data, mimeType };
 }
 
-/**
- * Download media via OpenClaw SDK and convert to MediaFile.
- * Unlike {@link downloadMediaForYuanbao}, this relies on core.media.loadWebMedia
- * for local path resolution and size limits, suitable for localRoots sandbox scenarios.
- */
+/** Download media via OpenClaw SDK (core.media.loadWebMedia), falls back to downloadMediaForYuanbao. */
 async function downloadMediaForLocal(
   url: string,
   core: PluginRuntime,
@@ -408,10 +364,7 @@ async function downloadMediaForLocal(
   return downloadMediaForYuanbao(url, account.mediaMaxMb, account);
 }
 
-/**
- * Minimal COS upload implementation (Node.js Buffer, no browser API dependencies).
- * Reuses cos-js-sdk-v5 SDK with params matching Yuanbao Web client.
- */
+/** Minimal COS upload implementation (Node.js Buffer, no browser API dependencies). */
 async function uploadBufferToCos(params: {
   config: CosUploadConfig;
   data: Buffer;
@@ -441,7 +394,9 @@ async function uploadBufferToCos(params: {
     }
   }
 
-  const COSConstructor = COS as new (opts: Record<string, unknown>) => { putObject: (params: Record<string, unknown>) => Promise<unknown> };
+  const COSConstructor = COS as new (opts: Record<string, unknown>) => {
+    putObject: (params: Record<string, unknown>) => Promise<unknown>;
+  };
   const cos = new COSConstructor({
     FileParallelLimit: 10,
     getAuthorization(_: unknown, callback: (cred: object) => void) {
@@ -485,9 +440,7 @@ async function uploadBufferToCos(params: {
   return config.resourceUrl;
 }
 
-/**
- * Upload Buffer to COS (auto-fetches pre-signed config via api.ts).
- */
+/** Upload Buffer to COS (auto-fetches pre-signed config via api.ts). */
 export async function uploadMediaToCos(
   mediaFile: MediaFile,
   account: ResolvedYuanbaoAccount,
@@ -523,9 +476,7 @@ export async function uploadMediaToCos(
   };
 }
 
-/**
- * Download from URL/local path/resourceId and upload to COS (one-stop).
- */
+/** Download from URL/local path/resourceId and upload to COS (one-stop). */
 export async function downloadAndUploadMedia(
   mediaUrl: string,
   core: PluginRuntime,
@@ -537,10 +488,7 @@ export async function downloadAndUploadMedia(
   return uploadMediaToCos(mediaFile, account, onProgress);
 }
 
-/**
- * Build Tencent IM TIMImageElem message body.
- * Ref: https://cloud.tencent.com/document/product/269/2720
- */
+/** Build Tencent IM TIMImageElem message body. */
 export function buildImageMsgBody(params: {
   url: string;
   filename?: string;
@@ -568,10 +516,7 @@ export function buildImageMsgBody(params: {
   ];
 }
 
-/**
- * Build Tencent IM TIMFileElem message body.
- * Ref: https://cloud.tencent.com/document/product/269/2720
- */
+/** Build Tencent IM TIMFileElem message body. */
 export function buildFileMsgBody(params: {
   url: string;
   filename: string;
@@ -591,12 +536,7 @@ export function buildFileMsgBody(params: {
   ];
 }
 
-/**
- * Download media list and save to agent-accessible directory, returning local file paths.
- * - MIME type from HTTP response header first, fallback to core.media.detectMime
- * - Filename from mediaName first, then inferred from response/URL
- * - Failed downloads are skipped with warning log
- */
+/** Download media list and save to agent-accessible directory, returning local file paths. */
 export async function downloadMediasToLocalFiles(
   medias: Array<{ url: string; mediaName?: string }>,
   account: ResolvedYuanbaoAccount,

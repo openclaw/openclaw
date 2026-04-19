@@ -25,7 +25,9 @@ import { createLog } from "../../../logger.js";
  * Note: project is ESM ("type": "module"), must use import() not require().
  */
 let _listChatCommands: ((options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
-let _listChatCommandsForConfig: ((cfg: Record<string, unknown>, options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
+let _listChatCommandsForConfig:
+  | ((cfg: Record<string, unknown>, options?: Record<string, unknown>) => ChatCommandDef[])
+  | null = null;
 let _commandAuthLoadPromise: Promise<void> | null = null;
 
 function loadCommandAuth(): Promise<void> {
@@ -47,9 +49,8 @@ function loadCommandAuth(): Promise<void> {
 }
 
 export type CommandItem = {
-  /** Command name (with /), e.g. "/help" */
+  /** With /, e.g. "/help" */
   name: string;
-  /** Command description */
   description: string;
 };
 
@@ -102,14 +103,14 @@ async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef
       const commands = _listChatCommandsForConfig(config);
       log.debug(`使用配置感知版本获取命令列表: ${commands.length} 个命令`);
       if (commands.length > 0) {
-      log.debug("命令原始结构示例:", {
-        sample: commands.slice(0, 3).map((c) => ({
-          name: c.name,
-          description: c.description,
-          textAliases: c.textAliases,
-          keys: Object.keys(c),
-        })),
-      });
+        log.debug("命令原始结构示例:", {
+          sample: commands.slice(0, 3).map((c) => ({
+            name: c.name,
+            description: c.description,
+            textAliases: c.textAliases,
+            keys: Object.keys(c),
+          })),
+        });
       }
       return commands;
     }

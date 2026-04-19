@@ -18,13 +18,10 @@ import type { MessageSender, OutboundItem } from "./types.js";
 
 /** Queue session interface */
 export interface QueueSession {
-  /** Current strategy in use */
   readonly strategy: "immediate" | "merge-text" | "mergeOnFlush";
-  /** Push a message into the queue */
   push(item: OutboundItem): Promise<void>;
-  /** Flush the queue, sending all remaining buffered content; returns whether any content was sent */
+  /** Returns whether any content was sent */
   flush(): Promise<boolean>;
-  /** Abort the queue, discarding all unsent buffered content */
   abort(): void;
   /**
    * Force-flush current buffer immediately without closing the session.
@@ -35,22 +32,18 @@ export interface QueueSession {
 
 /** Queue session creation options */
 export interface QueueSessionOptions {
-  /** Message sender */
   sender: MessageSender;
-  /** Send strategy */
   strategy: "immediate" | "merge-text";
   /**
    * When enabled, push only buffers; flush merges all text into a single message.
    * Orthogonal to strategy, takes priority over it.
    */
   mergeOnFlush?: boolean;
-  /** Cleanup callback when session completes */
   onComplete: () => void;
-  /** Session identifier (for logging) */
   sessionKey?: string;
-  /** merge-text strategy: min char count to trigger send, default 2800 */
+  /** Default 2800 */
   minChars?: number;
-  /** merge-text strategy: max char count per message, default 3000 */
+  /** Default 3000 */
   maxChars?: number;
   /**
    * Markdown-aware text chunking function (fence-aware).

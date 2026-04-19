@@ -1,21 +1,8 @@
-/**
- * Markdown processing utilities.
- *
- * Provides fence detection/repair, block-level structure analysis, and atomic-block-aware chunking.
- * Divided into three namespaces:
- *  - mdFence  — fence detection & repair
- *  - mdBlock  — block-level structure detection & separator inference
- *  - mdAtomic — atomic block (table & diagram fence) extraction & aware chunking
- */
+/** Markdown processing utilities: fence detection/repair, block-level analysis, and atomic-block-aware chunking. */
 
 // Fence-related
 
-/**
- * Strip outer ```markdown fences wrapping AI replies.
- *
- * Some models wrap table-containing replies in ```markdown fences, causing clients to render tables as code blocks.
- * Only strips when the interior contains a table to avoid damaging real code blocks.
- */
+/** Strip outer ```markdown fences wrapping AI replies (only when interior contains a table). */
 function stripOuterMarkdownFence(text: string): string {
   const HAS_TABLE = /^\s*\|[-:| ]+\|/m;
   return text.replace(/```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/gm, (fullMatch, inner: string) =>
@@ -23,11 +10,7 @@ function stripOuterMarkdownFence(text: string): string {
   );
 }
 
-/**
- * Check if text is inside an unclosed code fence (``` block).
- *
- * Scans line by line, toggling state on lines starting with ```. Odd toggles indicate an unclosed fence.
- */
+/** Check if text is inside an unclosed code fence (``` block). */
 function hasUnclosedFence(text: string): boolean {
   let inFence = false;
   for (const line of text.split("\n")) {
@@ -38,12 +21,7 @@ function hasUnclosedFence(text: string): boolean {
   return inFence;
 }
 
-/**
- * Check if text is inside an unclosed math block (`$$...$$`).
- *
- * Scans line by line, skipping content inside code fences, counting `$$` occurrences.
- * An odd count indicates an unclosed math block.
- */
+/** Check if text is inside an unclosed math block ($$...$$). Skips content inside code fences. */
 function hasUnclosedMathBlock(text: string): boolean {
   let inFence = false;
   let mathOpen = false;
@@ -68,12 +46,7 @@ function hasUnclosedMathBlock(text: string): boolean {
   return mathOpen;
 }
 
-/**
- * Fix paragraph separators erroneously inserted by block-streaming inside math blocks.
- *
- * Replaces consecutive blank lines (`\n\n+`) inside `$$...$$` with a single `\n`.
- * Only processes `$$` blocks outside code fences.
- */
+/** Fix paragraph separators erroneously inserted inside math blocks by block-streaming. */
 function normalizeMathBlocks(text: string): string {
   if (!text.includes("$$")) {
     return text;
@@ -120,11 +93,7 @@ function normalizeMathBlocks(text: string): string {
 
 /**
  * Append incoming to buffer, stripping redundant fence repair markers from block-streaming.
- *
- * Handles three error patterns:
- * 1. Internal pseudo-lines: close+open markers fused into a 6-backtick line -> replaced with `\n`.
- * 2. Boundary A: buffer ends with close marker, incoming starts with open marker -> both stripped.
- * 3. Boundary B: buffer has unclosed fence, incoming brings re-open marker -> strip re-open only.
+ * Handles: (1) internal pseudo-lines, (2) boundary close+open, (3) unclosed fence re-open.
  */
 function mergeBlockStreamingFences(buffer: string, incoming: string): string {
   const CLOSE_RE = /\n```\s*$/;
@@ -148,12 +117,7 @@ function mergeBlockStreamingFences(buffer: string, incoming: string): string {
 
 // Block-level structure
 
-/**
- * Check if the last non-empty line is a Markdown table row (starts and ends with |).
- *
- * Used to determine if the buffer ends with a table row — if so, wait for the next deliver block
- * to avoid splitting in the middle of a table.
- */
+/** Check if the last non-empty line is a Markdown table row (starts and ends with |). */
 function endsWithTableRow(text: string): boolean {
   const trimmed = text.trimEnd();
   if (!trimmed) {
@@ -164,11 +128,7 @@ function endsWithTableRow(text: string): boolean {
   return line.startsWith("|") && line.endsWith("|");
 }
 
-/**
- * Check if text starts with a Markdown block-level element.
- *
- * Used during block-streaming merge to infer whether a paragraph separator (`\n\n`) is needed.
- */
+/** Check if text starts with a Markdown block-level element. */
 function startsWithBlockElement(text: string): boolean {
   const firstLine = (text.trimStart().split("\n")[0] ?? "").trimStart();
   return (
@@ -187,16 +147,8 @@ function startsWithBlockElement(text: string): boolean {
 
 /**
  * Infer the separator to insert between buffer and incoming blocks.
- *
- * Block-streaming trims each block, discarding `\n\n` at paragraph boundaries.
- * This function heuristically restores the correct separator.
- *
- * Priority (high to low):
- *  1. Inside fence / already has `\n\n` -> no separator
- *  2. Mid-row table split -> `' '` (rejoin same line)
- *  3. Consecutive table rows -> `'\n'`
- *  4. Incoming starts with block element -> `'\n\n'`
- *  5. Otherwise -> no separator
+ * Priority: inside fence/math → no sep; mid-row table split → ' '; consecutive table rows → '\n';
+ * block element → '\n\n'; otherwise → ''.
  */
 function inferBlockSeparator(buffer: string, incoming: string): string {
   if (hasUnclosedFence(buffer)) {
@@ -234,17 +186,8 @@ function inferBlockSeparator(buffer: string, incoming: string): string {
 // Pipe-table sanitize
 
 /**
- * Markdown pipe-table sanitizer.
- *
- * Block-streaming may insert `\n\n` (or `\n`) at arbitrary positions within pipe tables,
- * breaking GFM rendering.
- *
- * Strategy:
- *   Phase 0: Fast-path exit when text clearly contains no tables.
- *   Phase 1: Scan lines, group consecutive pipe-containing lines as candidate table regions.
- *   Phase 2: For regions with blank lines and a GFM separator row, remove blanks and merge
- *            fragment lines based on structural signals (whether lines start/end with `|`).
- *   Phase 3: Reassemble repaired regions back into the original text.
+ * Markdown pipe-table sanitizer — fixes tables broken by block-streaming \n\n insertion.
+ * Phase 0: fast-path exit. Phase 1: find table regions. Phase 2: heal regions. Phase 3: reassemble.
  */
 
 interface PipeTableRegion {
@@ -254,11 +197,7 @@ interface PipeTableRegion {
   endLine: number;
 }
 
-/**
- * Scan raw lines, grouping consecutive pipe-containing lines as candidate table regions.
- * Blank lines between pipe lines are kept in the same group (they are `\n\n` artifacts to fix).
- * Non-empty lines without pipe characters end the current group.
- */
+/** Scan lines, grouping consecutive pipe-containing lines as candidate table regions. */
 function findPipeTableRegions(lines: string[]): PipeTableRegion[] {
   const regions: PipeTableRegion[] = [];
   let groupStart = -1;
@@ -300,12 +239,7 @@ function findSeparatorInFlat(flat: string): boolean {
   return PIPE_TABLE_SEPARATOR_RE.test(flat);
 }
 
-/**
- * Fix a table region: remove blank lines and merge fragment lines.
- *
- * Rule: if accumulated line ends with `|` and next line starts with `|`, they are separate rows;
- * otherwise the next line is a continuation fragment.
- */
+/** Fix a table region: remove blank lines and merge fragment lines using | boundary signals. */
 function healPipeTableRegion(regionLines: string[]): string | null {
   if (!regionLines.some((l) => l.trim() === "")) {
     return null;
@@ -338,13 +272,7 @@ function healPipeTableRegion(regionLines: string[]): string | null {
   return result.join("\n");
 }
 
-/**
- * Fix Markdown pipe tables broken by block-streaming `\n\n` insertion.
- *
- * Identifies table regions, verifies GFM separator presence, removes blank lines,
- * and re-merges fragment lines using structural signals (`|` at line start/end).
- * Safe to call on any text — non-table content passes through unchanged.
- */
+/** Fix Markdown pipe tables broken by block-streaming. Safe to call on any text. */
 function sanitizePipeTables(text: string): string {
   // Phase 0 — fast-path exit
   if (!text) {
@@ -407,11 +335,7 @@ const DIAGRAM_LANGUAGES = new Set([
 
 /**
  * Extract all atomic blocks (tables and diagram fence blocks) with character offset ranges.
- *
- * Line-by-line scan:
- * - Skips content inside plain code fences to avoid misidentifying `|` as table rows.
- * - Marks complete fence blocks with diagram languages as `diagram-fence` atomic blocks.
- * - Marks consecutive `|`-prefixed lines (with separator on 2nd line) as `table` atomic blocks.
+ * Skips content inside plain code fences.
  */
 function extractAtomicBlocks(text: string): AtomicBlock[] {
   const blocks: AtomicBlock[] = [];
@@ -498,12 +422,7 @@ function extractAtomicBlocks(text: string): AtomicBlock[] {
 
 /**
  * Atomic-block-aware Markdown text chunking.
- *
- * Runs `chunkFn` for fence-aware rough chunking, then checks if split boundaries fall inside
- * atomic blocks (tables / diagram fences):
- * - If inside, shift boundary before `block.start` (push entire block to next message).
- * - If cannot shift back (block at chunk start), shift after `block.end` (include in current chunk).
- * - If entire text is a single oversized atomic block, return `[text]` (graceful degradation).
+ * Adjusts split boundaries to avoid landing inside atomic blocks (tables / diagram fences).
  */
 function chunkMarkdownTextAtomicAware(
   text: string,
@@ -571,13 +490,9 @@ function chunkMarkdownTextAtomicAware(
 
 /** Fence detection & repair */
 export const mdFence = {
-  /** Strip outer ```markdown fence */
   stripOuter: stripOuterMarkdownFence,
-  /** Check for unclosed code fence */
   hasUnclosed: hasUnclosedFence,
-  /** Check for unclosed math block */
   hasUnclosedMath: hasUnclosedMathBlock,
-  /** Merge redundant block-streaming fence markers */
   mergeBlockStreaming: mergeBlockStreamingFences,
 } as const;
 
@@ -587,15 +502,12 @@ export const mdBlock = {
   startsWithBlockElement,
   /** Check if text ends with a table row */
   endsWithTableRow,
-  /** Infer separator between two block-streaming blocks */
   inferSeparator: inferBlockSeparator,
 } as const;
 
 /** Atomic block (table & diagram fence) aware chunking */
 export const mdAtomic = {
-  /** Extract all atomic block offset ranges from text */
   extract: extractAtomicBlocks,
-  /** Atomic-block-aware text chunking */
   chunkAware: chunkMarkdownTextAtomicAware,
   /** Diagram fence language identifiers */
   DIAGRAM_LANGUAGES,
@@ -603,14 +515,11 @@ export const mdAtomic = {
 
 /** Pipe-table repair */
 export const mdTable = {
-  /** Fix pipe tables broken by block-streaming */
   sanitize: sanitizePipeTables,
 } as const;
 
 /** Math block repair */
 export const mdMath = {
-  /** Check for unclosed math block */
   hasUnclosed: hasUnclosedMathBlock,
-  /** Fix paragraph separators erroneously inserted inside math blocks */
   normalize: normalizeMathBlocks,
 } as const;

@@ -24,7 +24,6 @@ export interface DeliverTarget {
   refMsgId?: string;
   refFromAccount?: string;
   wsClient: YuanbaoWsClient;
-  /** Trace context for injecting trace_id / msg_seq into outbound messages */
   traceContext?: YuanbaoTraceContext;
 }
 
