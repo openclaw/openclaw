@@ -23,6 +23,29 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(3);
     expect(onBlockReply.mock.calls[1][0].text).toBe("  ```js\n  const x = 1;\n  ```");
   });
+
+  it("keeps leading indentation in non-fence block reply chunks", () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createParagraphChunkedBlockReplyHarness({
+      onBlockReply,
+      chunking: {
+        minChars: 5,
+        maxChars: 30,
+      },
+    });
+
+    const text = "Intro\n\n  nested bullet\n  continued detail\n\nOutro";
+
+    emitAssistantTextDeltaAndEnd({ emit, text });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "Intro",
+      "  nested bullet",
+      "  continued detail",
+      "Outro",
+    ]);
+  });
+
   it("accepts longer fence markers for close", () => {
     const onBlockReply = vi.fn();
     const { emit } = createParagraphChunkedBlockReplyHarness({

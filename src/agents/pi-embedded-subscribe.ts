@@ -9,7 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -567,7 +567,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = sanitizeAssistantVisibleText(stripBlockTags(text, state.blockState));
+    const chunk = sanitizeAssistantVisibleTextWithProfile(
+      stripBlockTags(text, state.blockState),
+      "history",
+    ).trimEnd();
     if (!chunk) {
       return;
     }
