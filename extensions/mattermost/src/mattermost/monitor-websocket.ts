@@ -139,11 +139,28 @@ export function parsePostedEvent(
   return parsePostedPayload(payload);
 }
 
+export type CreateMattermostConnectOnceExtendedOpts = {
+  /**
+   * Number of consecutive health check failures before forcibly terminating
+   * the WebSocket to trigger a reconnect.
+   *
+   * When the health check REST API call fails repeatedly, the WebSocket may
+   * be in a zombie state — connected at the TCP level but no longer receiving
+   * events. Terminating the connection after N failures ensures the reconnect
+   * loop can establish a fresh WebSocket.
+   *
+   * Default: 3 (≈ 90s with default 30s interval).
+   * Set to 0 to disable this behaviour (legacy behaviour).
+   */
+  healthCheckFailureThreshold?: number;
+};
+
 export function createMattermostConnectOnce(
-  opts: CreateMattermostConnectOnceOpts,
+  opts: CreateMattermostConnectOnceOpts & CreateMattermostConnectOnceExtendedOpts = {} as CreateMattermostConnectOnceOpts,
 ): () => Promise<void> {
   const webSocketFactory = opts.webSocketFactory ?? defaultMattermostWebSocketFactory;
   const healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 30_000;
+  const healthCheckFailureThreshold = opts.healthCheckFailureThreshold ?? 3;
   return async () => {
     const flowId = randomUUID();
     const ws = webSocketFactory(opts.wsUrl);
@@ -159,6 +176,7 @@ export function createMattermostConnectOnce(
         let healthCheckInFlight = false;
         let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
         let initialUpdateAt: number | undefined;
+        let consecutiveHealthCheckFailures = 0;
 
         const clearTimers = () => {
           if (healthCheckTimer !== undefined) {
@@ -203,15 +221,32 @@ export function createMattermostConnectOnce(
               stopHealthChecks();
               ws.terminate();
             }
+            // Health check succeeded — reset the consecutive failure counter.
+            consecutiveHealthCheckFailures = 0;
           } catch (err) {
             if (!healthCheckEnabled || settled) {
               return;
             }
+            consecutiveHealthCheckFailures++;
             const label =
               initialUpdateAt === undefined
                 ? "mattermost: failed to get initial update_at"
                 : "mattermost: health check error";
             opts.runtime.error?.(`${label}: ${String(err)}`);
+            // If the health check has failed N times in a row, the WebSocket
+            // is likely in a zombie state (TCP connected but no events).
+            // Terminate it so the reconnect loop can establish a fresh one.
+            if (
+              healthCheckFailureThreshold > 0 &&
+              consecutiveHealthCheckFailures >= healthCheckFailureThreshold
+            ) {
+              opts.runtime.error?.(
+                `mattermost: ${consecutiveHealthCheckFailures} consecutive health check failures — terminating WebSocket to force reconnect`,
+              );
+              stopHealthChecks();
+              ws.terminate();
+              return;
+            }
           } finally {
             healthCheckInFlight = false;
             scheduleHealthCheck();
