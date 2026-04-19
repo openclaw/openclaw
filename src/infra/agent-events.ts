@@ -315,6 +315,15 @@ export type AgentRunContext = {
    * to provide it.
    */
   getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  /**
+   * Live-read accessor for `SessionEntry.postApprovalPermissions.
+   * acceptEdits`. Returns `true` only when the user approved the plan
+   * with "Accept, allow edits" (granting the agent permission to
+   * self-modify the plan at ≥95% confidence). Used by the acceptEdits
+   * constraint gate to block destructive / self-restart / config-
+   * change actions even when general normal-mode execution is allowed.
+   */
+  getLatestAcceptEdits?: () => boolean;
 };
 
 type AgentEventState = {

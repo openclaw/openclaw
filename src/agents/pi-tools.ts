@@ -291,6 +291,16 @@ export function createOpenClawCodingTools(options?: {
    * the current run).
    */
   getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  /**
+   * Cherry-pick of b6b2783ba3 (acceptEdits gate): live-read accessor
+   * for the session's `postApprovalPermissions.acceptEdits` flag.
+   * Returns `true` only when the user approved the plan with
+   * "Accept, allow edits" (granting acceptEdits permission); `false`
+   * otherwise. Threaded to the before-tool-call HookContext so the
+   * acceptEdits constraint gate can run on post-approval tool calls
+   * without re-reading the session store on each call.
+   */
+  getLatestAcceptEdits?: () => boolean;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -741,6 +751,13 @@ export function createOpenClawCodingTools(options?: {
       // can re-check after mid-turn approval transitions (cached
       // planMode goes stale; getLatestPlanMode reads fresh).
       ...(options?.getLatestPlanMode ? { getLatestPlanMode: options.getLatestPlanMode } : {}),
+      // Cherry-pick of b6b2783ba3 (acceptEdits gate): mirror
+      // getLatestPlanMode for the postApprovalPermissions.acceptEdits
+      // flag. Paired so the gate activates post-approval without a
+      // session store re-read per tool call.
+      ...(options?.getLatestAcceptEdits
+        ? { getLatestAcceptEdits: options.getLatestAcceptEdits }
+        : {}),
     }),
   );
   const withAbort = options?.abortSignal

@@ -42,11 +42,24 @@ export type RunEmbeddedPiAgentParams = {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
-  /** Trusted provider role ids for the requester in this group turn. */
+  /**
+   * Member-role ids the sender carries (e.g. Discord role ids, Slack
+   * group memberships). Used by channel-level tool policy + permission
+   * resolution. Restored after the cherry-pick of b6b2783ba3 — the
+   * agent's base predates this field but our HEAD requires it
+   * (referenced by run.ts:755 and attempt.ts:597).
+   */
   memberRoleIds?: string[];
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
-  /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
+  /**
+   * True when the run is operating on the agent's canonical workspace
+   * (not a sandboxed copy). Threaded through to the bootstrap-context
+   * resolver so it can decide whether to inject IDENTITY/SOUL files.
+   * Restored after the cherry-pick of b6b2783ba3 — the agent's base
+   * predates this field but our HEAD requires it (referenced by
+   * run.ts:757 and attempt.ts:672).
+   */
   isCanonicalWorkspace?: boolean;
   senderId?: string | null;
   senderName?: string | null;
@@ -102,6 +115,12 @@ export type RunEmbeddedPiAgentParams = {
    * still has "plan" cached for the rest of the current run).
    */
   getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  /**
+   * Live-read accessor for the session's `postApprovalPermissions.
+   * acceptEdits` flag. Threaded through to the HookContext so the
+   * acceptEdits constraint gate fires on post-approval tool calls.
+   */
+  getLatestAcceptEdits?: () => boolean;
   prompt: string;
   /** User-visible prompt body to persist instead of runtime-enriched prompt text. */
   transcriptPrompt?: string;

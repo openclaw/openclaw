@@ -84,6 +84,7 @@ import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   readLatestSessionEntryFresh,
+  resolveLatestAcceptEditsFromDisk,
   resolveLatestPlanModeFromDisk,
 } from "./fresh-session-entry.js";
 import type { FollowupRun } from "./queue.js";
@@ -745,6 +746,16 @@ export async function runAgentTurnWithFallback(params: {
           storePath: params.storePath,
           sessionKey: params.sessionKey,
         }),
+      // acceptEdits constraint-gate live read: true only when the
+      // user approved the plan with the "Accept, allow edits" button.
+      // When true, the acceptEdits gate runs on every tool call in
+      // normal mode and blocks the three hard constraints
+      // (destructive, self-restart, config-change).
+      getLatestAcceptEdits: () =>
+        resolveLatestAcceptEditsFromDisk({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        }),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -1216,6 +1227,16 @@ export async function runAgentTurnWithFallback(params: {
                 // stale-cache false positives.
                 getLatestPlanMode: () =>
                   resolveLatestPlanModeFromDisk({
+                    storePath: params.storePath,
+                    sessionKey: params.sessionKey,
+                  }),
+                // acceptEdits constraint-gate live read: true only
+                // when the user approved the plan with the "Accept,
+                // allow edits" button. Paired with getLatestPlanMode
+                // so the gate can distinguish post-approval acceptEdits
+                // from general normal-mode execution.
+                getLatestAcceptEdits: () =>
+                  resolveLatestAcceptEditsFromDisk({
                     storePath: params.storePath,
                     sessionKey: params.sessionKey,
                   }),

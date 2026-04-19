@@ -810,6 +810,16 @@ export async function runEmbeddedAttempt(
             // Bug 3+4 fix: also forward the live-read accessor so the
             // hook can re-check after mid-turn approval transitions.
             ...(params.getLatestPlanMode ? { getLatestPlanMode: params.getLatestPlanMode } : {}),
+            // Cherry-pick of b6b2783ba3 (acceptEdits gate): thread the
+            // live-read accessor for postApprovalPermissions.acceptEdits.
+            // The rest of the upstream commit's attempt.ts diff (~150
+            // lines: ollama-runtime imports + bootstrap refactor + dead-
+            // export removals) was unrelated WIP from the originating
+            // committer's working tree and was stripped during the
+            // cherry-pick. Only this 3-line threading is intended.
+            ...(params.getLatestAcceptEdits
+              ? { getLatestAcceptEdits: params.getLatestAcceptEdits }
+              : {}),
             agentDir,
             workspaceDir: effectiveWorkspace,
             // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points

@@ -19,6 +19,7 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { checkAcceptEditsConstraint } from "./plan-mode/accept-edits-gate.js";
 import { checkMutationGate, type PlanMode } from "./plan-mode/index.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -56,6 +57,22 @@ export type HookContext = {
    * don't have to provide it.
    */
   getLatestPlanMode?: () => PlanMode | undefined;
+  /**
+   * Live-read accessor for the session's `postApprovalPermissions.
+   * acceptEdits` flag. Returns `true` only when the user explicitly
+   * approved the plan with the "Accept, allow edits" button; `false`
+   * otherwise (including disk-read failures — fail-closed on the
+   * permission read, fail-open on the subsequent gate).
+   *
+   * When `true`, the acceptEdits constraint gate
+   * (src/agents/plan-mode/accept-edits-gate.ts) runs in normal-mode
+   * tool calls and blocks the three hard-constraint categories
+   * (destructive, self-restart, config-change).
+   *
+   * Optional so test contexts and unit fixtures don't have to
+   * provide it. When absent, the acceptEdits gate is not invoked.
+   */
+  getLatestAcceptEdits?: () => boolean;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -299,6 +316,40 @@ export async function runBeforeToolCallHook(args: {
       return {
         blocked: true,
         reason: gateResult.reason ?? `Tool "${toolName}" is blocked while plan mode is active.`,
+      };
+    }
+  } else if (latestPlanMode === "normal" && args.ctx?.getLatestAcceptEdits?.()) {
+    // Post-approval acceptEdits gate. Only runs when:
+    //   (a) mode is "normal" (plan already approved + closed), AND
+    //   (b) the user granted acceptEdits via "Accept, allow edits".
+    // Blocks the three hard constraints (destructive / self-restart /
+    // config-change) that override acceptEdits regardless of agent
+    // confidence. Fail-open otherwise — general mutations stay
+    // unblocked in post-approval execution.
+    let execCommand: string | undefined;
+    let filePath: string | undefined;
+    if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {
+      const cmd = params.command;
+      if (typeof cmd === "string") {
+        execCommand = cmd;
+      }
+    }
+    if (isPlainObject(params)) {
+      const candidate = params.path ?? params.filePath ?? params.file_path;
+      if (typeof candidate === "string") {
+        filePath = candidate;
+      }
+    }
+    const acceptEditsResult = checkAcceptEditsConstraint({
+      toolName,
+      execCommand,
+      filePath,
+    });
+    if (acceptEditsResult.blocked) {
+      return {
+        blocked: true,
+        reason:
+          acceptEditsResult.reason ?? `Tool "${toolName}" is blocked under acceptEdits permission.`,
       };
     }
   }
