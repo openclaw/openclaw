@@ -36,6 +36,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
 
@@ -184,12 +185,27 @@ export const __testing = {
   },
 };
 
-function resolveDeviceIdentityForGatewayCall(): ReturnType<
-  typeof loadOrCreateDeviceIdentity
-> | null {
-  // Shared-auth local calls should still stay device-bound so operator scopes
-  // remain available for detail RPCs such as status / system-presence /
-  // last-heartbeat.
+function shouldOmitDeviceIdentityForGatewayCall(params: {
+  url: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  try {
+    const hostname = new URL(params.url).hostname;
+    return isLoopbackHost(hostname) && !(params.token || params.password);
+  } catch {
+    return false;
+  }
+}
+
+function resolveDeviceIdentityForGatewayCall(params: {
+  url: string;
+  token?: string;
+  password?: string;
+}): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
+  if (shouldOmitDeviceIdentityForGatewayCall(params)) {
+    return null;
+  }
   try {
     return gatewayCallDeps.loadOrCreateDeviceIdentity();
   } catch {
@@ -400,12 +416,18 @@ function formatGatewayCloseError(
   code: number,
   reason: string,
   connectionDetails: GatewayConnectionDetails,
+  connectError?: Error | null,
 ): string {
   const reasonText = normalizeOptionalString(reason) || "no close reason";
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";
-  return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  const parts = [
+    connectError ? `gateway connect failed: ${connectError.message}` : undefined,
+    `gateway closed (${code}${suffix}): ${reasonText}`,
+    connectionDetails.message,
+  ].filter(Boolean);
+  return parts.join("\n");
 }
 
 function formatGatewayTimeoutError(
@@ -465,6 +487,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
+    let connectError: Error | null = null;
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
@@ -491,9 +514,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
+      deviceIdentity: resolveDeviceIdentityForGatewayCall({
+        url,
+        token,
+        password,
+      }),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+      onConnectError: (err) => {
+        connectError = err;
+      },
       onHelloOk: async (hello) => {
         try {
           ensureGatewaySupportsRequiredMethods({
@@ -520,7 +550,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         ignoreClose = true;
         client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        stop(
+          new Error(formatGatewayCloseError(code, reason, params.connectionDetails, connectError)),
+        );
       },
     });
 
