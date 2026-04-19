@@ -58,7 +58,7 @@ describe("startHeartbeatRunner", () => {
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
     runSpy: RunOnce;
-    wake: { reason: string; agentId?: string; sessionKey?: string; coalesceMs: number };
+    wake: Parameters<typeof requestHeartbeatNow>[0];
     expectedCall: Record<string, unknown>;
   }) {
     const runner = startHeartbeatRunner({
