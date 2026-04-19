@@ -126,6 +126,11 @@ const ERROR_PATTERNS = {
     // falls through to reason=unknown (#58315).
     /\boperation was aborted\b/i,
     /\bstream (?:was )?(?:closed|aborted)\b/i,
+    // Undici throws `TypeError: terminated` when an upstream closes the fetch
+    // body stream mid-read (e.g. Grok-Vertex streamGenerateContent dropping
+    // connection after first tokens). Without this the bare message falls
+    // through to reason=null, which disables fallback-model rotation.
+    /(?:^|[\s:])terminated\s*$/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,

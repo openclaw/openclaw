@@ -3,6 +3,7 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
@@ -75,5 +76,37 @@ describe("Z.ai vendor error codes (#48988)", () => {
     it("auth still classified correctly", () => {
       expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
     });
+  });
+});
+
+describe("undici stream-terminated errors (reason=null regression)", () => {
+  // When an upstream provider (observed with Grok-Vertex streamGenerateContent)
+  // closes the fetch body stream mid-read, Node/undici throws a bare
+  // `TypeError: terminated`. Without a classifier match the failover reason
+  // stays `null`, shouldRotateAssistant stays false, and openclaw retries the
+  // same provider until MAX_RUN_LOOP_ITERATIONS, then silently returns an
+  // error payload — configured fallback models never get a turn.
+  it("classifies bare 'terminated' as timeout", () => {
+    expect(isTimeoutErrorMessage("terminated")).toBe(true);
+  });
+
+  it("classifies 'Error: terminated' as timeout", () => {
+    expect(isTimeoutErrorMessage("Error: terminated")).toBe(true);
+  });
+
+  it("classifies 'TypeError: terminated' as timeout", () => {
+    expect(isTimeoutErrorMessage("TypeError: terminated")).toBe(true);
+  });
+
+  it("does not match 'subscription terminated' (billing-adjacent prose)", () => {
+    expect(isTimeoutErrorMessage("subscription terminated due to nonpayment")).toBe(false);
+  });
+
+  it("does not match 'account terminated by policy' (auth-adjacent prose)", () => {
+    expect(isTimeoutErrorMessage("account terminated by policy")).toBe(false);
+  });
+
+  it("does not shadow billing classification on 'subscription terminated'", () => {
+    expect(isBillingErrorMessage("subscription terminated — payment required")).toBe(true);
   });
 });
