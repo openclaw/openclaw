@@ -3,7 +3,10 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
-import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
+import {
+  createBoundaryAwareStreamFnForModel,
+  isTransportAwareApiSupported,
+} from "../provider-transport-stream.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -41,10 +44,14 @@ export function describeEmbeddedAgentStreamStrategy(params: {
   if (params.model.provider === "anthropic-vertex") {
     return "anthropic-vertex";
   }
+  if (
+    isTransportAwareApiSupported(params.model.api) &&
+    createBoundaryAwareStreamFnForModel(params.model)
+  ) {
+    return `boundary-aware:${params.model.api}`;
+  }
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    return createBoundaryAwareStreamFnForModel(params.model)
-      ? `boundary-aware:${params.model.api}`
-      : "stream-simple";
+    return "stream-simple";
   }
   return "session-custom";
 }
@@ -117,11 +124,29 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return createAnthropicVertexStreamFnForModel(params.model);
   }
 
-  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
-    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
-    if (boundaryAwareStreamFn) {
-      return boundaryAwareStreamFn;
+  // Prefer the boundary-aware transport for supported APIs regardless of what
+  // pi-coding-agent has wrapped `streamSimple` with. The session's default
+  // wrapper injects apiKey + headers and then calls pi-ai's streamSimple,
+  // which still carries vendor-specific compat gaps (e.g. Anthropic adaptive
+  // thinking for Opus 4.7). The OpenClaw transport implements those contracts
+  // correctly, so we route to it and re-apply apiKey injection here.
+  const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+  if (boundaryAwareStreamFn) {
+    if (params.authStorage || params.resolvedApiKey) {
+      const { authStorage, model, resolvedApiKey } = params;
+      return async (m, context, options) => {
+        const apiKey = await resolveEmbeddedAgentApiKey({
+          provider: model.provider,
+          resolvedApiKey,
+          authStorage,
+        });
+        return boundaryAwareStreamFn(m, context, {
+          ...options,
+          apiKey: apiKey ?? options?.apiKey,
+        });
+      };
     }
+    return boundaryAwareStreamFn;
   }
 
   return currentStreamFn;
