@@ -1,11 +1,96 @@
 # Plan-Mode Rollout — Architecture & Status
 
-**Last updated:** consolidation pass complete on `feat/plan-channel-parity` (post `01ed63633e`, see consolidation-pass section below). Branch is now rebased onto `upstream/main` @ `v2026.4.19-beta.2` and hosts the **umbrella PR #68939** which supersedes the 10-PR series.
+**Last updated:** nuclear-fix-stack integration complete on `feat/plan-channel-parity` (post `5a2f6255ff`, see "Nuclear-fix-stack integration" section below). Branch hosts the **umbrella PR #68939** which now carries the consolidation work + 7 review-loop waves + 9 nuclear-fix-stack commits + cleanup.
 **Live install (pre-rebase):** `OpenClaw 2026.4.15` from `feat/plan-channel-parity`
-**Total PRs (historical):** 10 individual PRs A/B/C/D/E/F/7/8/10/11 (now closed) + 1 umbrella PR (#68939) carrying the full 135-commit history
+**Total PRs (historical):** 10 individual PRs A/B/C/D/E/F/7/8/10/11 (now closed) + 1 umbrella PR (#68939) carrying the full 156-commit history (135 consolidation + 10 review-wave + 11 nuclear-fix integration)
 **Backup branch:** `feat/plan-channel-parity-backup` at pre-rebase HEAD `bee5e8c364` (pushed to origin for rollback safety)
 
 This document is the **single source of truth** for the plan-mode rollout. It survives Claude Code session compactions and is referenced by the umbrella PR + every closed PR's redirect comment.
+
+---
+
+## Nuclear-fix-stack integration — 2026-04-19 (post-wave-7)
+
+After review-loop wave 7 converged at 100% thread resolution, another agent ([@eva@100yen.org](mailto:eva@100yen.org)) surfaced a **9-commit "nuclear-fix stack"** on `feat/plan-mode-nuclear-fix-stack` addressing 5 correctness gaps in PR #68939 that the review waves only partially covered. Stack landed via cherry-pick (Option A from the integration ask comment).
+
+### The 5 bugs fixed
+
+| #   | Bug                                                                                             | Wave-N coverage                                                                     | Nuclear-fix stack coverage                                                                                                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `[PLAN_DECISION]: edited` injection had **no plan steps** (orphan `buildApprovedPlanInjection`) | Wave-5 codified `edit` action in schema                                             | Wires `buildApprovedPlanInjection` / `buildAcceptEditsPlanInjection` to actually carry plan steps in approve/edit injections                                                                               |
+| 2   | `pendingAgentInjection: string` is **last-write-wins** (silent clobber race)                    | Wave-3 answer-guard catches mismatched approvalIds                                  | Replaces scalar with typed priority-ordered queue `pendingAgentInjections: PendingAgentInjectionEntry[]` (id-dedup, drain-once-per-turn)                                                                   |
+| 3   | Post-approval ack-only turns are **never retried**                                              | (no fix shipped)                                                                    | Extends `resolvePlanModeAckOnlyRetryInstruction` to fire within `recentlyApprovedAt < 5min` grace                                                                                                          |
+| 4   | Subagent announce-turns **race the approval-resume turn**                                       | Wave-1 `openSubagentRunIds.size === 0` check at exit_plan_mode + approval-side gate | Adds concurrency cap (1 in plan mode) + 10s `lastSubagentSettledAt` grace window + dual gates + new error code `PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE`                                                 |
+| 5   | `acceptEdits` action has **no runtime semantics**                                               | Wave-5 schema discriminated union codified `action: "edit"`                         | New `SessionEntry.postApprovalPermissions.acceptEdits` (scoped by approvalId) + 3-rule constraint gate (no destructive, no self-restart, no config changes) at `src/agents/plan-mode/accept-edits-gate.ts` |
+
+### Integration commits (cherry-pick of side branch + cleanup)
+
+```
+5a2f6255ff chore(protocol): regenerate Swift bindings for nuclear-fix-stack additions
+735aafea71 fix(plan-mode): post-cherry-pick test + lint cleanup (queue migration + iteration-budget bump)
+834e5396cb test(plan-mode): wave-4 prompt-cache byte stability                    (+7 tests)
+c91cad9db9 test(plan-mode): wave-3 integration regression coverage                (+15 tests)
+70bd466589 fix(plan-mode): wave-1 adversarial review fixes                        (4 sub-fixes)
+f5b6fbe47c feat(plan-mode): post-approval ack-only retry grace window             (bug #3)
+436d308506 feat(plan-mode): subagent concurrency cap + grace window + dual gates  (bug #4)
+7110953c0c feat(plan-mode): acceptEdits constraint gate + runtime wiring          (bug #5; WIP-stripped)
+b33eeb4a3c feat(plan-mode): postApprovalPermissions schema + set/clear plumbing   (foundation for #5)
+5bd5a52d3b feat(plan-mode): wire queue writers + approved/acceptEdits plan text   (bug #1)
+70a6e4b23a feat(plan-mode): typed injection queue + auto-migrate legacy scalar    (bug #2 architecture)
+```
+
+### Resolution decisions during integration
+
+- **Schema additions truly orthogonal**: both stacks coexist in `SessionEntry`. Field order: `pendingAgentInjection` (legacy/deprecated, auto-migrated) → `pendingAgentInjections` (queue) → `pendingQuestionApprovalId` → `pendingQuestionOptions` → `pendingQuestionAllowFreetext` → `postApprovalPermissions`.
+- **`sessions-patch.ts` answer branch layered**: wave-3/4 answer-guard validation chain (approvalId match + option-membership for non-freetext) fires BEFORE `appendToInjectionQueue`. Both validations preserved.
+- **`pending-injection.ts` full rewrite** taken from the side branch as a queue-shim; once-and-only-once docstring backported as a comment block.
+- **WIP contamination strip on commit 4 (`b6b2783ba3`)**: ~150 lines of unrelated bootstrap refactor + ollama-runtime imports + dead-export removals dropped from `attempt.ts`. Only the ~3-line `getLatestAcceptEdits` threading kept. Same pattern applied in `pi-tools.ts` and `params.ts` where the cherry-pick removed our HEAD's existing `memberRoleIds` / `isCanonicalWorkspace` fields (restored).
+- **`resolveSessionTotalTokens` rename**: the side branch's commit 1 renamed this export to `resolveFreshSessionTotalTokens` but didn't update the 2 consumers (`src/commands/sessions.ts`, `src/commands/status.summary.ts`). Updated both consumers — the rename is semantically meaningful (communicates the fresh-read pattern).
+- **Pre-existing test repair**: `run.overflow-compaction.test.ts` asserted `mockedRunEmbeddedAttempt` was called 32 times (pre-PR-9-Tier-1 floor). Bumped to 500 to match `MIN_RUN_RETRY_ITERATIONS`. Same root cause flagged in the side branch's wave-5 disclosure.
+
+### New surface (post-integration)
+
+- **Files added**: `src/agents/plan-mode/injections.ts` (+ `.test.ts`), `src/agents/plan-mode/accept-edits-gate.ts` (+ `.test.ts`)
+- **Types added**: `PendingAgentInjectionKind`, `PendingAgentInjectionEntry`, `PostApprovalPermissions`
+- **Fields added on `AgentRunContext`**: `lastSubagentSettledAt: number`, `getLatestAcceptEdits: () => boolean`
+- **Public exports from `src/agents/plan-mode/index.ts`**: `buildAcceptEditsPlanInjection`, `appendToInjectionQueue`, `enqueuePendingAgentInjection`, `consumePendingAgentInjections`, `composePromptWithPendingInjections`, `SUBAGENT_SETTLE_GRACE_MS` (= 10_000), `MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE` (= 1)
+- **New error code**: `ErrorCodes.PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE` — returned from `sessions.patch { planApproval: approve | edit }` with `details.retryAfterMs` when the user clicks approve within 10s of a subagent completion
+- **New constants**: `POST_APPROVAL_ACK_ONLY_GRACE_MS` (= 5 \* 60_000), `MAX_QUEUE_SIZE` (= 10, oldest eviction with warn log), `DEFAULT_INJECTION_PRIORITY`
+
+### Test coverage delta
+
+| Suite                                  | Pre-integration | Post-integration |
+| -------------------------------------- | --------------- | ---------------- |
+| `injections.test.ts`                   | (didn't exist)  | 27 tests         |
+| `accept-edits-gate.test.ts`            | (didn't exist)  | 44 tests         |
+| `sessions-patch.subagent-gate.test.ts` | 7               | 15               |
+| `sessions-spawn-tool.test.ts`          | 12              | 15               |
+| `incomplete-turn.test.ts`              | 29              | 33               |
+| `approval.test.ts`                     | 32              | 39               |
+| **Total touched-surface**              | **~92**         | **~187 (+95)**   |
+
+Plus existing `sessions-patch.test.ts` (43 tests, including the queue-migration test update where `entry.pendingAgentInjection === "[QUESTION_ANSWER]: ..."` is now `entry.pendingAgentInjections[0].text === "..."`).
+
+### Deferred items (carried over from side branch's adversarial review)
+
+All disclosed in the agent's [architectural walkthrough](https://github.com/openclaw/openclaw/pull/68939#issuecomment-4276170359); kept deferred here as follow-ups:
+
+1. **Retry re-hydration on empty-response failure** (>100 LoC) — pending-injection consumer drains before the first attempt; empty-response retry has no context. Workaround today: post-approval ack-only grace covers the common failure mode.
+2. **Shell-escape destructive bypass** (pattern-limited) — env-var indirection / concat / alias redefinition can slip past the acceptEdits destructive denylist; prompt layer remains primary defense.
+3. **Double-approve on legacy-scalar upgrade** (<50% probability) — narrow scenario with bounded impact (duplicate "I'll execute..." ack, not broken state).
+4. **approvalRunId persister silent-bypass** (<0.1% probability).
+5. **Debug log multi-tag recording** (observability only).
+6. **Bootstrap context truncation** (AGENTS.md/SOUL.md diet) — separate PR.
+
+### Rollback escalation path
+
+Per side-branch disclosure (still applies):
+
+- Commit 70a6e4b23a (queue) regression → revert nuclear-fix stack; `pendingAgentInjection` legacy scalar path still works via the queue-shim's auto-migrate-on-first-read.
+- Commit 7110953c0c (acceptEdits gate) false-positive → revert that commit only; `action: "edit"` falls back to approve-path semantics.
+- Commit 436d308506 (subagent grace window) too strict → set `SUBAGENT_SETTLE_GRACE_MS = 0`; no revert needed.
+- Full feature regression → `agents.defaults.planMode.enabled: false` short-circuits everything.
+- Catastrophic failure → `git push --force-with-lease origin feat/plan-channel-parity-backup:feat/plan-channel-parity` restores pre-rebase HEAD `bee5e8c364`.
 
 ---
 
