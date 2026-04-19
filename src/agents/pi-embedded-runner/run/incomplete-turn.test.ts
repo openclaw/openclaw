@@ -240,6 +240,69 @@ describe("resolvePlanModeAckOnlyRetryInstruction", () => {
     });
     expect(result).toBeNull();
   });
+
+  // Wave-3 regression: post-approval ack-only grace. Fixes the
+  // "accept-with-edits → no response" scenario where the agent
+  // replies text-only after approval. planModeActive goes false
+  // post-approval but the detector still needs to fire within the
+  // POST_APPROVAL_ACK_ONLY_GRACE_MS window.
+  it("post-approval + recentlyApprovedAt within grace + ack-only text → fires (wave-3 fix)", () => {
+    const now = 1_700_000_000_000;
+    const recentlyApprovedAt = now - 60_000; // 1 min ago, well within 5-min grace
+    const result = resolvePlanModeAckOnlyRetryInstruction({
+      planModeActive: false,
+      recentlyApprovedAt,
+      nowMs: now,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt(),
+      retryAttemptIndex: 0,
+    });
+    expect(result).toBe(PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("post-approval + recentlyApprovedAt OUTSIDE grace window → returns null (wave-3 fix)", () => {
+    const now = 1_700_000_000_000;
+    const recentlyApprovedAt = now - 6 * 60_000; // 6 min ago, outside 5-min grace
+    const result = resolvePlanModeAckOnlyRetryInstruction({
+      planModeActive: false,
+      recentlyApprovedAt,
+      nowMs: now,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt(),
+      retryAttemptIndex: 0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("post-approval + recentlyApprovedAt undefined + planModeActive=false → returns null", () => {
+    // Sanity: normal non-approved session with no recent approval stays
+    // silent. Ensures the wave-3 grace doesn't accidentally fire for
+    // sessions that never went through plan mode.
+    const result = resolvePlanModeAckOnlyRetryInstruction({
+      planModeActive: false,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt(),
+      retryAttemptIndex: 0,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("post-approval + recentlyApprovedAt within grace + firm retry index → returns firm variant", () => {
+    const now = 1_700_000_000_000;
+    const result = resolvePlanModeAckOnlyRetryInstruction({
+      planModeActive: false,
+      recentlyApprovedAt: now - 60_000,
+      nowMs: now,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt(),
+      retryAttemptIndex: 1,
+    });
+    expect(result).toBe(PLAN_MODE_ACK_ONLY_RETRY_INSTRUCTION_FIRM);
+  });
 });
 
 /**

@@ -189,3 +189,177 @@ describe("sessions.patch planApproval — subagent gate (Bug 3)", () => {
     expect(result.error.message).toContain("and 2 more");
   });
 });
+
+describe("sessions.patch planApproval — subagent grace window (wave-3)", () => {
+  beforeEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+  afterEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+
+  it("approve rejected with PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE when settled < 10s ago", async () => {
+    // Register a parent context with a fresh settle timestamp (within
+    // the 10-second grace window). This mimics a subagent that just
+    // drained but whose announce-turn may still be mid-flight.
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 2_000, // 2s ago, well within grace
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE);
+    expect(result.error.message).toContain("Subagent recently settled");
+  });
+
+  it("approve succeeds when settled > 10s ago (grace window expired)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 11_000, // 11s ago, outside grace
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("approve succeeds when lastSubagentSettledAt is undefined (no subagents ever spawned)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      // no lastSubagentSettledAt
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("reject is NOT gated by the grace window (user can always reject)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 1_000,
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: {
+          action: "reject",
+          feedback: "trying again",
+          approvalId: "plan-approval-1",
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("edit also gated by the grace window (same posture as approve)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 3_000,
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "edit", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE);
+  });
+});
+
+describe("drainCompletedSubagentFromParents — lastSubagentSettledAt stamp (wave-3)", () => {
+  beforeEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+  afterEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+
+  it("stamps lastSubagentSettledAt when the last subagent drains", async () => {
+    const { drainCompletedSubagentFromParents } = await import("../infra/agent-events.js");
+    const runIds = new Set<string>();
+    runIds.add("child-1");
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: runIds,
+    });
+    const before = Date.now();
+    drainCompletedSubagentFromParents("child-1");
+    const after = Date.now();
+    const { getAgentRunContext } = await import("../infra/agent-events.js");
+    const ctx = getAgentRunContext(APPROVAL_RUN_ID);
+    expect(ctx?.lastSubagentSettledAt).toBeDefined();
+    expect(ctx?.lastSubagentSettledAt).toBeGreaterThanOrEqual(before);
+    expect(ctx?.lastSubagentSettledAt).toBeLessThanOrEqual(after);
+    expect(ctx?.openSubagentRunIds?.size).toBe(0);
+  });
+
+  it("does NOT stamp when drained runId wasn't in the set", async () => {
+    const { drainCompletedSubagentFromParents, getAgentRunContext } =
+      await import("../infra/agent-events.js");
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(["child-other"]),
+    });
+    drainCompletedSubagentFromParents("child-different");
+    const ctx = getAgentRunContext(APPROVAL_RUN_ID);
+    expect(ctx?.lastSubagentSettledAt).toBeUndefined();
+    expect(ctx?.openSubagentRunIds?.size).toBe(1);
+  });
+
+  it("does NOT stamp when set still non-empty after drain", async () => {
+    const { drainCompletedSubagentFromParents, getAgentRunContext } =
+      await import("../infra/agent-events.js");
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(["child-1", "child-2"]),
+    });
+    drainCompletedSubagentFromParents("child-1");
+    const ctx = getAgentRunContext(APPROVAL_RUN_ID);
+    expect(ctx?.lastSubagentSettledAt).toBeUndefined();
+    expect(ctx?.openSubagentRunIds?.size).toBe(1);
+  });
+});
