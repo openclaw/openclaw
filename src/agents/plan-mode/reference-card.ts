@@ -119,7 +119,7 @@ export const PLAN_MODE_REFERENCE_CARD = [
   "- `/plan revise <feedback>` — reject with revision feedback",
   "- `/plan answer <text>` — answer a pending ask_user_question",
   "- `/plan auto on|off` — toggle auto-approve mode",
-  "- `/plan self-test` — run the synthetic plan-mode flow + report pass/fail",
+  "- `/plan self-test` — _(deferred — runtime not yet wired; tracked in PLAN-MODE-ARCHITECTURE.md follow-ups)_",
   "",
   "## Common pitfalls",
   "",

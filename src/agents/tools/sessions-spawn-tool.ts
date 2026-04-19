@@ -257,8 +257,13 @@ export function createSessionsSpawnTool(
       // agent in plan mode could spawn N research children and build
       // up a race surface where each completion fires an announce-
       // turn that could collide with exit_plan_mode submission or
-      // approval resolution. Cap is 1 — subsequent spawns are
-      // rejected with a ToolInputError (agent learns to sequence).
+      // approval resolution. The cap value is
+      // `MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE` (defined in
+      // `src/agents/plan-mode/index.ts`); subsequent spawns over the
+      // cap are rejected with a ToolInputError (agent learns to
+      // sequence). Copilot review #68939 (round-2): comment kept
+      // value-agnostic so it stays correct if the constant ever
+      // changes — see the constant for the current numeric value.
       const spawnParentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
       if (
         spawnParentCtx?.inPlanMode === true &&

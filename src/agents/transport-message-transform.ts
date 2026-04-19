@@ -75,11 +75,23 @@ function appendMissingToolResults(
   // first 5 warns + a single aggregate summary so operators still
   // see the issue but the log stays usable under incident
   // conditions.
+  // Copilot review #68939 (round-2): bound the array growth at
+  // (per-turn cap + aggregate cap). Pre-fix, `repaired` collected
+  // ALL repaired items then sliced — pathological cases with
+  // hundreds/thousands of missing tool_results would allocate a
+  // huge intermediate array just to print 5 + 20 ids. Now we only
+  // store enough ids to cover the diagnostic output AND maintain a
+  // separate counter for the total. Keeps memory + CPU bounded
+  // while preserving the same operator-facing diagnostics.
   const TRANSPORT_REPAIR_PER_TURN_LOG_CAP = 5;
-  const repaired: Array<{ name: string; id: string }> = [];
+  const TRANSPORT_REPAIR_AGGREGATE_ID_LIST_CAP = 20;
+  const TRANSPORT_REPAIR_STORED_ID_CAP =
+    TRANSPORT_REPAIR_PER_TURN_LOG_CAP + TRANSPORT_REPAIR_AGGREGATE_ID_LIST_CAP;
+  const repairedIds: string[] = [];
+  let totalRepairs = 0;
   for (const toolCall of pendingToolCalls) {
     if (!existingToolResultIds.has(toolCall.id)) {
-      if (repaired.length < TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
+      if (totalRepairs < TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
         // PR-9 Wave C-#1b: log the repair so operators can grep
         // `transport-repair` in gateway logs to find the originating
         // session+turn. The placeholder text already includes the
@@ -89,7 +101,10 @@ function appendMissingToolResults(
             `name=${toolCall.name} id=${toolCall.id}`,
         );
       }
-      repaired.push({ name: toolCall.name, id: toolCall.id });
+      if (repairedIds.length < TRANSPORT_REPAIR_STORED_ID_CAP) {
+        repairedIds.push(toolCall.id);
+      }
+      totalRepairs += 1;
       result.push({
         role: "toolResult",
         toolCallId: toolCall.id,
@@ -100,18 +115,13 @@ function appendMissingToolResults(
       });
     }
   }
-  if (repaired.length > TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
-    // Copilot review #68939 (2026-04-19): cap the aggregate id
-    // list too — extreme failure modes (hundreds of dropped
-    // pairings) would otherwise produce an oversized log line
-    // that itself becomes incident-time noise. Show the first 20
-    // remaining ids + a count of additional ones beyond that.
-    const TRANSPORT_REPAIR_AGGREGATE_ID_LIST_CAP = 20;
-    const remaining = repaired.slice(TRANSPORT_REPAIR_PER_TURN_LOG_CAP);
-    const idList = remaining.slice(0, TRANSPORT_REPAIR_AGGREGATE_ID_LIST_CAP).map((r) => r.id);
-    const additional = remaining.length - idList.length;
+  if (totalRepairs > TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
+    // Show the next N ids beyond the per-turn log cap; surplus
+    // repairs (those past the stored cap) are summarized as a count.
+    const idList = repairedIds.slice(TRANSPORT_REPAIR_PER_TURN_LOG_CAP);
+    const additional = totalRepairs - repairedIds.length;
     log.warn(
-      `transport-repair: synthesized ${repaired.length} placeholders this turn ` +
+      `transport-repair: synthesized ${totalRepairs} placeholders this turn ` +
         `(only first ${TRANSPORT_REPAIR_PER_TURN_LOG_CAP} logged individually); ` +
         `next ${idList.length} tool_use ids: ${idList.join(", ")}` +
         (additional > 0 ? ` (+${additional} more)` : ""),

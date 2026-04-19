@@ -1078,7 +1078,16 @@ export async function runAgentTurnWithFallback(params: {
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
-                  prompt: params.commandBody,
+                  // Codex P1 review #68939 (round-2): pass the
+                  // composed prompt (with [PLAN_DECISION] /
+                  // [QUESTION_ANSWER] injection prepended) to the
+                  // CLI branch too. Pre-fix, only the embedded
+                  // runner branch consumed the hoisted injection;
+                  // CLI runs (Claude CLI / Codex CLI) used the bare
+                  // commandBody, dropping plan-mode approval/answer
+                  // context for any session that routed to a CLI
+                  // provider (or fell back to one).
+                  prompt: hoistedComposedPrompt,
                   transcriptPrompt: params.transcriptCommandBody,
                   provider: cliExecutionProvider,
                   model,

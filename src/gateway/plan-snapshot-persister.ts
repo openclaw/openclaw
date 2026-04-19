@@ -452,12 +452,14 @@ async function persistSnapshot(params: {
   // summary of what was done and stop". Without this, the agent has
   // no signal that the plan auto-closed and may keep churning.
   const completionStepCount = params.snapshot.length;
-  const completionInjection =
-    params.closeOnComplete && allowAutoClose
-      ? `[PLAN_COMPLETE]: ${completionStepCount} step${
-          completionStepCount === 1 ? "" : "s"
-        } completed. Post a brief summary of what was done and stop. The plan has been auto-closed; the user can start a new plan cycle if needed.`
-      : undefined;
+  // Codex P2 review #68939 (round-2): build the [PLAN_COMPLETE]
+  // text from the LOCKED auto-close decision (`appliedAllowAutoClose`
+  // computed below), not the preflight `allowAutoClose`. If
+  // preflight=deny but locked=allow, the close happens but the
+  // injection was previously undefined — agent never sees the
+  // [PLAN_COMPLETE] signal. Computed AFTER `updateSessionStore`
+  // returns so we know the actual close outcome.
+  let completionInjection: string | undefined;
 
   // Codex P1 review #68939 (post-nuclear-fix-stack round-1):
   // capture the locked auto-close decision OUT of the callback so
@@ -513,6 +515,15 @@ async function persistSnapshot(params: {
     }
     // Surface the locked decision to the post-write branch.
     appliedAllowAutoClose = lockedAllowAutoClose;
+    // Codex P2 review #68939 (round-2): now that `appliedAllowAutoClose`
+    // reflects the locked decision, build the [PLAN_COMPLETE]
+    // injection text from it. Used downstream by the post-write
+    // injection enqueue.
+    if (params.closeOnComplete && lockedAllowAutoClose) {
+      completionInjection = `[PLAN_COMPLETE]: ${completionStepCount} step${
+        completionStepCount === 1 ? "" : "s"
+      } completed. Post a brief summary of what was done and stop. The plan has been auto-closed; the user can start a new plan cycle if needed.`;
+    }
     return await applySessionsPatchToStore({
       cfg,
       store,
@@ -565,7 +576,11 @@ async function persistSnapshot(params: {
     // Bug 6: write the [PLAN_COMPLETE] injection. Server-internal
     // direct write — the runtime's `consumePendingAgentInjection`
     // (PR-15 consumer) reads + clears it on the next agent turn.
-    if (completionInjection) {
+    // Capture into a const so the inner async closure preserves
+    // the string narrowing across the await (TS can't narrow `let`
+    // across closure boundaries).
+    const completionInjectionText = completionInjection;
+    if (completionInjectionText) {
       try {
         const { updateSessionStoreEntry } = await import("../config/sessions/store.js");
         const { appendToInjectionQueue } = await import("../agents/plan-mode/injections.js");
@@ -583,7 +598,7 @@ async function persistSnapshot(params: {
             appendToInjectionQueue(entry, {
               id: `plan-complete-${params.sessionKey}-${Date.now()}`,
               kind: "plan_complete",
-              text: completionInjection,
+              text: completionInjectionText,
               createdAt: Date.now(),
             });
             // Plan lifecycle is ending — clear any acceptEdits

@@ -85,7 +85,13 @@ const OPENAI_PROVIDER_IDS_FOR_CONTEXT_ORDER: ReadonlySet<string> = new Set([
 ]);
 
 function getContextFileOrder(modelProviderId?: string, modelId?: string): Map<string, number> {
-  const provider = modelProviderId?.trim() ?? "";
+  // Copilot review #68939 (round-2): normalize provider to
+  // lowercase before set membership check. The set entries
+  // (`OPENAI_PROVIDER_IDS_FOR_CONTEXT_ORDER`) are lowercase, but
+  // upstream callers may pass `"OpenAI"` / `"OPENAI"` / `"OpenAI-
+  // Codex"`. Without normalization, the GPT-5 boot reorder
+  // silently doesn't apply for those casings.
+  const provider = modelProviderId?.trim().toLowerCase() ?? "";
   if (!OPENAI_PROVIDER_IDS_FOR_CONTEXT_ORDER.has(provider)) {
     return DEFAULT_CONTEXT_FILE_ORDER;
   }

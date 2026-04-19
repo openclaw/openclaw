@@ -368,12 +368,13 @@ export function renderFullPlanArchetypeMarkdown(input: PlanArchetypeMarkdownInpu
  *   - `` ` `` → U+2018 (', left single quote) — prevents code-span.
  *   - `_` → U+FF3F (＿, fullwidth low line) — prevents italic parsing.
  *
- * Note: this differs from `extensions/slack/src/monitor/mrkdwn.ts`
- * which uses backslash escaping. The plan renderer optimizes for
- * READABILITY of agent-authored step text in human-visible Slack
- * channels (no `\*\_` noise); the Slack monitor processes
- * USER-AUTHORED content where exact-byte preservation matters more.
- * Both are valid escape strategies for their respective use cases.
+ * Note: this differs from the Slack-monitor mrkdwn helper in the
+ * Slack channel-extension package, which uses backslash escaping.
+ * The plan renderer optimizes for READABILITY of agent-authored
+ * step text in human-visible Slack channels (no `\*\_` noise); the
+ * Slack monitor processes USER-AUTHORED content where exact-byte
+ * preservation matters more. Both are valid escape strategies for
+ * their respective use cases.
  *
  * Mention protection (@channel/@here/@everyone, Discord-style `<@123>`)
  * is provided by `neutralizeMentions()` called at the render-branch
