@@ -1,116 +1,73 @@
 /**
- * PR-15: pending-agent-injection consumer (runtime side).
+ * Backward-compat shim for the pending-agent-injection consumer.
  *
- * The gateway's `sessions.patch` handlers
- * (`src/gateway/sessions-patch.ts`) write a synthetic
- * `[QUESTION_ANSWER]: ...` or `[PLAN_DECISION]: ...` text into
- * `SessionEntry.pendingAgentInjection` whenever a `/plan answer`,
- * `/plan accept`, `/plan accept edits`, or `/plan revise` action
- * fires from any channel. This module is the consumer: it reads +
- * clears the field atomically so the injection is delivered once and
- * only once into the agent's next turn.
+ * The underlying storage is now a typed queue (`SessionEntry.
+ * pendingAgentInjections`) managed by `src/agents/plan-mode/
+ * injections.ts`. This file preserves the original `{ text: string |
+ * undefined }` API used by callers outside the plan-mode surface (e.g.
+ * `src/auto-reply/reply/agent-runner-execution.ts:1082`) so the queue
+ * rewrite ships without a disruptive refactor of every consumer.
  *
- * Architecture:
- * - **Single source of truth**: every channel (web, Telegram, Discord,
- *   Slack, iMessage) goes through the gateway's `sessions.patch`
- *   handler, which writes the same `pendingAgentInjection` field. No
- *   per-channel direct-injection paths needed.
- * - **Consumed once**: `consumePendingAgentInjection` is the read +
- *   clear barrier. After it returns the value, the field is cleared on
- *   disk so a subsequent agent run won't double-inject.
- * - **Server-internal API**: this helper writes the SessionEntry
- *   directly via `updateSessionStoreEntry` (NOT through the public
- *   `sessions.patch` RPC) because the field is server-set and
- *   server-cleared — clients should never need to send it.
+ * New code should prefer the typed helpers in
+ * `src/agents/plan-mode/injections.ts`:
+ *   - `enqueuePendingAgentInjection(sessionKey, entry)`
+ *   - `consumePendingAgentInjections(sessionKey)` — returns the full
+ *     entry array so callers can reason about `kind` / `approvalId`
+ *   - `composePromptWithPendingInjections(entries, userPrompt)`
  */
 
-import { loadConfig } from "../../config/io.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import { updateSessionStoreEntry } from "../../config/sessions/store.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  composePromptWithPendingInjections,
+  consumePendingAgentInjections,
+} from "../plan-mode/injections.js";
 
 export interface ConsumePendingAgentInjectionResult {
-  /** The injection text that was cleared, or `undefined` if nothing was pending. */
+  /** The composed injection text, or `undefined` if the queue was empty. */
   text: string | undefined;
 }
 
 /**
- * Atomically reads and clears `SessionEntry.pendingAgentInjection`.
+ * Atomically drains the session's pending-injection queue and returns
+ * the composed text (entries joined with `\n\n` in priority order).
  *
- * Returns the cleared value (or `undefined` if nothing was pending).
+ * Preserves the pre-queue scalar API: returns `{ text: undefined }`
+ * when nothing is pending, `{ text: "..." }` otherwise.
  *
- * Copilot review #68939 (2026-04-19): docstring rewritten to match
- * the implementation's actual behavior. On the happy path
- * (`updateSessionStoreEntry` succeeds), returns the value that was
- * captured before the in-place delete. On ANY error inside the
- * try-block (read OR write failure), returns `{ text: undefined }`
- * — the caller does not get a stale value to inject. This favors the
- * once-and-only-once guarantee: if we cannot prove the field was
- * cleared on disk, we drop the value entirely so a subsequent
- * agent-run retry won't double-inject. Operators see the warn-log
- * line for any disk failure path.
+ * Best-effort error semantics (Copilot review #68939 wave-2 wave-1
+ * compatible): on store-write failure inside the underlying queue
+ * helper, the queue helper drops the captured entries and returns an
+ * empty array — favoring the once-and-only-once guarantee over
+ * caller-can-still-inject. Operators see the warn-log line for any
+ * disk failure path.
  */
 export async function consumePendingAgentInjection(
   sessionKey: string,
   log?: { warn?: (msg: string) => void },
 ): Promise<ConsumePendingAgentInjectionResult> {
-  if (!sessionKey || sessionKey.trim().length === 0) {
-    return { text: undefined };
-  }
-  try {
-    const cfg = loadConfig();
-    const parsed = parseAgentSessionKey(sessionKey);
-    const storePath = resolveStorePath(
-      cfg.session?.store,
-      parsed?.agentId ? { agentId: parsed.agentId } : {},
-    );
-    let captured: string | undefined;
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (entry) => {
-        const current = entry.pendingAgentInjection;
-        if (typeof current === "string" && current.length > 0) {
-          captured = current;
-          // Clear the field by deleting it from the entry. The store
-          // serializer omits undefined fields, so `delete` is the
-          // canonical way to remove it from disk.
-          delete entry.pendingAgentInjection;
-        }
-        return entry;
-      },
-    });
-    return { text: captured };
-  } catch (err) {
-    log?.warn?.(
-      `consumePendingAgentInjection failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return { text: undefined };
-  }
+  const result = await consumePendingAgentInjections(sessionKey, log);
+  return { text: result.composedText };
 }
 
 /**
- * Composes the agent's next-turn prompt by prepending a pending
- * injection (if any) to the user-supplied prompt. Used to render a
- * channel-agnostic synthetic message into the user-message context
- * without leaking the marker into chat history.
+ * Composes a single injection string onto the user's prompt. Preserved
+ * as a thin wrapper over `composePromptWithPendingInjections` so
+ * existing callers that hold a scalar injection still work unchanged.
  *
- * Returns the original prompt unchanged when no injection is pending.
+ * Returns the user prompt unchanged when `injectionText` is
+ * `undefined` or empty. When the user prompt is empty/whitespace-only,
+ * the injection stands alone with no trailing blanks.
  */
 export function composePromptWithPendingInjection(
   injectionText: string | undefined,
   userPrompt: string,
 ): string {
-  if (!injectionText) {
+  if (!injectionText || injectionText.length === 0) {
     return userPrompt;
   }
-  // Two newlines separate the injection from the user's actual input
-  // so the agent sees them as distinct context blocks. If userPrompt
-  // is empty (e.g., the answer/accept fired without a follow-up
-  // message), the injection alone becomes the prompt.
-  const trimmedUser = userPrompt.trim();
-  if (trimmedUser.length === 0) {
-    return injectionText;
-  }
-  return `${injectionText}\n\n${trimmedUser}`;
+  // Bridge scalar → queue-shaped input so ordering/composition logic
+  // lives in one place.
+  return composePromptWithPendingInjections(
+    [{ id: "legacy", kind: "plan_decision", text: injectionText, createdAt: 0 }],
+    userPrompt,
+  );
 }

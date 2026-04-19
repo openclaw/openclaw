@@ -78,6 +78,45 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
 };
 
+/**
+ * Classification of a pending-agent-injection queue entry. Each writer
+ * stamps its kind so the consumer (or future filters) can reason about
+ * what was injected without parsing the text.
+ *
+ * See `src/agents/plan-mode/injections.ts` for the enqueue / consume
+ * helpers and `DEFAULT_INJECTION_PRIORITY` for the default drain order.
+ */
+export type PendingAgentInjectionKind =
+  | "plan_decision"
+  | "question_answer"
+  | "plan_complete"
+  | "plan_intro"
+  | "plan_nudge"
+  | "subagent_return";
+
+/**
+ * A single entry in the `SessionEntry.pendingAgentInjections` queue.
+ *
+ * - `id` is the dedup key: enqueue of a same-id entry upserts rather
+ *   than appends a duplicate. Writers pick stable ids (e.g.
+ *   `plan-decision-${approvalId}`) so retries are idempotent.
+ * - `approvalId` links a plan-cycle-scoped entry to its approval round
+ *   so consumers can detect stale entries across cycles.
+ * - `priority` overrides the default drain order. Higher drains first;
+ *   ties broken by `createdAt` ascending.
+ * - `expiresAt` is an optional auto-cleanup deadline for nudges or
+ *   other time-sensitive signals that become irrelevant after N ms.
+ */
+export interface PendingAgentInjectionEntry {
+  id: string;
+  approvalId?: string;
+  kind: PendingAgentInjectionKind;
+  text: string;
+  createdAt: number;
+  priority?: number;
+  expiresAt?: number;
+}
+
 export type SessionCompactionCheckpointReason =
   | "manual"
   | "auto-threshold"
@@ -317,8 +356,27 @@ export type SessionEntry = {
    * marker into user-visible chat history).
    *
    * Cleared by the runtime on first read.
+   *
+   * @deprecated Superseded by `pendingAgentInjections` (typed queue).
+   * Auto-migrated to a single-element queue on first read. Kept as an
+   * optional field so legacy sessions on disk continue to work; new
+   * writes always target the queue.
    */
   pendingAgentInjection?: string;
+  /**
+   * Priority-ordered queue of synthetic injections to prepend to the
+   * agent's next turn. Drained atomically per turn by the runtime. Each
+   * entry is upsert-dedup'd by `id` so a writer retry never duplicates.
+   *
+   * Supersedes the legacy `pendingAgentInjection: string` field which
+   * had last-write-wins semantics and clobbered concurrent writers
+   * (e.g. a `[QUESTION_ANSWER]` landing during a pending approval
+   * window would silently overwrite a fresh `[PLAN_DECISION]`).
+   *
+   * See `src/agents/plan-mode/injections.ts` for the enqueue / consume
+   * helpers.
+   */
+  pendingAgentInjections?: PendingAgentInjectionEntry[];
   /**
    * Codex P1 review #68939 (2026-04-19): tracks the most recent
    * `ask_user_question` approvalId so the gateway can validate
@@ -603,21 +661,11 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveSessionTotalTokens(
+export function resolveFreshSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
-    return undefined;
-  }
-  return total;
-}
-
-export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
-  const total = resolveSessionTotalTokens(entry);
-  if (total === undefined) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {

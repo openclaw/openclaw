@@ -2,7 +2,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
-import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
@@ -203,7 +203,7 @@ export async function getStatusSummary(
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
-        const total = resolveSessionTotalTokens(entry);
+        const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
         const remaining =
