@@ -1182,7 +1182,7 @@ async function processOpenAICompletionsStream(
     if (!choice.delta) {
       continue;
     }
-    if (choice.delta.content) {
+    if (typeof choice.delta.content === "string" && choice.delta.content) {
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
       } else {

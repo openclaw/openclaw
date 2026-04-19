@@ -48,10 +48,20 @@ export function extractThinking(message: unknown): string | null {
   if (Array.isArray(content)) {
     for (const p of content) {
       const item = p as Record<string, unknown>;
-      if (item.type === "thinking" && typeof item.thinking === "string") {
-        const cleaned = item.thinking.trim();
-        if (cleaned) {
-          parts.push(cleaned);
+      if (item.type === "thinking") {
+        const thinkingValue =
+          typeof item.thinking === "string"
+            ? item.thinking
+            : typeof item.thinking === "object" &&
+                item.thinking !== null &&
+                typeof (item.thinking as Record<string, unknown>).text === "string"
+              ? ((item.thinking as Record<string, unknown>).text as string)
+              : null;
+        if (thinkingValue) {
+          const cleaned = thinkingValue.trim();
+          if (cleaned) {
+            parts.push(cleaned);
+          }
         }
       }
     }
