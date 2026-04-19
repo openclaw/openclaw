@@ -2088,6 +2088,15 @@ describe("memory-core dreaming phases", () => {
 
     // Invalid expression
     expect(estimateCronIntervalMs("invalid")).toBeNull();
+
+    // Weekday range (Mon-Fri) — fires daily
+    expect(estimateCronIntervalMs("0 3 * * 1-5")).toBe(24 * 60 * 60 * 1000);
+
+    // Two days per week (Sun, Wed) — ~3.5 days
+    expect(estimateCronIntervalMs("0 3 * * 0,3")).toBe(Math.round((7 * 24 * 60 * 60 * 1000) / 2));
+
+    // Single DOW — still weekly
+    expect(estimateCronIntervalMs("0 3 * * 0")).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it("skips REM subagent when a REM run occurred within the last few days under default config", async () => {

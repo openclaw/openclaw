@@ -157,9 +157,42 @@ export function estimateCronIntervalMs(expr: string): number | null {
   }
   const [minute, hour, _dom, _month, dow] = parts;
 
-  // Weekly: day-of-week is a specific value (not * or */N)
+  // Day-of-week constraint: parse ranges/lists to estimate firing frequency.
   if (dow !== "*" && !dow.startsWith("*/")) {
-    return 7 * 24 * 60 * 60 * 1000;
+    const uniqueDays = new Set<number>();
+    for (const part of dow.split(",")) {
+      const rangeMatch = part.match(/^(\d+)-(\d+)$/);
+      if (rangeMatch) {
+        const start = parseInt(rangeMatch[1], 10);
+        const end = parseInt(rangeMatch[2], 10);
+        if (start <= end) {
+          for (let d = start; d <= end; d++) {
+            uniqueDays.add(d);
+          }
+        } else {
+          // wrap-around range like 5-1 (Fri–Mon)
+          for (let d = start; d <= 6; d++) {
+            uniqueDays.add(d);
+          }
+          for (let d = 0; d <= end; d++) {
+            uniqueDays.add(d);
+          }
+        }
+      } else {
+        const num = parseInt(part, 10);
+        if (!Number.isNaN(num)) {
+          uniqueDays.add(num);
+        }
+      }
+    }
+    const count = uniqueDays.size || 1;
+    if (count === 1) {
+      return 7 * 24 * 60 * 60 * 1000;
+    } // truly weekly
+    if (count >= 5) {
+      return 24 * 60 * 60 * 1000;
+    } // daily (consecutive weekdays)
+    return Math.round((7 * 24 * 60 * 60 * 1000) / count); // approximate
   }
 
   // Every N hours: hour field is */N
