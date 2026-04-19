@@ -119,6 +119,7 @@ Docs: https://docs.openclaw.ai
 - Agents/openai-completions: always send `stream_options.include_usage` on streaming requests, so local and custom OpenAI-compatible backends report real context usage instead of showing 0%. (#68746) Thanks @kagura-agent.
 - Agents/nested lanes: scope nested agent work per target session so a long-running nested run on one session no longer head-of-line blocks unrelated sessions across the gateway. (#67785) Thanks @stainlu.
 - Agents/status: preserve carried-forward session token totals for providers that omit usage metadata, so `/status` and `openclaw sessions` keep showing the last known context usage instead of dropping back to unknown/0%. (#67695) Thanks @stainlu.
+- Telegram/commands: preserve user-defined `customCommands` priority when the combined native + custom menu exceeds Telegram's 100-command or 5700-char payload cap, so operator commands are no longer silently dropped from `setMyCommands` on startup. Fixes #68333.
 - Install/update: keep legacy update verification compatible with the QA Lab runtime shim, so updating older global installs to beta no longer fails after npm installs the package successfully.
 
 ## 2026.4.19-beta.1
@@ -208,7 +209,6 @@ Docs: https://docs.openclaw.ai
 - Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
 - Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
 - Matrix/plugins: keep remaining Matrix event helpers on the canonical `matrix-js-sdk` subpath so build and plugin-load entrypoint checks stay consistent. (#68498) Thanks @masatohoshino.
-- Telegram/commands: preserve user-defined `customCommands` priority when the combined native + custom menu exceeds Telegram's 100-command or 5700-char payload cap, so operator commands are no longer silently dropped from `setMyCommands` on startup. Fixes #68333.
 
 ## 2026.4.15
 
