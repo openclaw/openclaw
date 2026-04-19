@@ -20,13 +20,9 @@ import type { YuanbaoInboundMessage } from "../../types.js";
 import { SessionAbortManager } from "../queue/session-abort-manager.js";
 import { SessionQueue } from "../queue/session-queue.js";
 
-// ============ Singletons ============
-
 const pipeline = createPipeline();
 const sessionQueue = new SessionQueue();
 const sessionAbortManager = new SessionAbortManager();
-
-// ============ Debouncer (lazy init) ============
 
 let debouncer: ReturnType<typeof createChannelInboundDebouncer<DebouncerItem>>["debouncer"] | null =
   null;

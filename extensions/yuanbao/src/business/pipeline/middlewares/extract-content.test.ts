@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 /** Mutable extractTextFromMsgBody return value, reconfigurable per test */
 let mockExtractResult = {
   rawBody: "",
@@ -46,8 +44,6 @@ function setupMocks(
     mockRegistered = true;
   }
 }
-
-// ============ Handler logic ============
 
 void test("extract-content: extracts fromAccount and senderNickname", async (t) => {
   setupMocks(t, { rawBody: "你好" });

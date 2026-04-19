@@ -63,7 +63,7 @@ const PATH_REGEX_SOURCE =
  * Example valid IDs:
  *   "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  *   "photo---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
- *   "image---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "图片---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
  */
 // eslint-disable-next-line no-control-regex
 const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\\x00]+)/;

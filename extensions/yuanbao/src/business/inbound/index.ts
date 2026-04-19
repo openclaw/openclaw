@@ -15,8 +15,6 @@ import type { ModuleLog } from "../../logger.js";
 import type { YuanbaoInboundMessage, ResolvedYuanbaoAccount } from "../../types.js";
 import { dispatchSystemCallback } from "../messaging/system-callbacks.js";
 
-// ============ Unified entry ============
-
 export type InboundMessageParams = {
   msg: YuanbaoInboundMessage;
   isGroup: boolean;

@@ -7,8 +7,6 @@
 
 import { resolveUsername } from "./directory.js";
 
-// ============ ID detection ============
-
 /**
  * Check if a raw string looks like a platform user ID.
  *
@@ -36,15 +34,11 @@ export function looksLikeYuanbaoId(raw: string): boolean {
   return true;
 }
 
-// ============ Type definitions ============
-
 export interface MessagingTarget {
   isGroup: boolean;
   target: string;
   sessionKey: string;
 }
-
-// ============ Parse functions ============
 
 /**
  * Parse raw target string into standardized MessagingTarget.
@@ -70,8 +64,6 @@ export function parseTarget(to: string, accountId = "default", groupCode = ""): 
   return { isGroup: false, target: to, sessionKey: `direct:${to}` };
 }
 
-// ============ Target normalization ============
-
 /**
  * Normalize Yuanbao message target string.
  * Strips "yuanbao:" prefix and trims; returns undefined for empty strings.
@@ -83,8 +75,6 @@ export function normalizeTarget(raw: string): string | undefined {
   }
   return trimmed.replace(/^(yuanbao):/i, "").trim() || undefined;
 }
-
-// ============ Message tool hints ============
 
 /**
  * Build Yuanbao channel message tool hints for injection into Agent system prompt.

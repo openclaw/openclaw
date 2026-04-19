@@ -13,8 +13,6 @@ import { deliver, type DeliverTarget } from "../deliver.js";
 import { getCachedSticker, searchStickers } from "./sticker-cache.js";
 import type { CachedSticker } from "./sticker-types.js";
 
-// ============ Type definitions ============
-
 export type ActionResult = { ok: true; data?: unknown } | { ok: false; error: string };
 
 export interface SendStickerParams {
@@ -23,8 +21,6 @@ export interface SendStickerParams {
   /** Delivery target context */
   dt: DeliverTarget;
 }
-
-// ============ Parameter normalization ============
 
 function normalizeStickerSearchQuery(params: Record<string, unknown>): string {
   const raw = params.query ?? params.keyword ?? params.q ?? params.text ?? params.search;
@@ -49,8 +45,6 @@ function normalizeStickerSearchLimit(params: Record<string, unknown>): number {
   return 10;
 }
 
-// ============ Message body building ============
-
 /**
  * Build sticker message body.
  * Pure function, converts cached sticker data to TIMFaceElem message body array.
@@ -74,8 +68,6 @@ export function buildStickerMsgBody(sticker: CachedSticker): YuanbaoMsgBodyEleme
   ];
 }
 
-// ============ Send (used by create-sender) ============
-
 /**
  * Send sticker message.
  * Looks up sticker from cache, builds TIMFaceElem message body, delivers via deliver().
@@ -91,8 +83,6 @@ export async function sendSticker(params: SendStickerParams): Promise<SendResult
   const msgBody = buildStickerMsgBody(sticker);
   return deliver(dt, msgBody);
 }
-
-// ============ sticker-search ============
 
 /**
  * Search cached stickers.

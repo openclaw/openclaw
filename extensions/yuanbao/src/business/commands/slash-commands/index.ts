@@ -17,8 +17,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getPluginVersion, getOpenclawVersion } from "../../../infra/env.js";
 import { createLog } from "../../../logger.js";
 
-// ============ Dynamic loading of command-auth (compat with older OpenClaw) ============
-
 /**
  * openclaw/plugin-sdk/command-auth is only available in newer versions (>= 2026.4).
  * Older OpenClaw (e.g. 2026.3.x) lacks this module; static import would cause plugin load failure.
@@ -48,8 +46,6 @@ function loadCommandAuth(): Promise<void> {
   return _commandAuthLoadPromise;
 }
 
-// ============ Types ============
-
 export type CommandItem = {
   /** Command name (with /), e.g. "/help" */
   name: string;
@@ -65,14 +61,10 @@ type ChatCommandDef = {
   [key: string]: unknown;
 };
 
-// ============ SyncInformation protocol constants ============
-
 export const SYNC_INFORMATION_TYPE = {
   UNSPECIFIED: 0,
   COMMANDS: 1,
 } as const;
-
-// ============ bot_commands: dynamically fetched from OpenClaw SDK ============
 
 /**
  * Fallback command list: used when command-auth module is unavailable (older OpenClaw).
@@ -179,8 +171,6 @@ function toBotCommandItems(commands: ChatCommandDef[]): CommandItem[] {
   return result;
 }
 
-// ============ plugin_commands: dynamically collected ============
-
 /**
  * Plugin-registered command list (collected at runtime).
  *
@@ -207,8 +197,6 @@ export function registerPluginCommand(name: string, description: string): void {
 export function getPluginCommands(): ReadonlyArray<CommandItem> {
   return pluginCommands;
 }
-
-// ============ Protocol building ============
 
 export type SyncInformationPayload = {
   syncType: number;

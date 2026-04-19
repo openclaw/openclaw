@@ -29,8 +29,6 @@ function listActions() {
   return SUPPORTED_ACTIONS;
 }
 
-// ============ Export adapter object ============
-
 /**
  * yuanbaoMessageActions — adapter object registered to yuanbaoPlugin.actions.
  *

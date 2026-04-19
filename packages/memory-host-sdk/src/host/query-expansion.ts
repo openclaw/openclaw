@@ -5,8 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-c
  *
  * When no embedding provider is available, we fall back to FTS (full-text search).
  * FTS works best with specific keywords, but users often ask conversational queries
- * like "that thing we discussed yesterday" or the same intent expressed in
- * another language.
+ * like "that thing we discussed yesterday" or "之前讨论的那个方案".
  *
  * This module extracts meaningful keywords from such queries to improve FTS results.
  */

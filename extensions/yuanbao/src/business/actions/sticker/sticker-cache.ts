@@ -10,8 +10,6 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CachedSticker, StickerCache } from "./sticker-types.js";
 
-// ============ Path computation ============
-
 function getCacheFilePath(): string {
   return join(homedir(), ".openclaw", "state", "yuanbao", "sticker-cache.json");
 }
@@ -29,8 +27,6 @@ function asStickersRecord(value: unknown): StickerCache["stickers"] {
   }
   return {};
 }
-
-// ============ Read/Write ============
 
 const CURRENT_VERSION = 1;
 
@@ -63,8 +59,6 @@ export function saveCache(cache: StickerCache): void {
   ensureCacheDir(filePath);
   writeFileSync(filePath, JSON.stringify(cache, null, 2), "utf-8");
 }
-
-// ============ Single-entry operations ============
 
 /**
  * Cache a single sticker; overwrites if same sticker_id exists (unlike batch builtin-skip strategy).
@@ -101,8 +95,6 @@ export function getCachedSticker(stickerId: string): CachedSticker | undefined {
   const cache = loadCache();
   return cache.stickers[stickerId];
 }
-
-// ============ Search ============
 
 /** Normalize case/compat chars for mixed CJK+ASCII name matching */
 function normalizeStickerMatchText(raw: string): string {

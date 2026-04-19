@@ -392,7 +392,7 @@ function findWindowsUnsupportedToken(command: string): string | null {
     }
     if (WINDOWS_UNSUPPORTED_TOKENS.has(ch)) {
       // Inside double-quoted strings, most special characters are safe literal
-      // values (e.g. "2026-03-28 (Sat) - LifeLog" contains "()" which are fine).
+      // values (e.g. "2026-03-28 (土) - LifeLog" contains "()" which are fine).
       // tokenizeWindowsSegment already handles all of these correctly inside quotes.
       if (inDouble && !WINDOWS_ALWAYS_UNSAFE_TOKENS.has(ch)) {
         continue;

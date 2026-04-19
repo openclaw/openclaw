@@ -7,8 +7,6 @@ import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 import { guardSendAccess } from "./guard-send-access.js";
 
-// ============ when condition guard ============
-
 void test("guard-send-access: when guard - executes in C2C", () => {
   const ctx = createMockCtx({ isGroup: false });
   assert.equal(guardSendAccess.when!(ctx), true);
@@ -18,8 +16,6 @@ void test("guard-send-access: when guard - skips in group chat", () => {
   const ctx = createMockCtx({ isGroup: true });
   assert.equal(guardSendAccess.when!(ctx), false);
 });
-
-// ============ Self-send protection ============
 
 void test("guard-send-access: self-send protection - sender = bot -> abort pipeline", async () => {
   const ctx = createMockCtx({
@@ -34,8 +30,6 @@ void test("guard-send-access: self-send protection - sender = bot -> abort pipel
   assert.equal(wasCalled(), false);
 });
 
-// ============ Normal pass through ============
-
 void test("guard-send-access: normal user message -> pass through", async () => {
   const ctx = createMockCtx({
     fromAccount: `normal-user-${Date.now()}-1`,
@@ -48,8 +42,6 @@ void test("guard-send-access: normal user message -> pass through", async () => 
 
   assert.equal(wasCalled(), true);
 });
-
-// ============ Message length check ============
 
 void test("guard-send-access: message too long -> abort pipeline", async () => {
   const ctx = createMockCtx({
@@ -76,8 +68,6 @@ void test("guard-send-access: message length exactly at limit -> pass through", 
 
   assert.equal(wasCalled(), true);
 });
-
-// ============ Rate limit ============
 
 void test("guard-send-access: rate limit - exceeds hourly limit -> abort pipeline", async () => {
   const senderId = `rate-limit-user-${Date.now()}`;

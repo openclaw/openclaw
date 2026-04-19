@@ -31,8 +31,6 @@ function setupMocks(t: any) {
   });
 }
 
-// ============ when condition guard ============
-
 void test("guard-group-command: when guard - executes in group chat", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
@@ -48,8 +46,6 @@ void test("guard-group-command: when guard - skips in C2C", async (t) => {
   const ctx = createMockCtx({ isGroup: false });
   assert.equal(guardGroupCommand.when!(ctx), false);
 });
-
-// ============ Handler logic ============
 
 void test("guard-group-command: non-owner executes registered command -> abort pipeline", async (t) => {
   setupMocks(t);

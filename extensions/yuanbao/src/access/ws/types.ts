@@ -34,7 +34,6 @@ export type WsClientConfig = {
   reconnectDelays?: number[];
 };
 
-
 /** Client state */
 export type WsClientState =
   | "disconnected"

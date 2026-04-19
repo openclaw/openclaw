@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let _capturedSenderOpts: any = null;
 let capturedQueueOpts: any = null;
 

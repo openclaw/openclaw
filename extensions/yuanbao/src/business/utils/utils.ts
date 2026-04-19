@@ -1,8 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 
-// ============================================================================
 // Type aliases
-// ============================================================================
 
 /**
  * Extract OpenClawPluginToolContext from OpenClawPluginApi['registerTool'] params.
@@ -16,9 +14,7 @@ type ToolFactory = Extract<RegisterToolParam, (...args: never[]) => unknown>;
 /** Tool context derived from OpenClawPluginToolFactory's first parameter */
 export type OpenClawPluginToolContext = Parameters<ToolFactory>[0];
 
-// ============================================================================
 // Session check
-// ============================================================================
 
 /**
  * Check if the current session is a Yuanbao channel group chat.
@@ -34,9 +30,7 @@ export function isYbGroupChat(ctx: OpenClawPluginToolContext): boolean {
   return false;
 }
 
-// ============================================================================
 // Session parsing
-// ============================================================================
 
 /**
  * Extract groupCode from a Yuanbao group chat sessionKey.
@@ -53,9 +47,7 @@ export function extractGroupCode(sessionKey: string): string {
   return sessionKey.slice(idx + prefix.length);
 }
 
-// ============================================================================
 // MCP response builders
-// ============================================================================
 
 /**
  * Build a plain-text MCP content response.
@@ -76,9 +68,7 @@ export function json(data: unknown) {
   };
 }
 
-// ============================================================================
 // Log desensitization
-// ============================================================================
 
 /**
  * Desensitize a MsgBody array for safe logging.

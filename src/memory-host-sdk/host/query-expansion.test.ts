@@ -194,7 +194,7 @@ describe("extractKeywords", () => {
     it("skips Japanese kanji bigrams in trigram mode", () => {
       const defaultKeywords = extractKeywords("経済政策について");
       const trigramKeywords = extractKeywords("経済政策について", trigramOpts);
-      // Default mode adds adjacent kanji bigrams from the phrase.
+      // Default mode adds kanji bigrams: 経済, 済政, 政策
       expect(defaultKeywords).toContain("経済");
       expect(defaultKeywords).toContain("済政");
       expect(defaultKeywords).toContain("政策");

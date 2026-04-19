@@ -24,7 +24,6 @@ import { yuanbaoSetupAdapter } from "./setup.js";
 // import { yuanbaoOnboardingAdapter } from './onboarding.js';
 import type { ResolvedYuanbaoAccount } from "./types.js";
 
-// ============ Metadata ============
 const meta = {
   id: "yuanbao",
   label: "元宝 Bot",

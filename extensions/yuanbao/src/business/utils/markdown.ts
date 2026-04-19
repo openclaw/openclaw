@@ -8,9 +8,7 @@
  *  - mdAtomic — atomic block (table & diagram fence) extraction & aware chunking
  */
 
-// ============================================================================
 // Fence-related
-// ============================================================================
 
 /**
  * Strip outer ```markdown fences wrapping AI replies.
@@ -148,9 +146,7 @@ function mergeBlockStreamingFences(buffer: string, incoming: string): string {
   return `${buffer}${normalized}`;
 }
 
-// ============================================================================
 // Block-level structure
-// ============================================================================
 
 /**
  * Check if the last non-empty line is a Markdown table row (starts and ends with |).
@@ -235,9 +231,7 @@ function inferBlockSeparator(buffer: string, incoming: string): string {
   return "";
 }
 
-// ============================================================================
 // Pipe-table sanitize
-// ============================================================================
 
 /**
  * Markdown pipe-table sanitizer.
@@ -390,9 +384,7 @@ function sanitizePipeTables(text: string): string {
   return lines.join("\n");
 }
 
-// ============================================================================
 // Atomic blocks — tables & diagram fence blocks
-// ============================================================================
 
 /** Markdown structures that cannot render independently after splitting */
 export type AtomicBlock = { start: number; end: number; kind: "table" | "diagram-fence" };
@@ -575,9 +567,7 @@ function chunkMarkdownTextAtomicAware(
   return result.filter((c) => c.length > 0);
 }
 
-// ============================================================================
 // Structured namespace exports
-// ============================================================================
 
 /** Fence detection & repair */
 export const mdFence = {

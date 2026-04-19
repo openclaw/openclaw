@@ -7,8 +7,6 @@ import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 import { skipPlaceholder } from "./skip-placeholder.js";
 
-// ============ C2C scenarios ============
-
 void test("skip-placeholder(C2C): empty message -> abort pipeline", async () => {
   const ctx = createMockCtx({ rawBody: "", isGroup: false });
   const { next, wasCalled } = createMockNext();
@@ -35,8 +33,6 @@ void test("skip-placeholder(C2C): normal text -> pass through", async () => {
 
   assert.equal(wasCalled(), true);
 });
-
-// ============ Group chat scenarios ============
 
 void test("skip-placeholder(group): empty + no media + not @bot -> abort pipeline", async () => {
   const ctx = createMockCtx({
@@ -79,8 +75,6 @@ void test("skip-placeholder(group): empty + @bot -> pass through", async () => {
 
   assert.equal(wasCalled(), true);
 });
-
-// ============ Placeholder messages ============
 
 void test("skip-placeholder: [image] placeholder + no media -> abort pipeline", async () => {
   const ctx = createMockCtx({ rawBody: "[image]", medias: [] });

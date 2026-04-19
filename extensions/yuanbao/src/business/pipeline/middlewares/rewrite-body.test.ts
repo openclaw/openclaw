@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mock setup ============
-
 /** Register module mocks required by rewrite-body */
 function setupMocks(t: any, formatQuoteImpl?: (q: any) => string) {
   t.mock.module("../../messaging/quote.js", {
@@ -18,8 +16,6 @@ function setupMocks(t: any, formatQuoteImpl?: (q: any) => string) {
     },
   });
 }
-
-// ============ Handler logic ============
 
 void test("rewrite-body: plain text is not rewritten", async (t) => {
   setupMocks(t);

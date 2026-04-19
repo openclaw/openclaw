@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let mockRegistered = false;
 
 function setupMocks(t: any) {
@@ -98,8 +96,6 @@ function createDispatchCtx(overrides: Record<string, any> = {}) {
   });
 }
 
-// ============ Prerequisite checks ============
-
 void test("dispatch-reply: prerequisite middleware not ready -> abort pipeline", async (t) => {
   setupMocks(t);
   const { dispatchReply } = await import("./dispatch-reply.js");
@@ -117,8 +113,6 @@ void test("dispatch-reply: prerequisite middleware not ready -> abort pipeline",
 
   assert.equal(wasCalled(), false, "should abort when prerequisites not ready");
 });
-
-// ============ Normal reply flow ============
 
 void test("dispatch-reply: normal reply - deliver text", async (t) => {
   const pushedItems: any[] = [];
@@ -176,8 +170,6 @@ void test("dispatch-reply: AI returns nothing + has fallbackReply -> send fallba
   assert.equal(sentFallback, true, "should send fallback reply");
 });
 
-// ============ Error handling ============
-
 void test("dispatch-reply: dispatch error -> abort queue and throw", async (t) => {
   let aborted = false;
   setupMocks(t);
@@ -199,8 +191,6 @@ void test("dispatch-reply: dispatch error -> abort queue and throw", async (t) =
 
   assert.equal(aborted, true, "should abort queue on error");
 });
-
-// ============ Media reply ============
 
 void test("dispatch-reply: deliver contains media URLs", async (t) => {
   const pushedItems: any[] = [];
@@ -225,8 +215,6 @@ void test("dispatch-reply: deliver contains media URLs", async (t) => {
   assert.ok(mediaItems.length > 0, "should have pushed media items");
   assert.equal(mediaItems[0].mediaUrl, "https://example.com/img.jpg");
 });
-
-// ============ Tool-kind deliver skip ============
 
 void test("dispatch-reply: tool-kind deliver is not sent to user", async (t) => {
   const pushedItems: any[] = [];

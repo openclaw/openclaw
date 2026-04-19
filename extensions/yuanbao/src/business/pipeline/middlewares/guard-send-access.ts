@@ -7,8 +7,6 @@
 
 import type { MiddlewareDescriptor } from "../types.js";
 
-// ============ Type definitions ============
-
 interface SendAccessPolicy {
   /** Who can trigger messages sent through the bot */
   allowedSenders: "all" | "admin" | "allowlist";
@@ -19,8 +17,6 @@ interface SendAccessPolicy {
   /** Max message length (characters) */
   maxMessageLength: number;
 }
-
-// ============ Rate limiter ============
 
 /** Rate limit tracking: senderId -> recent send timestamps */
 const rateLimitMap = new Map<string, number[]>();
@@ -86,16 +82,12 @@ export function clearRateLimits(): void {
   cleanupCounter = 0;
 }
 
-// ============ Default policy ============
-
 const DEFAULT_SEND_ACCESS_POLICY: SendAccessPolicy = {
   allowedSenders: "all",
   senderAllowlist: [],
   rateLimitPerHour: 60,
   maxMessageLength: 4000,
 };
-
-// ============ Middleware ============
 
 /**
  * Send access control guard middleware.

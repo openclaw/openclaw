@@ -9,8 +9,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { parseTarget } from "../messaging/targets.js";
 
-// ============ Type definitions ============
-
 /**
  * Action params structure passed by framework.
  *
@@ -55,8 +53,6 @@ export interface ResolvedTarget {
   agentId?: string;
 }
 
-// ============ Helper functions ============
-
 /**
  * Extract group groupCode from toolContext.currentChannelId.
  *
@@ -73,8 +69,6 @@ export function extractGroupFromChannelId(channelId?: string): string | undefine
   }
   return undefined;
 }
-
-// ============ Core resolution ============
 
 /**
  * Unified action target resolution.

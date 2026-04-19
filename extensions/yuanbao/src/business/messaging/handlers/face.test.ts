@@ -24,8 +24,6 @@ function makeResData(): ExtractTextFromMsgBodyResult {
   return { rawBody: "", isAtBot: false, medias: [], mentions: [], linkUrls: [] };
 }
 
-// ============ extract ============
-
 void test("faceHandler extract parses sticker name", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
@@ -57,8 +55,6 @@ void test("faceHandler extract returns generic placeholder for invalid JSON", ()
   const elem = { msg_type: "TIMFaceElem", msg_content: { data: "{invalid}" } };
   assert.equal(faceHandler.extract(ctx, elem, resData), "[EMOJI]");
 });
-
-// ============ buildMsgBody ============
 
 void test("faceHandler buildMsgBody constructs sticker message", () => {
   const result = faceHandler.buildMsgBody!({

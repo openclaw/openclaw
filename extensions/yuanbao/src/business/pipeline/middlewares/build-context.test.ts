@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let mockRegistered = false;
 
 function setupMocks(t: any) {
@@ -60,8 +58,6 @@ function createBuildCtx(overrides: Record<string, any> = {}) {
   });
   return { ctx, getFinalizedPayload: () => _finalizedPayload };
 }
-
-// ============ Handler logic ============
 
 void test("build-context: prerequisite middleware not ready -> abort pipeline", async (t) => {
   setupMocks(t);

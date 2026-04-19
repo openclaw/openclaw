@@ -7,8 +7,6 @@
 
 import type { MessageHandlerContext } from "../context.js";
 
-// ============ Message element types ============
-
 /** Single MsgBody element (Tencent IM raw format) */
 export type MsgBodyItemType = {
   msg_type: string;
@@ -34,8 +32,6 @@ export type MsgBodyItemType = {
     [key: string]: unknown;
   };
 };
-
-// ============ Extract result ============
 
 /** Media resource item */
 export type MediaItem = {
@@ -63,8 +59,6 @@ export type ExtractTextFromMsgBodyResult = {
   linkUrls: string[];
 };
 
-// ============ Outbound content items ============
-
 /**
  * Outbound content item: a content fragment extracted from reply content.
  *
@@ -90,8 +84,6 @@ export type OutboundContentItem =
   | { type: "file"; url: string; fileName?: string; fileSize?: number; uuid?: string }
   | { type: "video"; videoUrl: string; [key: string]: unknown }
   | { type: "custom"; data: string | Record<string, unknown> };
-
-// ============ Handler interface ============
 
 /**
  * Message element handler interface.

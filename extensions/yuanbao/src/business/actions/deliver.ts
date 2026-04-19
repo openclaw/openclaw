@@ -13,8 +13,6 @@ import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../../types.
 import type { SendResult } from "../outbound/types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 
-// ============ Type definitions ============
-
 /** Minimal context required by deliver */
 export interface DeliverTarget {
   isGroup: boolean;
@@ -29,8 +27,6 @@ export interface DeliverTarget {
   /** Trace context for injecting trace_id / msg_seq into outbound messages */
   traceContext?: YuanbaoTraceContext;
 }
-
-// ============ Core delivery function ============
 
 /**
  * Unified message delivery.

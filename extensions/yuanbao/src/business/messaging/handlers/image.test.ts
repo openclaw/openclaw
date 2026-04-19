@@ -24,8 +24,6 @@ function makeResData(): ExtractTextFromMsgBodyResult {
   return { rawBody: "", isAtBot: false, medias: [], mentions: [], linkUrls: [] };
 }
 
-// ============ extract ============
-
 void test("imageHandler extract extracts image URL to media list", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
@@ -60,8 +58,6 @@ void test("imageHandler extract returns undefined when no URL", () => {
   assert.equal(imageHandler.extract(ctx, elem, resData), undefined);
   assert.equal(resData.medias.length, 0);
 });
-
-// ============ buildMsgBody ============
 
 void test("imageHandler buildMsgBody constructs image message", () => {
   const result = imageHandler.buildMsgBody!({ url: "https://example.com/img.png" });

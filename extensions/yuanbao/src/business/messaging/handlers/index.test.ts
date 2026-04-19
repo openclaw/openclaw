@@ -14,8 +14,6 @@ import {
   buildOutboundMsgBody,
 } from "./index.js";
 
-// ============ getHandler ============
-
 void test("getHandler returns registered handler", () => {
   assert.ok(getHandler("TIMTextElem"));
   assert.ok(getHandler("TIMCustomElem"));
@@ -31,8 +29,6 @@ void test("getHandler returns undefined for unregistered type", () => {
   assert.equal(getHandler(""), undefined);
 });
 
-// ============ getAllHandlers ============
-
 void test("getAllHandlers returns all registered handlers", () => {
   const handlers = getAllHandlers();
   assert.ok(handlers.length >= 7, "should have at least 7 message type handlers");
@@ -43,8 +39,6 @@ void test("getAllHandlers returns all registered handlers", () => {
   assert.ok(types.has("TIMImageElem"));
   assert.ok(types.has("TIMFaceElem"));
 });
-
-// ============ buildMsgBody ============
 
 void test("buildMsgBody constructs message body by msgType", () => {
   const result = buildMsgBody("TIMTextElem", { text: "hello" });
@@ -58,8 +52,6 @@ void test("buildMsgBody returns undefined for unregistered type", () => {
   assert.equal(buildMsgBody("TIMUnknownElem", {}), undefined);
 });
 
-// ============ prepareOutboundContent ============
-
 void test("prepareOutboundContent plain text", () => {
   const items = prepareOutboundContent("hello world");
   assert.equal(items.length, 1);
@@ -72,8 +64,6 @@ void test("prepareOutboundContent empty text returns empty array", () => {
   assert.deepEqual(prepareOutboundContent(null as unknown as string), []);
   assert.deepEqual(prepareOutboundContent(undefined as unknown as string), []);
 });
-
-// ============ buildOutboundMsgBody ============
 
 void test("buildOutboundMsgBody converts content items to MsgBody", () => {
   const items = [

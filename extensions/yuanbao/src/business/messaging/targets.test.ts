@@ -8,8 +8,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { looksLikeYuanbaoId, parseTarget } from "./targets.js";
 
-// ============ looksLikeYuanbaoId ============
-
 void test("looksLikeYuanbaoId recognizes valid Base64 format IDs", () => {
   // Length >= 16, length is multiple of 4, Base64 charset only
   assert.equal(looksLikeYuanbaoId("YWJjZGVmZ2hpamts"), true);
@@ -28,8 +26,6 @@ void test("looksLikeYuanbaoId rejects invalid IDs", () => {
   // Contains illegal characters
   assert.equal(looksLikeYuanbaoId("ABCDEFghijklmn!@"), false);
 });
-
-// ============ parseTarget ============
 
 void test("parseTarget parses group chat target", () => {
   const result = parseTarget("group:test-group-123");

@@ -33,8 +33,6 @@ import type {
 
 // Module-level logger instance
 
-// ============ Protobuf decode result internal types ============
-
 /** InboundMessagePush decode result (camelCase fields) */
 type PBInboundMessage = {
   callbackCommand?: string;
@@ -88,8 +86,6 @@ type PBGetGroupMemberListRsp = PBCodeMessageRsp & {
 
 /** SyncInformationRsp decode result */
 type PBSyncInformationRsp = PBCodeMsgRsp;
-
-// ============ Root cache ============
 
 let root: protobuf.Root | null = null;
 
@@ -150,8 +146,6 @@ export function decodeBizPB<T>(key: string, data: Uint8Array | ArrayBuffer): T |
     return null;
   }
 }
-
-// ============ MsgBodyElement conversion ============
 
 /**
  * Convert TS MsgBodyElement[] to protobuf format.
@@ -410,8 +404,6 @@ export function decodeSendMessageRsp(
   // C2C and group Rsp share the same structure (code + message); try C2C first
   return decodeSendC2CMessageRsp(data, msgId) ?? decodeSendGroupMessageRsp(data, msgId);
 }
-
-// ============ QueryGroupInfo codec ============
 
 /**
  * Encode query group info request.

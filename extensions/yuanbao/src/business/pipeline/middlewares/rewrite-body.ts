@@ -5,8 +5,6 @@
 import { formatQuoteContext } from "../../messaging/quote.js";
 import type { MiddlewareDescriptor } from "../types.js";
 
-// ============ Slash command rewrite ============
-
 /** Regex for /yuanbao-health-check with optional start_time and end_time (HH:MM) */
 const SLASH_HEALTH_CHECK_RE =
   /^\/yuanbao-health-check(?:\s+(\d{1,2}:\d{2})(?:\s+(\d{1,2}:\d{2}))?)?\s*$/;

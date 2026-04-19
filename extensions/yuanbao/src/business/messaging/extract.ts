@@ -10,8 +10,6 @@ import type { MsgBodyItemType, ExtractTextFromMsgBodyResult } from "./handlers/t
 // Re-export types for backward compatibility
 export type { ExtractTextFromMsgBodyResult } from "./handlers/types.js";
 
-// ============ Extract text content from MsgBody ============
-
 /**
  * Extract text content from message body.
  *

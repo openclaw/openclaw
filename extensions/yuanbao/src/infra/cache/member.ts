@@ -20,9 +20,7 @@
 import { getActiveWsClient } from "../../access/ws/runtime.js";
 import { createLog } from "../../logger.js";
 
-// ============================================================================
 // Data structures
-// ============================================================================
 
 export type UserRecord = {
   userId: string;
@@ -32,9 +30,7 @@ export type UserRecord = {
   userType?: number;
 };
 
-// ============================================================================
 // SessionMember — Group active user submodule (session cache layer)
-// ============================================================================
 
 /** Active user entry TTL (24 hours) */
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -177,9 +173,7 @@ export class SessionMember {
   }
 }
 
-// ============================================================================
 // GroupMember — API member submodule (WS API layer)
-// ============================================================================
 
 /** API data cache TTL (5 minutes) */
 const GROUP_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -521,9 +515,7 @@ export class GroupMember {
   }
 }
 
-// ============================================================================
 // Member — Facade
-// ============================================================================
 
 /** Formatted user record (lastSeen as ISO string) */
 export type FormattedUserRecord = {
@@ -777,9 +769,7 @@ export class Member {
   }
 }
 
-// ============================================================================
 // Multi-instance Runtime — Managed by accountId
-// ============================================================================
 
 /** Store Member instances by accountId */
 const activeMembers = new Map<string, Member>();

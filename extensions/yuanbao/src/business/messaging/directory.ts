@@ -66,8 +66,6 @@ class DirectoryLRUCache {
 /** Global directory cache instance */
 const directoryCache = new DirectoryLRUCache(2000, 30 * 60 * 1000);
 
-// ============ Type definitions ============
-
 /** Represents a resolved user or group directory entry */
 export interface DirectoryEntry {
   kind: "user" | "group";

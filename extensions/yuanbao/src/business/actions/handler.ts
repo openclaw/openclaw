@@ -21,8 +21,6 @@ import type { ActionParams } from "./resolve-target.js";
 import { resolveActionTarget } from "./resolve-target.js";
 import { searchSticker } from "./sticker/send.js";
 
-// ============ Type definitions ============
-
 /** handleAction return type */
 export interface ActionHandlerResult {
   channel: "yuanbao";
@@ -31,8 +29,6 @@ export interface ActionHandlerResult {
   error?: Error;
   data?: unknown;
 }
-
-// ============ Adapter: ActionParams → OutboundItem[] ============
 
 /**
  * Convert ActionParams to OutboundItem list.
@@ -86,8 +82,6 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
 
   return items;
 }
-
-// ============ Core handler ============
 
 /**
  * Handle Action request.

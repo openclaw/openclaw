@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let recordedArgs: unknown[] = [];
 
 let mockRegistered = false;
@@ -28,8 +26,6 @@ function setupMocks(t: any) {
   }
 }
 
-// ============ when condition guard ============
-
 void test("record-member: when guard - executes in group chat", async (t) => {
   setupMocks(t);
   const { recordMember } = await import("./record-member.js");
@@ -45,8 +41,6 @@ void test("record-member: when guard - skips in C2C", async (t) => {
   const ctx = createMockCtx({ isGroup: false });
   assert.equal(recordMember.when!(ctx), false);
 });
-
-// ============ Handler logic ============
 
 void test("record-member: calls getMember().recordUser to record group member", async (t) => {
   setupMocks(t);

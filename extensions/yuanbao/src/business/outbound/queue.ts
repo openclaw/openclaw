@@ -16,7 +16,6 @@ import { createLog } from "../../logger.js";
 import { mdFence, mdBlock, mdAtomic } from "../utils/markdown.js";
 import type { MessageSender, OutboundItem } from "./types.js";
 
-
 /** Queue session interface */
 export interface QueueSession {
   /** Current strategy in use */
@@ -61,8 +60,6 @@ export interface QueueSessionOptions {
   chunkText?: (text: string, maxChars: number) => string[];
 }
 
-// ============ Simple even splitting (fallback) ============
-
 function defaultChunkText(text: string, max: number): string[] {
   if (text.length <= max) {
     return [text];
@@ -73,8 +70,6 @@ function defaultChunkText(text: string, max: number): string[] {
   }
   return chunks;
 }
-
-// ============ Queue factory ============
 
 /** Create a queue session */
 export function createQueueSession(opts: QueueSessionOptions): QueueSession {
@@ -90,8 +85,6 @@ export function createQueueSession(opts: QueueSessionOptions): QueueSession {
       return createImmediateSession(opts);
   }
 }
-
-// ============ immediate strategy ============
 
 /**
  * immediate strategy: send each message directly, no buffering.
@@ -143,8 +136,6 @@ function createImmediateSession(opts: QueueSessionOptions): QueueSession {
     },
   };
 }
-
-// ============ mergeOnFlush strategy ============
 
 /**
  * mergeOnFlush mode: push only buffers, flush merges all text into a single message.
@@ -226,8 +217,6 @@ function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
     },
   };
 }
-
-// ============ merge-text strategy ============
 
 /**
  * merge-text strategy (default):

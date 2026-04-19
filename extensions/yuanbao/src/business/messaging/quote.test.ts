@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseQuoteFromCloudCustomData, formatQuoteContext } from "./quote.js";
 
-// ============ parseQuoteFromCloudCustomData ============
-
 void test("parseQuoteFromCloudCustomData 解析有效引用", () => {
   const data = JSON.stringify({
     quote: {
@@ -54,8 +52,6 @@ void test("parseQuoteFromCloudCustomData 图片引用使用 [image] 占位符", 
 void test("parseQuoteFromCloudCustomData 非法 JSON 返回 undefined", () => {
   assert.equal(parseQuoteFromCloudCustomData("{invalid json}"), undefined);
 });
-
-// ============ formatQuoteContext ============
 
 void test("formatQuoteContext 格式化引用消息", () => {
   const result = formatQuoteContext({

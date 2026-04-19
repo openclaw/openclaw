@@ -8,8 +8,6 @@
 /** Max content truncation length */
 const CONTENT_MAX_LENGTH = 1000;
 
-// ============ 1010 Share card ============
-
 interface SharedLinkData {
   elem_type: 1010;
   title?: string;
@@ -55,8 +53,6 @@ function formatSharedLink(data: SharedLinkData): string {
   return lines.join("\n");
 }
 
-// ============ 1007 Link understanding card ============
-
 interface LinkUnderstandingData {
   elem_type: 1007;
   extend_type?: number;
@@ -90,8 +86,6 @@ function formatLinkUnderstanding(data: LinkUnderstandingData): string | undefine
   lines.push("</link_understanding>");
   return lines.join("\n");
 }
-
-// ============ Public API ============
 
 /**
  * Extract link card text representation (XML format) from custom message.

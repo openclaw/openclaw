@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let mockGateResult = { commandAuthorized: false, shouldBlock: true };
 let mockGateCallback: ((opts: any) => { commandAuthorized: boolean; shouldBlock: boolean }) | null =
   null;

@@ -6,8 +6,6 @@ import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { YuanbaoWsClient } from "../../access/ws/client.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
 
-// ============ Message processing context ============
-
 /** Message processing context */
 export type MessageHandlerContext = {
   groupCode?: string;

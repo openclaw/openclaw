@@ -12,8 +12,6 @@ import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../types.js"
 import { getMember } from "./cache/member.js";
 import { InMemoryTtlDb } from "./cache/ttl-db.js";
 
-// ============ Quote-reply deduplication ============
-
 const firstReplyRefDb = new InMemoryTtlDb<string, true>({
   ttlMs: 60 * 1000,
   maxKeys: 100,
@@ -58,8 +56,6 @@ async function shouldAttachReplyRef(params: {
   firstReplyRefDb.set(dedupeKey, true);
   return true;
 }
-
-// ============ Core send helpers (with logging) ============
 
 /** Send a C2C message body via WebSocket. */
 export async function sendC2CMsgBody(params: {

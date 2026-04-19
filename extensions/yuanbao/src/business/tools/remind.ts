@@ -30,9 +30,7 @@ interface RemindParams {
   jobId?: string;
 }
 
-// ============================================================================
 // Prompt constants
-// ============================================================================
 
 // Parameter extraction prompt
 const RemindSchema = {

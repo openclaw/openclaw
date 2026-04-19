@@ -15,8 +15,6 @@ import type { MessageSender } from "../outbound/types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 // import type { OutboundReplyPayload } from 'openclaw/plugin-sdk/reply-payload';
 
-// ============ Debouncer item ============
-
 /** Message item enqueued by the debouncer */
 export interface DebouncerItem {
   msg: YuanbaoInboundMessage;
@@ -36,8 +34,6 @@ export interface DebouncerItem {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   abortSignal?: AbortSignal;
 }
-
-// ============ Pipeline context ============
 
 /** Message processing context — flows through the pipeline, readable/writable by each middleware */
 export interface PipelineContext {
@@ -108,8 +104,6 @@ export interface PipelineContext {
   /** Action name (e.g. 'sticker', 'sticker-search', 'react'), undefined for non-action requests */
   action?: string;
 }
-
-// ============ Middleware ============
 
 /** Middleware function signature (onion model) */
 export type Middleware = (ctx: PipelineContext, next: () => Promise<void>) => Promise<void>;

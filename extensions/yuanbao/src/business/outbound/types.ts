@@ -10,8 +10,6 @@ import type { YuanbaoWsClient } from "../../access/ws/client.js";
 import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../../types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 
-// ============ Outbound message items ============
-
 /** Outbound message item */
 export type OutboundItem =
   | { type: "text"; text: string }
@@ -19,16 +17,12 @@ export type OutboundItem =
   | { type: "sticker"; stickerId: string }
   | { type: "raw"; msgBody: YuanbaoMsgBodyElement[] };
 
-// ============ Send result ============
-
 /** Send result */
 export interface SendResult {
   ok: boolean;
   messageId?: string;
   error?: string;
 }
-
-// ============ Send target context ============
 
 /** Send target context — assembled by prepareSender middleware */
 export interface SendParams {
@@ -46,8 +40,6 @@ export interface SendParams {
   /** Trace context, passed through to transport layer for injecting trace_id / msg_seq */
   traceContext?: YuanbaoTraceContext;
 }
-
-// ============ Message sender interface ============
 
 /** Message sender interface */
 export interface MessageSender {

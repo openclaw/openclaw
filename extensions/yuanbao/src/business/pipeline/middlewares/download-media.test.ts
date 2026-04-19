@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let mockDownloadResult = {
   mediaPaths: ["/tmp/img1.jpg"] as string[],
   mediaTypes: ["image"] as string[],
@@ -37,8 +35,6 @@ function setupMocks(t: any, downloadResult?: { mediaPaths: string[]; mediaTypes:
   }
 }
 
-// ============ when condition guard ============
-
 void test("download-media: when guard - executes when media present", async (t) => {
   setupMocks(t);
   const { downloadMedia } = await import("./download-media.js");
@@ -56,8 +52,6 @@ void test("download-media: when guard - empty array is still truthy", async (t) 
   const ctx = createMockCtx({ medias: [] });
   assert.equal(downloadMedia.when!(ctx), true);
 });
-
-// ============ Handler logic ============
 
 void test("download-media: C2C - downloads media and populates mediaPaths", async (t) => {
   setupMocks(t, {

@@ -24,8 +24,6 @@ function makeResData(): ExtractTextFromMsgBodyResult {
   return { rawBody: "", isAtBot: false, medias: [], mentions: [], linkUrls: [] };
 }
 
-// ============ extract ============
-
 void test("customHandler extract recognizes @Bot message", () => {
   const ctx = makeMockCtx("bot-001");
   const resData = makeResData();
@@ -77,8 +75,6 @@ void test("customHandler extract returns unsupported placeholder for non-@ custo
   assert.equal(customHandler.extract(ctx, elem, resData), "[当前消息暂不支持查看]");
 });
 
-// ============ buildMsgBody ============
-
 void test("customHandler buildMsgBody constructs custom message", () => {
   const result = customHandler.buildMsgBody!({ data: JSON.stringify({ key: "value" }) });
   assert.equal(result.length, 1);
@@ -92,8 +88,6 @@ void test("customHandler buildMsgBody auto-serializes object input", () => {
   const parsed = JSON.parse(result[0].msg_content.data!);
   assert.equal(parsed.key, "value");
 });
-
-// ============ buildAtUserMsgBodyItem ============
 
 void test("buildAtUserMsgBodyItem constructs @user message body", () => {
   const item = buildAtUserMsgBodyItem("user-123", "张三");

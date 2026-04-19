@@ -12,8 +12,6 @@ import type { YuanbaoInboundMessage } from "../../types.js";
 import { handleC2CRecall, handleGroupRecall } from "./callbacks/recall.js";
 import type { MessageHandlerContext } from "./context.js";
 
-// ============ Types ============
-
 export type SystemCallbackParams = {
   ctx: MessageHandlerContext;
   msg: YuanbaoInboundMessage;
@@ -21,8 +19,6 @@ export type SystemCallbackParams = {
 };
 
 export type SystemCallbackHandler = (params: SystemCallbackParams) => void;
-
-// ============ Registry ============
 
 /** callback_command → handler mapping */
 const systemCallbackRegistry = new Map<string, SystemCallbackHandler>();
@@ -57,8 +53,6 @@ export function dispatchSystemCallback(params: SystemCallbackParams): boolean {
   handler(params);
   return true;
 }
-
-// ============ Registration ============
 
 registerSystemCallback("Group.CallbackAfterRecallMsg", ({ ctx, msg }) =>
   handleGroupRecall(ctx, msg),

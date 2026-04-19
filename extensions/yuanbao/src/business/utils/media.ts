@@ -19,8 +19,6 @@ import { apiGetDownloadUrl, apiGetUploadInfo } from "../../access/api.js";
 import type { CosUploadConfig } from "../../access/api.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
 
-// ============ Type definitions ============
-
 /** Upload result */
 export type MediaUploadResult = {
   /** Public URL */
@@ -49,8 +47,6 @@ export type MediaFile = {
   mimeType: string;
 };
 
-// ============ Constants ============
-
 const DEFAULT_MAX_MB = 20;
 
 /** Image extension set (lowercase) */
@@ -65,8 +61,6 @@ export const IMAGE_EXTS = new Set([
   ".tiff",
   ".ico",
 ]);
-
-// ============ Utility functions ============
 
 /**
  * Guess MIME type from filename.
@@ -209,8 +203,6 @@ function parseWebpSize(buf: Buffer): { width: number; height: number } | undefin
   return undefined;
 }
 
-// ============ Local path utilities ============
-
 /**
  * Check if a string is a local file path (not a remote URL).
  */
@@ -255,8 +247,6 @@ function normalizePath(s: string): string {
   }
   return p;
 }
-
-// ============ Download ============
 
 /** Map content-type to file extension */
 const MIME_TO_EXT: Record<string, string> = {
@@ -418,8 +408,6 @@ async function downloadMediaForLocal(
   return downloadMediaForYuanbao(url, account.mediaMaxMb, account);
 }
 
-// ============ COS upload ============
-
 /**
  * Minimal COS upload implementation (Node.js Buffer, no browser API dependencies).
  * Reuses cos-js-sdk-v5 SDK with params matching Yuanbao Web client.
@@ -497,8 +485,6 @@ async function uploadBufferToCos(params: {
   return config.resourceUrl;
 }
 
-// ============ Main public API ============
-
 /**
  * Upload Buffer to COS (auto-fetches pre-signed config via api.ts).
  */
@@ -550,8 +536,6 @@ export async function downloadAndUploadMedia(
   const mediaFile = await downloadMediaForLocal(mediaUrl, core, mediaLocalRoots, account);
   return uploadMediaToCos(mediaFile, account, onProgress);
 }
-
-// ============ Tencent IM media message builders ============
 
 /**
  * Build Tencent IM TIMImageElem message body.
@@ -606,8 +590,6 @@ export function buildFileMsgBody(params: {
     },
   ];
 }
-
-// ============ Batch download & save ============
 
 /**
  * Download media list and save to agent-accessible directory, returning local file paths.

@@ -22,8 +22,6 @@ import { textHandler } from "./text.js";
 import type { MessageElemHandler, MsgBodyItemType, OutboundContentItem } from "./types.js";
 import { videoHandler } from "./video.js";
 
-// ============ Handler registration ============
-
 /** All registered message type handlers */
 const handlerList: MessageElemHandler[] = [
   textHandler,
@@ -52,8 +50,6 @@ const outboundTypeToMsgType: Record<string, string> = {
   custom: "TIMCustomElem",
 };
 
-// ============ Public API ============
-
 /**
  * Get handler by message type.
  */
@@ -78,8 +74,6 @@ export function buildMsgBody(
   const handler = handlerMap.get(msgType);
   return handler?.buildMsgBody?.(data);
 }
-
-// ============ Outbound content preparation and MsgBody construction pipeline ============
 
 /**
  * @user regex: whitespace (or line start) + @ + nickname + whitespace (or line end).
@@ -219,8 +213,6 @@ export function buildOutboundMsgBody(items: OutboundContentItem[]): MsgBodyItemT
 
   return msgBody;
 }
-
-// ============ Export types and handlers ============
 
 export type {
   MessageElemHandler,

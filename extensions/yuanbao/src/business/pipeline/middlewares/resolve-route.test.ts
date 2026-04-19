@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let mockEnvelopeResult = {
   storePath: "/tmp/store",
   envelopeOptions: {} as Record<string, unknown>,
@@ -38,8 +36,6 @@ function setupMocks(
     mockRegistered = true;
   }
 }
-
-// ============ Handler logic ============
 
 void test("resolve-route: C2C - resolves route and populates ctx", async (t) => {
   setupMocks(t, {

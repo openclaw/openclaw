@@ -25,8 +25,6 @@ function makeResData(): ExtractTextFromMsgBodyResult {
   return { rawBody: "", isAtBot: false, medias: [], mentions: [], linkUrls: [] };
 }
 
-// ============ extract ============
-
 void test("textHandler extract extracts text", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
@@ -52,8 +50,6 @@ void test("textHandler extract returns undefined for empty text", () => {
     undefined,
   );
 });
-
-// ============ buildMsgBody ============
 
 void test("textHandler buildMsgBody constructs text message", () => {
   const result = textHandler.buildMsgBody!({ text: "test message" });

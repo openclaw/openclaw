@@ -8,8 +8,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { textDesensitization, msgBodyDesensitization } from "./utils.js";
 
-// ============ textDesensitization ============
-
 void test("textDesensitization 短文本不脱敏", () => {
   assert.equal(textDesensitization("你好世界"), "你好世界");
   assert.equal(textDesensitization("hello"), "hello");
@@ -29,8 +27,6 @@ void test("textDesensitization 边界长度（6 字符）", () => {
   const result = textDesensitization("abcdef");
   assert.equal(result, "ab***(2)***ef");
 });
-
-// ============ msgBodyDesensitization ============
 
 void test("msgBodyDesensitization 处理文本消息", () => {
   const result = msgBodyDesensitization([

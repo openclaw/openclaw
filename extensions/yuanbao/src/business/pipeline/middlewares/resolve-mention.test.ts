@@ -6,8 +6,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ Shared mutable mock state ============
-
 let mockGatingResult = { effectiveWasMentioned: false, shouldSkip: false };
 
 let mockRegistered = false;
@@ -39,8 +37,6 @@ function setupMocks(
   }
 }
 
-// ============ when condition guard ============
-
 void test("resolve-mention: when guard - executes in group chat", async (t) => {
   setupMocks(t);
   const { resolveMention } = await import("./resolve-mention.js");
@@ -56,8 +52,6 @@ void test("resolve-mention: when guard - skips in C2C", async (t) => {
   const ctx = createMockCtx({ isGroup: false });
   assert.equal(resolveMention.when!(ctx), false);
 });
-
-// ============ Handler logic ============
 
 void test("resolve-mention: @bot message -> pass through", async (t) => {
   setupMocks(t, {
