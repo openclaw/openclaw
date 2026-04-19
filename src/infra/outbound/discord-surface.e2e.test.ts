@@ -370,15 +370,19 @@ describeLive("discord surface e2e (smoke)", () => {
         });
         threadId = spawn.threadId;
         spawnedSessionKey = spawn.spawnedSessionKey;
+        const requestMessageId = spawn.requestMessageId;
 
         // Visibility in the Discord thread is the authoritative merge gate
         // per project memory: "raw visible Discord message id" is the proof,
-        // session history alone is not sufficient evidence.
+        // session history alone is not sufficient evidence. Strict mode
+        // (Task 2) excludes the harness request message so the helper
+        // cannot mistake its own prompt echo for the assistant reply.
         const visible = await assertVisibleInThread({
           threadId,
           marker,
           env: liveEnv,
           timeoutMs: 60_000,
+          excludeMessageIds: [requestMessageId],
         });
 
         // Identity assertion: webhook-authored, username like ⚙ claude.
@@ -499,16 +503,20 @@ describeLive("discord surface e2e (red-team sanitization)", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
           // Visibility first: the marker reaching the Discord thread is the
           // authoritative proof of delivery per project memory's "raw visible
           // Discord message id" rule. Session-history is advisory-only for
-          // the Discord-origin path and checked below.
+          // the Discord-origin path and checked below. Strict mode excludes
+          // the harness request message so its own echo cannot satisfy the
+          // assertion.
           await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 60_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           // No forbidden operational chatter should survive to Discord.
@@ -574,15 +582,19 @@ describeLive("discord surface e2e (red-team sanitization)", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
           // Visibility first: thread must contain the marker (delivery path
           // works). This is the authoritative merge gate — session-history
-          // is checked as advisory-only diagnostics below.
+          // is checked as advisory-only diagnostics below. Strict mode
+          // excludes the harness request message so the leaky prompt echo
+          // cannot satisfy the assertion.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 60_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           // If the child referenced the path, progress sanitization should
@@ -661,15 +673,19 @@ describeLive("discord surface e2e (red-team sanitization)", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
           // Visibility first: the user-requested path lands in the thread
           // under the delivery (not progress) sanitizer profile. This is
           // the authoritative merge gate; session-history is advisory-only.
+          // Strict mode excludes the harness request message so its own
+          // echo of the file path cannot satisfy the assertion.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 60_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           // The delivery profile must NOT scrub the user-requested path.
@@ -776,13 +792,16 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
           // Visibility first: authoritative merge gate per project memory.
+          // Strict mode excludes the harness request message id.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
           assertAuthorIdentity(visible, {
             webhookId: "present",
@@ -842,13 +861,16 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
           // Visibility first: authoritative merge gate per project memory.
+          // Strict mode excludes the harness request message id.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
           assertAuthorIdentity(visible, {
             webhookId: "present",
@@ -912,12 +934,18 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode excludes the harness request message id. The
+          // follow-up's "request" is a gateway RPC, not a native Discord
+          // message, so the assertion on marker2 below does not need an
+          // exclusion (there is no harness echo of marker2 in Discord).
           await assertVisibleInThread({
             threadId,
             marker: marker1,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           // Follow-up turn on the SAME bound session.
@@ -982,12 +1010,18 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode excludes the harness request message id. The
+          // follow-up's "request" is a gateway RPC, not a native Discord
+          // message, so the assertion on marker2 below does not need an
+          // exclusion.
           await assertVisibleInThread({
             threadId,
             marker: marker1,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           await followUpInBoundThread({
@@ -1055,6 +1089,7 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
           // The session_active banner is emitted early in the session
           // lifecycle. By the time the marker is visible the banner must
@@ -1063,12 +1098,14 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           // (same surface as the banner), then do a blanket sanitation
           // check across the whole thread — any mis-identity-emitted
           // banner would be caught by the forbidden-chatter sweep (which
-          // includes the canonical bot-mode leak strings).
+          // includes the canonical bot-mode leak strings). Strict mode
+          // excludes the harness request message id.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
           assertAuthorIdentity(visible, {
             webhookId: "present",
@@ -1115,12 +1152,15 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode excludes the harness request message id.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
           assertAuthorIdentity(visible, {
             webhookId: "present",
@@ -1182,34 +1222,18 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode: helper throws outright if no webhook-authored
+          // match arrives (no silent fallback). The older diagnostic
+          // fall-back branch is no longer reachable post-Task-2.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 60_000,
+            excludeMessageIds: [requestMessageId],
           });
-          if (visible.webhook_id == null) {
-            const recent = await readMessagesInThread({
-              threadId,
-              env: liveEnv,
-              limit: 25,
-            });
-            const webhookMessages = recent.filter((msg) => msg.webhook_id != null);
-            const webhookMessagesWithMarker = webhookMessages.filter((msg) =>
-              msg.content?.includes(marker),
-            );
-            const webhookPreviews = webhookMessages.map((msg) => ({
-              id: msg.id,
-              author: msg.author?.username,
-              webhookId: msg.webhook_id,
-              hasMarker: msg.content?.includes(marker) ?? false,
-              preview: (msg.content ?? "").slice(0, 160),
-            }));
-            throw new Error(
-              `S7 diagnostic: assertVisibleInThread fell back to non-webhook message ${JSON.stringify({ visibleId: visible.id, visibleAuthor: visible.author?.username, visiblePreview: (visible.content ?? "").slice(0, 160), hasWebhookMessage: webhookMessages.length > 0, hasWebhookMessageWithMarker: webhookMessagesWithMarker.length > 0, webhookPreviews })}`,
-            );
-          }
           const content = visible.content ?? "";
           if (!/i['’]m blocked/i.test(content)) {
             throw new Error(
@@ -1271,12 +1295,15 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           threadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode excludes the harness request message id.
           const visible = await assertVisibleInThread({
             threadId,
             marker,
             env: liveEnv,
             timeoutMs: 60_000,
+            excludeMessageIds: [requestMessageId],
           });
           const content = visible.content ?? "";
           if (!/i['’]m blocked/i.test(content)) {
@@ -1334,12 +1361,15 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           originalThreadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode excludes the harness request message id.
           await assertVisibleInThread({
             threadId: originalThreadId,
             marker: marker1,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           // Archive the original bound thread. After this the Phase 11
@@ -1434,12 +1464,15 @@ describeLive.concurrent("discord surface e2e (matrix) — Phase 7 P2", () => {
           });
           originalThreadId = spawn.threadId;
           spawnedSessionKey = spawn.spawnedSessionKey;
+          const requestMessageId = spawn.requestMessageId;
 
+          // Strict mode excludes the harness request message id.
           await assertVisibleInThread({
             threadId: originalThreadId,
             marker: marker1,
             env: liveEnv,
             timeoutMs: 45_000,
+            excludeMessageIds: [requestMessageId],
           });
 
           const rebind = await rebindParentToNewThread({

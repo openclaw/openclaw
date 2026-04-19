@@ -373,6 +373,12 @@ export async function spawnAcpWithMarker(params: {
   // gate: the marker reaching the thread proves the whole delivery chain
   // (inbound self-bypass -> preflight -> bound-session resolution -> ACP
   // dispatch -> webhook outbound) works end-to-end against live Discord.
+  //
+  // IMPORTANT: we EXCLUDE the harness request message id from the scan so
+  // the helper cannot mistake its own prompt-echo for the assistant reply.
+  // Without this exclusion the scan matches the request message (which
+  // contains the marker verbatim) and succeeds before any webhook reply
+  // actually lands — the exact Task-2 false-positive.
   e2eTrace(`spawnAcpWithMarker: waiting for marker ${params.marker} in thread ${threadId}`);
   await withDiscordRetry(() =>
     findThreadWithMarker({
@@ -380,6 +386,7 @@ export async function spawnAcpWithMarker(params: {
       marker: params.marker,
       timeoutMs: Math.max(15_000, timeoutMs - (Date.now() - startedAt)),
       expectedThreadId: threadId,
+      excludeMessageIds: [requestMessageId],
     }),
   );
   e2eTrace(`spawnAcpWithMarker: marker seen in threadId=${threadId}`);
@@ -558,49 +565,101 @@ export async function followUpInBoundThread(params: {
 }
 
 /**
+ * Options for strict marker-visibility scans.
+ *
+ * - `excludeMessageIds`: ignore these message ids entirely when scanning for
+ *   the marker. The harness passes its own `requestMessageId` here so the
+ *   helper cannot mistake its own prompt for an assistant reply.
+ * - `requireWebhookAuthor`: when true (default), a match only counts if the
+ *   message has `webhook_id` set (i.e. was delivered via the bound webhook).
+ *   Non-webhook matches are ignored. Set `false` for explicit callers that
+ *   do not care about authorship.
+ * - `allowDiagnosticFallback`: when true, and no webhook match arrives
+ *   before the timeout, return the earliest non-webhook match so operators
+ *   can triage "saw a match but not a webhook one" vs "saw nothing". Default
+ *   is false: strict mode throws rather than silently falling back.
+ */
+export type MarkerVisibilityOptions = {
+  excludeMessageIds?: readonly string[];
+  requireWebhookAuthor?: boolean;
+  allowDiagnosticFallback?: boolean;
+};
+
+/**
  * Assert that a marker string appears in visible thread messages.
+ *
  * Uses jittered backoff polling so we absorb Discord REST propagation delay.
  * Returns the matched message for further assertions (author identity, etc).
+ *
+ * STRICT DEFAULTS (see `MarkerVisibilityOptions`):
+ *   - requireWebhookAuthor: true   (only webhook-authored messages count)
+ *   - allowDiagnosticFallback: false (no silent fallback on timeout)
+ *
+ * Callers SHOULD pass `excludeMessageIds: [requestMessageId]` so the
+ * harness's own request message cannot be mistaken for an assistant reply.
+ * This is the core Task-2 fix: without the exclusion, the harness can
+ * satisfy its own assertion in the exact failure mode "thread exists,
+ * banner exists, assistant reply missing".
  */
-export async function assertVisibleInThread(params: {
-  threadId: string;
-  marker: string;
-  env: DiscordE2EEnv;
-  timeoutMs?: number;
-  minCount?: number;
-}): Promise<APIMessage> {
+export async function assertVisibleInThread(
+  params: {
+    threadId: string;
+    marker: string;
+    env: DiscordE2EEnv;
+    timeoutMs?: number;
+    minCount?: number;
+  } & MarkerVisibilityOptions,
+): Promise<APIMessage> {
   const timeoutMs = params.timeoutMs ?? 45_000;
   const minCount = Math.max(1, params.minCount ?? 1);
+  const requireWebhookAuthor = params.requireWebhookAuthor ?? true;
+  const allowDiagnosticFallback = params.allowDiagnosticFallback ?? false;
+  const excluded = new Set(params.excludeMessageIds ?? []);
   const startedAt = Date.now();
   let lastMessages: APIMessage[] = [];
   let lastNonWebhookMatches: APIMessage[] = [];
   const byTimestamp = (a: APIMessage, b: APIMessage) => (a.timestamp < b.timestamp ? -1 : 1);
-  // Poll until we find a webhook-authored match (the canonical child reply)
-  // or the timeout expires. Prefer webhook-authored matches over bot/user
-  // matches because the harness posts the user's task message containing the
-  // marker BEFORE the child's webhook reply; timestamp-only sort would return
-  // the user echo and cause identity assertions to fail. If the timeout
-  // expires with only non-webhook matches, fall back to the earliest of those
-  // so callers that don't care about authorship (e.g. simple visibility
-  // checks without assertAuthorIdentity) still get a useful result.
+  // Poll until we find a qualifying match (webhook-authored under strict
+  // defaults; any non-excluded match when requireWebhookAuthor=false) or the
+  // timeout expires. The harness posts the user's task message containing
+  // the marker BEFORE the child's webhook reply; without the exclusion list
+  // the request message can be mistaken for the assistant reply and satisfy
+  // the assertion silently. See Task 2 in
+  // docs/superpowers/plans/2026-04-18-discord-surface-overhaul-master-handoff.md.
   while (Date.now() - startedAt < timeoutMs) {
     lastMessages = await withDiscordRetry(() =>
       readThreadMessages(params.env, params.threadId, 50),
     );
-    const matches = lastMessages.filter((msg) => msg.content?.includes(params.marker));
-    const webhookMatches = matches.filter((msg) => msg.webhook_id != null);
-    if (webhookMatches.length >= minCount) {
-      const ordered = webhookMatches.toSorted(byTimestamp);
-      const first = ordered[0];
-      if (!first) {
-        throw new Error("webhook matches list empty after sort");
+    const matches = lastMessages.filter(
+      (msg) => !excluded.has(msg.id) && msg.content?.includes(params.marker),
+    );
+    if (!requireWebhookAuthor) {
+      // Authorship-agnostic mode: return the earliest non-excluded match.
+      if (matches.length >= minCount) {
+        const ordered = matches.toSorted(byTimestamp);
+        const first = ordered[0];
+        if (first) {
+          return first;
+        }
       }
-      return first;
-    }
-    // Remember non-webhook matches so we can fall back on timeout without an
-    // extra REST round-trip.
-    if (matches.length >= minCount) {
-      lastNonWebhookMatches = matches;
+    } else {
+      const webhookMatches = matches.filter((msg) => msg.webhook_id != null);
+      if (webhookMatches.length >= minCount) {
+        const ordered = webhookMatches.toSorted(byTimestamp);
+        const first = ordered[0];
+        if (!first) {
+          throw new Error("webhook matches list empty after sort");
+        }
+        return first;
+      }
+      // Remember non-webhook matches so we can fall back on timeout
+      // without an extra REST round-trip — but ONLY if the caller has
+      // explicitly opted into the diagnostic fallback. Default behavior
+      // is to throw at timeout rather than silently accept a non-webhook
+      // match.
+      if (matches.length >= minCount) {
+        lastNonWebhookMatches = matches;
+      }
     }
     const jitter = 250 + Math.floor(Math.random() * 500);
     await sleep(1_000 + jitter);
@@ -626,19 +685,25 @@ export async function assertVisibleInThread(params: {
     );
   }
 
-  // If any non-webhook match was seen, return the earliest one (preserves
-  // pre-fix behavior for callers that don't assert authorship).
-  if (lastNonWebhookMatches.length >= minCount) {
+  // Diagnostic fallback: only if explicitly opted in. We still honor
+  // excludeMessageIds here so a request-id echo of the marker NEVER counts
+  // as visible proof, even in fallback mode.
+  if (allowDiagnosticFallback && lastNonWebhookMatches.length >= minCount) {
     const ordered = lastNonWebhookMatches.toSorted(byTimestamp);
     const first = ordered[0];
     if (first) {
       return first;
     }
   }
+  const suffix = requireWebhookAuthor
+    ? ` (no webhook-authored match; non-webhook matches=${String(lastNonWebhookMatches.length)}${
+        allowDiagnosticFallback ? " but diagnostic fallback produced nothing" : ""
+      })`
+    : "";
   throw new Error(
     `assertVisibleInThread: marker ${JSON.stringify(params.marker)} not seen in thread ${
       params.threadId
-    } within ${String(timeoutMs)}ms (saw ${String(lastMessages.length)} messages)`,
+    } within ${String(timeoutMs)}ms (saw ${String(lastMessages.length)} messages)${suffix}`,
   );
 }
 
@@ -1036,8 +1101,16 @@ async function findThreadWithMarker(params: {
    * simply omit this field.
    */
   expectedThreadId?: string;
+  /**
+   * Message ids that MUST NOT count as a marker match. `spawnAcpWithMarker`
+   * passes its own `requestMessageId` here so a match on the harness prompt
+   * cannot satisfy the "marker reached the thread" wait condition. Without
+   * this guard the wait resolves before the assistant reply actually lands.
+   */
+  excludeMessageIds?: readonly string[];
 }): Promise<string> {
   const { env, marker, timeoutMs, expectedThreadId } = params;
+  const excluded = new Set(params.excludeMessageIds ?? []);
   const startedAt = Date.now();
   const rest = getRestClient(env.botToken);
   let pollAttempt = 0;
@@ -1065,11 +1138,13 @@ async function findThreadWithMarker(params: {
       );
     }
     for (const thread of candidateThreads) {
-      // Scan the thread's messages for the marker.
+      // Scan the thread's messages for the marker, honoring the
+      // excludeMessageIds guard so the harness's own request echo does
+      // not satisfy the wait.
       const messages = (await rest.get(Routes.channelMessages(thread.id), {
         limit: 25,
       })) as APIMessage[];
-      if (messages.some((msg) => msg.content?.includes(marker))) {
+      if (messages.some((msg) => !excluded.has(msg.id) && msg.content?.includes(marker))) {
         e2eTrace(`findThreadWithMarker: matched thread ${thread.id} (${thread.name ?? ""})`);
         return thread.id;
       }

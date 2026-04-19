@@ -943,10 +943,12 @@ describe("assertVisibleInThread", () => {
     accountId: "default",
   };
 
-  it("falls back to earliest user/bot match on timeout when no webhook-authored match exists", async () => {
-    // Two user/bot-authored messages containing the marker. No webhook match
-    // will ever arrive, so the helper should wait out the short timeout and
-    // then fall back to returning the EARLIEST non-webhook match by timestamp.
+  it("falls back to earliest user/bot match on timeout only when diagnostic fallback is opted in", async () => {
+    // Two user/bot-authored messages containing the marker. No webhook
+    // match will ever arrive. Under the Task-2 strict default the helper
+    // MUST throw rather than silently falling back. Only when callers
+    // explicitly opt into `allowDiagnosticFallback: true` does the helper
+    // return the earliest non-webhook match by timestamp.
     restHandlers.get.mockImplementation(async () => [
       {
         id: "m-late",
@@ -966,6 +968,7 @@ describe("assertVisibleInThread", () => {
       env,
       marker: "MARKER-x",
       timeoutMs: 200,
+      allowDiagnosticFallback: true,
     });
     expect(msg.id).toBe("m-early");
   });
@@ -1083,6 +1086,141 @@ describe("assertVisibleInThread", () => {
         timeoutMs: 200,
       }),
     ).rejects.toThrow(/not seen in thread/);
+  });
+
+  // --- Strict visibility semantics (Task 2) --------------------------------
+  //
+  // These tests prove the helper cannot be fooled into reporting success
+  // when the only marker match is the harness request message itself.
+
+  it("ignores the original request message when scanning for the marker", async () => {
+    // The harness request message (request-id "req-1") is bot-authored and
+    // contains the marker. A later webhook-authored reply also contains the
+    // marker. With excludeMessageIds set to [request-id] the helper MUST
+    // return the webhook reply, not the request.
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "req-1",
+        content: "task: please echo MARKER-STRICT-A",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:00Z",
+      },
+      {
+        id: "child-reply",
+        content: "MARKER-STRICT-A done",
+        author: { id: "a", username: "⚙ claude", bot: true },
+        webhook_id: "wh-1",
+        timestamp: "2026-04-17T00:00:30Z",
+      },
+    ]);
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-STRICT-A",
+      timeoutMs: 2_000,
+      excludeMessageIds: ["req-1"],
+    });
+    expect(msg.id).toBe("child-reply");
+    expect((msg as { webhook_id?: string }).webhook_id).toBe("wh-1");
+  });
+
+  it("throws by default when only non-webhook marker matches exist", async () => {
+    // Only a bot/user-authored marker match exists. Under the new strict
+    // default (requireWebhookAuthor: true, allowDiagnosticFallback: false),
+    // the helper MUST throw rather than silently falling back to the
+    // non-webhook match.
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "req-1",
+        content: "task message with MARKER-STRICT-B echoed",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:00Z",
+      },
+    ]);
+    await expect(
+      assertVisibleInThread({
+        threadId: "t",
+        env,
+        marker: "MARKER-STRICT-B",
+        timeoutMs: 200,
+      }),
+    ).rejects.toThrow(/not seen in thread|no webhook-authored/i);
+  });
+
+  it("only allows non-webhook fallback in explicit diagnostic mode", async () => {
+    // Same thread state as the previous test, but this time callers pass
+    // allowDiagnosticFallback: true. The helper may now return the
+    // non-webhook match so operators can triage "saw a match but not a
+    // webhook one" vs "saw nothing at all".
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "req-1",
+        content: "task message with MARKER-STRICT-C echoed",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:00Z",
+      },
+    ]);
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-STRICT-C",
+      timeoutMs: 200,
+      allowDiagnosticFallback: true,
+    });
+    expect(msg.id).toBe("req-1");
+  });
+
+  it("excludes request id even in diagnostic fallback mode", async () => {
+    // Guard: excludeMessageIds must apply to both the webhook scan AND the
+    // diagnostic fallback. A request-id echo of the marker must NEVER count
+    // as visible proof, even when callers opt into the fallback.
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "req-1",
+        content: "task message with MARKER-STRICT-D echoed",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:00Z",
+      },
+    ]);
+    await expect(
+      assertVisibleInThread({
+        threadId: "t",
+        env,
+        marker: "MARKER-STRICT-D",
+        timeoutMs: 200,
+        excludeMessageIds: ["req-1"],
+        allowDiagnosticFallback: true,
+      }),
+    ).rejects.toThrow(/not seen in thread|no webhook-authored/i);
+  });
+
+  it("requireWebhookAuthor:false permits non-webhook matches without fallback flag", async () => {
+    // Some explicit-diagnostic callers do not care about authorship at
+    // all. Setting requireWebhookAuthor:false must allow any match
+    // (subject to excludeMessageIds) to satisfy the assertion immediately.
+    restHandlers.get.mockImplementation(async () => [
+      {
+        id: "req-1",
+        content: "task: MARKER-STRICT-E",
+        author: { id: "u", username: "openclaw-e2e", bot: true },
+        timestamp: "2026-04-17T00:00:00Z",
+      },
+      {
+        id: "bot-reply",
+        content: "MARKER-STRICT-E done",
+        author: { id: "a", username: "⚙ claude", bot: true },
+        timestamp: "2026-04-17T00:00:30Z",
+      },
+    ]);
+    const msg = await assertVisibleInThread({
+      threadId: "t",
+      env,
+      marker: "MARKER-STRICT-E",
+      timeoutMs: 2_000,
+      requireWebhookAuthor: false,
+      excludeMessageIds: ["req-1"],
+    });
+    expect(msg.id).toBe("bot-reply");
   });
 });
 
