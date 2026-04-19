@@ -49,6 +49,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const COST_USAGE_CACHE_MAX = 256;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -63,6 +64,20 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+
+// Store an entry with FIFO eviction when adding a new key would exceed the
+// cap. Mirrors the pattern in session-transcript-key.ts and server-session-key.ts
+// so the cache stays bounded under sliding-window usage queries (each
+// day/range combination produces a distinct key).
+function setCostUsageCache(cacheKey: string, entry: CostUsageCacheEntry): void {
+  if (!costUsageCache.has(cacheKey) && costUsageCache.size >= COST_USAGE_CACHE_MAX) {
+    const oldest = costUsageCache.keys().next().value;
+    if (oldest !== undefined) {
+      costUsageCache.delete(oldest);
+    }
+  }
+  costUsageCache.set(cacheKey, entry);
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -325,7 +340,7 @@ async function loadCostUsageSummaryCached(params: {
     config: params.config,
   })
     .then((summary) => {
-      costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      setCostUsageCache(cacheKey, { summary, updatedAt: Date.now() });
       return summary;
     })
     .catch((err) => {
@@ -338,12 +353,12 @@ async function loadCostUsageSummaryCached(params: {
       const current = costUsageCache.get(cacheKey);
       if (current?.inFlight === inFlight) {
         current.inFlight = undefined;
-        costUsageCache.set(cacheKey, current);
+        setCostUsageCache(cacheKey, current);
       }
     });
 
   entry.inFlight = inFlight;
-  costUsageCache.set(cacheKey, entry);
+  setCostUsageCache(cacheKey, entry);
 
   if (entry.summary) {
     return entry.summary;
