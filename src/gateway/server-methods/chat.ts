@@ -14,6 +14,7 @@ import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -52,6 +53,11 @@ import { MediaOffloadError } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import {
+  attachManagedOutgoingImagesToMessage,
+  cleanupManagedOutgoingImageRecords,
+  createManagedOutgoingImageBlocks,
+} from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -78,11 +84,6 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  attachManagedOutgoingImagesToMessage,
-  cleanupManagedOutgoingImageRecords,
-  createManagedOutgoingImageBlocks,
-} from "../managed-image-attachments.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -127,10 +128,19 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function buildWebchatAudioOnlyAssistantMessage(
+async function buildWebchatAudioOnlyAssistantMessage(
   payloads: ReplyPayload[],
-): { content: Array<Record<string, unknown>>; transcriptText: string } | null {
-  const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(payloads);
+  options?: {
+    localRoots?: readonly string[];
+    onLocalAudioAccessDenied?: (message: string) => void;
+  },
+): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, {
+    localRoots: options?.localRoots,
+    onLocalAudioAccessDenied: (err) => {
+      options?.onLocalAudioAccessDenied?.(formatForLog(err));
+    },
+  });
   if (audioBlocks.length === 0) {
     return null;
   }
@@ -2158,16 +2168,31 @@ export const chatHandlers: GatewayRequestHandlers = {
           savedImages: await persistedImagesPromise,
         });
       };
-      const appendWebchatAgentAudioTranscriptIfNeeded = (payload: ReplyPayload) => {
+      const appendWebchatAgentAudioTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
-          return;
-        }
-        const audioMessage = buildWebchatAudioOnlyAssistantMessage([payload]);
-        if (!audioMessage) {
           return;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const transcriptPath = resolveTranscriptPath({
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile,
+          agentId,
+        });
+        const localRoots = [
+          ...getAgentScopedMediaLocalRoots(cfg, agentId),
+          ...(transcriptPath ? [path.dirname(transcriptPath)] : []),
+        ];
+        const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
+          localRoots,
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+          },
+        });
+        if (!audioMessage) {
+          return;
+        }
         const appended = appendAssistantTranscriptMessage({
           message: audioMessage.transcriptText,
           content: audioMessage.content,
@@ -2196,7 +2221,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
-              appendWebchatAgentAudioTranscriptIfNeeded(payload);
+              await appendWebchatAgentAudioTranscriptIfNeeded(payload);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted

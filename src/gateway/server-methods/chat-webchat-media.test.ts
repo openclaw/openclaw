@@ -15,12 +15,15 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     tmpDir = undefined;
   });
 
-  it("embeds a local audio file as a base64 gateway chat block", () => {
+  it("embeds a local audio file as a base64 gateway chat block", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "clip.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
 
-    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: audioPath }]);
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath }],
+      { localRoots: [tmpDir] },
+    );
 
     expect(blocks).toHaveLength(1);
     const block = blocks[0] as {
@@ -36,48 +39,54 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     );
   });
 
-  it("skips remote URLs", () => {
-    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([
+  it("skips remote URLs", async () => {
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
       { mediaUrl: "https://example.com/a.mp3" },
     ]);
     expect(blocks).toHaveLength(0);
   });
 
-  it("skips non-audio local files", () => {
+  it("skips non-audio local files", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const imagePath = path.join(tmpDir, "clip.png");
     fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
-    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: imagePath }]);
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: imagePath }],
+      { localRoots: [tmpDir] },
+    );
 
     expect(blocks).toHaveLength(0);
   });
 
-  it("dedupes repeated paths", () => {
+  it("dedupes repeated paths", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "clip.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0x00]));
 
-    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([
-      { mediaUrl: audioPath },
-      { mediaUrl: audioPath },
-    ]);
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath }, { mediaUrl: audioPath }],
+      { localRoots: [tmpDir] },
+    );
     expect(blocks).toHaveLength(1);
   });
 
-  it("embeds file:// URLs pointing at a local file", () => {
+  it("embeds file:// URLs pointing at a local file", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "clip.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0x01]));
 
     const fileUrl = pathToFileURL(audioPath).href;
-    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: fileUrl }]);
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: fileUrl }],
+      { localRoots: [tmpDir] },
+    );
 
     expect(blocks).toHaveLength(1);
     expect((blocks[0] as { type?: string }).type).toBe("audio");
   });
 
-  it("does not read file contents when stat reports size over the cap", () => {
+  it("does not read file contents when stat reports size over the cap", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "huge.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0x02]));
@@ -91,7 +100,10 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     });
     const readSpy = vi.spyOn(fs, "readFileSync");
 
-    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: audioPath }]);
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath }],
+      { localRoots: [tmpDir] },
+    );
 
     expect(blocks).toHaveLength(0);
     expect(readSpy).not.toHaveBeenCalled();
