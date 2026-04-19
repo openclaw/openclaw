@@ -1,7 +1,12 @@
 import type { ServerResponse } from "node:http";
 import type { GatewayHttpCorsConfig } from "../config/types.gateway.js";
 
-export type CorsCoveredEndpoint = "chatCompletions" | "responses" | "toolsInvoke" | "models";
+export type CorsCoveredEndpoint =
+  | "chatCompletions"
+  | "responses"
+  | "toolsInvoke"
+  | "models"
+  | "embeddings";
 
 export type CorsDecision = {
   allowOrigin: string;
@@ -24,7 +29,12 @@ const DEFAULT_MAX_AGE = 600;
 export function classifyCorsEndpoint(
   method: string,
   pathname: string,
-  endpointsEnabled: { chatCompletions: boolean; responses: boolean; models: boolean },
+  endpointsEnabled: {
+    chatCompletions: boolean;
+    responses: boolean;
+    models: boolean;
+    embeddings: boolean;
+  },
 ): CorsCoveredEndpoint | null {
   const m = method.toUpperCase();
   const isOptionsOrPost = m === "OPTIONS" || m === "POST";
@@ -35,6 +45,9 @@ export function classifyCorsEndpoint(
   }
   if (isOptionsOrPost && pathname === "/v1/responses" && endpointsEnabled.responses) {
     return "responses";
+  }
+  if (isOptionsOrPost && pathname === "/v1/embeddings" && endpointsEnabled.embeddings) {
+    return "embeddings";
   }
   if (isOptionsOrPost && pathname === "/tools/invoke") {
     return "toolsInvoke";

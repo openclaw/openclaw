@@ -9,8 +9,8 @@ import {
 } from "./cors.js";
 
 describe("classifyCorsEndpoint", () => {
-  const both = { chatCompletions: true, responses: true, models: true };
-  const none = { chatCompletions: false, responses: false, models: false };
+  const both = { chatCompletions: true, responses: true, models: true, embeddings: true };
+  const none = { chatCompletions: false, responses: false, models: false, embeddings: false };
 
   it("POST /v1/chat/completions with chatCompletions enabled", () => {
     expect(classifyCorsEndpoint("POST", "/v1/chat/completions", both)).toBe("chatCompletions");
@@ -34,6 +34,18 @@ describe("classifyCorsEndpoint", () => {
 
   it("OPTIONS /v1/responses with responses enabled (preflight)", () => {
     expect(classifyCorsEndpoint("OPTIONS", "/v1/responses", both)).toBe("responses");
+  });
+
+  it("POST /v1/embeddings with embeddings enabled", () => {
+    expect(classifyCorsEndpoint("POST", "/v1/embeddings", both)).toBe("embeddings");
+  });
+
+  it("POST /v1/embeddings with embeddings disabled", () => {
+    expect(classifyCorsEndpoint("POST", "/v1/embeddings", none)).toBeNull();
+  });
+
+  it("OPTIONS /v1/embeddings with embeddings enabled (preflight)", () => {
+    expect(classifyCorsEndpoint("OPTIONS", "/v1/embeddings", both)).toBe("embeddings");
   });
 
   it("POST /tools/invoke always covered", () => {

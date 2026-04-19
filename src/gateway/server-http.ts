@@ -920,6 +920,7 @@ export function createGatewayHttpServer(opts: {
         chatCompletions: openAiChatCompletionsEnabled,
         responses: openResponsesEnabled,
         models: openAiCompatEnabled,
+        embeddings: openAiCompatEnabled,
       });
       const corsDecision = resolveCorsForRequest({
         method: req.method ?? "GET",
