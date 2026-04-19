@@ -15,6 +15,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
+import { shouldAuditPlaintextMcpValue } from "./mcp-target-sensitivity.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -208,6 +209,17 @@ function collectConfigSecrets(params: {
     if (
       target.entry.id === "models.providers.*.headers.*" &&
       !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+    ) {
+      continue;
+    }
+    if (
+      (target.entry.id === "mcp.servers.*.env.*" ||
+        target.entry.id === "mcp.servers.*.headers.*") &&
+      !shouldAuditPlaintextMcpValue({
+        kind: target.entry.id === "mcp.servers.*.env.*" ? "env" : "header",
+        name: target.pathSegments.at(-1) ?? "",
+        value: target.value,
+      })
     ) {
       continue;
     }

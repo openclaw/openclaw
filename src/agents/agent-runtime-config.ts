@@ -78,6 +78,9 @@ function hasAgentRuntimeSecretRefs(params: {
   ) {
     return true;
   }
+  if (hasNestedSecretRef(config.mcp?.servers)) {
+    return true;
+  }
   if (hasNestedSecretRef(config.messages?.tts?.providers)) {
     return true;
   }

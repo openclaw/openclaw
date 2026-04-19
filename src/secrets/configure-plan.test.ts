@@ -35,6 +35,39 @@ describe("secrets configure plan helpers", () => {
     expect(paths).toContain("channels.telegram.botToken");
   });
 
+  it("surfaces only likely credential-like core mcp env and header fields as configure candidates", () => {
+    const config = {
+      mcp: {
+        servers: {
+          "mission-control": {
+            env: {
+              MC_URL: "http://127.0.0.1:3000",
+              MC_API_KEY: "plaintext-mcp-api-key", // pragma: allowlist secret
+              AUTH: "plaintext-mcp-auth", // pragma: allowlist secret
+              SERVICE_KEY: "plaintext-service-key", // pragma: allowlist secret
+            },
+            headers: {
+              "X-Feature-Flag": "enabled",
+              Authorization: "Bearer plaintext-mcp-header", // pragma: allowlist secret
+              "X-Custom-Auth": "plaintext-custom-mcp-header", // pragma: allowlist secret
+              "X-Access-Key": "plaintext-access-key", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const paths = buildConfigureCandidates(config).map((entry) => entry.path);
+    expect(paths).toContain("mcp.servers.mission-control.env.MC_API_KEY");
+    expect(paths).toContain("mcp.servers.mission-control.env.AUTH");
+    expect(paths).toContain("mcp.servers.mission-control.env.SERVICE_KEY");
+    expect(paths).toContain("mcp.servers.mission-control.headers.Authorization");
+    expect(paths).toContain("mcp.servers.mission-control.headers.X-Custom-Auth");
+    expect(paths).toContain("mcp.servers.mission-control.headers.X-Access-Key");
+    expect(paths).not.toContain("mcp.servers.mission-control.env.MC_URL");
+    expect(paths).not.toContain("mcp.servers.mission-control.headers.X-Feature-Flag");
+  });
+
   it("collects provider upserts and deletes", () => {
     const original = {
       secrets: {
