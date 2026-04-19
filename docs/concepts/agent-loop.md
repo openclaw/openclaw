@@ -47,7 +47,7 @@ wired end-to-end.
 Every run flows through a single entrypoint, `runAgent()` in `src/agents/runtime-dispatch.ts`, which selects the active driver by reading `agents.list[<agentId>].runtime.type` off the loaded config:
 
 - `"embedded"` (default, set implicitly when `runtime` is unset) — drives the loop through pi-agent-core's `SessionManager` via `runEmbeddedPiAgent()`. This is the legacy path and the byte-for-byte unchanged default for every agent that has not explicitly opted into a different runtime.
-- `"acp"` — delegates the session to an external Agent Client Protocol harness (see [ACP concepts](/concepts/acp)).
+- `"acp"` — delegates the session to an external Agent Client Protocol harness (see [ACP Agents](/tools/acp-agents)).
 - `"claude-sdk"` — drives the loop through Anthropic's first-party Claude Agent SDK. Optional per-agent opt-in. See [Claude SDK runtime](/concepts/claude-sdk-runtime) for credentials, native-tool bridging, and known limitations.
 
 The selector is a pure function of config — runs never switch runtimes mid-invocation. Callers that used to reach into `runEmbeddedPiAgent()` directly (auto-reply execution, memory flush, followup runner, hook slug generation, attempt execution) all flow through `runAgent()` so the flag actually takes effect without needing a surgical change per caller.
