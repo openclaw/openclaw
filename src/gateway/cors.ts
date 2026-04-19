@@ -101,11 +101,11 @@ export function resolveCorsForRequest(params: {
 export function applyCorsHeaders(res: ServerResponse, decision: CorsDecision): void {
   res.setHeader("Access-Control-Allow-Origin", decision.allowOrigin);
   res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", decision.allowMethods);
   if (decision.allowCredentials) {
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   if (decision.isPreflight) {
+    res.setHeader("Access-Control-Allow-Methods", decision.allowMethods);
     res.setHeader("Access-Control-Allow-Headers", decision.allowHeaders);
     res.setHeader("Access-Control-Max-Age", String(decision.maxAge));
   }

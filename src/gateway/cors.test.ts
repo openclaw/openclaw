@@ -336,9 +336,9 @@ describe("applyCorsHeaders", () => {
     expect(res.setHeader).toHaveBeenCalledWith("Vary", "Origin");
   });
 
-  it("sets Access-Control-Allow-Methods", () => {
+  it("sets Access-Control-Allow-Methods on preflight", () => {
     const res = createMockRes();
-    applyCorsHeaders(res, baseDecision);
+    applyCorsHeaders(res, { ...baseDecision, isPreflight: true });
     expect(res.setHeader).toHaveBeenCalledWith(
       "Access-Control-Allow-Methods",
       "GET, POST, OPTIONS",
@@ -370,10 +370,11 @@ describe("applyCorsHeaders", () => {
     expect(res.setHeader).toHaveBeenCalledWith("Access-Control-Max-Age", "600");
   });
 
-  it("does not set Allow-Headers or Max-Age on non-preflight", () => {
+  it("does not set Allow-Methods, Allow-Headers, or Max-Age on non-preflight", () => {
     const res = createMockRes();
     applyCorsHeaders(res, baseDecision);
     const calls = (res.setHeader as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.find(([name]: string[]) => name === "Access-Control-Allow-Methods")).toBeFalsy();
     expect(calls.find(([name]: string[]) => name === "Access-Control-Allow-Headers")).toBeFalsy();
     expect(calls.find(([name]: string[]) => name === "Access-Control-Max-Age")).toBeFalsy();
   });
