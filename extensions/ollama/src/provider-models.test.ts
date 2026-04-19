@@ -212,4 +212,34 @@ describe("ollama provider models", () => {
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);
     expect(noCapabilities.input).toEqual(["text"]);
   });
+
+  it("buildOllamaModelDefinition flags gemma4 tags as reasoning via the id heuristic", () => {
+    expect(buildOllamaModelDefinition("gemma4").reasoning).toBe(true);
+    expect(buildOllamaModelDefinition("gemma4:12b").reasoning).toBe(true);
+    expect(buildOllamaModelDefinition("gemma4:27b").reasoning).toBe(true);
+  });
+
+  it("buildOllamaModelDefinition flags reasoning when /api/show capabilities include thinking", () => {
+    const thinkingOnly = buildOllamaModelDefinition("custom-local-model", 65536, [
+      "thinking",
+      "completion",
+    ]);
+    expect(thinkingOnly.reasoning).toBe(true);
+
+    const visionAndThinking = buildOllamaModelDefinition("kimi-k2.5:cloud", 262144, [
+      "vision",
+      "thinking",
+      "completion",
+      "tools",
+    ]);
+    expect(visionAndThinking.reasoning).toBe(true);
+    expect(visionAndThinking.input).toEqual(["text", "image"]);
+  });
+
+  it("buildOllamaModelDefinition leaves non-reasoning models unflagged", () => {
+    expect(buildOllamaModelDefinition("llama3:8b").reasoning).toBe(false);
+    expect(
+      buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]).reasoning,
+    ).toBe(false);
+  });
 });

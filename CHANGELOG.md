@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Browser/CDP: allow the selected remote CDP profile host for CDP health and control checks without widening browser navigation SSRF policy, so WSL-to-Windows Chrome endpoints no longer appear offline under strict defaults. Fixes #68108. (#68207) Thanks @Mlightsnow.
 - Codex: stop cumulative app-server token totals from being treated as fresh context usage, so session status no longer reports inflated context percentages after long Codex threads. (#64669) Thanks @cyrusaf.
 - Browser/CDP: add phase-specific CDP readiness diagnostics and normalize loopback WebSocket host aliases, so Windows browser startup failures surface whether HTTP discovery, WebSocket discovery, SSRF validation, or the `Browser.getVersion` health check failed.
+- Ollama/models: detect Gemma 4 (and any model whose `/api/show` capabilities include `thinking`) as reasoning models during discovery, so downstream Ollama thinking-mode behavior and provider defaults apply to Gemma 4 tags like `gemma4`, `gemma4:12b`, and `gemma4:27b` instead of falling back to non-reasoning defaults. Fixes #68728.
 
 ## 2026.4.18
 
