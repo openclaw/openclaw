@@ -110,7 +110,9 @@ describe("sendMessageSlack customize-scope fallback", () => {
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(logVerbose)).toHaveBeenCalled();
+    expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
+      "slack send: missing chat:write.customize, retrying without custom identity",
+    );
   });
 
   it("rethrows missing_scope errors that reference a different scope", async () => {
