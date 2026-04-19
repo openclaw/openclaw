@@ -568,12 +568,14 @@ describe("memory search config", () => {
       },
     });
     const providerSpy = vi.spyOn(memoryEmbeddingProviderRuntime, "getMemoryEmbeddingProvider");
+    try {
+      const resolved = resolveMemorySearchConfig(cfg, "main");
 
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-
-    expect(resolved?.provider).toBe("openai");
-    expect(providerSpy.mock.calls.length).toBeGreaterThan(0);
-    expect(providerSpy.mock.calls.every((call) => call[1] === cfg)).toBe(true);
-    providerSpy.mockRestore();
+      expect(resolved?.provider).toBe("openai");
+      expect(providerSpy.mock.calls.length).toBeGreaterThan(0);
+      expect(providerSpy.mock.calls.every((call) => call[1] === cfg)).toBe(true);
+    } finally {
+      providerSpy.mockRestore();
+    }
   });
 });
