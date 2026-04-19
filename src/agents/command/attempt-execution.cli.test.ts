@@ -19,8 +19,10 @@ vi.mock("../model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../pi-embedded.js", () => ({
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
 
 function makeCliResult(text: string): EmbeddedPiRunResult {
@@ -72,6 +74,7 @@ describe("CLI attempt execution", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
+    runEmbeddedPiAgentMock.mockReset();
   });
 
   afterEach(async () => {
@@ -179,5 +182,119 @@ describe("CLI attempt execution", () => {
       model: "opus",
       content: [{ type: "text", text: "hello from cli" }],
     });
+  });
+
+  it("sets cleanupBundleMcpOnRunEnd when spawnedBy is present", async () => {
+    const sessionKey = "agent:main:subagent:mcp-cleanup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-mcp-cleanup",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "done",
+        agentMeta: {
+          sessionId: "session-mcp-cleanup",
+          provider: "anthropic",
+          model: "opus",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    });
+
+    await runAgentAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "hello",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-mcp-cleanup",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: "agent:main:parent-session",
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "anthropic",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      cleanupBundleMcpOnRunEnd: true,
+    });
+  });
+
+  it("does not force cleanupBundleMcpOnRunEnd when spawnedBy is absent", async () => {
+    const sessionKey = "agent:main:subagent:no-spawn";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-no-spawn",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "done",
+        agentMeta: {
+          sessionId: "session-no-spawn",
+          provider: "anthropic",
+          model: "opus",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    });
+
+    await runAgentAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "hello",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-no-spawn",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "anthropic",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(false);
   });
 });
