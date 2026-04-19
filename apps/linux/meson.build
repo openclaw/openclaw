@@ -21,6 +21,7 @@ soup_dep = dependency('libsoup-3.0')
 gio_dep = dependency('gio-2.0')
 gio_unix_dep = dependency('gio-unix-2.0')
 glib_dep = dependency('glib-2.0')
+sodium_dep = dependency('libsodium')
 
 # Define LIBEXEC_PATH for the C compiler so tray.c knows where the installed helper lives
 libexec_path = get_option('prefix') / get_option('libexecdir') / meson.project_name()
@@ -36,6 +37,12 @@ sources = [
   'src/gateway_http.c',
   'src/gateway_protocol.c',
   'src/gateway_ws.c',
+  'src/device_identity.c',
+  'src/device_auth_store.c',
+  'src/device_pair_request_info.c',
+  'src/device_pair_approval_window.c',
+  'src/pairing_bootstrap_window.c',
+  'src/device_pair_prompter.c',
   'src/gateway_rpc.c',
   'src/gateway_data.c',
   'src/gateway_mutations.c',
@@ -54,7 +61,9 @@ sources = [
   'src/ui_model_utils.c',
   'src/config_setup_transform.c',
   'src/app_window.c',
-  'src/section_chat.c',
+  'src/app_window_section_tag.c',
+  'src/chat_controller.c',
+  'src/chat_window.c',
   'src/section_agents.c',
   'src/section_usage.c',
   'src/section_channels.c',
@@ -72,7 +81,7 @@ sources = [
 
 executable('openclaw-linux',
   sources,
-  dependencies : [gtk4_dep, adwaita_dep, json_glib_dep, soup_dep, gio_dep, gio_unix_dep],
+  dependencies : [gtk4_dep, adwaita_dep, json_glib_dep, soup_dep, gio_dep, gio_unix_dep, sodium_dep],
   install : true)
 
 # Tray helper (GTK3 + Ayatana AppIndicator)
@@ -128,10 +137,73 @@ test('seams', test_seams_exe)
 
 test_gateway_exe = executable('test_gateway',
   ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c',
+   'src/device_identity.c', 'src/device_auth_store.c',
    'src/state.c', 'src/runtime_mode.c', 'src/readiness.c', 'src/log.c',
    'src/test_seams.c'],
-  dependencies : [glib_dep, gio_dep, json_glib_dep])
+  dependencies : [glib_dep, gio_dep, json_glib_dep, sodium_dep])
 test('gateway', test_gateway_exe)
+
+test_device_identity_exe = executable('test_device_identity',
+  ['tests/test_device_identity.c', 'src/device_identity.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, sodium_dep])
+test('device_identity', test_device_identity_exe)
+
+test_device_auth_store_exe = executable('test_device_auth_store',
+  ['tests/test_device_auth_store.c', 'src/device_auth_store.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('device_auth_store', test_device_auth_store_exe)
+
+# End-to-end lifecycle for the device-token repair contract: exercises
+# store ↔ connect-builder ↔ hello-ok parse as a single composed flow so
+# the repair path itself is regression-guarded, not just its pieces.
+test_token_repair_exe = executable('test_token_repair',
+  ['tests/test_token_repair.c',
+   'src/device_auth_store.c', 'src/device_identity.c',
+   'src/gateway_protocol.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, sodium_dep])
+test('token_repair', test_token_repair_exe)
+
+test_device_pair_prompter_exe = executable('test_device_pair_prompter',
+  ['tests/test_device_pair_prompter.c',
+   'src/device_pair_prompter.c', 'src/device_pair_request_info.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep])
+test('device_pair_prompter', test_device_pair_prompter_exe)
+
+# Pure-C coverage for the Pango-markup body builder used by the approval
+# dialog. Uses only GLib (g_markup_escape_text), so no GTK/Adwaita link.
+test_pair_approval_body_exe = executable('test_pair_approval_body',
+  ['tests/test_pair_approval_body.c', 'src/device_pair_request_info.c'],
+  dependencies : [glib_dep, gtk4_dep])
+test('pair_approval_body', test_pair_approval_body_exe)
+
+# Pure-C regression for the sidebar-row → AppSection tag encoding used
+# by the main-window routing. Guards the "Dashboard (enum 0) stuck"
+# bug. Links only the 30-line helper TU; no main window, no display.
+test_app_window_routing_exe = executable('test_app_window_routing',
+  ['tests/test_app_window_routing.c', 'src/app_window_section_tag.c'],
+  dependencies : [glib_dep, gtk4_dep])
+test('app_window_routing', test_app_window_routing_exe)
+
+# Pure-C regression for the default-model → catalog-entry matcher,
+# which is what decides whether the chat gate resolves or stays blocked
+# on "Selected model unavailable". Handles the provider-prefixed vs
+# bare-id mismatch that made Chat blind to the catalog in Issue 2.
+test_model_catalog_match_exe = executable('test_model_catalog_match',
+  ['tests/test_model_catalog_match.c', 'src/display_model.c',
+   'src/readiness.c', 'src/runtime_mode.c', 'src/gateway_config.c',
+   'src/runtime_paths.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('model_catalog_match', test_model_catalog_match_exe)
+
+# Headless coverage for the pairing bootstrap window's state-cache
+# contract. Links the real module but never calls gtk_init()/show(); the
+# tests exercise the documented `_test_update_state` / `_test_clear_state`
+# seams which update cache + re-render without touching widgets.
+test_pairing_bootstrap_window_exe = executable('test_pairing_bootstrap_window',
+  ['tests/test_pairing_bootstrap_window.c',
+   'src/pairing_bootstrap_window.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep, adwaita_dep])
+test('pairing_bootstrap_window', test_pairing_bootstrap_window_exe)
 
 test_display_model_exe = executable('test_display_model',
   ['tests/test_display_model.c', 'src/display_model.c', 'src/readiness.c',
@@ -145,8 +217,9 @@ test_gateway_data_exe = executable('test_gateway_data',
 test('gateway_data', test_gateway_data_exe)
 
 test_gateway_rpc_exe = executable('test_gateway_rpc',
-  ['tests/test_gateway_rpc.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c', 'src/log.c'],
-  dependencies : [glib_dep, gio_dep, json_glib_dep])
+  ['tests/test_gateway_rpc.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c',
+   'src/device_identity.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, sodium_dep])
 test('gateway_rpc', test_gateway_rpc_exe)
 
 test_rpc_mutations_exe = executable('test_rpc_mutations',
@@ -156,8 +229,8 @@ test('rpc_mutations', test_rpc_mutations_exe)
 
 test_rpc_lifecycle_exe = executable('test_rpc_lifecycle',
   ['tests/test_rpc_lifecycle.c', 'src/gateway_rpc.c', 'src/gateway_protocol.c',
-   'src/gateway_data.c', 'src/log.c'],
-  dependencies : [glib_dep, gio_dep, json_glib_dep])
+   'src/gateway_data.c', 'src/device_identity.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, sodium_dep])
 test('rpc_lifecycle', test_rpc_lifecycle_exe)
 
 test_session_filter_exe = executable('test_session_filter',

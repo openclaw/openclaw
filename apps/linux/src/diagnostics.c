@@ -11,7 +11,9 @@
 
 #include "gateway_client.h"
 #include "gateway_config.h"
+#include "device_pair_prompter.h"
 #include "diagnostics.h"
+#include "gateway_ws.h"
 #include "state.h"
 #include "readiness.h"
 #include "display_model.h"
@@ -104,6 +106,43 @@ gchar* build_diagnostics_text(void) {
     g_string_append_printf(out, "Auth OK: %s\n", health->auth_ok ? "Yes" : "No");
     g_string_append_printf(out, "Auth Source: %s\n", health->auth_source ? health->auth_source : "N/A");
     g_string_append_printf(out, "Gateway Version: %s\n", health->gateway_version ? health->gateway_version : "N/A");
+
+    /*
+     * Pairing & Device Identity.
+     *
+     * First-class surface for the state the tray alone cannot
+     * communicate clearly. Emits three operator-facing answers:
+     *
+     *   - This Device Id:    the locally-loaded Ed25519 deviceId, or
+     *                        `Not loaded` if the identity file hasn't
+     *                        been created yet.
+     *   - Pairing Status:    "Paired & authenticated" / "Pairing
+     *                        required" / "Pending approvals from peers".
+     *   - Pending Approvals: exact count of queued/active approval
+     *                        requests the prompter is tracking; this
+     *                        is the number that drives the tray badge.
+     */
+    g_string_append_printf(out, "\n=== Pairing & Device Identity ===\n");
+    const gchar *this_device_id = gateway_ws_get_device_id();
+    g_string_append_printf(out, "This Device Id: %s\n",
+                           (this_device_id && this_device_id[0] != '\0')
+                               ? this_device_id : "Not loaded");
+    guint pending = device_pair_prompter_pending_count();
+    gboolean pairing_required = gateway_ws_is_pairing_required();
+    const gchar *status_line;
+    if (pairing_required) {
+        status_line = "Pairing required for this device";
+    } else if (pending > 0) {
+        status_line = "Pending approvals from peers";
+    } else if (health->auth_ok && health->ws_connected) {
+        status_line = "Paired & authenticated";
+    } else {
+        status_line = "Not paired yet";
+    }
+    g_string_append_printf(out, "Pairing Status: %s\n", status_line);
+    g_string_append_printf(out, "Pending Approvals: %u\n", pending);
+    g_string_append_printf(out, "Auth Source: %s\n",
+                           health->auth_source ? health->auth_source : "N/A");
 
     /* Configuration */
     g_string_append_printf(out, "\n=== Configuration ===\n");

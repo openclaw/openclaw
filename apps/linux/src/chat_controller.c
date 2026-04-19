@@ -1,20 +1,51 @@
 /*
- * section_chat.c
- * Description: Chat section controller for message streaming and session-scoped history.
+ * chat_controller.c
+ *
+ * Instance-backed chat controller for the OpenClaw Linux Companion App.
+ *
+ * Implementation note — on the "singleton-at-a-time" invariant:
+ *
+ *   The chat subsystem was historically implemented as a module-level
+ *   pile of `static` globals plus a `SectionController` accessor. The
+ *   public contract has since moved to an instance-owned `ChatController`
+ *   handle (see chat_controller.h), but converting every one of the
+ *   ~100 internal helpers to take a `self` parameter would be a
+ *   mechanical rewrite of ~1300 lines with zero behavioral gain.
+ *
+ *   Instead, the previous `static ... chat_foo` declarations are now
+ *   fields on the `ChatController` struct, and a single `g_ctl` pointer
+ *   plus macro aliases (`#define chat_foo (g_ctl->foo)`) make the rest
+ *   of the translation unit compile unchanged. The public API
+ *   (chat_controller_new / _build / _refresh / _invalidate / _destroy)
+ *   is the *only* entry point that mutates `g_ctl`, and it enforces the
+ *   "at most one live controller" invariant declared in the header.
+ *
+ *   This preserves:
+ *     - async gateway RPC callbacks that dispatch back into the module
+ *       via the existing file-local state,
+ *     - the generation-guarded staleness logic,
+ *     - the `ChatGateInfo` blocked-state renderer,
+ *
+ *   while removing the `SectionController` singleton accessor pattern
+ *   and letting `chat_window.c` own the controller lifecycle directly.
+ *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */
 
-#include "section_chat.h"
+#include "chat_controller.h"
 
 #include <adwaita.h>
 
 #include "chat_blocks.h"
+#include "display_model.h"        /* model_catalog_entry_matches_configured_default */
 #include "gateway_data.h"
 #include "gateway_rpc.h"
 #include "gateway_ws.h"
 #include "json_access.h"
+#include "log.h"                  /* OC_LOG_* for structured chat diagnostics */
 #include "markdown_render.h"
 #include "readiness.h"
+#include "section_controller.h"   /* SECTION_FRESH_INTERVAL_US + helpers */
 #include "session_filter.h"
 #include "state.h"
 #include "ui_model_utils.h"
@@ -26,6 +57,7 @@ typedef struct {
 
 typedef struct {
     gchar *id;
+    gchar *provider;  /* used by the default-model matcher */
     gchar *label;
 } ChatModelChoice;
 
@@ -35,48 +67,114 @@ typedef struct {
     gchar *text;
 } ChatQueuedAssistant;
 
-static GtkWidget *chat_status_label = NULL;
-static GtkWidget *chat_messages_box = NULL;
-static GtkWidget *chat_agent_dropdown = NULL;
-static GtkWidget *chat_model_dropdown = NULL;
-static GtkWidget *chat_session_dropdown = NULL;
-static GtkStringList *chat_agent_model = NULL;
-static GtkStringList *chat_model_model = NULL;
-static GtkStringList *chat_session_model = NULL;
-static GtkWidget *chat_show_thinking_toggle = NULL;
-static GtkWidget *chat_show_tools_toggle = NULL;
-static GtkWidget *chat_compose_view = NULL;
-static GtkWidget *chat_send_btn = NULL;
+/* ─────────────────────── ChatController instance ───────────────────────
+ * All state that was previously a file-local `static` is now a member of
+ * this struct. The macro aliases below keep the existing code paths
+ * working without a massive "add self-> everywhere" rewrite.
+ */
+struct ChatController {
+    /* Widget refs (cleared in destroy). */
+    GtkWidget     *status_label;
+    GtkWidget     *messages_scrolled; /* vexpand scrolled viewport around messages_box;
+                                       * keeps the composer anchored at the bottom of
+                                       * the window instead of letting the entire page
+                                       * scroll together (old bug). */
+    GtkWidget     *messages_box;
+    GtkWidget     *agent_dropdown;
+    GtkWidget     *model_dropdown;
+    GtkWidget     *session_dropdown;
+    GtkStringList *agent_model;
+    GtkStringList *model_model;
+    GtkStringList *session_model;
+    GtkWidget     *show_thinking_toggle;
+    GtkWidget     *show_tools_toggle;
+    GtkWidget     *compose_view;
+    GtkWidget     *send_btn;
 
-static GPtrArray *chat_agents = NULL;
-static GPtrArray *chat_models = NULL;
-static GPtrArray *chat_session_choices = NULL;
-static GPtrArray *chat_history_messages = NULL; /* JsonNode* objects */
-static GPtrArray *chat_finalized_assistant_queue = NULL; /* ChatQueuedAssistant* */
-static GatewaySessionsData *chat_sessions_cache = NULL;
+    /* Cached gateway data. */
+    GPtrArray            *agents;
+    GPtrArray            *models;
+    GPtrArray            *session_choices;
+    GPtrArray            *history_messages;           /* JsonNode* */
+    GPtrArray            *finalized_assistant_queue;  /* ChatQueuedAssistant* */
+    GatewaySessionsData  *sessions_cache;
 
-static gchar *chat_selected_agent_id = NULL;
-static gchar *chat_selected_model_id = NULL;
-static gchar *chat_selected_session_key = NULL;
-static gchar *chat_pending_run_id = NULL;
-static gchar *chat_pending_session_key = NULL;
-static gchar *chat_pending_assistant_text = NULL;
-static gchar *chat_last_finalized_run_id = NULL;
-static gchar *chat_last_finalized_session_key = NULL;
+    /* Selection / pending streaming state. */
+    gchar *selected_agent_id;
+    gchar *selected_model_id;
+    gchar *selected_session_key;
+    gchar *pending_run_id;
+    gchar *pending_session_key;
+    gchar *pending_assistant_text;
+    gchar *last_finalized_run_id;
+    gchar *last_finalized_session_key;
 
-static gboolean chat_fetch_in_flight = FALSE;
-static gboolean chat_sessions_in_flight = FALSE;
-static gboolean chat_history_in_flight = FALSE;
-static guint chat_dependencies_pending = 0;
-static gint64 chat_last_fetch_us = 0;
-static gboolean chat_show_thinking = FALSE;
-static gboolean chat_show_tools = TRUE;
-static guint chat_event_listener_id = 0;
-static gboolean chat_guard_agent_change = FALSE;
-static gboolean chat_guard_model_change = FALSE;
-static gboolean chat_guard_session_change = FALSE;
-static guint chat_generation = 1;
-static ChatGateInfo chat_gate_info = {0};
+    /* Lifecycle / scheduling flags. */
+    gboolean     fetch_in_flight;
+    gboolean     sessions_in_flight;
+    gboolean     history_in_flight;
+    guint        dependencies_pending;
+    gint64       last_fetch_us;
+    gboolean     show_thinking;
+    gboolean     show_tools;
+    guint        event_listener_id;
+    gboolean     guard_agent_change;
+    gboolean     guard_model_change;
+    gboolean     guard_session_change;
+    guint        generation;
+    ChatGateInfo gate_info;
+};
+
+/*
+ * Single-live-instance pointer. NULL when no controller exists; set by
+ * chat_controller_new() and cleared by chat_controller_destroy(). The
+ * module-internal helpers reach through this pointer via the macros
+ * below, which is why only one ChatController may be live at a time.
+ */
+static ChatController *g_ctl = NULL;
+
+/* Macro aliases: keep the rest of the translation unit textually
+ * identical to the original `static chat_foo` surface. */
+#define chat_status_label              (g_ctl->status_label)
+#define chat_messages_scrolled         (g_ctl->messages_scrolled)
+#define chat_messages_box              (g_ctl->messages_box)
+#define chat_agent_dropdown            (g_ctl->agent_dropdown)
+#define chat_model_dropdown            (g_ctl->model_dropdown)
+#define chat_session_dropdown          (g_ctl->session_dropdown)
+#define chat_agent_model               (g_ctl->agent_model)
+#define chat_model_model               (g_ctl->model_model)
+#define chat_session_model             (g_ctl->session_model)
+#define chat_show_thinking_toggle      (g_ctl->show_thinking_toggle)
+#define chat_show_tools_toggle         (g_ctl->show_tools_toggle)
+#define chat_compose_view              (g_ctl->compose_view)
+#define chat_send_btn                  (g_ctl->send_btn)
+#define chat_agents                    (g_ctl->agents)
+#define chat_models                    (g_ctl->models)
+#define chat_session_choices           (g_ctl->session_choices)
+#define chat_history_messages          (g_ctl->history_messages)
+#define chat_finalized_assistant_queue (g_ctl->finalized_assistant_queue)
+#define chat_sessions_cache            (g_ctl->sessions_cache)
+#define chat_selected_agent_id         (g_ctl->selected_agent_id)
+#define chat_selected_model_id         (g_ctl->selected_model_id)
+#define chat_selected_session_key      (g_ctl->selected_session_key)
+#define chat_pending_run_id            (g_ctl->pending_run_id)
+#define chat_pending_session_key       (g_ctl->pending_session_key)
+#define chat_pending_assistant_text    (g_ctl->pending_assistant_text)
+#define chat_last_finalized_run_id     (g_ctl->last_finalized_run_id)
+#define chat_last_finalized_session_key (g_ctl->last_finalized_session_key)
+#define chat_fetch_in_flight           (g_ctl->fetch_in_flight)
+#define chat_sessions_in_flight        (g_ctl->sessions_in_flight)
+#define chat_history_in_flight         (g_ctl->history_in_flight)
+#define chat_dependencies_pending      (g_ctl->dependencies_pending)
+#define chat_last_fetch_us             (g_ctl->last_fetch_us)
+#define chat_show_thinking             (g_ctl->show_thinking)
+#define chat_show_tools                (g_ctl->show_tools)
+#define chat_event_listener_id         (g_ctl->event_listener_id)
+#define chat_guard_agent_change        (g_ctl->guard_agent_change)
+#define chat_guard_model_change        (g_ctl->guard_model_change)
+#define chat_guard_session_change      (g_ctl->guard_session_change)
+#define chat_generation                (g_ctl->generation)
+#define chat_gate_info                 (g_ctl->gate_info)
 
 typedef struct {
     guint generation;
@@ -197,7 +295,16 @@ static void chat_render_blocked_state(const ChatGateInfo *gate) {
     const gchar *next_action = (gate && gate->next_action) ? gate->next_action : "Check gateway status.";
 
     if (chat_status_label) {
-        g_autofree gchar *line = g_strdup_printf("%s Next: %s", status, next_action);
+        /*
+         * Single coherent status line — no "Next:" prefix, no duplicated
+         * explanation. The operator sees one sentence with the reason
+         * and one sentence with the action, separated by an em dash.
+         * Example: "No default model selected yet. — Open Config and
+         * select a default model."
+         */
+        g_autofree gchar *line = (next_action && next_action[0])
+            ? g_strdup_printf("%s \xe2\x80\x94 %s", status, next_action)
+            : g_strdup(status);
         gtk_label_set_text(GTK_LABEL(chat_status_label), line);
     }
 
@@ -220,6 +327,7 @@ static void chat_render_blocked_state(const ChatGateInfo *gate) {
 static void chat_model_choice_free(ChatModelChoice *m) {
     if (!m) return;
     g_free(m->id);
+    g_free(m->provider);
     g_free(m->label);
     g_free(m);
 }
@@ -272,6 +380,11 @@ static void chat_append_line(const gchar *text, const gchar *css_class) {
     gtk_box_append(GTK_BOX(chat_messages_box), label);
 }
 
+/*
+ * Renderability policy lives in `chat_blocks.{c,h}` so tests can cover
+ * it without linking GTK. See `chat_message_is_renderable`.
+ */
+
 static void chat_render_message_object(JsonObject *msg_obj, gboolean is_pending) {
     const gchar *role = oc_json_string_member(msg_obj, "role");
     if (!role || role[0] == '\0') {
@@ -317,28 +430,70 @@ static void chat_set_send_enabled(void) {
     gtk_text_buffer_get_bounds(buf, &start, &end);
     g_autofree gchar *txt = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
     gboolean has_text = txt && g_strstrip(txt)[0] != '\0';
+
+    /*
+     * Composer sensitivity is driven by the chat-gate ready flag alone:
+     * we want the user to be able to type even with no session selected
+     * (send is disabled until one exists), but a blocked gate means the
+     * gateway can't serve chat at all and an editable-looking composer
+     * is a lie. Send sensitivity adds the text + session preconditions
+     * on top.
+     */
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(chat_compose_view), connected);
+    gtk_widget_set_sensitive(chat_compose_view, connected);
     gtk_widget_set_sensitive(chat_send_btn, connected && has_session && has_text);
+}
+
+/*
+ * Scroll the transcript viewport to the bottom. Called after the
+ * message UI is rebuilt / a new message is appended so the latest
+ * entry is always visible. No-op when the viewport hasn't been built
+ * yet (rebuilds during startup may race with the first message).
+ */
+static void chat_scroll_transcript_to_bottom(void) {
+    if (!chat_messages_scrolled) return;
+    GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(
+        GTK_SCROLLED_WINDOW(chat_messages_scrolled));
+    if (!vadj) return;
+    double upper = gtk_adjustment_get_upper(vadj);
+    double page  = gtk_adjustment_get_page_size(vadj);
+    gtk_adjustment_set_value(vadj, upper - page);
 }
 
 static void chat_rebuild_messages_ui(void) {
     chat_clear_messages_ui();
 
     if (!chat_gate_info.ready) {
-        const gchar *status = chat_gate_info.status ? chat_gate_info.status : "Chat is not ready.";
-        const gchar *next = chat_gate_info.next_action ? chat_gate_info.next_action : "Check gateway status.";
-        g_autofree gchar *line = g_strdup_printf("<i>%s %s</i>", status, next);
-        chat_append_line(line, "dim-label");
+        /*
+         * The status label above the transcript carries the canonical
+         * blocked-state copy. Don't echo it in the transcript viewport
+         * too — duplicated text was one of the things that made the
+         * old chat surface look like a prototype. An empty transcript
+         * body is the right signal: there are no messages to show.
+         */
         return;
     }
 
+    guint rendered = 0;
+    guint skipped_system = 0;
     if (!chat_history_messages || chat_history_messages->len == 0) {
         chat_append_line("<i>No chat history in this session yet.</i>", "dim-label");
     } else {
         for (guint i = 0; i < chat_history_messages->len; i++) {
             JsonNode *node = g_ptr_array_index(chat_history_messages, i);
-            if (node && JSON_NODE_HOLDS_OBJECT(node)) {
-                chat_render_message_object(json_node_get_object(node), FALSE);
+            if (!node || !JSON_NODE_HOLDS_OBJECT(node)) continue;
+            JsonObject *obj = json_node_get_object(node);
+            if (!chat_message_is_renderable(obj)) {
+                /*
+                 * Only `system` entries hit the skip path today, but
+                 * counting each one keeps the diagnostic honest if we
+                 * add more filters later.
+                 */
+                skipped_system++;
+                continue;
             }
+            chat_render_message_object(obj, FALSE);
+            rendered++;
         }
     }
 
@@ -349,6 +504,37 @@ static void chat_rebuild_messages_ui(void) {
         g_autoptr(JsonNode) pending_node = chat_message_node_from_text("assistant", pending_text);
         chat_render_message_object(json_node_get_object(pending_node), TRUE);
     }
+
+    /*
+     * Single structured rebuild log. Intentionally INFO-level so the
+     * operator can reproduce "chat looked looped" scenarios from
+     * journalctl without enabling trace logging. Keep key order
+     * stable for grep-ability.
+     */
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                "chat.rebuild session=%s gen=%u history=%u rendered=%u "
+                "skipped_system=%u pending_run=%s pending_session=%s "
+                "last_finalized_run=%s last_finalized_session=%s "
+                "finalized_queue=%u",
+                chat_selected_session_key ? chat_selected_session_key : "(none)",
+                chat_generation,
+                chat_history_messages ? chat_history_messages->len : 0,
+                rendered,
+                skipped_system,
+                chat_pending_run_id ? chat_pending_run_id : "(none)",
+                chat_pending_session_key ? chat_pending_session_key : "(none)",
+                chat_last_finalized_run_id ? chat_last_finalized_run_id : "(none)",
+                chat_last_finalized_session_key ? chat_last_finalized_session_key : "(none)",
+                chat_finalized_assistant_queue ? chat_finalized_assistant_queue->len : 0);
+
+    /*
+     * Defer the scroll-to-bottom to the next idle tick so GTK has time
+     * to re-measure the adjustment upper bound after the newly-appended
+     * widgets are allocated. Running this synchronously sees an `upper`
+     * that predates the new content and leaves the viewport frozen at
+     * the previous bottom.
+     */
+    g_idle_add_once((GSourceOnceFunc)chat_scroll_transcript_to_bottom, NULL);
 }
 
 static void chat_clear_pending_state(void) {
@@ -365,6 +551,26 @@ static gboolean chat_pending_is_for_selected_session(void) {
 static gboolean chat_stream_claim_or_match_owner(const gchar *session_key,
                                                  const gchar *run_id) {
     if (!session_key || session_key[0] == '\0') return FALSE;
+
+    /*
+     * Late-event guard. After `lifecycle phase=end` (or equivalent
+     * terminal state) we finalize the pending assistant, append its
+     * text to history, and clear pending state. The runId of that
+     * finished turn is remembered in `chat_last_finalized_run_id` so
+     * a straggling `assistant`-stream event for the SAME run cannot
+     * resurrect a pending slot — doing so would make the transcript
+     * render the turn twice (once as history, once as a "streaming"
+     * pending reply), which was the visible "stuck on the first
+     * response" loop on the Linux companion. Every late event for a
+     * finalized run is a silent no-op.
+     */
+    if (run_id && run_id[0] != '\0' &&
+        chat_last_finalized_run_id && chat_last_finalized_session_key &&
+        g_strcmp0(chat_last_finalized_run_id, run_id) == 0 &&
+        g_strcmp0(chat_last_finalized_session_key, session_key) == 0)
+    {
+        return FALSE;
+    }
 
     if (!chat_pending_session_key || chat_pending_session_key[0] == '\0') {
         g_free(chat_pending_session_key);
@@ -512,7 +718,14 @@ static void chat_rebuild_model_dropdown(void) {
     for (guint i = 0; chat_models && i < chat_models->len; i++) {
         ChatModelChoice *m = g_ptr_array_index(chat_models, i);
         gtk_string_list_append(new_model, m->label ? m->label : m->id);
-        if (chat_selected_model_id && g_strcmp0(chat_selected_model_id, m->id) == 0) {
+        /* Use the shared matcher so both bare ("gpt-oss:20b") and
+         * provider-prefixed ("ollama/gpt-oss:20b") selection ids hit
+         * the right catalog entry. The raw g_strcmp0 was this bug's
+         * sibling: even when the user picked the right model, a
+         * provider-prefixed selection never re-attached after refresh. */
+        if (chat_selected_model_id &&
+            model_catalog_entry_matches_configured_default(
+                chat_selected_model_id, m->id, m->provider)) {
             selected_index = i + 1;
         }
     }
@@ -713,12 +926,16 @@ static void on_models_response(const GatewayRpcResponse *response, gpointer user
         return;
     }
 
+    guint raw_count = 0;
+    guint parsed_count = 0;
+    guint skipped_no_id = 0;
     if (response->ok && response->payload && JSON_NODE_HOLDS_OBJECT(response->payload)) {
         JsonObject *obj = json_node_get_object(response->payload);
         JsonNode *mn = json_object_get_member(obj, "models");
         if (mn && JSON_NODE_HOLDS_ARRAY(mn)) {
             JsonArray *arr = json_node_get_array(mn);
-            for (guint i = 0; i < json_array_get_length(arr); i++) {
+            raw_count = json_array_get_length(arr);
+            for (guint i = 0; i < raw_count; i++) {
                 JsonNode *n = json_array_get_element(arr, i);
                 if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
                 JsonObject *mo = json_node_get_object(n);
@@ -731,10 +948,27 @@ static void on_models_response(const GatewayRpcResponse *response, gpointer user
                 }
                 const gchar *provider = oc_json_string_member(mo, "provider");
                 const gchar *name = oc_json_string_member(mo, "name");
+                m->provider = provider ? g_strdup(provider) : NULL;
                 m->label = g_strdup_printf("%s (%s)",
                                            name ? name : m->id,
                                            provider ? provider : "provider");
-                if (m->id) g_ptr_array_add(parsed_models, m); else chat_model_choice_free(m);
+                /*
+                 * The only legitimate reason to drop a model entry is
+                 * an absent/empty `id`, which makes the choice
+                 * unselectable. Every other catalog row should be
+                 * visible in the dropdown — provider filtering is the
+                 * gateway's job (see `buildAllowedModelSet`), not the
+                 * UI's. Structured log below records the count split
+                 * so "dropdown shows only default" can be localized
+                 * to server-side filtering vs Linux-side filtering.
+                 */
+                if (m->id) {
+                    g_ptr_array_add(parsed_models, m);
+                    parsed_count++;
+                } else {
+                    chat_model_choice_free(m);
+                    skipped_no_id++;
+                }
             }
         }
     } else if (chat_status_label) {
@@ -747,6 +981,18 @@ static void on_models_response(const GatewayRpcResponse *response, gpointer user
     if (chat_models) g_ptr_array_unref(chat_models);
     chat_models = g_steal_pointer(&parsed_models);
     chat_rebuild_model_dropdown();
+
+    /*
+     * One structured log line per `models.list` response. `raw=` is
+     * the count the gateway returned (after its server-side
+     * `buildAllowedModelSet` filter); `parsed=` is the count that
+     * made it into the dropdown after Linux-side validation. If the
+     * user reports a missing model, these two numbers localize the
+     * bug immediately.
+     */
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                "chat.models_loaded raw=%u parsed=%u skipped_no_id=%u",
+                raw_count, parsed_count, skipped_no_id);
 
     if (!chat_models || chat_models->len == 0) {
         gtk_label_set_text(GTK_LABEL(chat_status_label), "No models available. Configure provider/model first.");
@@ -888,6 +1134,19 @@ static void chat_send_current_message(void) {
     json_builder_end_object(b);
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
+
+    /*
+     * One structured chat.send log line per invocation. `agent=` and
+     * `session=` are the two fields that most often disagree between
+     * platforms (web / macOS / Linux); logging them both is cheap and
+     * makes a regression instantly greppable.
+     */
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                "chat.send agent=%s session=%s idempotency=%s msg_len=%zu",
+                chat_selected_agent_id ? chat_selected_agent_id : "(none)",
+                chat_selected_session_key,
+                chat_pending_run_id ? chat_pending_run_id : "(none)",
+                strlen(text));
 
     ChatRequestContext *ctx = chat_request_context_new();
     g_autofree gchar *rid = gateway_rpc_request("chat.send", params, 0, on_chat_send_response, ctx);
@@ -1136,25 +1395,39 @@ static void on_show_tools_toggled(GtkCheckButton *button, gpointer user_data) {
     chat_rebuild_messages_ui();
 }
 
+/*
+ * Layout shape:
+ *
+ *   root VBox (returned)
+ *   ├── header VBox                (fixed at top; compact)
+ *   │     ├── status_label         (one line, dim, e.g. "Chat is ready." or blocked reason)
+ *   │     └── controls HBox        (agent / model / session + thinking / tools toggles)
+ *   ├── messages_scrolled          (vexpand=TRUE, owns the vertical scroll)
+ *   │     └── messages_box         (VBox of message widgets)
+ *   └── composer HBox              (fixed at bottom)
+ *         ├── compose_view TextView  (hexpand=TRUE, wrap word/char)
+ *         └── send_btn               (suggested-action)
+ *
+ * The old layout stuffed everything into a single outer scrolled window
+ * which made the composer scroll away as the transcript grew — appearing
+ * "at the top" with no visible message viewport.
+ */
 static GtkWidget* chat_build(void) {
-    GtkWidget *scrolled = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_margin_start(root, 12);
+    gtk_widget_set_margin_end(root, 12);
+    gtk_widget_set_margin_top(root, 8);
+    gtk_widget_set_margin_bottom(root, 12);
 
-    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_widget_set_margin_start(page, 24);
-    gtk_widget_set_margin_end(page, 24);
-    gtk_widget_set_margin_top(page, 24);
-    gtk_widget_set_margin_bottom(page, 24);
-
-    GtkWidget *title = gtk_label_new("Chat");
-    gtk_widget_add_css_class(title, "title-1");
-    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
-    gtk_box_append(GTK_BOX(page), title);
+    /* ── Header (status + controls) ── */
+    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
 
     chat_status_label = gtk_label_new("Loading…");
     gtk_widget_add_css_class(chat_status_label, "dim-label");
     gtk_label_set_xalign(GTK_LABEL(chat_status_label), 0.0);
-    gtk_box_append(GTK_BOX(page), chat_status_label);
+    gtk_label_set_wrap(GTK_LABEL(chat_status_label), TRUE);
+    gtk_label_set_wrap_mode(GTK_LABEL(chat_status_label), PANGO_WRAP_WORD_CHAR);
+    gtk_box_append(GTK_BOX(header), chat_status_label);
 
     GtkWidget *controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     chat_agent_model = NULL;
@@ -1164,49 +1437,83 @@ static GtkWidget* chat_build(void) {
     chat_agent_dropdown = gtk_drop_down_new(NULL, NULL);
     chat_model_dropdown = gtk_drop_down_new(NULL, NULL);
     chat_session_dropdown = gtk_drop_down_new(NULL, NULL);
+    /* Make the three selectors share space proportionally rather than
+     * collapsing the session dropdown into a single-row label. */
+    gtk_widget_set_hexpand(chat_agent_dropdown, TRUE);
+    gtk_widget_set_hexpand(chat_model_dropdown, TRUE);
     gtk_widget_set_hexpand(chat_session_dropdown, TRUE);
 
     chat_attach_agent_dropdown_model(gtk_string_list_new(NULL), 0, TRUE);
     chat_attach_model_dropdown_model(gtk_string_list_new(NULL), 0, TRUE);
     chat_attach_session_dropdown_model(gtk_string_list_new(NULL), 0, TRUE);
 
-    g_signal_connect(chat_agent_dropdown, "notify::selected", G_CALLBACK(on_chat_agent_changed), NULL);
-    g_signal_connect(chat_model_dropdown, "notify::selected", G_CALLBACK(on_chat_model_changed), NULL);
+    g_signal_connect(chat_agent_dropdown,   "notify::selected", G_CALLBACK(on_chat_agent_changed),   NULL);
+    g_signal_connect(chat_model_dropdown,   "notify::selected", G_CALLBACK(on_chat_model_changed),   NULL);
     g_signal_connect(chat_session_dropdown, "notify::selected", G_CALLBACK(on_chat_session_changed), NULL);
 
     gtk_box_append(GTK_BOX(controls), chat_agent_dropdown);
     gtk_box_append(GTK_BOX(controls), chat_model_dropdown);
     gtk_box_append(GTK_BOX(controls), chat_session_dropdown);
 
-    chat_show_thinking_toggle = gtk_check_button_new_with_label("Show thinking");
-    chat_show_tools_toggle = gtk_check_button_new_with_label("Show tools");
+    chat_show_thinking_toggle = gtk_check_button_new_with_label("Thinking");
+    chat_show_tools_toggle    = gtk_check_button_new_with_label("Tools");
     gtk_check_button_set_active(GTK_CHECK_BUTTON(chat_show_tools_toggle), TRUE);
     g_signal_connect(chat_show_thinking_toggle, "toggled", G_CALLBACK(on_show_thinking_toggled), NULL);
-    g_signal_connect(chat_show_tools_toggle, "toggled", G_CALLBACK(on_show_tools_toggled), NULL);
+    g_signal_connect(chat_show_tools_toggle,    "toggled", G_CALLBACK(on_show_tools_toggled),    NULL);
     gtk_box_append(GTK_BOX(controls), chat_show_thinking_toggle);
     gtk_box_append(GTK_BOX(controls), chat_show_tools_toggle);
-    gtk_box_append(GTK_BOX(page), controls);
 
-    chat_messages_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-    gtk_box_append(GTK_BOX(page), chat_messages_box);
+    gtk_box_append(GTK_BOX(header), controls);
+    gtk_box_append(GTK_BOX(root), header);
 
+    /* ── Transcript (scrolled, vexpand) ── */
+    chat_messages_scrolled = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(chat_messages_scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_vexpand(chat_messages_scrolled, TRUE);
+    gtk_widget_add_css_class(chat_messages_scrolled, "card");
+
+    chat_messages_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_margin_start(chat_messages_box, 12);
+    gtk_widget_set_margin_end(chat_messages_box, 12);
+    gtk_widget_set_margin_top(chat_messages_box, 12);
+    gtk_widget_set_margin_bottom(chat_messages_box, 12);
+    /* vexpand on the inner box keeps it filling the scrolled viewport
+     * vertically so an empty transcript isn't collapsed to zero height. */
+    gtk_widget_set_vexpand(chat_messages_box, TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(chat_messages_scrolled), chat_messages_box);
+    gtk_box_append(GTK_BOX(root), chat_messages_scrolled);
+
+    /* ── Composer (fixed at bottom) ── */
     GtkWidget *compose_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *compose_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(compose_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(compose_scroll), 56);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(compose_scroll), 160);
+    gtk_widget_set_hexpand(compose_scroll, TRUE);
+
     chat_compose_view = gtk_text_view_new();
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(chat_compose_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(chat_compose_view), 8);
+    gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(chat_compose_view), 8);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(chat_compose_view), 8);
+    gtk_text_view_set_right_margin(GTK_TEXT_VIEW(chat_compose_view), 8);
     gtk_widget_set_hexpand(chat_compose_view, TRUE);
-    gtk_widget_set_size_request(chat_compose_view, -1, 96);
     GtkEventController *key_ctrl = gtk_event_controller_key_new();
     g_signal_connect(key_ctrl, "key-pressed", G_CALLBACK(on_compose_key_pressed), NULL);
     gtk_widget_add_controller(chat_compose_view, key_ctrl);
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(chat_compose_view));
     g_signal_connect(buf, "changed", G_CALLBACK(on_compose_text_changed), NULL);
-    gtk_box_append(GTK_BOX(compose_row), chat_compose_view);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(compose_scroll), chat_compose_view);
+    gtk_box_append(GTK_BOX(compose_row), compose_scroll);
 
     chat_send_btn = gtk_button_new_with_label("Send");
     gtk_widget_add_css_class(chat_send_btn, "suggested-action");
+    gtk_widget_set_valign(chat_send_btn, GTK_ALIGN_END);
     g_signal_connect(chat_send_btn, "clicked", G_CALLBACK(on_send_clicked), NULL);
     gtk_box_append(GTK_BOX(compose_row), chat_send_btn);
-    gtk_box_append(GTK_BOX(page), compose_row);
+    gtk_box_append(GTK_BOX(root), compose_row);
 
     if (!chat_history_messages) {
         chat_history_messages = g_ptr_array_new_with_free_func((GDestroyNotify)json_node_unref);
@@ -1217,9 +1524,8 @@ static GtkWidget* chat_build(void) {
     chat_rebuild_model_dropdown();
     chat_rebuild_session_dropdown();
 
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
     chat_set_send_enabled();
-    return scrolled;
+    return root;
 }
 
 static void chat_refresh(void) {
@@ -1277,6 +1583,7 @@ static void chat_destroy(void) {
     ui_dropdown_detach_model(chat_session_dropdown, (gpointer *)&chat_session_model);
 
     chat_status_label = NULL;
+    chat_messages_scrolled = NULL;
     chat_messages_box = NULL;
     chat_agent_dropdown = NULL;
     chat_model_dropdown = NULL;
@@ -1328,13 +1635,65 @@ static void chat_invalidate(void) {
     chat_clear_pending_state();
 }
 
-static const SectionController chat_controller = {
-    .build = chat_build,
-    .refresh = chat_refresh,
-    .destroy = chat_destroy,
-    .invalidate = chat_invalidate,
-};
+/* ──────────────────────────── public API ──────────────────────────── */
 
-const SectionController* section_chat_get(void) {
-    return &chat_controller;
+ChatController* chat_controller_new(void) {
+    if (g_ctl) {
+        /*
+         * A live instance already exists. The module-internal helpers
+         * assume at most one owner (see implementation note at the top
+         * of this file), so we refuse rather than silently trashing
+         * async callback state. Callers must destroy the prior instance
+         * first.
+         */
+        return NULL;
+    }
+    ChatController *self = g_new0(ChatController, 1);
+    /*
+     * Bootstrap defaults that the original translation unit expressed
+     * as non-zero initializers at file scope. Zero-init covers most
+     * fields; these are the exceptions:
+     *   - generation starts at 1 so the first ChatRequestContext sees a
+     *     non-zero tag (tests depend on this in test_gateway).
+     *   - show_tools defaults to TRUE; show_thinking stays FALSE.
+     */
+    self->generation    = 1;
+    self->show_tools    = TRUE;
+    self->show_thinking = FALSE;
+
+    g_ctl = self;
+    return self;
+}
+
+GtkWidget* chat_controller_build(ChatController *self) {
+    g_return_val_if_fail(self != NULL, NULL);
+    g_return_val_if_fail(g_ctl == self, NULL);
+    return chat_build();
+}
+
+void chat_controller_refresh(ChatController *self) {
+    g_return_if_fail(self != NULL);
+    g_return_if_fail(g_ctl == self);
+    chat_refresh();
+}
+
+void chat_controller_invalidate(ChatController *self) {
+    g_return_if_fail(self != NULL);
+    g_return_if_fail(g_ctl == self);
+    chat_invalidate();
+}
+
+void chat_controller_destroy(ChatController *self) {
+    if (!self) return;
+    /*
+     * Even if some pathological caller passes a pointer that isn't the
+     * current g_ctl, we still need to release its storage. But the
+     * internal chat_destroy() walks g_ctl->*, so only call it when the
+     * pointers match.
+     */
+    if (g_ctl == self) {
+        chat_destroy();
+        g_ctl = NULL;
+    }
+    g_free(self);
 }

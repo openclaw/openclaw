@@ -17,6 +17,20 @@ void chat_block_free(ChatBlock *block) {
     g_free(block);
 }
 
+gboolean chat_message_is_renderable(JsonObject *msg_obj) {
+    if (!msg_obj) return FALSE;
+    const gchar *role = oc_json_string_member(msg_obj, "role");
+    if (!role || role[0] == '\0') return TRUE;
+    /*
+     * `system` entries are internal to the model: they carry
+     * scaffolding like the `[bootstrap-pending]` directive emitted
+     * by `src/agents/system-prompt.ts`. Rendering them in the
+     * transcript looks like the conversation is looping.
+     */
+    if (g_strcmp0(role, "system") == 0) return FALSE;
+    return TRUE;
+}
+
 static ChatBlock* chat_block_new(ChatBlockType type, const gchar *text) {
     ChatBlock *b = g_new0(ChatBlock, 1);
     b->type = type;

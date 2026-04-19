@@ -67,14 +67,45 @@ gchar* find_nearest_existing_ancestor(const gchar *path);
 typedef enum {
     TRAY_UI_REQUEST_SETTINGS = 0,
     TRAY_UI_REQUEST_DIAGNOSTICS = 1,
+    TRAY_UI_REQUEST_CHAT = 2,
 } TrayUiRequest;
 
 typedef enum {
     TRAY_UI_ACTION_SHOW_SETTINGS = 0,
     TRAY_UI_ACTION_SHOW_DIAGNOSTICS = 1,
+    /*
+     * Chat lives in its own window (chat_window.{c,h}) — entirely separate
+     * from the settings / diagnostics main window. This action tells tray
+     * callers to present the chat window without touching the main one.
+     */
+    TRAY_UI_ACTION_SHOW_CHAT = 2,
 } TrayUiAction;
 
 TrayUiAction tray_ui_dispatch_decide(TrayUiRequest request, gboolean onboarding_visible);
+
+/* ── Chat window lifecycle decisions (from chat_window.c) ─────────── */
+
+typedef enum {
+    /* No window exists; caller should build + present a new window. */
+    CHAT_WINDOW_ACTION_BUILD_AND_PRESENT = 0,
+    /* Singleton exists; caller should present the existing window. */
+    CHAT_WINDOW_ACTION_PRESENT_EXISTING = 1,
+    /* No GApplication is bound; caller should ignore the request. */
+    CHAT_WINDOW_ACTION_IGNORE_NO_APP = 2,
+} ChatWindowShowAction;
+
+/*
+ * Pure decision helper for `chat_window_show()`. Keeps the UI-agnostic
+ * invariants (singleton, application-scoped lifetime) testable without
+ * instantiating GTK widgets:
+ *
+ *   - If `has_application` is FALSE, returns IGNORE_NO_APP regardless of
+ *     whether a window already exists.
+ *   - Else, if `window_exists` is TRUE, returns PRESENT_EXISTING.
+ *   - Else, returns BUILD_AND_PRESENT.
+ */
+ChatWindowShowAction chat_window_show_decide(gboolean has_application,
+                                             gboolean window_exists);
 
 /* ── Onboarding refresh decisions (from onboarding.c) ─────────────── */
 

@@ -106,6 +106,66 @@ void tray_display_model_build(
     const HealthState *health,
     TrayDisplayModel *out);
 
+/* ── Pairing status (app footer) ──
+ *
+ * Pure helper for the main-window footer pairing indicator. Collapses
+ * the shared truth `(pairing_required, pending_approvals, auth_ok,
+ * ws_connected)` into a human-readable label, a dot color, and an
+ * `actionable` flag that drives whether the footer exposes a click
+ * affordance that raises the pair approval / bootstrap surface.
+ *
+ * No GTK dependency; callers pass concrete scalars so this helper is
+ * trivially testable.
+ */
+typedef enum {
+    PAIRING_STATUS_REQUIRED,        /* gateway rejected handshake — needs approval */
+    PAIRING_STATUS_PENDING_APPROVAL, /* one or more inbound requests queued locally */
+    PAIRING_STATUS_PAIRED,          /* ws connected + auth ok, nothing pending */
+    PAIRING_STATUS_UNKNOWN,         /* transport not yet authenticated */
+} PairingStatusKind;
+
+typedef struct {
+    PairingStatusKind kind;
+    const char *label;          /* "Pairing: …" text for the footer label */
+    StatusColor color;          /* footer dot color */
+    gboolean actionable;        /* TRUE if the footer affordance should open the pairing surface */
+    guint pending_count;        /* echoed for formatting */
+} PairingStatusModel;
+
+void pairing_status_model_build(
+    gboolean pairing_required,
+    guint pending_approvals,
+    gboolean auth_ok,
+    gboolean ws_connected,
+    PairingStatusModel *out);
+
+/* ── Model catalog resolution ── */
+
+/*
+ * Decide whether the configured default model id resolves to a specific
+ * catalog entry. The configured id may be bare (`gpt-oss:20b`) or
+ * provider-prefixed (`ollama/gpt-oss:20b`) depending on how the operator
+ * wrote it; `models.list` returns entries with a bare `id` field and a
+ * separate `provider` field. Both forms must match for Chat readiness
+ * to resolve — otherwise the chat gate stays "Selected model unresolved"
+ * and users see "Selected model unavailable" despite the catalog being
+ * present.
+ *
+ * Pure helper; no GTK. `configured_default_model_id`, `catalog_entry_id`,
+ * and `catalog_entry_provider` may each be NULL (treated as empty).
+ *
+ * Returns TRUE iff any of the following holds (case-sensitive):
+ *   - configured == entry.id
+ *   - configured == "<entry.provider>/<entry.id>"
+ *   - configured starts with "<something>/" and the suffix == entry.id
+ *     AND the "<something>" part equals entry.provider (defensive — a
+ *     different-provider prefix should not match a different provider)
+ */
+gboolean model_catalog_entry_matches_configured_default(
+    const char *configured_default_model_id,
+    const char *catalog_entry_id,
+    const char *catalog_entry_provider);
+
 /* ── Config display model ── */
 
 typedef struct {

@@ -198,10 +198,26 @@ static void logs_trigger_fetch(gboolean force) {
 
     logs_fetch_in_flight = TRUE;
 
+    /*
+     * Bound the response size. The gateway's `logs.tail` schema
+     * accepts `maxBytes` up to 1_000_000; we pick a conservative
+     * 256 KiB tail window so the WS frame stays well under the
+     * libsoup incoming-payload ceiling even after JSON framing and
+     * any UTF-8 expansion. Without this bound, the 200-line limit
+     * alone could produce a frame larger than the WS max-incoming
+     * payload — which the user observed as:
+     *
+     *   ws_on_error: Received WebSocket payload from the server
+     *   larger than configured max-incoming-payload-size
+     *
+     * and which tore down every pending RPC on the connection.
+     */
     JsonBuilder *b = json_builder_new();
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "limit");
     json_builder_add_int_value(b, 200);
+    json_builder_set_member_name(b, "maxBytes");
+    json_builder_add_int_value(b, 256 * 1024);
     json_builder_end_object(b);
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);

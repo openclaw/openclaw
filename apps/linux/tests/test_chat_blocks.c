@@ -107,6 +107,49 @@ static void test_malformed_string_fields(void) {
     json_node_unref(n);
 }
 
+/* ── Regression: chat_message_is_renderable ── */
+
+static JsonObject* obj_with_role(const gchar *role) {
+    JsonObject *obj = json_object_new();
+    if (role) json_object_set_string_member(obj, "role", role);
+    return obj;
+}
+
+static void test_renderable_system_is_hidden(void) {
+    g_autoptr(JsonObject) obj = obj_with_role("system");
+    g_assert_false(chat_message_is_renderable(obj));
+}
+
+static void test_renderable_user_assistant_tool_are_visible(void) {
+    g_autoptr(JsonObject) u = obj_with_role("user");
+    g_autoptr(JsonObject) a = obj_with_role("assistant");
+    g_autoptr(JsonObject) t = obj_with_role("tool");
+    g_assert_true(chat_message_is_renderable(u));
+    g_assert_true(chat_message_is_renderable(a));
+    g_assert_true(chat_message_is_renderable(t));
+}
+
+static void test_renderable_missing_role_defaults_visible(void) {
+    /* An entry without a role is ambiguous; we default to visible so we
+     * never silently drop content (the renderer will tag it "assistant").
+     */
+    g_autoptr(JsonObject) obj = obj_with_role(NULL);
+    g_assert_true(chat_message_is_renderable(obj));
+    g_autoptr(JsonObject) empty = obj_with_role("");
+    g_assert_true(chat_message_is_renderable(empty));
+}
+
+static void test_renderable_null_object_is_rejected(void) {
+    g_assert_false(chat_message_is_renderable(NULL));
+}
+
+static void test_renderable_unknown_role_is_visible(void) {
+    /* Forward compatibility: unknown roles (e.g. new experimental
+     * roles from core) are shown rather than silently hidden. */
+    g_autoptr(JsonObject) obj = obj_with_role("function");
+    g_assert_true(chat_message_is_renderable(obj));
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -115,6 +158,16 @@ int main(int argc, char **argv) {
     g_test_add_func("/chat_blocks/structured", test_structured_blocks);
     g_test_add_func("/chat_blocks/plain_text", test_plain_text_extraction);
     g_test_add_func("/chat_blocks/malformed_string_fields", test_malformed_string_fields);
+    g_test_add_func("/chat_blocks/renderable/system_is_hidden",
+                    test_renderable_system_is_hidden);
+    g_test_add_func("/chat_blocks/renderable/user_assistant_tool_visible",
+                    test_renderable_user_assistant_tool_are_visible);
+    g_test_add_func("/chat_blocks/renderable/missing_role_defaults_visible",
+                    test_renderable_missing_role_defaults_visible);
+    g_test_add_func("/chat_blocks/renderable/null_object_rejected",
+                    test_renderable_null_object_is_rejected);
+    g_test_add_func("/chat_blocks/renderable/unknown_role_visible",
+                    test_renderable_unknown_role_is_visible);
 
     return g_test_run();
 }

@@ -146,6 +146,86 @@ static void test_tray_dispatch_repeated_requests_safe(void) {
     }
 }
 
+/*
+ * Chat requests must resolve to the dedicated chat-window action regardless
+ * of onboarding visibility — the chat window lives independently of the
+ * main settings / diagnostics window and must not be redirected through
+ * the onboarding-aware settings path.
+ */
+static void test_tray_dispatch_chat_onboarding_visible(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_CHAT, TRUE);
+    g_assert_cmpint(action, ==, TRAY_UI_ACTION_SHOW_CHAT);
+}
+
+static void test_tray_dispatch_chat_onboarding_hidden(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_CHAT, FALSE);
+    g_assert_cmpint(action, ==, TRAY_UI_ACTION_SHOW_CHAT);
+}
+
+/* ── Chat window show-decision tests ── */
+
+/* No GApplication bound: the show request must be ignored entirely so the
+ * tray action never triggers window construction during early startup /
+ * late shutdown. */
+static void test_chat_window_show_no_application(void) {
+    g_assert_cmpint(chat_window_show_decide(FALSE, FALSE), ==, CHAT_WINDOW_ACTION_IGNORE_NO_APP);
+    g_assert_cmpint(chat_window_show_decide(FALSE, TRUE),  ==, CHAT_WINDOW_ACTION_IGNORE_NO_APP);
+}
+
+/* App bound, no window yet: build + present a new standalone window. */
+static void test_chat_window_show_builds_when_absent(void) {
+    g_assert_cmpint(chat_window_show_decide(TRUE, FALSE), ==, CHAT_WINDOW_ACTION_BUILD_AND_PRESENT);
+}
+
+/* App bound, window already exists: reuse the singleton; never rebuild. */
+static void test_chat_window_show_presents_existing_singleton(void) {
+    g_assert_cmpint(chat_window_show_decide(TRUE, TRUE), ==, CHAT_WINDOW_ACTION_PRESENT_EXISTING);
+}
+
+/*
+ * Full chat lifecycle through the decision seam.
+ *
+ * Models, in order, the sequence `chat_window.c` walks when the user
+ * opens chat, clicks the tray icon a second time, closes the window,
+ * and reopens it:
+ *
+ *   1. first open:        no window  → BUILD_AND_PRESENT
+ *   2. second tray click: window up  → PRESENT_EXISTING (no rebuild)
+ *   3. close:             window gone
+ *   4. re-open:           no window  → BUILD_AND_PRESENT (fresh controller)
+ *
+ * This is the headless analogue of "open builds the controller, a
+ * second show presents the existing window, close destroys the
+ * controller, re-open creates a fresh controller cleanly". The
+ * instance-scoped ChatController state itself lives behind a GTK-heavy
+ * monolith (`chat_controller.c`) that we can't link into a pure unit
+ * test, but the decision seam captures the only externally-observable
+ * property of the lifecycle contract: whether the host is told to
+ * build vs. present.
+ */
+static void test_chat_window_show_full_lifecycle_cycle(void) {
+    gboolean window_exists = FALSE;
+
+    /* 1. First open. */
+    g_assert_cmpint(chat_window_show_decide(TRUE, window_exists),
+                    ==, CHAT_WINDOW_ACTION_BUILD_AND_PRESENT);
+    window_exists = TRUE; /* host builds + tracks it */
+
+    /* 2. Second request while live: must NOT rebuild. */
+    g_assert_cmpint(chat_window_show_decide(TRUE, window_exists),
+                    ==, CHAT_WINDOW_ACTION_PRESENT_EXISTING);
+    g_assert_cmpint(chat_window_show_decide(TRUE, window_exists),
+                    ==, CHAT_WINDOW_ACTION_PRESENT_EXISTING);
+
+    /* 3. Operator closes window → host drops its pointer. */
+    window_exists = FALSE;
+
+    /* 4. Re-open must behave exactly like a first open: build a fresh
+     *    controller, do not try to reuse whatever was last on screen. */
+    g_assert_cmpint(chat_window_show_decide(TRUE, window_exists),
+                    ==, CHAT_WINDOW_ACTION_BUILD_AND_PRESENT);
+}
+
 /* ── QR Payload Typed Access Tests ── */
 
 static JsonNode* parse_json_node(const gchar *json_str) {
@@ -218,6 +298,14 @@ int main(int argc, char **argv) {
     g_test_add_func("/seams/tray_dispatch/settings_onboarding_hidden", test_tray_dispatch_settings_onboarding_hidden);
     g_test_add_func("/seams/tray_dispatch/diagnostics_onboarding_visible", test_tray_dispatch_diagnostics_onboarding_visible);
     g_test_add_func("/seams/tray_dispatch/repeated_requests_safe", test_tray_dispatch_repeated_requests_safe);
+    g_test_add_func("/seams/tray_dispatch/chat_onboarding_visible", test_tray_dispatch_chat_onboarding_visible);
+    g_test_add_func("/seams/tray_dispatch/chat_onboarding_hidden", test_tray_dispatch_chat_onboarding_hidden);
+
+    /* chat window show-decision tests */
+    g_test_add_func("/seams/chat_window_show/no_application", test_chat_window_show_no_application);
+    g_test_add_func("/seams/chat_window_show/builds_when_absent", test_chat_window_show_builds_when_absent);
+    g_test_add_func("/seams/chat_window_show/presents_existing_singleton", test_chat_window_show_presents_existing_singleton);
+    g_test_add_func("/seams/chat_window_show/full_lifecycle_cycle", test_chat_window_show_full_lifecycle_cycle);
 
     /* onboarding refresh regression tests */
     g_test_add_func("/seams/onboarding_refresh/route_stable_config_change_refreshes_live",

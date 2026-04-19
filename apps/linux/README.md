@@ -78,8 +78,13 @@ sudo apt install -y \
   libayatana-appindicator3-dev \
   libjson-glib-dev \
   libsoup-3.0-dev \
+  libsodium-dev \
   glib-networking
 ```
+
+> `libsodium-dev` is required for the device identity (Ed25519 signing used
+> by the gateway connect handshake — see
+> [Device identity and pairing](#device-identity-and-pairing)).
 
 ### 2) Install Node.js via external sources (works on Ubuntu 24.04 and 26.04)
 
@@ -232,6 +237,109 @@ Expected Ubuntu runtime environment:
 - **Ubuntu 26.04:** verify the installed GNOME extension packaging on the target system; some systems expose equivalent Ubuntu/GNOME extension bundles rather than a standalone package
 
 GTK3 Ayatana deprecation warnings on newer Ubuntu releases are known for the current v1 approach.
+
+The tray intentionally does **not** surface pairing status. When the
+gateway signals `PAIRING_REQUIRED` (or any inbound pair approval is
+pending on this machine), the main app window's sidebar footer shows a
+dedicated **Pairing** indicator next to the Gateway and Service
+indicators. See below.
+
+---
+
+## Device identity and pairing
+
+The Linux companion is a first-class operator surface: it carries its
+own device-bound identity, persists per-role device tokens across
+reconnects, and can **approve pairing requests locally from this
+machine** — via the CLI, the bootstrap window, or the in-app approval
+dialog — without needing a second device. The identity and token
+formats are interoperable with the other OpenClaw clients (Control UI,
+macOS companion), so a token issued here is usable from any paired
+surface, but nothing here requires another surface to exist.
+
+Where it lives on disk:
+
+```
+<state dir>/identity/
+├── device.json         # Ed25519 identity (mode 0600; dir 0700)
+└── device-auth.json    # durable per-role device tokens (mode 0600)
+```
+
+The effective state dir is resolved via `runtime_paths.c` and normally
+sits under `$OPENCLAW_STATE_DIR` or `~/.openclaw/state/<profile>`.
+
+Handshake behavior (see `src/gateway_ws.c`, `src/gateway_protocol.c`):
+
+- **First run on a loopback gateway:** the companion generates a fresh
+  identity, signs the connect challenge with it, and the gateway silent-
+  approves the local device. The returned `hello.auth.deviceToken` is
+  persisted in `device-auth.json` for future reconnects.
+- **Steady state:** on every reconnect the stored device token is sent
+  as `auth.token`; no operator interaction is required.
+- **Token mismatch repair:** on `AUTH_TOKEN_MISMATCH` the companion
+  retries once with the stored token echoed in `auth.deviceToken`
+  (one-shot budget per session). On success the fresh token replaces
+  the old one; on `AUTH_DEVICE_TOKEN_MISMATCH` the stored token is
+  cleared so the next connect rebuilds trust.
+- **Remote-only or disabled silent pair:** if the gateway returns a
+  `PAIRING_REQUIRED` detail code, reconnect is paused and a native
+  **Pairing required** bootstrap window is presented. The window
+  carries the pending request id, this machine's deviceId, and the
+  canonical Linux fallback command so the operator can approve
+  **locally** without leaving the box:
+
+  ```bash
+  openclaw devices pair approve <requestId>
+  ```
+
+  A copy-to-clipboard button next to the command is provided for
+  terminals that don't cleanly handle selection from Adwaita. If the
+  gateway did not include a request id, the window falls back to
+  `openclaw devices pair list` so the operator can discover it on
+  this machine. An already-paired operator surface on another OS
+  (Control UI in a browser, macOS companion, …) remains an
+  **optional alternate** approver. After approval — however it
+  happens — pressing **Check again** resumes the WS reconnect.
+- **Approving other devices from Linux:** the operator-class Linux
+  companion is a first-class approver for other devices too. It
+  receives `device.pair.requested` events and presents an Adwaita
+  approval dialog (Approve / Reject / Later) mirroring the macOS
+  `NSAlert` flow. Decisions are dispatched back to the gateway via
+  `device.pair.approve` or `device.pair.reject`.
+- **Cross-surface convergence:** when `device.pair.resolved` arrives
+  for a request the Linux operator is currently looking at, the open
+  approval dialog is dismissed silently (no decision RPC is emitted
+  from this machine). Queued-but-not-yet-presented duplicates of the
+  same request id are dropped on the floor. This matches the macOS
+  `DevicePairingApprovalPrompter` and Control UI semantics: exactly
+  one operator decision per request, regardless of where it came
+  from.
+- **List seed on reconnect:** every time the WS transport transitions
+  to `CONNECTED`, the companion issues `device.pair.list` and enqueues
+  any requests it learns about. The queue dedupes by request id so
+  live events arriving in parallel with the seed don't show up twice.
+- **In-app affordance:** the main window's sidebar footer shows a
+  **Pairing** status row (dot + label) alongside the Gateway and
+  Service indicators. Label and color are computed by the pure helper
+  `pairing_status_model_build` from the same truth sources the
+  Diagnostics tab reads. When the row is actionable (pairing required
+  on this handshake, or one or more inbound approvals are pending
+  locally) an adjacent **Open** button appears; clicking it raises the
+  bootstrap window (if up) or the active approval dialog via
+  `device_pair_prompter_raise()`. The tray menu does not duplicate
+  this state.
+
+Forgetting the device (e.g. to re-run first-run pairing) is a simple
+filesystem operation:
+
+```bash
+rm -rf "$(openclaw doctor --print-state-dir)/identity"
+# or, in the default layout:
+rm -rf ~/.openclaw/state/<profile>/identity
+```
+
+The next connect will regenerate a fresh identity and re-enter the
+silent-pair (or bootstrap) path.
 
 ---
 

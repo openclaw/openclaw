@@ -19,6 +19,9 @@
 #include "gateway_rpc.h"
 #include "gateway_ws.h"
 #include "json_access.h"
+#include "runtime_paths.h"
+#include "device_pair_prompter.h"
+#include "display_model.h"        /* model_catalog_entry_matches_configured_default */
 #include "state.h"
 #include "log.h"
 #include "test_seams.h"
@@ -176,12 +179,23 @@ static void on_dependency_models_response(const GatewayRpcResponse *response, gp
             ? current_config->configured_default_model_id
             : NULL;
     if (default_model_id && default_model_id[0] != '\0') {
+        /*
+         * The configured default may be stored as the bare model id
+         * (e.g. "gpt-oss:20b") OR as the fully-qualified "provider/id"
+         * form (e.g. "ollama/gpt-oss:20b"). The matcher handles both,
+         * and rejects accidental cross-provider collisions. Without
+         * this the chat gate stays `SELECTED_MODEL_UNRESOLVED` and
+         * users see "Chat blocked — Selected model unavailable" even
+         * when the catalog contains the right model.
+         */
         for (guint i = 0; i < model_count; i++) {
             JsonNode *n = json_array_get_element(arr, i);
             if (!n || !JSON_NODE_HOLDS_OBJECT(n)) continue;
             JsonObject *mo = json_node_get_object(n);
             const gchar *id = oc_json_string_member(mo, "id");
-            if (id && g_strcmp0(id, default_model_id) == 0) {
+            const gchar *provider = oc_json_string_member(mo, "provider");
+            if (model_catalog_entry_matches_configured_default(
+                    default_model_id, id, provider)) {
                 selected_resolved = TRUE;
                 break;
             }
@@ -414,6 +428,33 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
     if (ws_connected) {
         do_health_check();
         dependency_refresh_start(TRUE);
+        /*
+         * Seed the pairing approval queue from the gateway so the Linux
+         * operator sees any pending `device.pair.requested` that arrived
+         * while we were offline or during reconnect. Safe on repeat
+         * transitions: the prompter dedupes by requestId.
+         */
+        device_pair_prompter_seed_from_server();
+    }
+
+    /*
+     * Bootstrap window lifecycle is owned by `device_pair_prompter`
+     * end-to-end. The show path is driven by the synthetic
+     * "device.pairing.required" event that `gateway_ws` emits whenever
+     * an auth reject carries the PAIRING_REQUIRED detail — the prompter
+     * subscribes to that event and calls `pairing_bootstrap_window_show`
+     * with the full actionable metadata (requestId + deviceId + detail).
+     * The hide path is the mirror image: on a successful WS transition
+     * the prompter is notified, which closes the bootstrap surface.
+     *
+     * This module deliberately does NOT call `pairing_bootstrap_window_*`
+     * APIs. Having a single owner avoids the previous duplicate-show
+     * bug where both this handler and the prompter drove the window,
+     * each with different argument sets (and the client's NULL-parent
+     * show would clobber live cached state).
+     */
+    if (ws_connected) {
+        device_pair_prompter_notify_transport_authenticated();
     }
 }
 
@@ -526,6 +567,23 @@ static void start_transport(void) {
     OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "start_transport http=%s ws=%s auth_mode=%s",
               current_http_url, current_ws_url,
               current_config->auth_mode ? current_config->auth_mode : "(null)");
+
+    /* Resolve the effective state dir so device identity + device tokens
+     * persist under the correct profile. */
+    {
+        gchar *derived_profile = NULL;
+        gchar *derived_state_dir = NULL;
+        gchar *derived_config_path = NULL;
+        systemd_get_runtime_context(&derived_profile, &derived_state_dir, &derived_config_path);
+        RuntimeEffectivePaths paths = {0};
+        runtime_effective_paths_resolve(current_config, derived_profile,
+                                        derived_state_dir, derived_config_path, &paths);
+        gateway_ws_set_identity_context(paths.effective_state_dir);
+        runtime_effective_paths_clear(&paths);
+        g_free(derived_profile);
+        g_free(derived_state_dir);
+        g_free(derived_config_path);
+    }
 
     /* Start HTTP health polling */
     do_health_check();
