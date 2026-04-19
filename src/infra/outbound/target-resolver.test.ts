@@ -15,18 +15,22 @@ const mocks = vi.hoisted(() => ({
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
-  getActivePluginChannelRegistry: vi.fn(() => null),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   normalizeChannelId: (value: string) => value,
 }));
 
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+}));
+
 vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
-  getActivePluginChannelRegistry: () => mocks.getActivePluginChannelRegistry(),
+  getActivePluginChannelRegistry: () => null,
   getActivePluginRegistry: () => null,
+  getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
 }));
 
 beforeAll(async () => {
@@ -43,8 +47,6 @@ beforeEach(() => {
   mocks.getChannelPlugin.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
-  mocks.getActivePluginChannelRegistry.mockReset();
-  mocks.getActivePluginChannelRegistry.mockReturnValue(null);
   resetDirectoryCache();
 });
 
