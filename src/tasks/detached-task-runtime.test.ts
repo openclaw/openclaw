@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TaskRecord } from "./task-registry.types.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -12,6 +11,7 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./detached-task-runtime.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
   return {
@@ -46,15 +46,16 @@ describe("detached-task-runtime", () => {
       taskId: "task-running",
       runId: "run-running",
     });
+    const updatedTasks = [runningTask];
 
     const fakeRuntime = {
       createQueuedTaskRun: vi.fn(() => queuedTask),
       createRunningTaskRun: vi.fn(() => runningTask),
-      startTaskRunByRunId: vi.fn(() => []),
-      recordTaskRunProgressByRunId: vi.fn(() => []),
-      completeTaskRunByRunId: vi.fn(() => []),
-      failTaskRunByRunId: vi.fn(() => []),
-      setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+      startTaskRunByRunId: vi.fn(() => updatedTasks),
+      recordTaskRunProgressByRunId: vi.fn(() => updatedTasks),
+      completeTaskRunByRunId: vi.fn(() => updatedTasks),
+      failTaskRunByRunId: vi.fn(() => updatedTasks),
+      setDetachedTaskDeliveryStatusByRunId: vi.fn(() => updatedTasks),
     };
 
     setDetachedTaskLifecycleRuntime(fakeRuntime);
