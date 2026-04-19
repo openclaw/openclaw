@@ -21,7 +21,7 @@ import {
 const log = createSubsystemLogger("bedrock-discovery");
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
-const DEFAULT_CONTEXT_WINDOW = 128_000;
+const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 4096;
 
 // ---------------------------------------------------------------------------
