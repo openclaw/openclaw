@@ -99,7 +99,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedPiRunActive(sessionId)) {
     runtime.abortEmbeddedPiRun(sessionId);
-    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    const drained = await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    if (!drained) {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Cannot compact: previous run is still winding down. Try again in a moment." },
+      };
+    }
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -116,6 +122,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: sessionAgentId,
     isGroup: params.isGroup,
   });
+
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,

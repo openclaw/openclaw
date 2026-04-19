@@ -11,6 +11,7 @@ export type {
 export {
   abortEmbeddedAgentRun,
   abortEmbeddedPiRun,
+  clearActiveEmbeddedRun,
   compactEmbeddedAgentSession,
   compactEmbeddedPiSession,
   isEmbeddedAgentRunActive,
@@ -24,6 +25,8 @@ export {
   resolveEmbeddedSessionLane,
   runEmbeddedAgent,
   runEmbeddedPiAgent,
+  setActiveEmbeddedRun,
   waitForEmbeddedAgentRunEnd,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded-runner.js";
+export type { EmbeddedPiQueueHandle } from "./pi-embedded-runner.js";
