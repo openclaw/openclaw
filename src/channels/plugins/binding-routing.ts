@@ -103,6 +103,17 @@ export async function ensureConfiguredBindingRouteReady(params: {
       logVerbose(
         `acp: ensureConfiguredBindingRouteReady timed out after ${BINDING_ROUTE_READY_TIMEOUT_MS / 1_000}s`,
       );
+      // Log when the orphaned readyP eventually settles so diagnostics are clear
+      readyP.then(
+        (late) =>
+          logVerbose(
+            `acp: binding route ready resolved after timeout (ok=${late.ok})`,
+          ),
+        (err) =>
+          logVerbose(
+            `acp: binding route ready rejected after timeout: ${err}`,
+          ),
+      );
       return { ok: false, error: "Configured ACP binding route ready check timed out" };
     }
     return result;

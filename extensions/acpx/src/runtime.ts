@@ -111,7 +111,9 @@ export class AcpxRuntime implements AcpxRuntimeLike {
           // Clean up the orphaned delegate session if it eventually resolves
           op.then(
             (handle) =>
-              this.delegate.close({ handle, reason: "timeout", discardPersistentState: false }),
+              this.delegate
+                .close({ handle, reason: "timeout", discardPersistentState: false })
+                .catch(() => {}), // close failure is non-fatal — session will be reclaimed
             () => {}, // delegate rejected — nothing to clean up
           );
           throw new Error(
