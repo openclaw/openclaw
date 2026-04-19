@@ -232,7 +232,7 @@ async function readTextFileStreaming(
   });
 }
 
-// Helper function for bridge mode
+// Helper function for bridge mode - reads entire file but respects maxChars after
 async function readTextFileBridge(
   bridge: SandboxFsBridge,
   filePath: string,
@@ -248,28 +248,63 @@ async function readTextFileBridge(
     signal,
   });
   const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
-  const lines = text.split("\n");
+  
+  // Apply character limit after reading
+  let truncatedText = text;
+  let truncated = false;
+  if (text.length > maxChars) {
+    truncatedText = text.slice(0, maxChars);
+    truncated = true;
+  }
+  
+  const lines = truncatedText.split("\n");
   const totalLines = lines.length;
   
   const start = Math.max(0, Math.min(offset - 1, totalLines));
   const end = limit !== undefined ? Math.min(start + limit, totalLines) : totalLines;
   let content = lines.slice(start, end).join("\n");
   
-  let truncated = false;
-  if (content.length > maxChars) {
-    content = content.slice(0, maxChars) + `\n\n... [Content truncated to ${maxChars} chars]`;
-    truncated = true;
+  if (truncated && content.length === maxChars) {
+    content += `\n\n... [Content truncated to ${maxChars} chars]`;
   }
   
   return { content, truncated, totalLines };
 }
 
-// Helper function to detect if a WebM file is audio-only
-async function isWebmAudioOnly(filePath: string): Promise<boolean> {
+// Helper function to read limited bytes from bridge by reading and slicing
+async function readFileBytesWithLimit(
+  bridge: SandboxFsBridge,
+  filePath: string,
+  cwd: string,
+  maxBytes: number,
+  signal?: AbortSignal
+): Promise<Buffer> {
+  const result = await bridge.readFile({
+    filePath,
+    cwd,
+    signal,
+  });
+  const buffer = Buffer.isBuffer(result) ? result : Buffer.from(result);
+  return buffer.slice(0, maxBytes);
+}
+
+// Helper function to detect if a WebM file is audio-only using bridge-aware reads
+async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?: string): Promise<boolean> {
   try {
-    const { buffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
-    const mime = await detectMime({ buffer, filePath });
-    const kind = kindFromMime(mime);
+    let buffer: Buffer;
+    
+    if (bridge && cwd) {
+      // Read only first 8KB for MIME detection
+      buffer = await readFileBytesWithLimit(bridge, filePath, cwd, 8192);
+    } else {
+      // Use local filesystem with byte limit
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
+      buffer = localBuffer;
+    }
+    
+    const detectedMime = await detectMime({ buffer, filePath });
+    const mimeType = detectedMime ?? "video/webm"; // Default to video if detection fails
+    const kind = kindFromMime(mimeType);
     return kind === 'audio';
   } catch (error) {
     console.warn(`Failed to detect WebM type for ${filePath}, treating as video:`, error);
@@ -299,8 +334,19 @@ async function resizeImageToSizeLimit(
   let currentQuality = initialQuality;
   let attempts = 0;
   
-  // Check if resizing is needed
-  if (currentBuffer.length <= maxBytes) {
+  // Check dimension constraints first, even if under byte limit
+  let needsDimensionResize = false;
+  try {
+    const meta = await getImageMetadata(currentBuffer);
+    if (meta?.width && meta?.height) {
+      needsDimensionResize = meta.width > maxDimensionPx || meta.height > maxDimensionPx;
+    }
+  } catch (metaError) {
+    console.warn(`Image metadata extraction failed for ${fileName}:`, metaError);
+  }
+  
+  // If under byte limit but needs dimension resize, still resize
+  if (!needsDimensionResize && currentBuffer.length <= maxBytes) {
     return {
       buffer: currentBuffer,
       mimeType: currentMimeType,
@@ -310,9 +356,9 @@ async function resizeImageToSizeLimit(
     };
   }
   
-  console.log(`Resizing image ${fileName}: initial=${Math.round(currentBuffer.length / 1024)}KB, limit=${Math.round(maxBytes / 1024)}KB`);
+  console.log(`Resizing image ${fileName}: initial=${Math.round(currentBuffer.length / 1024)}KB, limit=${Math.round(maxBytes / 1024)}KB, needsDimensionResize=${needsDimensionResize}`);
   
-  while (attempts < maxAttempts && currentBuffer.length > maxBytes && currentQuality >= minQuality) {
+  while (attempts < maxAttempts && (currentBuffer.length > maxBytes || (needsDimensionResize && attempts === 0)) && currentQuality >= minQuality) {
     try {
       // Log current state for debugging
       let dimensions = "";
@@ -343,6 +389,7 @@ async function resizeImageToSizeLimit(
       }
       
       attempts++;
+      needsDimensionResize = false; // After first resize, dimensions are handled
     } catch (error) {
       console.error(`Resize attempt ${attempts + 1} failed for ${fileName}:`, error);
       return {
@@ -546,12 +593,46 @@ function normalizePathForUrl(filePath: string): string {
   return normalized;
 }
 
-function getMediaUrl(filePath: string, getBaseUrl?: () => string): string {
-  const normalizedPath = normalizePathForUrl(filePath);
-  const encodedPath = normalizedPath.split("/").map(encodeURIComponent).join("/");
-  const baseUrl = getBaseUrl?.() || "http://localhost:18791";
-  const cleanBaseUrl = baseUrl.replace(/\/$/, "");
-  return `${cleanBaseUrl}${encodedPath}`;
+function getMediaUrl(filePath: string, workspaceRoot: string, getBaseUrl?: () => string): string {
+  // 1. Cross-Platform Normalization
+  // path.resolve() handles the OS-specific absolute path logic.
+  // .replace ensures that even on Windows, we are working with '/' for string manipulation.
+  const normalizedFile = path.resolve(filePath).replace(/\\/g, '/');
+  const normalizedRoot = path.resolve(workspaceRoot).replace(/\\/g, '/');
+
+  let finalRelativePath = "";
+
+  // 2. The "Workspace Anchor" Logic (Case-Insensitive)
+  // This works on Linux (/home/user/workspace/...) and Windows (C:/workspace/...)
+  const workspaceMarker = "/workspace/";
+  const lowerFile = normalizedFile.toLowerCase();
+  const workspaceIndex = lowerFile.indexOf(workspaceMarker);
+
+  if (workspaceIndex !== -1) {
+    // Preserve the actual folder casing from the original path
+    finalRelativePath = normalizedFile.slice(workspaceIndex + workspaceMarker.length);
+  } else {
+    // Fallback if the folder isn't named 'workspace'
+    const rootDir = normalizedRoot.endsWith('/') ? normalizedRoot : normalizedRoot + '/';
+    
+    if (normalizedFile.startsWith(rootDir)) {
+      finalRelativePath = normalizedFile.slice(rootDir.length);
+    } else {
+      finalRelativePath = path.basename(normalizedFile);
+    }
+  }
+
+  // 3. URL Construction
+  // We split by '/' (which we guaranteed in step 1) and encode each part.
+  const urlPath = finalRelativePath
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+
+  const baseUrl = getBaseUrl ? getBaseUrl().replace(/\/+$/, '') : 'http://localhost:18791';
+  
+  return `${baseUrl}/${urlPath}`;
 }
 
 type SandboxToolParams = {
@@ -732,7 +813,9 @@ async function readOptionalUtf8File(params: {
         cwd: params.sandbox.root,
         signal: params.signal,
       });
-      return buffer.toString("utf-8");
+      // Limit to 10MB for memory flush reads
+      const limitedBuffer = Buffer.isBuffer(buffer) ? buffer.slice(0, 10 * 1024 * 1024) : Buffer.from(buffer).slice(0, 10 * 1024 * 1024);
+      return limitedBuffer.toString("utf-8");
     }
     return await fs.readFile(params.absolutePath, "utf-8");
   } catch (error) {
@@ -929,11 +1012,112 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
   };
 }
 
+// Helper function to get fallback MIME type from extension
+function getFallbackMimeTypeFromExtension(filePath: string): string {
+  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+  return getFallbackMimeType(ext);
+}
+
+function getFallbackMimeType(ext: string): string {
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return getImageMimeType(ext);
+  }
+  if (AUDIO_EXTENSIONS.has(ext)) {
+    return getAudioMimeType(ext);
+  }
+  if (VIDEO_EXTENSIONS.has(ext)) {
+    return getVideoMimeType(ext);
+  }
+  if (ext === WEBM_EXTENSION) {
+    return "video/webm";
+  }
+  return "text/plain";
+}
+
+function getKindFromExtension(filePath: string): string {
+  const ext = filePath.toLowerCase().split(".").pop() ?? "";
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return "image";
+  }
+  if (AUDIO_EXTENSIONS.has(ext)) {
+    return "audio";
+  }
+  if (VIDEO_EXTENSIONS.has(ext) || ext === WEBM_EXTENSION) {
+    return "video";
+  }
+  return "text";
+}
+
+// Helper function to detect media type from file bytes with proper byte limits
+async function detectMediaTypeFromBytes(
+  filePath: string,
+  useBridge: boolean,
+  bridge: SandboxFsBridge | undefined,
+  cwd: string,
+  signal?: AbortSignal,
+  maxBytesForSniffing: number = 8192 // Default to 8KB for MIME sniffing
+): Promise<{ mimeType: string; kind: string; extension: string }> {
+  try {
+    let buffer: Buffer;
+    
+    if (useBridge && bridge) {
+      // FIXED: Use helper that reads only first maxBytesForSniffing bytes
+      buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForSniffing, signal);
+    } else {
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: maxBytesForSniffing });
+      buffer = localBuffer;
+    }
+    
+    const detectedMime = await detectMime({ buffer, filePath });
+    const mimeType = detectedMime ?? getFallbackMimeTypeFromExtension(filePath);
+    const detectedKind = kindFromMime(mimeType);
+    const kind = detectedKind ?? getKindFromExtension(filePath);
+    const ext = filePath.toLowerCase().split(".").pop() ?? "";
+    
+    return { mimeType, kind, extension: ext };
+  } catch (error) {
+    console.warn(`Failed to detect MIME type for ${filePath}, falling back to extension:`, error);
+    const ext = filePath.toLowerCase().split(".").pop() ?? "";
+    const mimeType = getFallbackMimeType(ext);
+    const kind = getKindFromExtension(filePath);
+    return { mimeType, kind, extension: ext };
+  }
+}
+
+// Helper function to create text fallback for media results
+function createMediaResultWithFallback(
+  toolCallId: string,
+  mediaType: string,
+  fileName: string,
+  mediaUrl: string,
+  mimeType: string,
+  filePath: string,
+  fileSize: number,
+  details: Record<string, unknown>
+): AgentToolResult {
+  const mediaContent: ContentBlock = {
+    type: mediaType as "audio" | "video",
+    url: mediaUrl,
+    filename: fileName,
+    mimeType: mimeType,
+  };
+  
+  const textFallback = `[${mediaType.toUpperCase()}] ${fileName}\nURL: ${mediaUrl}\nType: ${mimeType}\nSize: ${fileSize} bytes`;
+  
+  return {
+    toolCallId,
+    content: [mediaContent, { type: "text", text: textFallback }],
+    details: { path: filePath, size: fileSize, ...details },
+  } as AgentToolResult;
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
   const useBridge = !!options?.bridge;
+  // Define constant at function scope for lint compliance
+  const MAX_IMAGE_BYTES_BEFORE_SANITIZATION = 50 * 1024 * 1024; // 50MB pre-read cap
 
   return {
     ...base,
@@ -961,7 +1145,6 @@ export function createOpenClawReadTool(
       });
 
       try {
-        let stats;
         let isDirectory = false;
         let fileSize = 0;
 
@@ -976,9 +1159,8 @@ export function createOpenClawReadTool(
           }
           isDirectory = bridgeStats.type === "directory";
           fileSize = bridgeStats.size;
-          stats = { size: fileSize, isDirectory: () => isDirectory };
         } else {
-          stats = await fs.stat(inputPath);
+          const stats = await fs.stat(inputPath);
           isDirectory = stats.isDirectory();
           fileSize = stats.size;
         }
@@ -993,65 +1175,83 @@ export function createOpenClawReadTool(
           return result;
         }
 
-        const ext = inputPath.toLowerCase().split(".").pop() ?? "";
+        // Detect media type from file bytes (limited to 8KB for MIME sniffing)
+        const { mimeType, kind, extension: detectedExt } = await detectMediaTypeFromBytes(
+          inputPath,
+          useBridge,
+          options?.bridge,
+          rootDirResolved,
+          signal,
+          8192, // Limit MIME sniffing to 8KB
+        );
+        
         const fileName = path.basename(inputPath);
-        const mediaUrl = getMediaUrl(inputPath, options?.getBaseUrl);
+        const mediaUrl = getMediaUrl(inputPath, rootDirResolved, options?.getBaseUrl);
 
         let result: AgentToolResult;
 
-        // Handle WebM files
-        if (ext === WEBM_EXTENSION) {
-          const isAudioOnly = await isWebmAudioOnly(inputPath);
-          
-          if (isAudioOnly) {
-            const audioContent: ContentBlock = {
-              type: "audio",
-              url: mediaUrl,
-              filename: fileName,
-              mimeType: "audio/webm",
-            };
-            result = {
-              toolCallId,
-              content: [audioContent],
-              details: { path: inputPath, size: fileSize, detectedAs: "audio" },
-            } as AgentToolResult;
-          } else {
-            const videoContent: ContentBlock = {
-              type: "video",
-              url: mediaUrl,
-              filename: fileName,
-              mimeType: "video/webm",
-            };
-            result = {
-              toolCallId,
-              content: [videoContent],
-              details: { path: inputPath, size: fileSize, detectedAs: "video" },
-            } as AgentToolResult;
-          }
-        } 
-        // Handle audio files
-        else if (AUDIO_EXTENSIONS.has(ext)) {
-          const mimeType = getAudioMimeType(ext);
-          const audioContent: ContentBlock = {
-            type: "audio",
-            url: mediaUrl,
-            filename: fileName,
-            mimeType: mimeType,
-          };
-          result = {
+        // Route based on detected kind, not just extension
+        if (kind === "audio") {
+          result = createMediaResultWithFallback(
             toolCallId,
-            content: [audioContent],
-            details: { path: inputPath, size: fileSize },
-          } as AgentToolResult;
+            "audio",
+            fileName,
+            mediaUrl,
+            mimeType,
+            inputPath,
+            fileSize,
+            { detectedVia: "mime-sniff" },
+          );
         } 
-        // Handle image files with sanitization
-        else if (IMAGE_EXTENSIONS.has(ext)) {
+        else if (kind === "video") {
+          // Special handling for WebM audio-only detection
+          if (detectedExt === WEBM_EXTENSION && mimeType === "video/webm") {
+            // Check if it's actually audio-only using bridge-aware detection
+            const isAudioOnly = await isWebmAudioOnly(inputPath, options?.bridge, rootDirResolved);
+            if (isAudioOnly) {
+              result = createMediaResultWithFallback(
+                toolCallId,
+                "audio",
+                fileName,
+                mediaUrl,
+                "audio/webm",
+                inputPath,
+                fileSize,
+                { detectedVia: "mime-sniff", webmDetectedAs: "audio-only" },
+              );
+            } else {
+              result = createMediaResultWithFallback(
+                toolCallId,
+                "video",
+                fileName,
+                mediaUrl,
+                mimeType,
+                inputPath,
+                fileSize,
+                { detectedVia: "mime-sniff" },
+              );
+            }
+          } else {
+            result = createMediaResultWithFallback(
+              toolCallId,
+              "video",
+              fileName,
+              mediaUrl,
+              mimeType,
+              inputPath,
+              fileSize,
+              { detectedVia: "mime-sniff" },
+            );
+          }
+        }
+        else if (kind === "image") {
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
 
           let fileBuffer: Buffer;
           if (useBridge) {
+            // Read full file for images to allow proper sanitization
             const buffer = await options.bridge!.readFile({
               filePath: inputPath,
               cwd: rootDirResolved,
@@ -1059,15 +1259,41 @@ export function createOpenClawReadTool(
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
           } else {
+            // Add pre-read size cap to prevent OOM on host-side image reads
+            if (fileSize > MAX_IMAGE_BYTES_BEFORE_SANITIZATION) {
+              // Image is too large to safely read into memory - return error
+              const errorResult = {
+                toolCallId,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Error: Image file '${fileName}' is too large (${Math.round(fileSize / 1024 / 1024)}MB). Maximum allowed size before processing is ${Math.round(MAX_IMAGE_BYTES_BEFORE_SANITIZATION / 1024 / 1024)}MB.`,
+                  },
+                ],
+                details: { 
+                  path: inputPath, 
+                  error: "Image exceeds maximum read size",
+                  fileSize,
+                  maxAllowed: MAX_IMAGE_BYTES_BEFORE_SANITIZATION,
+                },
+              } as AgentToolResult;
+              
+              if (options?.transformForTransport) {
+                return transformToolResultForTransport(errorResult);
+              }
+              return errorResult;
+            }
+            
+            // Safe to read the file since it's under the size limit
             fileBuffer = await fs.readFile(inputPath);
           }
 
-          let mimeType = getImageMimeType(ext);
+          let finalMimeType = mimeType;
           
           // Apply image sanitization if configured
           if (options?.imageSanitization) {
             const maxBytes = options.imageSanitization.maxBytes ?? 5 * 1024 * 1024;
-            const maxDimensionPx = options.imageSanitization.maxDimensionPx ?? 3840;
+            const maxDimensionPx = options.imageSanitization.maxDimensionPx ?? 1200;
             
             // Check if sanitization is needed
             let needsSanitization = fileBuffer.length > maxBytes;
@@ -1094,11 +1320,11 @@ export function createOpenClawReadTool(
               
               if (!resizeResult.success) {
                 // Return error message instead of oversized/invalid image
-                result = {
+                const errorResult = {
                   toolCallId,
                   content: [
                     {
-                      type: "text",
+                      type: "text" as const,
                       text: `Error: Unable to process image '${fileName}'. ${resizeResult.error || `Could not resize to meet ${Math.round(maxBytes / 1024)}KB limit after ${resizeResult.attempts} attempts.`}`,
                     },
                   ],
@@ -1111,13 +1337,13 @@ export function createOpenClawReadTool(
                 } as AgentToolResult;
                 
                 if (options?.transformForTransport) {
-                  result = transformToolResultForTransport(result);
+                  return transformToolResultForTransport(errorResult);
                 }
-                return result;
+                return errorResult;
               }
               
               fileBuffer = resizeResult.buffer;
-              mimeType = resizeResult.mimeType;
+              finalMimeType = resizeResult.mimeType;
               
               console.log(`Image ${fileName} resized successfully: ${Math.round(fileBuffer.length / 1024)}KB (quality: ${resizeResult.finalQuality}, attempts: ${resizeResult.attempts})`);
             }
@@ -1127,33 +1353,18 @@ export function createOpenClawReadTool(
             type: "image",
             source: {
               type: "base64",
-              media_type: mimeType,
+              media_type: finalMimeType,
               data: fileBuffer.toString("base64"),
             },
           };
           result = {
             toolCallId,
             content: [imageContent, { type: "text", text: fileName }],
-            details: { path: inputPath, size: fileBuffer.length },
+            details: { path: inputPath, size: fileBuffer.length, detectedVia: "mime-sniff" },
           } as AgentToolResult;
         } 
-        // Handle video files
-        else if (VIDEO_EXTENSIONS.has(ext)) {
-          const mimeType = getVideoMimeType(ext);
-          const videoContent: ContentBlock = {
-            type: "video",
-            url: mediaUrl,
-            filename: fileName,
-            mimeType: mimeType,
-          };
-          result = {
-            toolCallId,
-            content: [videoContent],
-            details: { path: inputPath, size: fileSize },
-          } as AgentToolResult;
-        } 
-        // Handle text files
         else {
+          // Handle text files
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
@@ -1192,7 +1403,7 @@ export function createOpenClawReadTool(
           result = {
             toolCallId,
             content: [{ type: "text", text }],
-            details: { path: inputPath, size: fileSize, offset, limit, truncated },
+            details: { path: inputPath, size: fileSize, offset, limit, truncated, detectedVia: "mime-sniff" },
           } as AgentToolResult;
         }
 

@@ -130,10 +130,9 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   
-  // For absolute Unix paths, only treat as local if they're not gateway-routed
-  // This prevents bypassing allowlist checks
+  // Absolute Unix paths ARE local attachments and should go through allowlist check
   if (trimmed.startsWith("/") && !trimmed.startsWith("//")) {
-    return false;
+    return true;
   }
   
   return (
@@ -480,6 +479,7 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
             },
             opts.onOpenSidebar,
           ),
@@ -1235,6 +1235,7 @@ function renderAssistantAttachments(
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
+  hasRawMedia?: boolean, // Pass this flag to know if media is already rendered elsewhere
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -1242,12 +1243,9 @@ function renderAssistantAttachments(
   return html`
     <div class="chat-assistant-attachments">
       ${attachments.map(({ attachment }) => {
-        // Skip audio - handled by audio player
-        if (attachment.kind === "audio") {
-          return nothing;
-        }
-        // Skip image - handled by renderMessageImages
-        if (attachment.kind === "image") {
+        // Skip audio and image ONLY if they're already rendered by extractAudioVideoBlocks/extractImages
+        // This prevents duplicates while still allowing attachment-only media to render
+        if (hasRawMedia && (attachment.kind === "audio" || attachment.kind === "image")) {
           return nothing;
         }
         
@@ -1262,6 +1260,56 @@ function renderAssistantAttachments(
           availability.status === "available"
             ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
             : null;
+            
+        // Handle audio attachments (only if not rendered elsewhere)
+        if (attachment.kind === "audio") {
+          if (!attachmentUrl) {
+            return renderAssistantAttachmentStatusCard({
+              kind: "audio",
+              label: attachment.label,
+              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              reason: availability.status === "unavailable" ? availability.reason : undefined,
+            });
+          }
+          return html`
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+              <audio controls preload="metadata" src=${attachmentUrl}></audio>
+              <a
+                class="chat-assistant-attachment-card__link"
+                href=${attachmentUrl}
+                target="_blank"
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
+            </div>
+          `;
+        }
+        
+        // Handle image attachments (only if not rendered elsewhere)
+        if (attachment.kind === "image") {
+          if (!attachmentUrl) {
+            return renderAssistantAttachmentStatusCard({
+              kind: "image",
+              label: attachment.label,
+              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              reason: availability.status === "unavailable" ? availability.reason : undefined,
+            });
+          }
+          return html`
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--image">
+              <img src=${attachmentUrl} alt=${attachment.label} />
+              <a
+                class="chat-assistant-attachment-card__link"
+                href=${attachmentUrl}
+                target="_blank"
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
+            </div>
+          `;
+        }
+        
+        // Handle video attachments
         if (attachment.kind === "video") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -1284,6 +1332,8 @@ function renderAssistantAttachments(
             </div>
           `;
         }
+        
+        // Handle document/other attachments
         if (!attachmentUrl) {
           return renderAssistantAttachmentStatusCard({
             kind: "document",
@@ -1463,7 +1513,7 @@ function renderGroupedMessage(
     isResizable ? "chat-bubble-resizable" : ""
   ].filter(Boolean).join(" ");
 
-  if (!markdown && hasToolCards && isToolResult && !hasMedia) {
+  if (!markdown && hasToolCards && isToolResult && !hasMedia && assistantAttachments.length === 0) {
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
@@ -1601,6 +1651,7 @@ function renderGroupedMessage(
                 opts.basePath,
                 opts.assistantAttachmentAuthToken,
                 opts.onRequestUpdate,
+                hasMedia, // Pass whether there's raw media from content blocks
               )}
             </div>
           </details>
@@ -1617,7 +1668,7 @@ function renderGroupedMessage(
               if (details.open) {
                 setTimeout(() => {
                   details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }, 50);
+                }, 150);
               }
             }}
           >

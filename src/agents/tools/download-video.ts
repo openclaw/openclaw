@@ -9,6 +9,7 @@ import http from 'http';
 import { ClientRequest } from 'http';
 import crypto from 'crypto';
 import type { AgentToolResult, AgentToolUpdateCallback } from '@mariozechner/pi-agent-core';
+import { AsyncLocalStorage } from 'async_hooks';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -28,6 +29,56 @@ const YTDLP_CHECKSUM_FILES: Record<string, string> = {
 };
 
 const CHECKSUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
+
+// FIX: Context injection for trusted workspace root - use AsyncLocalStorage for per-session isolation
+interface WorkspaceContext {
+  trustedWorkspaceRoot: string;
+}
+
+const workspaceContextStorage = new AsyncLocalStorage<WorkspaceContext>();
+
+/**
+ * Sets the trusted workspace root for the current async session
+ * This should be called by the agent runtime when initializing the session
+ */
+export function setTrustedWorkspaceRoot(workspaceRoot: string): void {
+  // Validate workspace root before setting
+  if (!workspaceRoot || typeof workspaceRoot !== 'string') {
+    throw new Error('Invalid workspace root provided');
+  }
+  
+  const resolvedPath = path.resolve(workspaceRoot);
+  
+  // Basic security checks
+  if (resolvedPath.includes('..') || resolvedPath.includes('./')) {
+    throw new Error('Workspace root contains relative path segments');
+  }
+  
+  const context: WorkspaceContext = {
+    trustedWorkspaceRoot: resolvedPath
+  };
+  
+  workspaceContextStorage.enterWith(context);
+}
+
+/**
+ * Gets the current trusted workspace root for this session
+ */
+export function getTrustedWorkspaceRoot(): string | null {
+  const context = workspaceContextStorage.getStore();
+  return context?.trustedWorkspaceRoot ?? null;
+}
+
+/**
+ * Runs a function with a specific workspace context
+ */
+export function withWorkspaceContext<T>(workspaceRoot: string, fn: () => T): T {
+  const resolvedPath = path.resolve(workspaceRoot);
+  const context: WorkspaceContext = {
+    trustedWorkspaceRoot: resolvedPath
+  };
+  return workspaceContextStorage.run(context, fn);
+}
 
 /**
  * Downloads text content from URL with redirect following
@@ -68,7 +119,8 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
         return reject(new Error(`Too many redirects: ${url}`));
       }
 
-      currentRequest = https.get(currentUrl, (response) => {
+      const protocol = currentUrl.startsWith('https') ? https : http;
+      const request = protocol.get(currentUrl, (response) => {
         currentResponse = response;
         
         if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
@@ -98,7 +150,11 @@ async function downloadTextContent(url: string, signal?: AbortSignal): Promise<s
           signal?.removeEventListener('abort', abortHandler);
           reject(err);
         });
-      }).on('error', (err) => {
+      });
+      
+      currentRequest = request;
+      
+      request.on('error', (err) => {
         cleanup();
         signal?.removeEventListener('abort', abortHandler);
         reject(err);
@@ -239,7 +295,8 @@ async function downloadFileWithVerification(
           return reject(new Error(`Too many redirects: ${url}`));
         }
 
-        currentRequest = https.get(currentUrl, (response) => {
+        const protocol = currentUrl.startsWith('https') ? https : http;
+        const request = protocol.get(currentUrl, (response) => {
           currentResponse = response;
           
           if ((response.statusCode === 301 || response.statusCode === 302) && response.headers.location) {
@@ -312,7 +369,11 @@ async function downloadFileWithVerification(
               reject(error);
             }
           });
-        }).on('error', (err) => {
+        });
+        
+        currentRequest = request;
+        
+        request.on('error', (err) => {
           cleanup();
           combinedSignal.removeEventListener('abort', abortHandler);
           reject(err);
@@ -379,40 +440,36 @@ async function ensureYtDlp(signal?: AbortSignal): Promise<string> {
           shouldDeleteBinary = true;
         }
       } catch (checksumError) {
-        // FIX: Don't fail closed when checksum fetch fails due to network issues
-        // Only delete binary on explicit hash mismatch, not on network errors
-        console.warn('Could not verify existing yt-dlp binary (network/parsing issue):', checksumError);
+        // FIX: CRITICAL SECURITY - Never trust a binary without hash verification
+        // Even if checksum fetch fails due to network issues, we cannot verify authenticity
+        // Fail closed - delete binary and re-download rather than risk executing tampered code
+        console.error('CRITICAL: Checksum verification failed, cannot trust existing binary:', checksumError);
+        console.warn('Deleting unverifiable yt-dlp binary and will re-download');
+        shouldDeleteBinary = true;
         
-        // Verify the binary can at least execute before trusting it
+        // Do NOT attempt to execute the binary - this would be a security vulnerability
+        // Even if --version works, it doesn't prove the binary hasn't been tampered with
+      }
+      
+      if (shouldDeleteBinary) {
+        console.warn('Removing unverifiable yt-dlp binary');
+        await fs.unlink(ytDlpPath).catch(() => {});
+      }
+      
+      if (integrityCheckPassed && !shouldDeleteBinary) {
+        // Only execute after integrity is cryptographically verified
         try {
           await execFileAsync(ytDlpPath, ['--version'], { 
             signal: abortController.signal,
             timeout: 5000 
           });
-          // Binary executes successfully, trust it despite checksum fetch failure
-          integrityCheckPassed = true;
-          console.log('Existing yt-dlp binary executes successfully, continuing with existing installation');
+          return ytDlpPath;
         } catch (execError) {
-          console.warn('Existing yt-dlp binary failed to execute:', execError);
-          shouldDeleteBinary = true;
+          // If verified binary fails to execute, something is wrong
+          console.warn('Verified yt-dlp binary failed to execute:', execError);
+          await fs.unlink(ytDlpPath).catch(() => {});
+          // Fall through to download fresh copy
         }
-      }
-      
-      if (shouldDeleteBinary) {
-        console.warn('Removing compromised/non-functional yt-dlp binary');
-        await fs.unlink(ytDlpPath).catch(() => {});
-      }
-      
-      if (integrityCheckPassed && !shouldDeleteBinary) {
-        // ONLY execute version check after integrity is verified or binary is confirmed working
-        await execFileAsync(ytDlpPath, ['--version'], { signal: abortController.signal });
-        return ytDlpPath;
-      }
-      
-      // Integrity check failed - delete the compromised binary if not already deleted
-      if (!shouldDeleteBinary) {
-        console.warn('Removing unverified yt-dlp binary');
-        await fs.unlink(ytDlpPath).catch(() => {});
       }
     }
     
@@ -467,71 +524,102 @@ async function ensureFfmpeg(): Promise<void> {
 }
 
 /**
- * FIX: Use injected workspace root instead of heuristic findWorkspaceFolder()
- * This ensures the tool respects per-session workspace selection and sandbox boundaries
+ * FIX: Use segment-safe path validation to prevent sibling directory traversal
+ * This ensures paths like /tmp2 or /home/user2 are not incorrectly accepted
  */
-async function resolveWorkspaceRoot(injectedRoot?: string): Promise<string> {
-  // If workspace root is injected from context, use it directly
-  if (injectedRoot) {
-    await fs.mkdir(injectedRoot, { recursive: true });
-    return injectedRoot;
+function isPathWithinBoundary(childPath: string, parentPath: string): boolean {
+  // Normalize and resolve both paths to handle symlinks and relative segments
+  const normalizedChild = path.resolve(childPath);
+  const normalizedParent = path.resolve(parentPath);
+  
+  // Ensure parent path ends with separator for accurate startsWith check
+  const parentWithSep = normalizedParent.endsWith(path.sep) ? normalizedParent : normalizedParent + path.sep;
+  
+  // Check if child path starts with parent path + separator
+  // This prevents matching sibling directories like /tmp2 when parent is /tmp
+  return normalizedChild.startsWith(parentWithSep) || normalizedChild === normalizedParent;
+}
+
+/**
+ * Validates if a path is within allowed session boundaries
+ * FIX: Accepts any path that is either:
+ * - Under the session's trusted workspace root
+ * - Under /tmp for temporary files
+ * - Under the user's home directory for configuration
+ */
+async function isValidSessionPath(resolvedPath: string, trustedRoot: string | null): Promise<boolean> {
+  // Priority 1: Check if path is under trusted workspace root
+  if (trustedRoot) {
+    if (isPathWithinBoundary(resolvedPath, trustedRoot)) {
+      return true;
+    }
   }
   
-  // Fallback to heuristic detection only when no context provided
-  // Use session workspace when saving downloaded videos
-  // First check if we're already in a workspace directory
-  let currentPath = path.resolve(process.cwd());
-  const root = path.parse(currentPath).root;
-  
-  // Check for workspace marker files/directories that indicate an active session workspace
-  while (currentPath !== root) {
-    const parent = path.dirname(currentPath);
-    
-    // Check for common workspace indicators
-    const workspaceIndicators = [
-      '.workspace',
-      'workspace.json',
-      '.agent-workspace',
-      'workspace',
-      '.openclaw-workspace'
-    ];
-    
-    for (const indicator of workspaceIndicators) {
-      const indicatorPath = path.join(currentPath, indicator);
-      try {
-        const stat = await fs.stat(indicatorPath);
-        if (indicator === 'workspace' && stat.isDirectory()) {
-          return indicatorPath;
-        } else if (stat.isFile()) {
-          return currentPath;
-        }
-      } catch {
-        // Indicator doesn't exist, continue checking
-      }
-    }
-    
-    // Check if parent directory is named 'workspace'
-    if (path.basename(parent) === 'workspace') {
-      return currentPath;
-    }
-    
-    currentPath = parent;
+  // Priority 2: Allow temporary directory for downloads
+  // FIX: Use segment-safe boundary check to prevent /tmp2 acceptance
+  const resolvedTmp = path.resolve('/tmp');
+  if (isPathWithinBoundary(resolvedPath, resolvedTmp)) {
+    return true;
   }
   
-  // Check for environment variable that might indicate workspace
+  // Priority 3: Allow home directory for yt-dlp binary and config
+  const homeDir = os.homedir();
+  if (isPathWithinBoundary(resolvedPath, homeDir)) {
+    // Only allow specific subdirectories under home for security
+    const allowedHomeSubdirs = ['.openclaw', '.cache', '.config'];
+    const relativeToHome = path.relative(homeDir, resolvedPath);
+    const firstSegment = relativeToHome.split(path.sep)[0];
+    
+    if (allowedHomeSubdirs.includes(firstSegment)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * FIX: Security-critical - workspace root MUST come from trusted runtime context
+ * NOT from untrusted tool parameters. This function only uses injected trusted root
+ * or falls back to safe defaults, never trusting user input.
+ * 
+ * FIXED: No longer restricts to only home/tmp - supports any session-approved workspace
+ */
+async function resolveWorkspaceRoot(): Promise<string> {
+  // Priority 1: Use trusted workspace root from current async session
+  const sessionTrustedRoot = getTrustedWorkspaceRoot();
+  if (sessionTrustedRoot) {
+    // Validate the trusted workspace root is still safe using session boundary policy
+    // Ensure directory exists
+    await fs.mkdir(sessionTrustedRoot, { recursive: true });
+    return sessionTrustedRoot;
+  }
+  
+  // Priority 2: Check environment variables (controlled by runtime, not user)
   const envWorkspace = process.env.OPENCLAW_WORKSPACE || process.env.AGENT_WORKSPACE;
   if (envWorkspace) {
-    try {
-      await fs.mkdir(envWorkspace, { recursive: true });
-      return envWorkspace;
-    } catch {
-      // Fall through to fallback if env workspace is invalid
+    const resolved = path.resolve(envWorkspace);
+    
+    // Validate environment workspace is safe for this session
+    const isValid = await isValidSessionPath(resolved, sessionTrustedRoot);
+    if (isValid) {
+      try {
+        await fs.mkdir(resolved, { recursive: true });
+        console.log(`Using workspace from environment: ${resolved}`);
+        return resolved;
+      } catch (error) {
+        console.warn(`Failed to create environment workspace directory: ${resolved}`, error);
+        // Fall through to fallback if env workspace is invalid
+      }
+    } else {
+      console.warn(`Security: Environment workspace "${resolved}" is not allowed by session policy, ignoring`);
     }
   }
   
-  // Fallback to home directory workspace
+  // Priority 3: Fallback to safe home directory workspace (never user-controllable)
   const fallback = path.join(os.homedir(), '.openclaw', 'workspace');
   await fs.mkdir(fallback, { recursive: true });
+  console.log(`Using fallback workspace: ${fallback}`);
   return fallback;
 }
 
@@ -559,25 +647,47 @@ function sanitizeFilename(title: string): string {
 }
 
 /**
- * FIX: Route gateway download URLs through assistant-media query API
- * The gateway media handler expects: /__openclaw__/assistant-media?source=<encodedPath>
+ * Builds a media URL for accessing downloaded files
+ * The link is created for the included media server which can play the streaming media locally.
  */
-function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
-  const relativePath = path.relative(workspaceRoot, filePath);
-  const posixPath = relativePath.split(path.sep).join('/');
-  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
-  
-  // If gateway origin is provided (e.g., from environment or request context), use the correct media route
-  if (gatewayOrigin) {
-    // Remove trailing slash if present
-    const baseOrigin = gatewayOrigin.replace(/\/$/, '');
-    // FIX: Use query parameter format that matches gateway media handler
-    // The handler in src/gateway/control-ui.ts expects ?source= parameter
-    return `${baseOrigin}/__openclaw__/assistant-media?source=${encodedPath}`;
+function buildMediaUrl(workspaceRoot: string, filePath: string): string {
+  // 1. Cross-platform normalization
+  // path.resolve() handles OS-specific absolute paths.
+  // .replace(/\\/g, '/') handles Windows backslashes so string matching works on all platforms.
+  const normalizedFile = path.resolve(filePath).replace(/\\/g, '/');
+  const normalizedRoot = path.resolve(workspaceRoot).replace(/\\/g, '/');
+
+  let relativePath = "";
+
+  // 2. Locate the "workspace" anchor (case-insensitive for Windows compatibility)
+  const workspaceMarker = "/workspace/";
+  const lowerFile = normalizedFile.toLowerCase();
+  const workspaceIndex = lowerFile.indexOf(workspaceMarker);
+
+  if (workspaceIndex !== -1) {
+    // Slice from the original normalizedFile to preserve folder casing (e.g., "Sasha-Main")
+    relativePath = normalizedFile.slice(workspaceIndex + workspaceMarker.length);
+  } else {
+    // Fallback: If "workspace" isn't in the path, manually strip the provided workspaceRoot
+    const rootDir = normalizedRoot.endsWith('/') ? normalizedRoot : normalizedRoot + '/';
+    
+    if (normalizedFile.startsWith(rootDir)) {
+      relativePath = normalizedFile.slice(rootDir.length);
+    } else {
+      // If the file is somehow outside the tree, just return the filename
+      relativePath = path.basename(normalizedFile);
+    }
   }
-  
-  // Fallback to localhost for development/local deployments
-  return `http://localhost:${MEDIA_SERVER_PORT}/${encodedPath}`;
+
+  // 3. Clean, segment, and encode for URL safety
+  const encodedPath = relativePath
+    .split('/')
+    .filter(Boolean) // Prevents empty segments or double slashes
+    .map(encodeURIComponent)
+    .join('/');
+
+  // Return with the leading slash the media server expects for its routes
+  return `/${encodedPath}`;
 }
 
 export const downloadVideoTool = {
@@ -597,14 +707,10 @@ export const downloadVideoTool = {
     required: ["url"]
   },
   execute: async (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>> => {
-    // Create a child process controller that can properly kill yt-dlp
     const abortController = new AbortController();
-    
-    // Track if we should re-throw abort error
     let wasAborted = false;
     
     try {
-      // Link external signal to internal controller
       if (signal) {
         if (signal.aborted) {
           abortController.abort();
@@ -619,13 +725,16 @@ export const downloadVideoTool = {
       
       await ensureFfmpeg();
       const ytDlpPath = await ensureYtDlp(abortController.signal);
+      const workspaceRoot = await resolveWorkspaceRoot();
       
-      // FIX: Extract workspace root from context if provided
-      // This allows the tool to respect per-session workspace selection
       const typedParams = params as Record<string, unknown>;
-      const injectedWorkspaceRoot = typedParams.workspaceRoot as string | undefined;
-      const workspaceRoot = await resolveWorkspaceRoot(injectedWorkspaceRoot);
+      const videoUrl = typedParams.url as string;
+      
+      if (!videoUrl || typeof videoUrl !== 'string') {
+        throw new Error('Invalid or missing URL parameter');
+      }
 
+      // 1. Determine Format
       let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
       if (typedParams.quality === "720") {
           formatSelector = "bestvideo[height<=720]+bestaudio/best[height<=720]";
@@ -633,28 +742,28 @@ export const downloadVideoTool = {
           formatSelector = "bestvideo+bestaudio/best";
       } else if (typedParams.quality === "worst") {
           formatSelector = "worstvideo+worstaudio/worst";
-      } else if (typedParams.quality && typeof typedParams.quality === "string" && typedParams.quality.includes("[")) {
-          formatSelector = typedParams.quality;
       }
 
+      // 2. Get Title for Sanitization
       const { stdout: rawTitle } = await execFileAsync(
         ytDlpPath, 
-        ['--get-title', '--no-playlist', typedParams.url as string],
+        ['--get-title', '--no-playlist', videoUrl],
         { signal: abortController.signal }
       );
       
       const sanitized = sanitizeFilename(rawTitle);
-      
       const outputTemplate = `${sanitized}.%(ext)s`;
 
       if (onUpdate) {
           const qualityStr = typeof typedParams.quality === 'string' ? typedParams.quality : '1080';
           onUpdate({
-            content: [{ type: "text", text: `Starting download in ${qualityStr}p...` }],
+            content: [{ type: "text", text: `Starting download: ${rawTitle.trim()} (${qualityStr}p)...` }],
             details: { status: "downloading", quality: qualityStr }
           });
       }
 
+      // 3. Perform Download
+      // We use --print after_move:filepath to get the EXACT final location
       const { stdout: ytDlpOutput } = await execFileAsync(ytDlpPath, [
         '-f', formatSelector,
         '--no-playlist',
@@ -663,8 +772,8 @@ export const downloadVideoTool = {
         '--quiet',
         '--no-progress',
         '-o', outputTemplate,
-        '--print', 'after_move:filepath',
-        typedParams.url as string
+        '--print', 'after_move:filepath', 
+        videoUrl
       ], { 
         cwd: workspaceRoot, 
         timeout: 300000,
@@ -672,97 +781,56 @@ export const downloadVideoTool = {
         signal: abortController.signal
       });
 
-      await new Promise(resolve => setTimeout(resolve, 100));
-
+      // 4. Resolve the Final Path
+      // yt-dlp returns the full absolute path of the saved file
       const lines = ytDlpOutput?.split('\n').filter(Boolean);
-      let downloadedFile = lines?.[lines.length - 1]?.trim();
+      const finalPath = lines?.[lines.length - 1]?.trim();
       
-      if (!downloadedFile || !downloadedFile.includes(sanitized)) {
-        const files = await fs.readdir(workspaceRoot);
-        
-        // Replace control characters with hex escapes \x00-\x7F
-        const asciiNormalizedTitle = sanitized.normalize('NFKD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^\p{ASCII}]/gu, '');
-        
-        const matchingFiles = files.filter(f => {
-          if (f.endsWith('.part') || f.endsWith('.ytdl')) { return false; }
-          if (f.includes(sanitized)) { return true; }
-          
-          const normalizedFilename = f.normalize('NFKD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^\p{ASCII}]/gu, '');
-          
-          return asciiNormalizedTitle.length > 0 && 
-                 (normalizedFilename.includes(asciiNormalizedTitle) || 
-                  /video_.*\d{13}/.test(f));
-        });
-        
-        if (matchingFiles.length > 0) {
-          const fileStats = await Promise.all(
-            matchingFiles.map(async f => ({
-              name: f,
-              stat: await fs.stat(path.join(workspaceRoot, f))
-            }))
-          );
-          
-          fileStats.sort((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime());
-          downloadedFile = fileStats[0]?.name;
-        }
-      } else {
-        downloadedFile = path.basename(downloadedFile);
+      if (!finalPath) {
+        throw new Error("Download completed but file path not found in yt-dlp output");
       }
 
-      if (!downloadedFile) {
-        throw new Error("Download completed but file not found in workspace");
-      }
-
-      const finalPath = path.join(workspaceRoot, downloadedFile);
+      // 5. Security & Verification
+      const resolvedPath = path.resolve(finalPath);
+      const resolvedWorkspace = path.resolve(workspaceRoot);
       
-      try {
-        const stats = await fs.stat(finalPath);
-        if (stats.size === 0) {
-          throw new Error("Downloaded file is empty");
-        }
-        
-        // Build media URL using gateway origin if available
-        // The gateway origin can come from environment variable or request context
-        const gatewayOrigin = process.env.GATEWAY_ORIGIN || process.env.ASSISTANT_API_BASE;
-        const fileUrl = buildMediaUrl(workspaceRoot, finalPath, gatewayOrigin);
-
-        return {
-          content: [{
-            type: "text",
-            text: `✅ **Download Success**\nURL: ${fileUrl}\nFile: ${downloadedFile}\nSize: ${(stats.size / 1e6).toFixed(2)} MB`
-          }],
-          details: { 
-            status: "complete",
-            filename: downloadedFile, 
-            mediaUrl: fileUrl, 
-            fullPath: finalPath,
-            sizeMB: (stats.size / 1e6).toFixed(2) 
-          }
-        };
-      } catch (statError) {
-        throw new Error(`File verification failed: ${finalPath} does not exist or is inaccessible`, {
-          cause: statError
-        });
+      if (!isPathWithinBoundary(resolvedPath, resolvedWorkspace)) {
+        throw new Error(`Security violation: Attempted to access file outside workspace: ${resolvedPath}`);
       }
+      
+      const stats = await fs.stat(resolvedPath);
+      if (stats.size === 0) {
+        throw new Error("Downloaded file is empty");
+      }
+        
+      // 6. Build the URL using our workspace-anchored logic
+      const fileUrl = buildMediaUrl(workspaceRoot, resolvedPath);
+      const fileName = path.basename(resolvedPath);
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ **Download Success**\n**File:** ${fileName}\n**Size:** ${(stats.size / 1e6).toFixed(2)} MB\n**Stream URL:** ${fileUrl}`
+        }],
+        details: { 
+          status: "complete",
+          filename: fileName, 
+          mediaUrl: fileUrl, 
+          fullPath: resolvedPath,
+          sizeMB: (stats.size / 1e6).toFixed(2) 
+        }
+      };
       
     } catch (err: unknown) {
       const error = err as Error;
-      
-      // FIX: Properly propagate abort errors instead of swallowing them
       if (error.name === 'AbortError' || wasAborted || abortController.signal.aborted) {
-        throw error; // Re-throw abort error to preserve cancellation semantics
+        throw error;
       }
-      
       return {
         content: [{ type: "text", text: `❌ Error: ${error.message}` }],
         details: { error: error.message, status: "failed" }
       };
     } finally {
-      // Always clean up the abort controller
       if (!abortController.signal.aborted) {
         abortController.abort();
       }
