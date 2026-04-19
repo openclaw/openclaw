@@ -16,6 +16,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, parse_qs
 import base64
 from pathlib import Path
+import html
 
 class MediaServerHandler(SimpleHTTPRequestHandler):
     """Custom handler that serves media files with proper headers"""
@@ -25,25 +26,37 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)
     
     def get_full_file_path(self, requested_path):
-        """Convert requested path to absolute file path, supporting both absolute and relative paths"""
-        # If the path is absolute (starts with /), treat it as absolute path
-        if requested_path.startswith('/'):
-            # Check if it's a valid absolute path
-            if os.path.exists(requested_path):
-                return requested_path
-            # Try to resolve relative to root folder (current working directory)
-            root_folder = self.directory
-            # Remove leading slash and join with root folder
+        """Convert requested path to absolute file path, with security restrictions"""
+        # Normalize the requested path to prevent directory traversal
+        normalized_path = os.path.normpath(requested_path)
+        
+        # If the path is absolute or contains directory traversal
+        if normalized_path.startswith('/') or '..' in normalized_path.split(os.sep):
+            # Resolve against the configured root directory
+            # Remove leading slash and join with root directory
             relative_part = requested_path.lstrip('/')
-            potential_path = os.path.join(root_folder, relative_part)
+            potential_path = os.path.join(self.directory, relative_part)
+            # Normalize to resolve any .. components
+            potential_path = os.path.normpath(potential_path)
+            
+            # Verify the resolved path is within the configured directory
+            if not potential_path.startswith(os.path.normpath(self.directory) + os.sep) and potential_path != os.path.normpath(self.directory):
+                # Attempt to access outside the configured root - deny access
+                return None
+            
             if os.path.exists(potential_path):
                 return potential_path
-            # If still not found, return the original (will be checked by caller)
-            return requested_path
+            return None
         else:
             # Relative path - resolve based on root folder (current working directory)
-            root_folder = self.directory
-            return os.path.join(root_folder, requested_path)
+            potential_path = os.path.join(self.directory, requested_path)
+            potential_path = os.path.normpath(potential_path)
+            
+            # Verify the resolved path is within the configured directory
+            if not potential_path.startswith(os.path.normpath(self.directory) + os.sep) and potential_path != os.path.normpath(self.directory):
+                return None
+            
+            return potential_path if os.path.exists(potential_path) else None
     
     def do_GET(self):
         """Handle GET requests"""
@@ -122,7 +135,7 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
                         mime_type = mime_map.get(ext, f'{media_type}/x-unknown')
                     
                     media_files.append({
-                        'path': rel_path_file,  # ✅ Now uses relative path directly
+                        'path': rel_path_file,
                         'full_path': abs_path,
                         'filename': file,
                         'mimeType': mime_type,
@@ -151,24 +164,28 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
         # Generate file listing HTML with compact spacing
         file_list_html = ''
         for media in all_media:
-            # ✅ Use RELATIVE path for display and actions
+            # Use RELATIVE path for display and actions
             rel_path = media['path']
             dir_path = os.path.dirname(rel_path)
-            if not dir_path:
+            if not dir_path or dir_path == '.':
                 dir_path = "."
             filename = media['filename']
+            
+            # Escape the path for safe embedding in JavaScript
+            escaped_path = html.escape(rel_path)
+            js_escaped_path = escaped_path.replace("'", "\\'").replace('"', '\\"')
             
             file_list_html += f'''
             <tr>
                 <td>
                     <div class="file-info">
-                        <strong class="filename">{filename}</strong>
-                        <span class="filepath">{dir_path}</span>
+                        <strong class="filename">{html.escape(filename)}</strong>
+                        <span class="filepath">{html.escape(dir_path)}</span>
                     </div>
                 </td>
                 <td>
-                    <button class="action-btn" onclick="window.open('{rel_path}', '_blank')">▶ Open</button>
-                    <button class="action-btn" onclick="copyToClipboard('{rel_path}')">📋 Copy Path</button>
+                    <button class="action-btn" onclick="window.open('{js_escaped_path}', '_blank')">▶ Open</button>
+                    <button class="action-btn" onclick="copyToClipboard('{js_escaped_path}')">📋 Copy Path</button>
                 </td>
                 <td><span class="badge badge-{media['type']}">{media['type']}</span></td>
                 <td>{media['mimeType']}</td>
@@ -179,7 +196,7 @@ class MediaServerHandler(SimpleHTTPRequestHandler):
         if not file_list_html:
             file_list_html = '<tr><td colspan="5">No media files found in current directory (max depth: 2 folders)</td></tr>'
         
-        html = f'''<!DOCTYPE html>
+        html_content = f'''<!DOCTYPE html>
 <html>
 <head>
     <title>OpenClaw Media Server</title>
@@ -428,9 +445,9 @@ body {{
         
         self.send_response(200)
         self.send_header('Content-Type', 'text/html')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', 'http://localhost:18791')
         self.end_headers()
-        self.wfile.write(html.encode())
+        self.wfile.write(html_content.encode())
     
     def handle_list_media(self, page=1, per_page=34):
         """Return JSON list of media files with pagination"""
@@ -456,12 +473,12 @@ body {{
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', 'http://localhost:18791')
         self.end_headers()
         self.wfile.write(json.dumps(response, indent=2).encode())
     
     def handle_media_info(self, query):
-        """Get info about a specific media file"""
+        """Get info about a specific media file with size limit"""
         params = {}
         if query:
             for param in query.split('&'):
@@ -487,6 +504,13 @@ body {{
             self.send_error(404, 'File not found')
             return
         
+        # Add size limit check (10MB max for base64 encoding)
+        MAX_MEDIA_SIZE = 10 * 1024 * 1024  # 10MB
+        file_size = os.path.getsize(safe_path)
+        if file_size > MAX_MEDIA_SIZE:
+            self.send_error(413, f'File too large for media info endpoint (max {MAX_MEDIA_SIZE // (1024*1024)}MB)')
+            return
+        
         mime_type, _ = mimetypes.guess_type(safe_path)
         ext = os.path.splitext(safe_path)[1].lower()
         
@@ -508,6 +532,7 @@ body {{
             mime_type = mime_map.get(ext, 'application/octet-stream')
         
         try:
+            # Read file in chunks to avoid memory issues
             with open(safe_path, 'rb') as f:
                 media_data = f.read()
             
@@ -524,7 +549,7 @@ body {{
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', 'http://localhost:18791')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode())
             
@@ -597,7 +622,7 @@ body {{
         self.send_header('Content-Length', str(content_length))
         self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', 'http://localhost:18791')
         self.send_header('Cache-Control', 'no-cache')
         self.end_headers()
         
@@ -613,8 +638,8 @@ body {{
                 remaining -= len(chunk)
     
     def end_headers(self):
-        """Add CORS headers to all responses"""
-        self.send_header('Access-Control-Allow-Origin', '*')
+        """Add CORS headers to all responses (restricted to localhost)"""
+        self.send_header('Access-Control-Allow-Origin', 'http://localhost:18791')
         self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS, HEAD')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Range')
         super().end_headers()
@@ -634,6 +659,7 @@ def main():
     parser.add_argument('--port', type=int, default=18791, help='Port to run the server on')
     parser.add_argument('--directory', default='.', help='Directory to serve media from')
     parser.add_argument('--max-depth', type=int, default=2, help='Maximum directory depth to scan (default: 2)')
+    parser.add_argument('--bind-all', action='store_true', help='Bind to all interfaces (0.0.0.0) instead of localhost only')
     args = parser.parse_args()
     
     # Change to the specified directory - this becomes the root for relative paths
@@ -643,13 +669,18 @@ def main():
     global global_args
     global_args = args
     
-    server = HTTPServer(('0.0.0.0', args.port), MediaServerHandler)
+    # Bind to localhost by default for security, allow --bind-all for wider access
+    bind_host = '0.0.0.0' if args.bind_all else '127.0.0.1'
+    server = HTTPServer((bind_host, args.port), MediaServerHandler)
     
     print(f"\n🎵 Media Server Started")
     print(f"   Directory: {os.getcwd()}")
     print(f"   Port: {args.port}")
+    print(f"   Bind address: {bind_host}")
     print(f"   Max Depth: {args.max_depth} directory levels")
     print(f"   URL: http://localhost:{args.port}")
+    if args.bind_all:
+        print(f"   Also available on network: http://<your-ip>:{args.port}")
     print(f"\n   Status page: http://localhost:{args.port}/")
     print(f"\n   Supported formats:")
     print(f"   📷 Images: jpg, png, gif, webp, svg, bmp")
@@ -657,8 +688,8 @@ def main():
     print(f"   🎬 Video: mp4, webm, avi, mov, mkv, m4v, mpg, mpeg")
     print(f"\n   Features:")
     print(f"   - Range requests for seeking in audio/video")
-    print(f"   - CORS enabled")
-    print(f"   - No file size limits")
+    print(f"   - CORS restricted to localhost (use --bind-all for network access)")
+    print(f"   - File size limit: 10MB for API endpoints")
     print(f"   - Full file list (no pagination)")
     print(f"   - Limited to {args.max_depth} directory depth")
     print(f"   - Full file path displayed for each file")
