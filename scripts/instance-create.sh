@@ -111,7 +111,7 @@ cfg = {
         'queue': {'mode': 'steer'},
     },
     'commands': {
-        'native': 'auto',
+        'native': False,
         'nativeSkills': 'auto',
         'restart': True
     },
