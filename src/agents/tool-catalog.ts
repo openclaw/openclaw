@@ -201,6 +201,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "browser",
     label: "browser",
+    pluginImplemented: true,
     description: "Control web browser",
     sectionId: "ui",
     profiles: [],
