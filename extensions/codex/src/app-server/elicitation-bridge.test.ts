@@ -1,4 +1,8 @@
-import { callGatewayTool, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import {
+  callGatewayTool,
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 
@@ -52,6 +56,7 @@ function buildApprovalElicitation() {
 describe("Codex app-server elicitation bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("routes MCP tool approval elicitations through plugin approvals", async () => {
@@ -96,6 +101,45 @@ describe("Codex app-server elicitation bridge", () => {
       content: {
         approve: true,
         persist: "session",
+      },
+      _meta: null,
+    });
+  });
+
+  it("does not inherit persist defaults for one-time approvals", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-5", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-5", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approve: {
+              type: "boolean",
+              title: "Approve this tool call",
+            },
+            persist: {
+              type: "string",
+              title: "Persist choice",
+              enum: ["session", "always"],
+              default: "always",
+            },
+          },
+          required: ["approve"],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: {
+        approve: true,
       },
       _meta: null,
     });
@@ -195,5 +239,46 @@ describe("Codex app-server elicitation bridge", () => {
 
     expect(result).toBeUndefined();
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("logs and declines approved elicitations that do not expose an approval field", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-6", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-6", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        requestedSchema: {
+          type: "object",
+          properties: {
+            confirmChoice: {
+              type: "string",
+              title: "Confirmation choice",
+              enum: ["yes", "no"],
+            },
+          },
+          required: ["confirmChoice"],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex MCP approval elicitation approved without a mappable response",
+      expect.objectContaining({
+        approvalKind: "mcp_tool_call",
+        fields: ["confirmChoice"],
+        outcome: "approved-once",
+      }),
+    );
   });
 });

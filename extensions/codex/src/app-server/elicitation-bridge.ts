@@ -1,4 +1,4 @@
-import { type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import { embeddedAgentLog, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   mapExecDecisionToOutcome,
   requestPluginApproval,
@@ -42,11 +42,7 @@ export async function handleCodexAppServerElicitationRequest(params: {
     description: approvalPrompt.description,
     signal: params.signal,
   });
-  return buildElicitationResponse(
-    approvalPrompt.requestedSchema,
-    approvalPrompt.meta,
-    outcome,
-  );
+  return buildElicitationResponse(approvalPrompt.requestedSchema, approvalPrompt.meta, outcome);
 }
 
 function matchesCurrentTurn(
@@ -156,6 +152,11 @@ function buildElicitationResponse(
 
   const content = buildAcceptedContent(requestedSchema, meta, outcome);
   if (!content) {
+    embeddedAgentLog.warn("codex MCP approval elicitation approved without a mappable response", {
+      approvalKind: meta.codex_approval_kind,
+      fields: Object.keys(requestedSchema.properties ?? {}),
+      outcome,
+    });
     return { action: "decline", content: null, _meta: null };
   }
   return { action: "accept", content, _meta: null };
@@ -166,12 +167,16 @@ function buildAcceptedContent(
   meta: JsonObject,
   outcome: AppServerApprovalOutcome,
 ): JsonObject | undefined {
-  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : undefined;
+  const properties = isJsonObject(requestedSchema.properties)
+    ? requestedSchema.properties
+    : undefined;
   if (!properties) {
     return undefined;
   }
   const required = Array.isArray(requestedSchema.required)
-    ? new Set(requestedSchema.required.filter((entry): entry is string => typeof entry === "string"))
+    ? new Set(
+        requestedSchema.required.filter((entry): entry is string => typeof entry === "string"),
+      )
     : new Set<string>();
   const content: JsonObject = {};
   let sawApprovalField = false;
@@ -185,7 +190,7 @@ function buildAcceptedContent(
     const next =
       readApprovalFieldValue(property, outcome) ??
       readPersistFieldValue(property, meta, outcome) ??
-      readDefaultValue(property.schema);
+      readFallbackFieldValue(property, outcome);
 
     if (next === undefined) {
       if (isApprovalField(property)) {
@@ -244,7 +249,9 @@ function readPersistFieldValue(
     return undefined;
   }
   for (const preferred of persistHints) {
-    const match = options.find((option) => option.value === preferred || option.label === preferred);
+    const match = options.find(
+      (option) => option.value === preferred || option.label === preferred,
+    );
     if (match) {
       return match.value;
     }
@@ -254,6 +261,16 @@ function readPersistFieldValue(
 
 function readDefaultValue(schema: JsonObject): JsonValue | undefined {
   return schema.default as JsonValue | undefined;
+}
+
+function readFallbackFieldValue(
+  property: ApprovalPropertyContext,
+  outcome: AppServerApprovalOutcome,
+): JsonValue | undefined {
+  if (outcome === "approved-once" && isPersistField(property)) {
+    return undefined;
+  }
+  return readDefaultValue(property.schema);
 }
 
 function isApprovalField(property: ApprovalPropertyContext): boolean {
@@ -318,8 +335,7 @@ function isPositiveApprovalOption(option: { value: string; label: string }): boo
 function isSessionApprovalOption(option: { value: string; label: string }): boolean {
   const haystack = `${option.value} ${option.label}`.toLowerCase();
   return (
-    /\b(session|always|persistent)\b/.test(haystack) &&
-    /\b(allow|approve|accept)\b/.test(haystack)
+    /\b(session|always|persistent)\b/.test(haystack) && /\b(allow|approve|accept)\b/.test(haystack)
   );
 }
 
