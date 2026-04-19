@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AnyAgentTool } from "../tools/common.js";
+import { setPluginToolMeta } from "../../plugins/tools.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
 function makeTool(name: string, ownerOnly = false): AnyAgentTool {
@@ -116,5 +117,31 @@ describe("applyFinalEffectiveToolPolicy", () => {
     });
 
     expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+  });
+
+  it("warns when MCP tool lacks plugin metadata during filtering", () => {
+    const warnings: string[] = [];
+    const mcpTool = makeTool("bundle-mcp__test_tool");
+    // Intentionally do NOT attach plugin metadata to simulate degradation
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [mcpTool],
+      config: { tools: { allow: ["bundle-mcp__test_tool"] } },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.some((w) => w.includes("bundle-mcp") && w.includes("metadata"))).toBe(true);
+  });
+
+  it("does not warn when MCP tool has plugin metadata", () => {
+    const warnings: string[] = [];
+    const mcpTool = makeTool("bundle-mcp__test_tool");
+    setPluginToolMeta(mcpTool, { pluginId: "bundle-mcp", optional: false });
+    applyFinalEffectiveToolPolicy({
+      bundledTools: [mcpTool],
+      config: { tools: { allow: ["bundle-mcp__test_tool"] } },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.some((w) => w.includes("bundle-mcp") && w.includes("metadata"))).toBe(false);
   });
 });
