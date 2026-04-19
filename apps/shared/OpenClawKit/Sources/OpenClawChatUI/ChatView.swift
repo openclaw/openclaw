@@ -378,6 +378,7 @@ public struct OpenClawChatView: View {
                     mimeType: nil,
                     fileName: nil,
                     content: nil,
+                    contentCodingKey: nil,
                     id: toolCallId,
                     name: message.toolName,
                     arguments: nil))

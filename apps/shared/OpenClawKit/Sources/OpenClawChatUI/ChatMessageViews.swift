@@ -351,8 +351,12 @@ private struct ChatMessageBody: View {
 }
 
 private struct AttachmentRow: View {
+    private static let maxPreviewBytes = 5_000_000
+
     let att: OpenClawChatMessageContent
     let isUser: Bool
+
+    @State private var previewImage: OpenClawPlatformImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -375,20 +379,46 @@ private struct AttachmentRow: View {
         .padding(10)
         .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .task(id: self.previewSourceKey) {
+            self.previewImage = await Self.loadPreviewImage(from: self.att)
+        }
     }
 
-    private var previewImage: OpenClawPlatformImage? {
-        if let data = self.imageData {
-            return OpenClawPlatformImage(data: data)
+    private var previewSourceKey: String {
+        [self.att.type, self.att.fileName, self.att.mimeType, self.contentSourceString].compactMap { $0 }.joined(separator: "|")
+    }
+
+    private var contentSourceString: String? {
+        if let string = self.att.content?.value as? String {
+            return string
+        }
+        if let dict = self.att.content?.value as? [String: Any], let nested = dict["data"] as? String {
+            return nested
+        }
+        if let dict = self.att.content?.value as? [String: Any], let url = dict["url"] as? String {
+            return url
+        }
+        if let dict = self.att.content?.value as? [String: AnyCodable], let nested = dict["data"]?.value as? String {
+            return nested
+        }
+        if let dict = self.att.content?.value as? [String: AnyCodable], let url = dict["url"]?.value as? String {
+            return url
         }
         return nil
     }
 
-    private var imageData: Data? {
-        if let string = self.att.content?.value as? String {
+    nonisolated private static func loadPreviewImage(from att: OpenClawChatMessageContent) async -> OpenClawPlatformImage? {
+        await Task.detached(priority: .utility) {
+            guard let data = Self.imageData(from: att) else { return nil }
+            return OpenClawPlatformImage(data: data)
+        }.value
+    }
+
+    nonisolated private static func imageData(from att: OpenClawChatMessageContent) -> Data? {
+        if let string = att.content?.value as? String {
             return Self.decodeImageData(from: string)
         }
-        if let dict = self.att.content?.value as? [String: Any] {
+        if let dict = att.content?.value as? [String: Any] {
             if let nested = dict["data"] as? String {
                 return Self.decodeImageData(from: nested)
             }
@@ -396,7 +426,7 @@ private struct AttachmentRow: View {
                 return Self.decodeImageData(from: url)
             }
         }
-        if let dict = self.att.content?.value as? [String: AnyCodable] {
+        if let dict = att.content?.value as? [String: AnyCodable] {
             if let nested = dict["data"]?.value as? String {
                 return Self.decodeImageData(from: nested)
             }
@@ -407,19 +437,38 @@ private struct AttachmentRow: View {
         return nil
     }
 
-    private static func decodeImageData(from raw: String) -> Data? {
+    nonisolated private static func decodeImageData(from raw: String) -> Data? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if let commaIndex = trimmed.range(of: ","), trimmed[..<commaIndex.lowerBound].contains(";base64") {
             let base64 = String(trimmed[commaIndex.upperBound...])
-            return Data(base64Encoded: base64)
+            return Self.decodeBase64ImageData(base64)
         }
-        if let base64 = Data(base64Encoded: trimmed) {
+        if let base64 = Self.decodeBase64ImageData(trimmed) {
             return base64
         }
-        let url = URL(fileURLWithPath: trimmed)
-        guard url.isFileURL else { return nil }
-        return try? Data(contentsOf: url)
+        guard let url = URL(string: trimmed), url.isFileURL else { return nil }
+        return Self.readImageData(from: url)
+    }
+
+    nonisolated private static func decodeBase64ImageData(_ base64: String) -> Data? {
+        let estimatedDecodedLength = (base64.count * 3) / 4
+        guard estimatedDecodedLength <= Self.maxPreviewBytes else { return nil }
+        guard let data = Data(base64Encoded: base64), data.count <= Self.maxPreviewBytes else { return nil }
+        return data
+    }
+
+    nonisolated private static func readImageData(from url: URL) -> Data? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize,
+              fileSize <= Self.maxPreviewBytes
+        else {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]), data.count <= Self.maxPreviewBytes else {
+            return nil
+        }
+        return data
     }
 }
 

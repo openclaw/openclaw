@@ -63,6 +63,13 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
 }
 
 public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
+    public enum ContentCodingKey: String, Codable, Hashable, Sendable {
+        case content
+        case data
+        case source
+        case imageURL = "image_url"
+    }
+
     public let type: String?
     public let text: String?
     public let thinking: String?
@@ -70,6 +77,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let mimeType: String?
     public let fileName: String?
     public let content: AnyCodable?
+    public let contentCodingKey: ContentCodingKey?
 
     // Tool-call fields (when `type == "toolCall"` or similar)
     public let id: String?
@@ -84,6 +92,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         mimeType: String?,
         fileName: String?,
         content: AnyCodable?,
+        contentCodingKey: ContentCodingKey? = nil,
         id: String? = nil,
         name: String? = nil,
         arguments: AnyCodable? = nil)
@@ -95,6 +104,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.mimeType = mimeType
         self.fileName = fileName
         self.content = content
+        self.contentCodingKey = contentCodingKey
         self.id = id
         self.name = name
         self.arguments = arguments
@@ -130,16 +140,22 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
 
         if let any = try container.decodeIfPresent(AnyCodable.self, forKey: .content) {
             self.content = any
+            self.contentCodingKey = .content
         } else if let str = try container.decodeIfPresent(String.self, forKey: .content) {
             self.content = AnyCodable(str)
+            self.contentCodingKey = .content
         } else if let data = try container.decodeIfPresent(String.self, forKey: .data) {
             self.content = AnyCodable(data)
+            self.contentCodingKey = .data
         } else if let source = try container.decodeIfPresent(AnyCodable.self, forKey: .source) {
             self.content = source
+            self.contentCodingKey = .source
         } else if let imageURL = try container.decodeIfPresent(AnyCodable.self, forKey: .imageURL) {
             self.content = imageURL
+            self.contentCodingKey = .imageURL
         } else {
             self.content = nil
+            self.contentCodingKey = nil
         }
     }
 
@@ -151,7 +167,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.thinkingSignature, forKey: .thinkingSignature)
         try container.encodeIfPresent(self.mimeType, forKey: .mimeType)
         try container.encodeIfPresent(self.fileName, forKey: .fileName)
-        try container.encodeIfPresent(self.content, forKey: .content)
+        switch self.contentCodingKey ?? .content {
+        case .content:
+            try container.encodeIfPresent(self.content, forKey: .content)
+        case .data:
+            try container.encodeIfPresent(self.content?.value as? String, forKey: .data)
+        case .source:
+            try container.encodeIfPresent(self.content, forKey: .source)
+        case .imageURL:
+            try container.encodeIfPresent(self.content, forKey: .imageURL)
+        }
         try container.encodeIfPresent(self.id, forKey: .id)
         try container.encodeIfPresent(self.name, forKey: .name)
         try container.encodeIfPresent(self.arguments, forKey: .arguments)
@@ -230,6 +255,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
                     mimeType: nil,
                     fileName: nil,
                     content: nil,
+                    contentCodingKey: nil,
                     id: nil,
                     name: nil,
                     arguments: nil),
@@ -254,6 +280,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
                     mimeType: mimeType,
                     fileName: URL(fileURLWithPath: path).lastPathComponent,
                     content: AnyCodable(path),
+                    contentCodingKey: .data,
                     id: nil,
                     name: nil,
                     arguments: nil))

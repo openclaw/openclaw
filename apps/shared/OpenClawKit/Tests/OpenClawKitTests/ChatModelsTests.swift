@@ -24,6 +24,7 @@ struct ChatModelsTests {
         #expect(message.content[1].mimeType == "image/png")
         #expect(message.content[1].fileName == "test-image.png")
         #expect(message.content[1].content?.value as? String == "/tmp/test-image.png")
+        #expect(message.content[1].contentCodingKey == .data)
     }
 
     @Test
@@ -51,6 +52,45 @@ struct ChatModelsTests {
         let source = try #require(content.content?.value as? [String: AnyCodable])
 
         #expect(content.type == "image")
+        #expect(content.contentCodingKey == .source)
         #expect(source["data"]?.value as? String == "QUJDRA==")
+    }
+
+    @Test
+    func preservesOriginalImagePayloadCodingKeyWhenEncoding() throws {
+        let json = """
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "image",
+              "mimeType": "image/png",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "QUJDRA=="
+              }
+            },
+            {
+              "type": "image",
+              "mimeType": "image/png",
+              "image_url": {
+                "url": "https://example.com/image.png"
+              }
+            }
+          ],
+          "timestamp": 123
+        }
+        """
+
+        let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(json.utf8))
+        let encoded = try JSONEncoder().encode(message)
+        let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        let content = try #require(object?["content"] as? [[String: Any]])
+
+        #expect(content[0]["source"] != nil)
+        #expect(content[0]["content"] == nil)
+        #expect(content[1]["image_url"] != nil)
+        #expect(content[1]["content"] == nil)
     }
 }
