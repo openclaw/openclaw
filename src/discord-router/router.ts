@@ -484,29 +484,33 @@ async function onboardNewUsers(
       color: 0xff8080,
     });
 
-    // Generate Google auth URL for this user
-    let googleAuthNote = "";
-    if (oauthRequestAuth) {
-      try {
-        const { authUrl } = oauthRequestAuth({ discordUserId: userId, email: "user" });
-        googleAuthNote = ` When they say yes to Google, respond ONLY with this exact markdown link on its own line: [Click here to connect your Google account](${authUrl}) — do not explain OAuth, client secrets, or any setup steps. The link handles everything automatically.`;
-      } catch {
-        googleAuthNote = "";
-      }
-    }
-
-    // Route through the agent so it starts a conversation
+    // Route through the agent for the greeting
     routeDM({
       discordUserId: userId,
       channelId,
-      messageContent: `[System: This is a brand new user who just joined. You are OpenClaw, a personal AI assistant. Do NOT refer to yourself as Claude Code or Claude — you are OpenClaw. Greet them warmly, introduce yourself as OpenClaw, and ask what they'd like to be called. Keep it brief and friendly — 2-3 sentences max. Do not mention Docker, containers, or any technical infrastructure. After they tell you their name in a follow-up message, acknowledge it and then in the SAME response ask: "Would you like to connect your Google account? This lets me help with your calendar, email, files, and more."${googleAuthNote}]`,
+      messageContent:
+        "[System: This is a brand new user who just joined. You are OpenClaw, a personal AI assistant. Do NOT refer to yourself as Claude Code or Claude — you are OpenClaw. Greet them warmly, introduce yourself as OpenClaw, and ask what they'd like to be called. Keep it brief and friendly — 2-3 sentences max. Do not mention Docker, containers, Google, OAuth, or any technical infrastructure. Just greet and ask their name.]",
       instance,
       discordToken,
       runtime,
       agentTimeoutMs,
       inflight,
-    }).then((success) => {
+    }).then(async (success) => {
       if (success) {
+        // Send Google auth embed after the agent greeting
+        if (oauthRequestAuth) {
+          try {
+            const { authUrl } = oauthRequestAuth({ discordUserId: userId, email: "user" });
+            await discordSendEmbed(discordToken, channelId, {
+              title: "Connect Google Account",
+              description: `Connect your Google account to unlock Calendar, Gmail, Drive, and more.\n\n[Click here to connect Google](${authUrl})`,
+              color: 0xff8080,
+            });
+            runtime.log(`[router] sent Google auth embed to ${userId}`);
+          } catch (err) {
+            runtime.log(`[router] failed to send Google auth embed: ${err}`);
+          }
+        }
         markOnboarded(instance);
         runtime.log(`[router] onboarding complete for ${userId}`);
       } else {
