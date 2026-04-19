@@ -72,8 +72,8 @@ async function resolveImageRuntime(params: {
   let model: Model<Api> | null = null;
   for (const lookupRef of lookupRefs) {
     model = modelRegistry.find(lookupRef.provider, lookupRef.model) as Model<Api> | null;
-    resolvedRef = lookupRef;
     if (model) {
+      resolvedRef = lookupRef;
       break;
     }
   }
