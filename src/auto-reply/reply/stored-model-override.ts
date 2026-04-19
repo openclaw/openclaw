@@ -31,12 +31,17 @@ export function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
   defaultProvider: string;
 }): StoredModelOverride | null {
+  // Issue #68706: auto-source overrides are transient fallback selections
+  // that should only survive for the duration of the current turn.  If the
+  // process crashed after persisting the override but before the rollback
+  // ran, a stale "auto" override would pin the session to the fallback model
+  // indefinitely.  Ignore it here so the default model is re-resolved.
   const direct = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.sessionEntry?.providerOverride,
     overrideModel: params.sessionEntry?.modelOverride,
   });
-  if (direct) {
+  if (direct && params.sessionEntry?.modelOverrideSource !== "auto") {
     return { ...direct, source: "session" };
   }
   const parentKey = resolveParentSessionKeyCandidate({
