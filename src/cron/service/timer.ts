@@ -1220,6 +1220,7 @@ async function executeMainSessionCronJob(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
+          heartbeat: { target: "last" },
         });
         return { status: "ok", summary: text };
       }
@@ -1234,6 +1235,7 @@ async function executeMainSessionCronJob(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
+          heartbeat: { target: "last" },
         });
         return { status: "ok", summary: text };
       }
@@ -1256,6 +1258,7 @@ async function executeMainSessionCronJob(
     reason: `cron:${job.id}`,
     agentId: job.agentId,
     sessionKey: targetMainSessionKey,
+    heartbeat: { target: "last" },
   });
   return { status: "ok", summary: text };
 }
