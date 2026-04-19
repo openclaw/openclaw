@@ -961,6 +961,10 @@
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
     },
+    "./plugin-sdk/minions-runtime": {
+      "types": "./dist/plugin-sdk/minions-runtime.d.ts",
+      "default": "./dist/plugin-sdk/minions-runtime.js"
+    },
     "./plugin-sdk/models-provider-runtime": {
       "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
       "default": "./dist/plugin-sdk/models-provider-runtime.js"

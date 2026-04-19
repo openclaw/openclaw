@@ -18,3 +18,4 @@ export * from "./schema/snapshot.js";
 export * from "./schema/types.js";
 export * from "./schema/plugin-approvals.js";
 export * from "./schema/wizard.js";
+export * from "./schema/minions.js";
