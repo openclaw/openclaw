@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Anthropic/models: add Claude Opus 4.7 `xhigh` reasoning effort support and keep it separate from adaptive thinking.
 - Control UI/settings: overhaul the settings and slash-command experience with faster presets, quick-create flows, and refreshed command discovery. (#67819) Thanks @BunsDev.
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+- Minions: durable SQLite-backed job queue for subagents, ACP, CLI, and cron. Subagents survive gateway restarts. New `sessions_spawn_many` tool for parallel fan-out. Cancel a parent and all descendants stop. Token accounting rolls up per job. `openclaw minions` CLI for queue inspection. Plugin SDK seam at `openclaw/plugin-sdk/minions-runtime`. Zero-config upgrade.
 
 ### Fixes
 

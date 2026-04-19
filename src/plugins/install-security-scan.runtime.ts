@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
@@ -159,6 +160,39 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
+function findPnpmWorkspaceRoot(startDir: string): string | null {
+  let dir = path.resolve(startDir);
+  const root = path.parse(dir).root;
+  while (dir !== root) {
+    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
+function isWorkspaceMemberPath(workspaceRoot: string, targetPath: string): boolean {
+  const rel = path.relative(workspaceRoot, targetPath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return false;
+  }
+  const segments = rel.split(path.sep);
+  if (rel === "" || rel === ".") {
+    return true;
+  }
+  if (segments[0] === "extensions" && segments.length <= 2) {
+    return true;
+  }
+  if (segments[0] === "packages" && segments.length <= 2) {
+    return true;
+  }
+  if (segments[0] === "ui" && segments.length <= 1) {
+    return true;
+  }
+  return false;
+}
+
 async function inspectNodeModulesSymlinkTarget(params: {
   rootRealPath: string;
   symlinkPath: string;
@@ -179,9 +213,17 @@ async function inspectNodeModulesSymlinkTarget(params: {
   }
 
   if (!isPathInside(params.rootRealPath, resolvedTargetPath)) {
-    throw new Error(
-      `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
-    );
+    // pnpm workspace layout: node_modules symlinks for workspace packages
+    // (e.g. node_modules/openclaw, node_modules/@openclaw/matrix) resolve to
+    // sibling directories within the same monorepo. Allow these by checking
+    // whether both the install root and the target share a common workspace
+    // ancestor (identified by pnpm-workspace.yaml or .git).
+    const workspaceRoot = findPnpmWorkspaceRoot(params.rootRealPath);
+    if (!workspaceRoot || !isWorkspaceMemberPath(workspaceRoot, resolvedTargetPath)) {
+      throw new Error(
+        `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
+      );
+    }
   }
 
   const resolvedTargetStats = await fs.stat(resolvedTargetPath);
