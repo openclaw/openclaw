@@ -1,33 +1,9 @@
-import type { cancelTaskById } from "./runtime-internal.js";
 import type {
-  completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
-  failTaskRunByRunId,
-  recordTaskRunProgressByRunId,
-  setDetachedTaskDeliveryStatusByRunId,
-  startTaskRunByRunId,
-} from "./task-executor.js";
+  DetachedTaskLifecycleRuntime,
+  DetachedTaskLifecycleRuntimeRegistration,
+} from "./detached-task-runtime-contract.js";
 
-export type DetachedTaskLifecycleRuntime = {
-  createQueuedTaskRun: typeof createQueuedTaskRun;
-  createRunningTaskRun: typeof createRunningTaskRun;
-  startTaskRunByRunId: typeof startTaskRunByRunId;
-  recordTaskRunProgressByRunId: typeof recordTaskRunProgressByRunId;
-  completeTaskRunByRunId: typeof completeTaskRunByRunId;
-  failTaskRunByRunId: typeof failTaskRunByRunId;
-  setDetachedTaskDeliveryStatusByRunId: typeof setDetachedTaskDeliveryStatusByRunId;
-  /**
-   * Return `found: false` when this runtime does not own the task so core can
-   * fall back to the legacy detached-task cancel path.
-   */
-  cancelDetachedTaskRunById: typeof cancelTaskById;
-};
-
-export type DetachedTaskLifecycleRuntimeRegistration = {
-  pluginId: string;
-  runtime: DetachedTaskLifecycleRuntime;
-};
+export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
 let detachedTaskLifecycleRuntimeRegistration: DetachedTaskLifecycleRuntimeRegistration | undefined;
 

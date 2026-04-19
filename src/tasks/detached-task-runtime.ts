@@ -1,10 +1,12 @@
+import type {
+  DetachedTaskLifecycleRuntime,
+  DetachedTaskLifecycleRuntimeRegistration,
+} from "./detached-task-runtime-contract.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration as getDetachedTaskLifecycleRuntimeRegistrationState,
   getRegisteredDetachedTaskLifecycleRuntime,
   registerDetachedTaskLifecycleRuntime,
-  type DetachedTaskLifecycleRuntime,
-  type DetachedTaskLifecycleRuntimeRegistration,
 } from "./detached-task-runtime-state.js";
 import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
 import {
