@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { fetchBlueBubblesServerInfo, getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import {
+  fetchBlueBubblesServerInfo,
+  getCachedBlueBubblesPrivateApiStatus,
+  isMacOS26OrHigher,
+} from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget, createChatForHandle } from "./send.js";
@@ -15,6 +19,7 @@ import { _setFetchGuardForTesting, type BlueBubblesSendTarget } from "./types.js
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
 const fetchServerInfoMock = vi.mocked(fetchBlueBubblesServerInfo);
+const isMacOS26OrHigherMock = vi.mocked(isMacOS26OrHigher);
 const setFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
 
 installBlueBubblesFetchTestHooks({
@@ -456,7 +461,7 @@ describe("send", () => {
       const body = JSON.parse(sendCall[1].body);
       expect(body.chatGuid).toBe("iMessage;-;+15551234567");
       expect(body.message).toBe("Hello world!");
-      expect(body.method).toBeUndefined();
+      expect(body.method).toBe("apple-script");
     });
 
     it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
@@ -616,7 +621,7 @@ describe("send", () => {
       expect(result.messageId).toBe("msg-uuid-plain");
       const sendCall = mockFetch.mock.calls[1];
       const body = JSON.parse(sendCall[1].body);
-      expect(body.method).toBeUndefined();
+      expect(body.method).toBe("apple-script");
       expect(body.selectedMessageGuid).toBeUndefined();
       expect(body.partIndex).toBeUndefined();
     });
@@ -644,6 +649,62 @@ describe("send", () => {
       expect(body.effectId).toBe("com.apple.MobileSMS.expressivesend.invisibleink");
     });
 
+    // macOS 26 Tahoe broke AppleScript Messages.app automation (-1700). When
+    // Private API is available on these hosts, plain text sends should prefer
+    // Private API even without reply/effect features. (#53159 Bug B, #64480)
+    it("forces Private API for plain text on macOS 26 when available", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      isMacOS26OrHigherMock.mockReturnValue(true);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-macos26" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Plain text", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-macos26");
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+      } finally {
+        isMacOS26OrHigherMock.mockReturnValue(false);
+      }
+    });
+
+    // If macOS 26 host has Private API disabled, there is nothing we can do —
+    // the AppleScript path is broken on that OS. We still tag the send
+    // explicitly as apple-script rather than omitting `method`; BB Server's
+    // behavior on an omitted field is version-dependent and silently drops
+    // on some setups, which is the worse failure mode. (#64480)
+    it("falls back to apple-script on macOS 26 when Private API is disabled", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+      );
+      isMacOS26OrHigherMock.mockReturnValue(true);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-macos26-no-pa" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Plain text", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-macos26-no-pa");
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("apple-script");
+      } finally {
+        isMacOS26OrHigherMock.mockReturnValue(false);
+      }
+    });
+
     it("warns and downgrades private-api features when status is unknown", async () => {
       const runtimeLog = vi.fn();
       setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
@@ -666,7 +727,7 @@ describe("send", () => {
 
         const sendCall = mockFetch.mock.calls[1];
         const body = JSON.parse(sendCall[1].body);
-        expect(body.method).toBeUndefined();
+        expect(body.method).toBe("apple-script");
         expect(body.selectedMessageGuid).toBeUndefined();
         expect(body.partIndex).toBeUndefined();
         expect(body.effectId).toBeUndefined();
@@ -925,7 +986,7 @@ describe("send", () => {
           expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
           const sendCall = mockFetch.mock.calls[1];
           const body = JSON.parse(sendCall[1].body);
-          expect(body.method).toBeUndefined();
+          expect(body.method).toBe("apple-script");
           expect(body.selectedMessageGuid).toBeUndefined();
         } finally {
           clearBlueBubblesRuntime();
@@ -973,7 +1034,7 @@ describe("send", () => {
           expect(runtimeLog).not.toHaveBeenCalled();
           const sendCall = mockFetch.mock.calls[1];
           const body = JSON.parse(sendCall[1].body);
-          expect(body.method).toBeUndefined();
+          expect(body.method).toBe("apple-script");
           expect(body.selectedMessageGuid).toBeUndefined();
         } finally {
           clearBlueBubblesRuntime();
@@ -994,7 +1055,7 @@ describe("send", () => {
         expect(fetchServerInfoMock).not.toHaveBeenCalled();
         const sendCall = mockFetch.mock.calls[1];
         const body = JSON.parse(sendCall[1].body);
-        expect(body.method).toBeUndefined();
+        expect(body.method).toBe("apple-script");
       });
 
       it("degrades gracefully when refresh returns null (server unreachable)", async () => {

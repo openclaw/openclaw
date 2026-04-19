@@ -11,6 +11,7 @@ import {
   fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
+  isMacOS26OrHigher,
 } from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
@@ -88,11 +89,18 @@ function resolvePrivateApiDecision(params: {
   privateApiStatus: boolean | null;
   wantsReplyThread: boolean;
   wantsEffect: boolean;
+  accountId?: string;
 }): PrivateApiDecision {
-  const { privateApiStatus, wantsReplyThread, wantsEffect } = params;
+  const { privateApiStatus, wantsReplyThread, wantsEffect, accountId } = params;
   const needsPrivateApi = wantsReplyThread || wantsEffect;
+  // On macOS 26 Tahoe, AppleScript Messages.app automation is broken
+  // (`-1700` error) for outbound sends. Prefer Private API even for plain
+  // text when it is available so sends still reach the recipient.
+  // (#53159 Bug B, #64480)
+  const forceOnMacOS26 =
+    isMacOS26OrHigher(accountId) && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
   const canUsePrivateApi =
-    needsPrivateApi && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+    (needsPrivateApi || forceOnMacOS26) && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
   const throwEffectDisabledError = wantsEffect && privateApiStatus === false;
   if (!needsPrivateApi || privateApiStatus !== null) {
     return { canUsePrivateApi, throwEffectDisabledError };
@@ -496,6 +504,7 @@ export async function sendMessageBlueBubbles(
     privateApiStatus,
     wantsReplyThread,
     wantsEffect,
+    accountId,
   });
   if (privateApiDecision.throwEffectDisabledError) {
     throw new Error(
@@ -505,14 +514,16 @@ export async function sendMessageBlueBubbles(
   if (privateApiDecision.warningMessage) {
     warnBlueBubbles(privateApiDecision.warningMessage);
   }
+  // Always set `method` explicitly. BB Server's behavior on an omitted
+  // `method` is version-dependent and silently drops on some setups (e.g.
+  // macOS without Private API — message lands in Messages.app locally but
+  // never reaches the phone). (#64480)
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
     message: strippedText,
+    method: privateApiDecision.canUsePrivateApi ? "private-api" : "apple-script",
   };
-  if (privateApiDecision.canUsePrivateApi) {
-    payload.method = "private-api";
-  }
 
   // Add reply threading support
   if (wantsReplyThread && privateApiDecision.canUsePrivateApi) {
