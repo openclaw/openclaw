@@ -31,7 +31,6 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
-import { handleCodexAppServerToolUserInputRequest } from "./request-user-input-bridge.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
 import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
@@ -160,15 +159,6 @@ export async function runCodexAppServerAttempt(
     }
     if (request.method === "mcpServer/elicitation/request") {
       return handleCodexAppServerElicitationRequest({
-        requestParams: request.params,
-        paramsForRun: params,
-        threadId: thread.threadId,
-        turnId,
-        signal: runAbortController.signal,
-      });
-    }
-    if (request.method === "item/tool/requestUserInput") {
-      return handleCodexAppServerToolUserInputRequest({
         requestParams: request.params,
         paramsForRun: params,
         threadId: thread.threadId,

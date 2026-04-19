@@ -10,7 +10,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
-import * as requestUserInputBridge from "./request-user-input-bridge.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
 import { buildThreadResumeParams, buildTurnStartParams } from "./thread-lifecycle.js";
@@ -229,91 +228,6 @@ describe("runCodexAppServerAttempt", () => {
       aborted: false,
       timedOut: false,
     });
-  });
-
-  it("routes approval-shaped request_user_input prompts through the native bridge", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const bridgeSpy = vi
-      .spyOn(requestUserInputBridge, "handleCodexAppServerToolUserInputRequest")
-      .mockResolvedValue({
-        answers: {
-          approval: {
-            answers: ["Allow once"],
-          },
-        },
-      });
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
-      }
-      if (method === "turn/start") {
-        return { turn: { id: "turn-1", status: "inProgress" } };
-      }
-      return {};
-    });
-    __testing.setCodexAppServerClientFactoryForTests(
-      async () =>
-        ({
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
-
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    );
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
-
-    const result = await handleRequest?.({
-      id: "request-1",
-      method: "item/tool/requestUserInput",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "tool-call-1",
-        questions: [],
-      },
-    });
-
-    expect(result).toEqual({
-      answers: {
-        approval: {
-          answers: ["Allow once"],
-        },
-      },
-    });
-    expect(bridgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    );
-
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
-    await run;
   });
 
   it("routes MCP approval elicitations through the native bridge", async () => {
