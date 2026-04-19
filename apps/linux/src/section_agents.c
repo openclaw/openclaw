@@ -342,7 +342,25 @@ static void on_agents_update_response(const GatewayRpcResponse *response, gpoint
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Agent updated");
         section_mark_stale(&agents_last_fetch_us);
     } else {
-        gtk_label_set_text(GTK_LABEL(agents_status_label), "Agent update failed");
+        /*
+         * Surface the actual server error so operators can diagnose the
+         * failure without tailing the terminal. A common class of
+         * failure was a torn-down WS after the Logs tab ran into the
+         * oversized-payload ceiling; the fix for that lives in
+         * `gateway_ws.c` / `section_logs.c`, but keeping a useful
+         * error message here is still worthwhile.
+         */
+        const gchar *detail = (response->error_msg && response->error_msg[0] != '\0')
+            ? response->error_msg
+            : (response->error_code && response->error_code[0] != '\0'
+                ? response->error_code
+                : "Agent update failed");
+        g_autofree gchar *line = g_strdup_printf("Agent update failed: %s", detail);
+        gtk_label_set_text(GTK_LABEL(agents_status_label), line);
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_STATE,
+                    "agents.update failed code=%s msg=%s",
+                    response->error_code ? response->error_code : "(none)",
+                    response->error_msg ? response->error_msg : "(none)");
     }
 }
 
@@ -390,7 +408,20 @@ static void on_agents_save_clicked(GtkButton *button, gpointer user_data) {
     g_object_unref(b);
 
     AgentsRequestContext *ctx = agents_request_context_new();
-    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request agents.update");
+    /*
+     * Structured payload log. The schema for `agents.update` accepts
+     * `agentId` plus any optional subset of `name` / `workspace` /
+     * `model` / `emoji` / `avatar`. We log which fields we chose to
+     * include this invocation so the server-side "agent update failed"
+     * response can be triaged without capturing the WebSocket frame.
+     */
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE,
+                "agents.update agentId=%s name=%s workspace=%s avatar=%s model=%s",
+                a->id,
+                (name && name[0] != '\0') ? name : "(unset)",
+                (workspace && workspace[0] != '\0') ? workspace : "(unset)",
+                (avatar && avatar[0] != '\0') ? avatar : "(unset)",
+                (model && model[0] != '\0') ? model : "(unset)");
     g_autofree gchar *rid = gateway_rpc_request("agents.update", params, 0,
                                                 on_agents_update_response, ctx);
     json_node_unref(params);

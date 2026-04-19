@@ -46,6 +46,7 @@ static GtkWidget *runtime_item = NULL;
 /* Navigation actions */
 static GtkWidget *open_main_item = NULL;
 static GtkWidget *open_dashboard_item = NULL;
+static GtkWidget *open_chat_item = NULL;
 
 /* Expected service actions */
 static GtkWidget *start_item = NULL;
@@ -64,6 +65,7 @@ static void send_action(const char *action) {
 
 static void on_open_main(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_MAIN"); }
 static void on_open_dashboard(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_DASHBOARD"); }
+static void on_open_chat(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_CHAT"); }
 static void on_start_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("START"); }
 static void on_stop_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("STOP"); }
 static void on_restart_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("RESTART"); }
@@ -113,6 +115,8 @@ static gboolean handle_stdin(GIOChannel *source, GIOCondition condition, gpointe
                     gtk_widget_set_sensitive(restart_item, is_sensitive);
                 } else if (g_strcmp0(action, "OPEN_DASHBOARD") == 0 && open_dashboard_item) {
                     gtk_widget_set_sensitive(open_dashboard_item, is_sensitive);
+                } else if (g_strcmp0(action, "OPEN_CHAT") == 0 && open_chat_item) {
+                    gtk_widget_set_sensitive(open_chat_item, is_sensitive);
                 }
             }
             g_strfreev(parts);
@@ -161,6 +165,21 @@ int main(int argc, char **argv) {
     g_signal_connect(open_dashboard_item, "activate", G_CALLBACK(on_open_dashboard), NULL);
     gtk_widget_set_sensitive(open_dashboard_item, FALSE);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), open_dashboard_item);
+
+    /* Chat lives in its own standalone window; see chat_window.{c,h}. */
+    open_chat_item = gtk_menu_item_new_with_label("Open Chat");
+    g_signal_connect(open_chat_item, "activate", G_CALLBACK(on_open_chat), NULL);
+    gtk_widget_set_sensitive(open_chat_item, FALSE);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), open_chat_item);
+
+    /*
+     * Intentionally no pairing entry here. Pairing status and its
+     * actionable affordances live in the main app window footer (see
+     * `refresh_shell_status_footer()` in src/app_window.c). The
+     * bootstrap/approval surfaces are raised directly by the pair
+     * prompter when pairing is required or pending; the tray does not
+     * duplicate that state.
+     */
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 

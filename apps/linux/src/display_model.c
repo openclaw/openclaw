@@ -67,6 +67,57 @@ static const char *NOTICE_LISTENER_NOT_PROVEN_SERVICE =
     "companion cannot confirm that the listener on this port "
     "corresponds to the expected service.";
 
+/* ── Model catalog resolution ── */
+
+gboolean model_catalog_entry_matches_configured_default(
+    const char *configured_default_model_id,
+    const char *catalog_entry_id,
+    const char *catalog_entry_provider)
+{
+    if (!configured_default_model_id || !configured_default_model_id[0]) return FALSE;
+    if (!catalog_entry_id || !catalog_entry_id[0]) return FALSE;
+
+    /* Exact match against the bare catalog id covers the simple case
+     * (`default = "gpt-oss:20b"`, catalog `id = "gpt-oss:20b"`). */
+    if (g_strcmp0(configured_default_model_id, catalog_entry_id) == 0) {
+        return TRUE;
+    }
+
+    const char *prov = (catalog_entry_provider && catalog_entry_provider[0])
+        ? catalog_entry_provider : NULL;
+
+    /* Match against the canonical "<provider>/<id>" composite. */
+    if (prov) {
+        g_autofree gchar *composite = g_strdup_printf("%s/%s", prov, catalog_entry_id);
+        if (g_strcmp0(configured_default_model_id, composite) == 0) {
+            return TRUE;
+        }
+    }
+
+    /* Defensive: if the configured id looks like "<something>/<suffix>"
+     * AND `<something>` matches the entry's provider AND `<suffix>`
+     * matches the entry id, accept it. This tolerates operators who
+     * typed the provider in a slightly different canonicalisation but
+     * still kept it attached to the correct provider; and it rejects
+     * accidental cross-provider collisions (e.g. a config of
+     * "openai/gpt-oss:20b" must NOT match an ollama-hosted entry). */
+    const char *slash = strchr(configured_default_model_id, '/');
+    if (slash && slash != configured_default_model_id) {
+        size_t prov_len = (size_t)(slash - configured_default_model_id);
+        const char *suffix = slash + 1;
+        if (suffix[0] &&
+            prov &&
+            strlen(prov) == prov_len &&
+            strncmp(configured_default_model_id, prov, prov_len) == 0 &&
+            g_strcmp0(suffix, catalog_entry_id) == 0)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 /* ── Dashboard display model ── */
 
 void dashboard_display_model_build(
@@ -202,6 +253,63 @@ void tray_display_model_build(
     out->restart_sensitive = is_stoppable && can_act;
     out->refresh_sensitive = TRUE;
     out->open_dashboard_sensitive = (health && health->config_valid);
+}
+
+/* ── Pairing status (app footer) ──
+ *
+ * Single-truth helper. Intentionally mirrors the exact precedence used
+ * by `device_pair_prompter_raise()` so the footer label, the footer
+ * dot color, and the raise primitive cannot drift:
+ *
+ *   1. `pairing_required` → transport is blocked on PAIRING_REQUIRED;
+ *      the bootstrap window is the actionable surface.
+ *   2. `pending_approvals > 0` → inbound pair requests queued on this
+ *      device; the approval dialog is the actionable surface.
+ *   3. `auth_ok && ws_connected` → paired and authenticated; nothing
+ *      to do.
+ *   4. Otherwise → transport not yet up; neutral.
+ */
+void pairing_status_model_build(
+    gboolean pairing_required,
+    guint pending_approvals,
+    gboolean auth_ok,
+    gboolean ws_connected,
+    PairingStatusModel *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->pending_count = pending_approvals;
+
+    if (pairing_required) {
+        out->kind = PAIRING_STATUS_REQUIRED;
+        out->label = "Pairing: required";
+        out->color = STATUS_COLOR_RED;
+        out->actionable = TRUE;
+        return;
+    }
+
+    if (pending_approvals > 0) {
+        out->kind = PAIRING_STATUS_PENDING_APPROVAL;
+        out->label = (pending_approvals == 1)
+            ? "Pairing: 1 request pending"
+            : "Pairing: requests pending";
+        out->color = STATUS_COLOR_ORANGE;
+        out->actionable = TRUE;
+        return;
+    }
+
+    if (auth_ok && ws_connected) {
+        out->kind = PAIRING_STATUS_PAIRED;
+        out->label = "Pairing: paired";
+        out->color = STATUS_COLOR_GREEN;
+        out->actionable = FALSE;
+        return;
+    }
+
+    out->kind = PAIRING_STATUS_UNKNOWN;
+    out->label = "Pairing: not paired yet";
+    out->color = STATUS_COLOR_GRAY;
+    out->actionable = FALSE;
 }
 
 /* ── Config display model ── */

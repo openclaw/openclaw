@@ -18,6 +18,7 @@
 #include "state.h"
 #include "log.h"
 #include "app_window.h"
+#include "chat_window.h"
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "display_model.h"
@@ -95,6 +96,10 @@ static void handle_helper_action(const gchar *action) {
         gateway_client_refresh();
     } else if (g_strcmp0(action, "OPEN_MAIN") == 0) {
         app_window_show();
+    } else if (g_strcmp0(action, "OPEN_CHAT") == 0) {
+        /* Standalone chat window — lives independently of the main
+         * settings / diagnostics window (see chat_window.{c,h}). */
+        chat_window_show();
     } else if (g_strcmp0(action, "OPEN_DASHBOARD") == 0) {
         GatewayConfig *cfg = gateway_client_get_config();
         if (cfg) {
@@ -302,7 +307,11 @@ void tray_update_from_state(const AppState state) {
     
     /* A2: Single authoritative STATE emission showing human-readable status.
      * tray_helper.c uses this for the status menu item label.
-     */
+     *
+     * Pairing status is owned by the main app footer (see
+     * `refresh_shell_status_footer()` in src/app_window.c); the tray
+     * status label intentionally reflects only the service/app state
+     * and no longer folds in a "Pairing Required" override. */
     const gchar *status_str = state_get_current_string();
     g_autofree gchar *status_line = g_strdup_printf("STATE:%s\n", status_str);
     send_line_to_helper(status_line, NULL);
@@ -364,17 +373,34 @@ void tray_update_from_state(const AppState state) {
     
     /* A5: Send SENSITIVE commands in exact format expected by tray_helper.c.
      * Format: SENSITIVE:ACTION:0|1 (tray_helper.c parses with g_strsplit(line, ":", 3))
-     * Supported actions: START, STOP, RESTART, OPEN_DASHBOARD
+     * Supported actions: START, STOP, RESTART, OPEN_DASHBOARD, OPEN_CHAT
+     *
+     * Chat sensitivity mirrors the dashboard gate: the standalone chat
+     * window relies on the gateway being reachable for agents.list /
+     * models.list / chat.send to work. Users may still want to open the
+     * window while degraded so the chat surface can display its own
+     * "Chat blocked" state, so we keep OPEN_CHAT sensitive whenever the
+     * dashboard is too.
      */
+    gboolean can_open_chat = can_open_dashboard;
+
     g_autofree gchar *sensitive_start = g_strdup_printf("SENSITIVE:START:%d\n", can_start ? 1 : 0);
     g_autofree gchar *sensitive_stop = g_strdup_printf("SENSITIVE:STOP:%d\n", can_stop ? 1 : 0);
     g_autofree gchar *sensitive_restart = g_strdup_printf("SENSITIVE:RESTART:%d\n", can_restart ? 1 : 0);
     g_autofree gchar *sensitive_dashboard = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n", can_open_dashboard ? 1 : 0);
-    
+    g_autofree gchar *sensitive_chat = g_strdup_printf("SENSITIVE:OPEN_CHAT:%d\n", can_open_chat ? 1 : 0);
+
+    /*
+     * Pairing is intentionally not a tray menu item anymore; no
+     * SENSITIVE:OPEN_PAIRING is emitted. The main app footer owns that
+     * surface and raises the pair approval / bootstrap windows directly.
+     */
+
     send_line_to_helper(sensitive_start, NULL);
     send_line_to_helper(sensitive_stop, NULL);
     send_line_to_helper(sensitive_restart, NULL);
     send_line_to_helper(sensitive_dashboard, NULL);
+    send_line_to_helper(sensitive_chat, NULL);
 
     /* A6: Send runtime mode label if available.
      * tray_helper.c supports RUNTIME:<label> for the runtime menu item.

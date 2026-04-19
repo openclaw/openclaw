@@ -24,6 +24,9 @@
 #include "gateway_client.h"
 #include "diagnostics.h"
 #include "onboarding.h"
+#include "device_pair_prompter.h"
+#include "gateway_ws.h"
+#include "chat_window.h"
 #include "gateway_rpc.h"
 #include "gateway_data.h"
 #include "gateway_mutations.h"
@@ -34,7 +37,6 @@
 #include "section_sessions.h"
 #include "section_cron.h"
 #include "section_instances.h"
-#include "section_chat.h"
 #include "section_agents.h"
 #include "section_usage.h"
 #include "section_logs.h"
@@ -82,6 +84,9 @@ static GtkWidget *shell_gateway_status_label = NULL;
 static GtkWidget *shell_gateway_status_dot = NULL;
 static GtkWidget *shell_service_status_label = NULL;
 static GtkWidget *shell_service_status_dot = NULL;
+static GtkWidget *shell_pairing_status_label = NULL;
+static GtkWidget *shell_pairing_status_dot = NULL;
+static GtkWidget *shell_pairing_status_button = NULL;
 static guint refresh_timer_id = 0;
 static AppSection active_section = SECTION_DASHBOARD;
 static gboolean last_rpc_ready = FALSE;
@@ -116,6 +121,7 @@ static void refresh_shell_status_footer(void);
 static void ensure_app_css_loaded(void);
 static void on_sidebar_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer user_data);
 static void on_window_destroy(GtkWindow *window, gpointer user_data);
+static void on_shell_pairing_button_clicked(GtkButton *button, gpointer user_data);
 
 /* Integrated (non-controller) surfaces are lifecycle-sensitive: refresh helpers
  * must treat widget pointers as ephemeral and no-op during shutdown/teardown. */
@@ -125,6 +131,30 @@ static inline gboolean app_window_can_refresh_integrated(void) {
 
 /* ── Sidebar construction ── */
 
+/*
+ * Returns TRUE when a given AppSection should appear in the main settings
+ * window. Sections whose UX lives in their own dedicated window (like
+ * Chat, which ships as a standalone AdwApplicationWindow) are filtered
+ * out here so the main window stays focused on management / diagnostics.
+ */
+static gboolean section_is_embedded_in_main_window(AppSection section) {
+    switch (section) {
+    case SECTION_CHAT:
+        /* Chat lives in its own window (see chat_window.{c,h}); do not
+         * register it as a sidebar row or a content stack page. */
+        return FALSE;
+    default:
+        return TRUE;
+    }
+}
+
+/*
+ * Pure section-tag encode/decode helpers live in
+ * `app_window_section_tag.c` so a headless test can link them without
+ * dragging the full GTK/Adwaita main-window TU. See that file for the
+ * NULL-collision rationale (SECTION_DASHBOARD == 0).
+ */
+
 static GtkWidget* build_sidebar_row(AppSection section) {
     const SectionMeta *meta = &section_meta[section];
 
@@ -133,6 +163,21 @@ static GtkWidget* build_sidebar_row(AppSection section) {
     gtk_widget_set_margin_end(box, 8);
     gtk_widget_set_margin_top(box, 6);
     gtk_widget_set_margin_bottom(box, 6);
+
+    /*
+     * Pin the logical section onto the row widget so activation handlers
+     * do not have to rely on the list-box index (which shifts when we
+     * filter out standalone-windowed sections like Chat).
+     *
+     * CRITICAL: store `section + 1`, never the raw enum. `SECTION_DASHBOARD`
+     * is 0, and `g_object_set_data(..., GINT_TO_POINTER(0))` stores a
+     * NULL pointer — indistinguishable from "no data set" when the row
+     * activation handler tests `if (!tag) return`. The shift makes NULL
+     * unambiguously mean "missing", and the activation / navigate paths
+     * subtract 1 to recover the enum.
+     */
+    g_object_set_data(G_OBJECT(box), "oc_section",
+                      app_window_section_tag_encode(section));
 
     GtkWidget *icon = gtk_image_new_from_icon_name(meta->icon_name);
     gtk_box_append(GTK_BOX(box), icon);
@@ -159,6 +204,7 @@ static GtkWidget* build_sidebar(void) {
     gtk_widget_add_css_class(sidebar_list, "navigation-sidebar");
 
     for (int i = 0; i < SECTION_COUNT; i++) {
+        if (!section_is_embedded_in_main_window((AppSection)i)) continue;
         GtkWidget *row_content = build_sidebar_row((AppSection)i);
         gtk_list_box_append(GTK_LIST_BOX(sidebar_list), row_content);
     }
@@ -198,6 +244,29 @@ static GtkWidget* build_sidebar(void) {
     gtk_box_append(GTK_BOX(service_row), shell_service_status_label);
     gtk_box_append(GTK_BOX(footer), service_row);
 
+    /*
+     * Pairing status row. Always present; actionability (and the
+     * trailing "Open" button) is driven by `pairing_status_model_build`
+     * which consults the same single-truth sources the macOS app and
+     * Diagnostics tab read. Pairing is intentionally NOT in the tray
+     * menu — this footer is the sole user-facing pairing surface.
+     */
+    GtkWidget *pairing_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    shell_pairing_status_dot = gtk_label_new("●");
+    gtk_widget_add_css_class(shell_pairing_status_dot, "status-dot");
+    gtk_box_append(GTK_BOX(pairing_row), shell_pairing_status_dot);
+    shell_pairing_status_label = gtk_label_new("Pairing: not paired yet");
+    gtk_label_set_xalign(GTK_LABEL(shell_pairing_status_label), 0.0);
+    gtk_widget_set_hexpand(shell_pairing_status_label, TRUE);
+    gtk_box_append(GTK_BOX(pairing_row), shell_pairing_status_label);
+    shell_pairing_status_button = gtk_button_new_with_label("Open");
+    gtk_widget_add_css_class(shell_pairing_status_button, "flat");
+    gtk_widget_set_visible(shell_pairing_status_button, FALSE);
+    g_signal_connect(shell_pairing_status_button, "clicked",
+                     G_CALLBACK(on_shell_pairing_button_clicked), NULL);
+    gtk_box_append(GTK_BOX(pairing_row), shell_pairing_status_button);
+    gtk_box_append(GTK_BOX(footer), pairing_row);
+
     gtk_box_append(GTK_BOX(sidebar_shell), footer);
     return sidebar_shell;
 }
@@ -208,6 +277,30 @@ static void clear_status_dot_classes(GtkWidget *dot) {
     gtk_widget_remove_css_class(dot, "disconnected");
     gtk_widget_remove_css_class(dot, "connecting");
     gtk_widget_remove_css_class(dot, "service-inactive");
+    gtk_widget_remove_css_class(dot, "warning");
+    gtk_widget_remove_css_class(dot, "neutral");
+}
+
+static const char* pairing_dot_css_class(StatusColor color) {
+    switch (color) {
+    case STATUS_COLOR_GREEN:  return "connected";
+    case STATUS_COLOR_ORANGE: return "warning";
+    case STATUS_COLOR_RED:    return "disconnected";
+    case STATUS_COLOR_GRAY:
+    default:                  return "neutral";
+    }
+}
+
+static void on_shell_pairing_button_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+    /*
+     * Single-truth raise primitive shared with (previously) the tray
+     * and with any other pairing affordance. Picks bootstrap window vs
+     * approval dialog internally based on the same precedence the
+     * footer `pairing_status_model_build` uses.
+     */
+    device_pair_prompter_raise();
 }
 
 static void refresh_shell_status_footer(void) {
@@ -253,6 +346,34 @@ static void refresh_shell_status_footer(void) {
         gtk_widget_add_css_class(shell_service_status_dot, "service-inactive");
         gtk_label_set_text(GTK_LABEL(shell_service_status_label), "Service: Inactive");
     }
+
+    /*
+     * Pairing status row. Reads the same two truth sources the
+     * previous tray computation used — `gateway_ws_is_pairing_required`
+     * (transport blocked on PAIRING_REQUIRED) and
+     * `device_pair_prompter_pending_count` (local inbound-approval
+     * queue) — plus the existing WS auth signal so a healthy paired
+     * session can show a positive indicator.
+     */
+    if (shell_pairing_status_label && shell_pairing_status_dot) {
+        gboolean pairing_required = gateway_ws_is_pairing_required();
+        guint pending_approvals = device_pair_prompter_pending_count();
+        gboolean auth_ok = (health && health->auth_ok);
+        gboolean ws_connected = (health && health->ws_connected);
+
+        PairingStatusModel pm;
+        pairing_status_model_build(
+            pairing_required, pending_approvals, auth_ok, ws_connected, &pm);
+
+        clear_status_dot_classes(shell_pairing_status_dot);
+        gtk_widget_add_css_class(shell_pairing_status_dot,
+                                 pairing_dot_css_class(pm.color));
+        gtk_label_set_text(GTK_LABEL(shell_pairing_status_label),
+                           pm.label ? pm.label : "Pairing: unknown");
+        if (shell_pairing_status_button) {
+            gtk_widget_set_visible(shell_pairing_status_button, pm.actionable);
+        }
+    }
 }
 
 static void ensure_app_css_loaded(void) {
@@ -266,6 +387,8 @@ static void ensure_app_css_loaded(void) {
         ".status-dot.connected { color: #33d17a; }"
         ".status-dot.disconnected { color: #e01b24; }"
         ".status-dot.service-inactive { color: #77767b; }"
+        ".status-dot.warning { color: #e5a50a; }"
+        ".status-dot.neutral { color: #77767b; }"
         ".status-dot.connecting {"
         "  color: #e5a50a;"
         "  animation: openclaw-pulse 1.1s ease-in-out infinite;"
@@ -298,8 +421,9 @@ static GtkWidget* build_content_stack(void) {
     gtk_stack_set_transition_type(GTK_STACK(content_stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
     gtk_stack_set_transition_duration(GTK_STACK(content_stack), 150);
 
-    /* Register section controllers for RPC-backed sections */
-    section_controllers[SECTION_CHAT]      = section_chat_get();
+    /* Register section controllers for RPC-backed sections embedded in the
+     * main window. Chat is intentionally excluded: it lives in a separate
+     * window (chat_window.c) and owns its own controller lifecycle. */
     section_controllers[SECTION_AGENTS]    = section_agents_get();
     section_controllers[SECTION_USAGE]     = section_usage_get();
     section_controllers[SECTION_CHANNELS]  = section_channels_get();
@@ -312,6 +436,7 @@ static GtkWidget* build_content_stack(void) {
     section_controllers[SECTION_INSTANCES] = section_instances_get();
 
     for (int i = 0; i < SECTION_COUNT; i++) {
+        if (!section_is_embedded_in_main_window((AppSection)i)) continue;
         GtkWidget *page;
         if (section_controllers[i]) {
             page = section_controllers[i]->build();
@@ -387,13 +512,24 @@ static void on_sidebar_row_activated(GtkListBox *box, GtkListBoxRow *row, gpoint
     (void)box;
     (void)user_data;
 
-    int idx = gtk_list_box_row_get_index(row);
-    if (idx >= 0 && idx < SECTION_COUNT) {
-        active_section = (AppSection)idx;
-        gtk_stack_set_visible_child_name(GTK_STACK(content_stack), section_meta[idx].id);
-        refresh_active_integrated_section(active_section);
-        refresh_active_rpc_section(active_section);
-    }
+    /* Rows carry their logical AppSection as user data (see
+     * build_sidebar_row); do not use the GtkListBoxRow index, which is
+     * relative to visible rows and not to the AppSection enum.
+     *
+     * The tag is stored as `section + 1` so that SECTION_DASHBOARD (=0)
+     * doesn't collide with GObject's "no data" sentinel (NULL). Decode
+     * by subtracting 1 and reject the NULL case explicitly. */
+    GtkWidget *row_child = gtk_list_box_row_get_child(row);
+    gpointer tag = row_child
+        ? g_object_get_data(G_OBJECT(row_child), "oc_section")
+        : NULL;
+    AppSection section;
+    if (!app_window_section_tag_decode(tag, &section)) return;
+
+    active_section = section;
+    gtk_stack_set_visible_child_name(GTK_STACK(content_stack), section_meta[section].id);
+    refresh_active_integrated_section(active_section);
+    refresh_active_rpc_section(active_section);
 }
 
 /* ── Placeholder section (Tier B / deferred) ── */
@@ -2024,9 +2160,33 @@ static GtkWidget* build_diagnostics_section(void) {
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(diag_text_view), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(diag_text_view), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_monospace(GTK_TEXT_VIEW(diag_text_view), TRUE);
-    gtk_widget_set_vexpand(diag_text_view, TRUE);
+    /*
+     * Intentionally no `vexpand=TRUE` on the inner text view. The
+     * parent `GtkScrolledWindow` is vexpanded and owns the vertical
+     * growth; duplicating the hint on the child confuses the measure
+     * pass and was one of the contributors to the "Trying to snapshot
+     * GtkGizmo ... without a current allocation" warning emitted when
+     * the Diagnostics tab first became visible.
+     */
 
     GtkWidget *scrolled = gtk_scrolled_window_new();
+    /*
+     * Pin explicit scrollbar policies. With the default
+     * `GTK_POLICY_AUTOMATIC` on both axes, GTK has to measure the
+     * wrapped text view to decide whether to show the horizontal
+     * scrollbar before any allocation is known, which is what
+     * triggered the `GtkGizmo` snapshot warning. Word-char wrapping
+     * means we never want a horizontal scrollbar, so NEVER is the
+     * correct answer.
+     */
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    /*
+     * Give the viewport a stable minimum intrinsic height so its
+     * internal gizmos (scrollbar trough/slider) have an allocation
+     * before the first snapshot pass runs.
+     */
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(scrolled), 360);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), diag_text_view);
     gtk_widget_set_vexpand(scrolled, TRUE);
     gtk_box_append(GTK_BOX(page), scrolled);
@@ -2045,6 +2205,16 @@ static GtkWidget* build_diagnostics_section(void) {
 static void refresh_diagnostics_content(void) {
     if (!app_window_can_refresh_integrated()) return;
     if (!diag_text_view) return;
+    /*
+     * Avoid touching the buffer before the text view (and therefore
+     * the enclosing GtkScrolledWindow) has a valid allocation. A
+     * buffer `set_text` queues resize which, during snapshot of an
+     * un-realized viewport, produced the "Trying to snapshot
+     * GtkGizmo ... without a current allocation" warning. This check
+     * is cheap: the first integrated refresh tick after presenting
+     * the window simply re-runs on the next interval.
+     */
+    if (!gtk_widget_get_realized(diag_text_view)) return;
     g_autofree gchar *text = build_diagnostics_text();
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(diag_text_view));
     gtk_text_buffer_set_text(buf, text, -1);
@@ -2563,13 +2733,39 @@ void app_window_show(void) {
 
     adw_application_window_set_content(ADW_APPLICATION_WINDOW(main_window), GTK_WIDGET(split));
 
-    /* Select dashboard row by default */
+    /*
+     * Select dashboard row by default. `gtk_list_box_select_row` emits
+     * `row-selected`, NOT `row-activated` — the activation handler won't
+     * fire here, so we also explicitly set the visible child below.
+     */
     GtkListBoxRow *first = gtk_list_box_get_row_at_index(GTK_LIST_BOX(sidebar_list), 0);
     if (first) {
         gtk_list_box_select_row(GTK_LIST_BOX(sidebar_list), first);
     }
+    /*
+     * Pin the initial visible child to the default section's id rather
+     * than trusting insertion order. GtkStack picks "first child added"
+     * by default, which is correct today but silently fragile — if the
+     * embedded-section filter ever changes or Dashboard is reordered
+     * in the enum, the default would drift.
+     */
+    if (content_stack) {
+        const char *initial_id = section_meta[active_section].id;
+        if (gtk_stack_get_child_by_name(GTK_STACK(content_stack), initial_id)) {
+            gtk_stack_set_visible_child_name(GTK_STACK(content_stack), initial_id);
+        } else {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_STATE,
+                        "content stack missing child for default section id=%s",
+                        initial_id ? initial_id : "(null)");
+        }
+    }
 
     g_signal_connect(main_window, "destroy", G_CALLBACK(on_window_destroy), NULL);
+
+    /* Re-parent pairing dialogs (approval window + bootstrap window) to the
+     * newly-created main window. Safe to call even if the prompter has not
+     * been initialized; calls before init are no-ops. */
+    device_pair_prompter_set_parent(GTK_WINDOW(main_window));
 
     /* Initial content fill for local/cheap sections + start auto-refresh */
     refresh_active_integrated_section(active_section);
@@ -2585,6 +2781,15 @@ void app_window_show(void) {
 void app_window_navigate_to(AppSection section) {
     if (section < 0 || section >= SECTION_COUNT) return;
 
+    /* Sections that live in their own window (Chat) must not drag the
+     * main window open; route them to the dedicated surface instead. */
+    if (!section_is_embedded_in_main_window(section)) {
+        if (section == SECTION_CHAT) {
+            chat_window_show();
+        }
+        return;
+    }
+
     app_window_show();
 
     active_section = section;
@@ -2592,10 +2797,21 @@ void app_window_navigate_to(AppSection section) {
         gtk_stack_set_visible_child_name(GTK_STACK(content_stack), section_meta[section].id);
     }
     if (sidebar_list) {
-        GtkListBoxRow *row = gtk_list_box_get_row_at_index(GTK_LIST_BOX(sidebar_list), section);
-        if (row) {
-            gtk_list_box_select_row(GTK_LIST_BOX(sidebar_list), row);
+        /* Walk rows to find the one whose stored section matches; the
+         * index-based API is not reliable after filtering Chat out. */
+        GtkListBoxRow *selected = NULL;
+        for (int i = 0; ; i++) {
+            GtkListBoxRow *row = gtk_list_box_get_row_at_index(GTK_LIST_BOX(sidebar_list), i);
+            if (!row) break;
+            GtkWidget *child = gtk_list_box_row_get_child(row);
+            gpointer tag = child ? g_object_get_data(G_OBJECT(child), "oc_section") : NULL;
+            AppSection row_section;
+            if (app_window_section_tag_decode(tag, &row_section) && row_section == section) {
+                selected = row;
+                break;
+            }
         }
+        if (selected) gtk_list_box_select_row(GTK_LIST_BOX(sidebar_list), selected);
     }
     refresh_active_integrated_section(active_section);
     refresh_active_rpc_section(active_section);

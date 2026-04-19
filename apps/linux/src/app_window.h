@@ -43,3 +43,16 @@ void app_window_show(void);
 void app_window_navigate_to(AppSection section);
 gboolean app_window_is_visible(void);
 void app_window_refresh_snapshot(void);
+
+/*
+ * Pure helpers for the sidebar-row → AppSection tag encoding. The tag
+ * must not collide with GObject's "no data" sentinel (NULL), so we
+ * store `section + 1` and decode with `- 1`. Exposed so tests can
+ * regress the "Dashboard (enum 0) stuck" bug without GTK.
+ *
+ *   encode(section)       returns a gpointer safe to stash via g_object_set_data
+ *   decode(tag, &out)     returns TRUE on success, FALSE for NULL tags
+ *                         or values outside the AppSection range.
+ */
+gpointer app_window_section_tag_encode(AppSection section);
+gboolean app_window_section_tag_decode(gpointer tag, AppSection *out_section);

@@ -12,6 +12,7 @@
 #include <json-glib/json-glib.h>
 #include "../src/gateway_config.h"
 #include "../src/gateway_protocol.h"
+#include "../src/device_identity.h"
 #include "../src/state.h"
 #include "../src/test_seams.h"
 
@@ -2325,6 +2326,217 @@ static void test_state_priority_setup_gateway_not_installed(void) {
     clear_env();
 }
 
+/* ───────── v2 signed-connect + hello-ok-v2 + error-details tests ───────── */
+
+static gchar* v2_tmp_state_dir(void) {
+    gchar *tmpl = g_build_filename(g_get_tmp_dir(), "openclaw-v2-XXXXXX", NULL);
+    gchar *dir = g_mkdtemp(tmpl);
+    g_assert_nonnull(dir);
+    return dir;
+}
+
+static void v2_rm_rf(const gchar *path) {
+    g_autoptr(GDir) d = g_dir_open(path, 0, NULL);
+    if (d) {
+        const gchar *name;
+        while ((name = g_dir_read_name(d))) {
+            g_autofree gchar *child = g_build_filename(path, name, NULL);
+            if (g_file_test(child, G_FILE_TEST_IS_DIR)) v2_rm_rf(child);
+            else g_unlink(child);
+        }
+    }
+    g_rmdir(path);
+}
+
+static JsonObject* v2_parse_object(const gchar *json_str) {
+    g_autoptr(JsonParser) parser = json_parser_new();
+    g_assert_true(json_parser_load_from_data(parser, json_str, -1, NULL));
+    JsonNode *root = json_parser_get_root(parser);
+    g_assert_nonnull(root);
+    g_assert_true(JSON_NODE_HOLDS_OBJECT(root));
+    return json_object_ref(json_node_get_object(root));
+}
+
+static void test_protocol_build_connect_v2_signed(void) {
+    g_autofree gchar *dir = v2_tmp_state_dir();
+    OcDeviceIdentity *id = oc_device_identity_load_or_create(dir, NULL);
+    g_assert_nonnull(id);
+
+    const gchar *scopes[] = {"operator.admin", NULL};
+    GatewayConnectBuildParams p = {0};
+    p.request_id = "req-1";
+    p.client_id = "openclaw-linux";
+    p.client_mode = "ui";
+    p.role = "operator";
+    p.scopes = scopes;
+    p.auth_mode = "token";
+    p.token = "sometok";
+    p.platform = "linux";
+    p.version = "dev";
+    p.identity = id;
+    p.connect_nonce = "nonce-xyz";
+    p.signed_at_ms = 1700000000000;
+
+    g_autofree gchar *json = gateway_protocol_build_connect_v2(&p);
+    g_assert_nonnull(json);
+
+    g_autoptr(JsonObject) root = v2_parse_object(json);
+    JsonObject *params = json_object_get_object_member(root, "params");
+    g_assert_nonnull(params);
+    g_assert_true(json_object_has_member(params, "device"));
+    JsonObject *dev = json_object_get_object_member(params, "device");
+    g_assert_cmpstr(json_object_get_string_member(dev, "id"), ==, id->device_id);
+    g_assert_cmpstr(json_object_get_string_member(dev, "nonce"), ==, "nonce-xyz");
+    g_assert_cmpint(json_object_get_int_member(dev, "signedAt"), ==, 1700000000000);
+    g_assert_nonnull(json_object_get_string_member(dev, "publicKey"));
+    g_assert_nonnull(json_object_get_string_member(dev, "signature"));
+
+    /* auth.token is the explicit token */
+    JsonObject *auth = json_object_get_object_member(params, "auth");
+    g_assert_cmpstr(json_object_get_string_member(auth, "token"), ==, "sometok");
+    g_assert_false(json_object_has_member(auth, "deviceToken"));
+
+    oc_device_identity_free(id);
+    v2_rm_rf(dir);
+}
+
+static void test_protocol_build_connect_v2_no_identity_no_device(void) {
+    const gchar *scopes[] = {"operator.read", NULL};
+    GatewayConnectBuildParams p = {0};
+    p.request_id = "req-noid";
+    p.client_id = "openclaw-linux";
+    p.client_mode = "ui";
+    p.role = "operator";
+    p.scopes = scopes;
+    p.auth_mode = "token";
+    p.token = "t";
+    p.platform = "linux";
+    p.version = "dev";
+    /* No identity, no nonce */
+
+    g_autofree gchar *json = gateway_protocol_build_connect_v2(&p);
+    g_assert_nonnull(json);
+    g_autoptr(JsonObject) root = v2_parse_object(json);
+    JsonObject *params = json_object_get_object_member(root, "params");
+    g_assert_false(json_object_has_member(params, "device"));
+}
+
+static void test_protocol_build_connect_v2_stored_token_as_auth(void) {
+    g_autofree gchar *dir = v2_tmp_state_dir();
+    OcDeviceIdentity *id = oc_device_identity_load_or_create(dir, NULL);
+    g_assert_nonnull(id);
+
+    const gchar *scopes[] = {"operator.admin", NULL};
+    GatewayConnectBuildParams p = {0};
+    p.request_id = "req-stored";
+    p.client_id = "openclaw-linux";
+    p.client_mode = "ui";
+    p.role = "operator";
+    p.scopes = scopes;
+    p.auth_mode = NULL; /* auto */
+    p.token = NULL;     /* no explicit */
+    p.stored_token = "stored-tok";
+    p.identity = id;
+    p.connect_nonce = "n1";
+    p.platform = "linux";
+    p.version = "dev";
+
+    g_autofree gchar *json = gateway_protocol_build_connect_v2(&p);
+    g_assert_nonnull(json);
+    g_autoptr(JsonObject) root = v2_parse_object(json);
+    JsonObject *params = json_object_get_object_member(root, "params");
+    JsonObject *auth = json_object_get_object_member(params, "auth");
+    g_assert_cmpstr(json_object_get_string_member(auth, "token"), ==, "stored-tok");
+    g_assert_false(json_object_has_member(auth, "deviceToken"));
+
+    oc_device_identity_free(id);
+    v2_rm_rf(dir);
+}
+
+static void test_protocol_build_connect_v2_retry_emits_device_token(void) {
+    g_autofree gchar *dir = v2_tmp_state_dir();
+    OcDeviceIdentity *id = oc_device_identity_load_or_create(dir, NULL);
+    g_assert_nonnull(id);
+
+    const gchar *scopes[] = {"operator.admin", NULL};
+    GatewayConnectBuildParams p = {0};
+    p.request_id = "req-retry";
+    p.client_id = "openclaw-linux";
+    p.client_mode = "ui";
+    p.role = "operator";
+    p.scopes = scopes;
+    p.auth_mode = "token";
+    p.token = "explicit";
+    p.stored_token = "stored-dev";
+    p.retry_with_device_token = TRUE;
+    p.identity = id;
+    p.connect_nonce = "n2";
+    p.platform = "linux";
+    p.version = "dev";
+
+    g_autofree gchar *json = gateway_protocol_build_connect_v2(&p);
+    g_assert_nonnull(json);
+    g_autoptr(JsonObject) root = v2_parse_object(json);
+    JsonObject *params = json_object_get_object_member(root, "params");
+    JsonObject *auth = json_object_get_object_member(params, "auth");
+    /* Explicit token still wins for auth.token */
+    g_assert_cmpstr(json_object_get_string_member(auth, "token"), ==, "explicit");
+    /* Stored device token is carried as auth.deviceToken for repair. */
+    g_assert_cmpstr(json_object_get_string_member(auth, "deviceToken"), ==, "stored-dev");
+
+    oc_device_identity_free(id);
+    v2_rm_rf(dir);
+}
+
+static void test_protocol_hello_ok_v2_extracts_token_role_scopes(void) {
+    const gchar *json =
+        "{\"type\":\"res\",\"id\":\"r1\",\"payload\":{"
+        "\"type\":\"hello-ok\",\"protocol\":1,"
+        "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc\"},"
+        "\"features\":{\"methods\":[],\"events\":[]},\"snapshot\":{},"
+        "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000},"
+        "\"auth\":{\"source\":\"device-token\",\"deviceToken\":\"tok-xyz\",\"role\":\"operator\","
+                  "\"scopes\":[\"operator.read\",\"operator.admin\"]}"
+        "}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+
+    gchar *auth_src = NULL;
+    gdouble tick_ms = 0;
+    gchar *dev_tok = NULL;
+    gchar *role = NULL;
+    gchar **scopes = NULL;
+    g_assert_true(gateway_protocol_parse_hello_ok_v2(
+        frame, &auth_src, &tick_ms, &dev_tok, &role, &scopes));
+    g_assert_cmpstr(auth_src, ==, "device-token");
+    g_assert_cmpstr(dev_tok, ==, "tok-xyz");
+    g_assert_cmpstr(role, ==, "operator");
+    g_assert_nonnull(scopes);
+    g_assert_cmpint(g_strv_length(scopes), ==, 2);
+
+    g_free(auth_src);
+    g_free(dev_tok);
+    g_free(role);
+    g_strfreev(scopes);
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_error_details_fields(void) {
+    const gchar *json =
+        "{\"type\":\"res\",\"id\":\"r1\",\"error\":{"
+        "\"code\":\"AUTH_FAILED\",\"message\":\"bad\","
+        "\"details\":{\"code\":\"AUTH_TOKEN_MISMATCH\",\"requestId\":\"pair-42\",\"canRetryWithDeviceToken\":true}"
+        "}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpstr(frame->code, ==, "AUTH_FAILED");
+    g_assert_cmpstr(frame->error, ==, "bad");
+    g_assert_cmpstr(frame->detail_code, ==, "AUTH_TOKEN_MISMATCH");
+    g_assert_cmpstr(frame->detail_request_id, ==, "pair-42");
+    g_assert_true(frame->detail_can_retry_with_device_token);
+    gateway_frame_free(frame);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -2417,6 +2629,14 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/config/bind_invalid_literal_is_rejected", test_config_bind_invalid_literal_is_rejected);
     g_test_add_func("/gateway/config/tls_object_form", test_config_tls_object_form);
     g_test_add_func("/gateway/config/tls_from_security_block", test_config_tls_from_security_block);
+
+    /* v2 signed-connect + hello-ok-v2 + error-details tests */
+    g_test_add_func("/gateway/protocol/v2/connect_signed_with_identity", test_protocol_build_connect_v2_signed);
+    g_test_add_func("/gateway/protocol/v2/connect_no_device_without_identity", test_protocol_build_connect_v2_no_identity_no_device);
+    g_test_add_func("/gateway/protocol/v2/connect_stored_token_used_as_auth_token", test_protocol_build_connect_v2_stored_token_as_auth);
+    g_test_add_func("/gateway/protocol/v2/connect_retry_puts_stored_in_device_token", test_protocol_build_connect_v2_retry_emits_device_token);
+    g_test_add_func("/gateway/protocol/v2/hello_ok_extracts_device_token_and_scopes", test_protocol_hello_ok_v2_extracts_token_role_scopes);
+    g_test_add_func("/gateway/protocol/v2/error_details_code_request_id_retry", test_protocol_parse_error_details_fields);
 
     /* URL route fragment preservation tests */
     g_test_add_func("/gateway/url_route/preserves_fragment", test_dashboard_url_with_route_preserves_fragment);

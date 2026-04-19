@@ -73,7 +73,19 @@ GPtrArray* session_filter_build_choices(const gchar *agent_id,
         g_ptr_array_add(out, choice);
     }
 
-    g_autofree gchar *default_key = g_strdup_printf("agent:%s:default", agent_id);
+    /*
+     * Canonical default session key across core, web, TUI, and tests is
+     * `agent:<agentId>:main` (see `resolveMainSessionKey()` and the
+     * session-key routing tests). Using `agent:<agentId>:default` as we
+     * did before silently created a throwaway session key the server
+     * had never heard of — every chat.send bootstrapped a fresh
+     * conversation and every chat.history returned empty, which made
+     * the bot appear to loop on its first-turn greeting because each
+     * user turn was the first turn as far as the gateway was
+     * concerned. Keep this constant aligned with core's
+     * `resolveMainSessionKey`.
+     */
+    g_autofree gchar *default_key = g_strdup_printf("agent:%s:main", agent_id);
     gboolean has_default = FALSE;
     for (guint i = 0; i < out->len; i++) {
         SessionChoice *choice = g_ptr_array_index(out, i);
@@ -86,7 +98,12 @@ GPtrArray* session_filter_build_choices(const gchar *agent_id,
     if (!has_default) {
         SessionChoice *choice = g_new0(SessionChoice, 1);
         choice->key = g_strdup(default_key);
-        choice->label = g_strdup("default (new)");
+        /*
+         * Human-readable fallback label for the synthesized main-session
+         * entry. Kept deliberately short; the canonical name is shown in
+         * the dropdown in tandem with the agent identity.
+         */
+        choice->label = g_strdup("main");
         g_ptr_array_add(out, choice);
     }
 

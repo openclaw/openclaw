@@ -147,10 +147,27 @@ TrayUiAction tray_ui_dispatch_decide(TrayUiRequest request, gboolean onboarding_
     switch (request) {
         case TRAY_UI_REQUEST_DIAGNOSTICS:
             return TRAY_UI_ACTION_SHOW_DIAGNOSTICS;
+        case TRAY_UI_REQUEST_CHAT:
+            /*
+             * Chat UX lives in its own standalone window; keep it off of
+             * the settings / diagnostics main-window fallback path so tray
+             * "Open Chat" never pulls the operator away from whatever
+             * section they had open in the main window.
+             */
+            return TRAY_UI_ACTION_SHOW_CHAT;
         case TRAY_UI_REQUEST_SETTINGS:
         default:
             return TRAY_UI_ACTION_SHOW_SETTINGS;
     }
+}
+
+/* ── Chat window show-decision (from chat_window.c) ──────────────── */
+
+ChatWindowShowAction chat_window_show_decide(gboolean has_application,
+                                             gboolean window_exists) {
+    if (!has_application) return CHAT_WINDOW_ACTION_IGNORE_NO_APP;
+    if (window_exists)    return CHAT_WINDOW_ACTION_PRESENT_EXISTING;
+    return CHAT_WINDOW_ACTION_BUILD_AND_PRESENT;
 }
 
 /* ── Onboarding refresh decisions (from onboarding.c) ─────────────── */

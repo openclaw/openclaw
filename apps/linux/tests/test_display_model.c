@@ -727,6 +727,85 @@ static void test_dashboard_url_base_path_trailing_slash(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * Pairing status (app footer) tests
+ *
+ * These guard the single-truth collapse of `(pairing_required,
+ * pending_approvals, auth_ok, ws_connected)` used by the main window
+ * sidebar footer. No GTK — pure scalar in, pure struct out.
+ * ══════════════════════════════════════════════════════════════════ */
+
+static void test_pairing_status_required_wins(void) {
+    /* Transport is blocked on PAIRING_REQUIRED even if inbound
+     * approvals happen to be queued simultaneously — the bootstrap
+     * window is the actionable surface. */
+    PairingStatusModel pm = {0};
+    pairing_status_model_build(/*pairing_required*/ TRUE,
+                               /*pending*/ 2,
+                               /*auth_ok*/ FALSE,
+                               /*ws_connected*/ FALSE, &pm);
+    g_assert_cmpint(pm.kind, ==, PAIRING_STATUS_REQUIRED);
+    g_assert_cmpint(pm.color, ==, STATUS_COLOR_RED);
+    g_assert_true(pm.actionable);
+    g_assert_nonnull(pm.label);
+    assert_contains(pm.label, "required", "required.label");
+}
+
+static void test_pairing_status_single_pending_approval(void) {
+    PairingStatusModel pm = {0};
+    pairing_status_model_build(FALSE, 1, TRUE, TRUE, &pm);
+    g_assert_cmpint(pm.kind, ==, PAIRING_STATUS_PENDING_APPROVAL);
+    g_assert_cmpint(pm.color, ==, STATUS_COLOR_ORANGE);
+    g_assert_true(pm.actionable);
+    g_assert_cmpuint(pm.pending_count, ==, 1);
+    assert_contains(pm.label, "1 request pending", "single.label");
+}
+
+static void test_pairing_status_multiple_pending_approvals(void) {
+    PairingStatusModel pm = {0};
+    pairing_status_model_build(FALSE, 3, TRUE, TRUE, &pm);
+    g_assert_cmpint(pm.kind, ==, PAIRING_STATUS_PENDING_APPROVAL);
+    g_assert_cmpint(pm.color, ==, STATUS_COLOR_ORANGE);
+    g_assert_true(pm.actionable);
+    g_assert_cmpuint(pm.pending_count, ==, 3);
+    assert_contains(pm.label, "requests pending", "multi.label");
+}
+
+static void test_pairing_status_paired_happy_path(void) {
+    PairingStatusModel pm = {0};
+    pairing_status_model_build(FALSE, 0, TRUE, TRUE, &pm);
+    g_assert_cmpint(pm.kind, ==, PAIRING_STATUS_PAIRED);
+    g_assert_cmpint(pm.color, ==, STATUS_COLOR_GREEN);
+    g_assert_false(pm.actionable);
+    assert_contains(pm.label, "paired", "paired.label");
+}
+
+static void test_pairing_status_transport_not_yet_authenticated(void) {
+    /* WS may be down, or up but not yet auth-ok. Neither pairing nor
+     * approvals are pending. Neutral state, no actionable affordance. */
+    PairingStatusModel pm = {0};
+    pairing_status_model_build(FALSE, 0, FALSE, FALSE, &pm);
+    g_assert_cmpint(pm.kind, ==, PAIRING_STATUS_UNKNOWN);
+    g_assert_cmpint(pm.color, ==, STATUS_COLOR_GRAY);
+    g_assert_false(pm.actionable);
+    assert_contains(pm.label, "not paired", "unknown.label");
+}
+
+static void test_pairing_status_ws_connected_but_auth_pending(void) {
+    /* WS handshake completed but auth has not succeeded yet — still
+     * neutral, must not claim paired. */
+    PairingStatusModel pm = {0};
+    pairing_status_model_build(FALSE, 0, FALSE, TRUE, &pm);
+    g_assert_cmpint(pm.kind, ==, PAIRING_STATUS_UNKNOWN);
+    g_assert_false(pm.actionable);
+}
+
+static void test_pairing_status_null_output_is_safe(void) {
+    /* Must not crash on NULL out-ptr. */
+    pairing_status_model_build(TRUE, 5, FALSE, FALSE, NULL);
+    pairing_status_model_build(FALSE, 0, TRUE, TRUE, NULL);
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * Registration
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -761,6 +840,22 @@ int main(int argc, char **argv) {
     g_test_add_func("/display_model/tray/starting", test_tray_starting);
     g_test_add_func("/display_model/tray/needs_setup", test_tray_needs_setup);
     g_test_add_func("/display_model/tray/null_output", test_tray_null_output);
+
+    /* Pairing status (app footer) */
+    g_test_add_func("/display_model/pairing/required_wins",
+                    test_pairing_status_required_wins);
+    g_test_add_func("/display_model/pairing/single_pending_approval",
+                    test_pairing_status_single_pending_approval);
+    g_test_add_func("/display_model/pairing/multiple_pending_approvals",
+                    test_pairing_status_multiple_pending_approvals);
+    g_test_add_func("/display_model/pairing/paired_happy_path",
+                    test_pairing_status_paired_happy_path);
+    g_test_add_func("/display_model/pairing/transport_not_yet_authenticated",
+                    test_pairing_status_transport_not_yet_authenticated);
+    g_test_add_func("/display_model/pairing/ws_connected_but_auth_pending",
+                    test_pairing_status_ws_connected_but_auth_pending);
+    g_test_add_func("/display_model/pairing/null_output_is_safe",
+                    test_pairing_status_null_output_is_safe);
 
     /* Config display model */
     g_test_add_func("/display_model/config/valid", test_config_valid);

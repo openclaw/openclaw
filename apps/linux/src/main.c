@@ -19,6 +19,7 @@
 #include "log.h"
 #include "gateway_client.h"
 #include "onboarding.h"
+#include "device_pair_prompter.h"
 
 extern void tray_init(void);
 extern void systemd_init(void);
@@ -67,6 +68,12 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     // The gateway client manages its own internal timers for health polling
     // and WebSocket reconnection with exponential backoff.
     gateway_client_init();
+
+    // 5b. Initialize the pairing-approval prompter so pairing events that
+    // arrive on the very first WS handshake are captured. Parent remains
+    // NULL here; app_window wires the real parent when the main window
+    // exists.
+    device_pair_prompter_init(NULL);
 
     // 6. Schedule onboarding check after a short delay so the initial
     // health probe has time to complete and state is meaningful.
