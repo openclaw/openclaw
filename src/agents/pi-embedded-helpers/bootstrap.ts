@@ -88,8 +88,9 @@ export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
-const BOOTSTRAP_HEAD_RATIO = 0.7;
-const BOOTSTRAP_TAIL_RATIO = 0.2;
+const BOOTSTRAP_HEAD_RATIO = 0.75;
+const BOOTSTRAP_TAIL_RATIO = 0.24;
+/** ~1% reserved for the truncation marker inserted between head and tail. */
 
 type TrimBootstrapResult = {
   content: string;
