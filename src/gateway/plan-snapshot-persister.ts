@@ -533,6 +533,13 @@ async function persistSnapshot(params: {
               text: completionInjection,
               createdAt: Date.now(),
             });
+            // Plan lifecycle is ending — clear any acceptEdits
+            // permission granted by this cycle's approval. The next
+            // plan cycle will regenerate approvalId and set its own
+            // permission (or not).
+            if (entry.postApprovalPermissions !== undefined) {
+              entry.postApprovalPermissions = undefined;
+            }
             return entry;
           },
         });

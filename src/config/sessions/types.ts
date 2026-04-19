@@ -79,6 +79,27 @@ export type CliSessionBinding = {
 };
 
 /**
+ * Post-approval permissions granted to the agent after a plan was
+ * approved. Scoped by `approvalId` so a permission granted for cycle A
+ * can't leak into cycle B. Cleared on new plan-mode cycle, close-on-
+ * complete, or explicit reset.
+ *
+ * Currently tracks only `acceptEdits` (Claude-Code-style auto-edit
+ * permission: the agent may self-modify the plan during execution at
+ * ≥95% confidence, subject to three hard constraints — no destructive
+ * actions, no self-restart, no config changes). Runtime enforcement of
+ * the three constraints lives in
+ * `src/agents/plan-mode/accept-edits-gate.ts`; the prompt injection
+ * that teaches the agent the semantics is
+ * `buildAcceptEditsPlanInjection` in `src/agents/plan-mode/approval.ts`.
+ */
+export interface PostApprovalPermissions {
+  acceptEdits: boolean;
+  grantedAt: number;
+  approvalId: string;
+}
+
+/**
  * Classification of a pending-agent-injection queue entry. Each writer
  * stamps its kind so the consumer (or future filters) can reason about
  * what was injected without parsing the text.
@@ -327,6 +348,17 @@ export type SessionEntry = {
    * cycle starts from scratch.
    */
   recentlyApprovedAt?: number;
+  /**
+   * Post-approval permissions granted to the agent (currently just
+   * acceptEdits). Set when the approval action is "edit" (Claude-Code
+   * acceptEdits semantics: grants the agent permission to self-modify
+   * the plan during execution).
+   *
+   * Scoped by `approvalId` — a new plan cycle regenerates approvalId
+   * and invalidates the prior permission. Explicitly cleared on
+   * enter_plan_mode and close-on-complete.
+   */
+  postApprovalPermissions?: PostApprovalPermissions;
   /**
    * Live-test iteration 3 D2: marker timestamp set at the FIRST
    * `sessions.patch { planMode: "plan" }` transition for this
