@@ -14,7 +14,6 @@ import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js"
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -23,7 +22,6 @@ import {
   resolveAgentExecutionContract,
   resolveAgentMaxIterations,
   resolveSessionAgentIds,
-  resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
@@ -303,10 +301,6 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
-      const canonicalWorkspace = resolveUserPath(
-        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-      );
-      const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -910,9 +904,7 @@ export async function runEmbeddedPiAgent(
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
-            isCanonicalWorkspace,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
@@ -1978,7 +1970,7 @@ export async function runEmbeddedPiAgent(
                   source: "planning_only_retry",
                 },
               });
-              params.onAgentEvent?.({
+              void params.onAgentEvent?.({
                 stream: "plan",
                 data: {
                   phase: "update",
@@ -2035,6 +2027,16 @@ export async function runEmbeddedPiAgent(
                 : "normal";
           const planModeAckOnlyInstruction = resolvePlanModeAckOnlyRetryInstruction({
             planModeActive: ackRetryLatestPlanMode === "plan",
+            // Post-approval grace: the ack-only failure (text without
+            // tool) is a real stall in the first few minutes after
+            // approval while the agent orients to unlocked mutation
+            // tools. sessions-patch clears planMode on approve/edit so
+            // `planModeActive` goes false; `recentlyApprovedAt`
+            // survives the deletion at SessionEntry root, letting this
+            // detector fire during the grace window.
+            ...(typeof ackRetryAckCtx?.recentlyApprovedAt === "number"
+              ? { recentlyApprovedAt: ackRetryAckCtx.recentlyApprovedAt }
+              : {}),
             aborted,
             timedOut,
             attempt,

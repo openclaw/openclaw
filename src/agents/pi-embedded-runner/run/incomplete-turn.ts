@@ -438,22 +438,6 @@ function isEmptyResponseAssistantTurn(params: {
   return true;
 }
 
-function shouldSkipPlanningOnlyRetry(params: {
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: IncompleteTurnAttempt;
-}): boolean {
-  return Boolean(
-    params.aborted ||
-    params.timedOut ||
-    params.attempt.clientToolCall ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
-    params.attempt.replayMetadata.hadPotentialSideEffects,
-  );
-}
-
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -464,7 +448,15 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   /** When true, planning-only is the desired state — skip retry pressure. */
   planModeActive?: boolean;
 }): string | null {
-  if (shouldSkipPlanningOnlyRetry(params)) {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
+  ) {
     return null;
   }
 
@@ -504,7 +496,15 @@ export function resolveEmptyResponseRetryInstruction(params: {
   /** When true, planning-only is the desired state — skip retry pressure. */
   planModeActive?: boolean;
 }): string | null {
-  if (shouldSkipPlanningOnlyRetry(params)) {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
+  ) {
     return null;
   }
 
@@ -839,15 +839,41 @@ type PlanModeAckOnlyAttempt = Pick<
   | "replayMetadata"
 >;
 
+/**
+ * Grace window (ms) after approval during which the ack-only detector
+ * remains active. Same rationale as POST_APPROVAL_YIELD_GRACE_MS but
+ * narrower — ack-only is a text-without-tool failure, which is most
+ * common in the first few minutes post-approval while the agent is
+ * still orienting to the unlocked mutation tools. 5 minutes covers the
+ * natural response latency without keeping the retry armed
+ * indefinitely.
+ */
+export const POST_APPROVAL_ACK_ONLY_GRACE_MS = 5 * 60_000;
+
 export function resolvePlanModeAckOnlyRetryInstruction(params: {
   planModeActive?: boolean;
+  /**
+   * Epoch-ms timestamp from `SessionEntry.recentlyApprovedAt`.
+   * Post-approval the session is in normal mode but the ack-only
+   * failure pattern (agent says "I'll now execute..." without
+   * calling a tool) is still a real stall. Extends the detector's
+   * fire window by POST_APPROVAL_ACK_ONLY_GRACE_MS when planMode is
+   * no longer active but approval was recent.
+   */
+  recentlyApprovedAt?: number;
+  /** Now (ms) — injectable for tests. Defaults to Date.now(). */
+  nowMs?: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanModeAckOnlyAttempt;
   /** 0 = first retry (standard tone), >=1 = firm */
   retryAttemptIndex: number;
 }): string | null {
-  if (!params.planModeActive) {
+  const now = params.nowMs ?? Date.now();
+  const withinPostApprovalGrace =
+    typeof params.recentlyApprovedAt === "number" &&
+    now - params.recentlyApprovedAt < POST_APPROVAL_ACK_ONLY_GRACE_MS;
+  if (!params.planModeActive && !withinPostApprovalGrace) {
     return null;
   }
   if (params.aborted || params.timedOut) {
