@@ -14,7 +14,10 @@ import {
 } from "./persistent-bindings.types.js";
 import { toAcpRuntimeError } from "./runtime/errors.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
-import { isAcpStaleSessionError } from "./runtime/stale-session.js";
+import {
+  ACP_STALE_BINDING_UNBIND_REASON,
+  isAcpStaleSessionError,
+} from "./runtime/stale-session.js";
 
 function sessionMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
@@ -196,7 +199,7 @@ export async function resetAcpSessionInPlace(params: {
       try {
         const removedBindings = await getSessionBindingService().unbind({
           targetSessionKey: sessionKey,
-          reason: "acp-session-init-failed",
+          reason: ACP_STALE_BINDING_UNBIND_REASON,
         });
         logVerbose(
           `acp-configured-binding: removed ${removedBindings.length} stale binding(s) for ${sessionKey} after reset failure: ${message}`,
