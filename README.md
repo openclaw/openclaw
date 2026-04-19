@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
+  <strong>EXFOLIATE! EXFOLIATE! With Juggs</strong>
 </p>
 
 <p align="center">
