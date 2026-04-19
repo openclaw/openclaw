@@ -3,6 +3,7 @@ import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.j
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
+import { isGemmaModelRequiringReasoningStrip } from "./pi-embedded-helpers/google.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
@@ -23,6 +24,7 @@ export type TranscriptPolicy = {
   };
   sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
+  dropReasoningFromHistory: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
@@ -54,6 +56,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeThoughtSignatures: undefined,
   sanitizeThinkingSignatures: false,
   dropThinkingBlocks: false,
+  dropReasoningFromHistory: false,
   applyGoogleTurnOrdering: false,
   validateGeminiTurns: false,
   validateAnthropicTurns: false,
@@ -114,6 +117,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
       : {}),
+    ...(isGemmaModelRequiringReasoningStrip(params.modelId)
+      ? { dropReasoningFromHistory: true }
+      : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
@@ -150,6 +156,9 @@ function mergeTranscriptPolicy(
       : {}),
     ...(typeof policy.dropThinkingBlocks === "boolean"
       ? { dropThinkingBlocks: policy.dropThinkingBlocks }
+      : {}),
+    ...(typeof policy.dropReasoningFromHistory === "boolean"
+      ? { dropReasoningFromHistory: policy.dropReasoningFromHistory }
       : {}),
     ...(typeof policy.applyAssistantFirstOrderingFix === "boolean"
       ? { applyGoogleTurnOrdering: policy.applyAssistantFirstOrderingFix }

@@ -112,7 +112,7 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   return touched ? out : messages;
 }
 
-function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const message of messages) {
