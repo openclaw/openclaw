@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { onAgentEvent } from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createStubSessionHarness,
@@ -291,6 +292,71 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
     expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
+  it("emits turn events through the onAgentEvent callback", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "turn_start" });
+    emit({
+      type: "turn_end",
+      toolResults: [{ toolCallId: "tool-1" }],
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "turn",
+      data: {
+        phase: "start",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "turn",
+      data: {
+        phase: "end",
+        toolResultsCount: 1,
+      },
+    });
+  });
+
+  it("emits turn events on the global agent event bus", () => {
+    const { session, emit } = createStubSessionHarness();
+    const seen: Array<{ stream: string; phase?: unknown; toolResultsCount?: unknown }> = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId !== "run-turns") {
+        return;
+      }
+      seen.push({
+        stream: evt.stream,
+        phase: evt.data.phase,
+        toolResultsCount: evt.data.toolResultsCount,
+      });
+    });
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-turns",
+    });
+
+    emit({ type: "turn_start" });
+    emit({
+      type: "turn_end",
+      toolResults: [{ toolCallId: "tool-1" }, { toolCallId: "tool-2" }],
+    });
+
+    stop();
+
+    expect(seen).toEqual([
+      {
+        stream: "turn",
+        phase: "start",
+        toolResultsCount: undefined,
+      },
+      {
+        stream: "turn",
+        phase: "end",
+        toolResultsCount: 2,
+      },
+    ]);
   });
 
   it("does not emit duplicate agent events when message_end repeats", () => {
