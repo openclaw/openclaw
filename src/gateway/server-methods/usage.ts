@@ -310,6 +310,10 @@ async function loadCostUsageSummaryCached(params: {
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
+  // Lazy eviction: prune stale entries to prevent unbounded growth across days.
+  if (cached && cached.updatedAt && now - cached.updatedAt >= COST_USAGE_CACHE_TTL_MS) {
+    costUsageCache.delete(cacheKey);
+  }
 
   if (cached?.inFlight) {
     if (cached.summary) {
