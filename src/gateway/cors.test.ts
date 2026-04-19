@@ -9,8 +9,8 @@ import {
 } from "./cors.js";
 
 describe("classifyCorsEndpoint", () => {
-  const both = { chatCompletions: true, responses: true };
-  const none = { chatCompletions: false, responses: false };
+  const both = { chatCompletions: true, responses: true, models: true };
+  const none = { chatCompletions: false, responses: false, models: false };
 
   it("POST /v1/chat/completions with chatCompletions enabled", () => {
     expect(classifyCorsEndpoint("POST", "/v1/chat/completions", both)).toBe("chatCompletions");
@@ -44,20 +44,28 @@ describe("classifyCorsEndpoint", () => {
     expect(classifyCorsEndpoint("OPTIONS", "/tools/invoke", none)).toBe("toolsInvoke");
   });
 
-  it("GET /v1/models always covered", () => {
-    expect(classifyCorsEndpoint("GET", "/v1/models", none)).toBe("models");
+  it("GET /v1/models with models enabled", () => {
+    expect(classifyCorsEndpoint("GET", "/v1/models", both)).toBe("models");
   });
 
-  it("GET /v1/models/some-model subpath covered", () => {
-    expect(classifyCorsEndpoint("GET", "/v1/models/some-model", none)).toBe("models");
+  it("GET /v1/models with models disabled", () => {
+    expect(classifyCorsEndpoint("GET", "/v1/models", none)).toBeNull();
   });
 
-  it("OPTIONS /v1/models covered (preflight)", () => {
-    expect(classifyCorsEndpoint("OPTIONS", "/v1/models", none)).toBe("models");
+  it("GET /v1/models/some-model subpath with models enabled", () => {
+    expect(classifyCorsEndpoint("GET", "/v1/models/some-model", both)).toBe("models");
+  });
+
+  it("OPTIONS /v1/models with models enabled (preflight)", () => {
+    expect(classifyCorsEndpoint("OPTIONS", "/v1/models", both)).toBe("models");
+  });
+
+  it("OPTIONS /v1/models with models disabled", () => {
+    expect(classifyCorsEndpoint("OPTIONS", "/v1/models", none)).toBeNull();
   });
 
   it("POST /v1/models wrong method", () => {
-    expect(classifyCorsEndpoint("POST", "/v1/models", none)).toBeNull();
+    expect(classifyCorsEndpoint("POST", "/v1/models", both)).toBeNull();
   });
 
   it("GET /hooks/wake not covered", () => {

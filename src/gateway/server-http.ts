@@ -919,6 +919,7 @@ export function createGatewayHttpServer(opts: {
       const corsEndpoint = classifyCorsEndpoint(req.method ?? "GET", requestPath, {
         chatCompletions: openAiChatCompletionsEnabled,
         responses: openResponsesEnabled,
+        models: openAiCompatEnabled,
       });
       const corsDecision = resolveCorsForRequest({
         method: req.method ?? "GET",

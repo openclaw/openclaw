@@ -24,7 +24,7 @@ const DEFAULT_MAX_AGE = 600;
 export function classifyCorsEndpoint(
   method: string,
   pathname: string,
-  endpointsEnabled: { chatCompletions: boolean; responses: boolean },
+  endpointsEnabled: { chatCompletions: boolean; responses: boolean; models: boolean },
 ): CorsCoveredEndpoint | null {
   const m = method.toUpperCase();
   const isOptionsOrPost = m === "OPTIONS" || m === "POST";
@@ -39,7 +39,11 @@ export function classifyCorsEndpoint(
   if (isOptionsOrPost && pathname === "/tools/invoke") {
     return "toolsInvoke";
   }
-  if (isOptionsOrGet && (pathname === "/v1/models" || pathname.startsWith("/v1/models/"))) {
+  if (
+    isOptionsOrGet &&
+    endpointsEnabled.models &&
+    (pathname === "/v1/models" || pathname.startsWith("/v1/models/"))
+  ) {
     return "models";
   }
   return null;
