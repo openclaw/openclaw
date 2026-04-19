@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ContextEngine } from "../context-engine/types.js";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -66,6 +67,12 @@ vi.mock("../config/sessions.js", () => {
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
+const noopContextEngine = {
+  info: { id: "test-context-engine", name: "Test context engine" },
+  ingest: async () => ({ ingested: false }),
+  assemble: async () => ({ messages: [], estimatedTokens: 0 }),
+  compact: async () => ({ ok: true, compacted: false }),
+} satisfies ContextEngine;
 vi.mock("./subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
@@ -108,6 +115,11 @@ describe("subagent registry steer restarts", () => {
   beforeEach(() => {
     vi.useRealTimers();
     lifecycleHandler = undefined;
+    mod.__testing.setDepsForTest({
+      ensureContextEnginesInitialized: () => {},
+      ensureRuntimePluginsLoaded: () => {},
+      resolveContextEngine: async () => noopContextEngine,
+    });
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
@@ -221,6 +233,7 @@ describe("subagent registry steer restarts", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    mod.__testing.setDepsForTest();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
@@ -294,7 +307,7 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-completion-delayed");
 
-      await vi.waitFor(() => {
+      await waitForRegistrySideEffect(() => {
         expect(announceSpy).toHaveBeenCalledTimes(1);
       });
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
