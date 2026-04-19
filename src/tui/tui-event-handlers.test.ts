@@ -721,7 +721,8 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+    /* Message is now suppressed — only the internal reset fires */
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
 
     handlers.dispose?.();
   });
@@ -847,7 +848,8 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledTimes(2);
+    /* Messages are now suppressed — only the internal reset fires */
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
 
     handlers.dispose?.();
   });
