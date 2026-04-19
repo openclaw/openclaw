@@ -212,6 +212,7 @@ export function createMattermostConnectOnce(
             }
             if (initialUpdateAt === undefined) {
               initialUpdateAt = current;
+              consecutiveHealthCheckFailures = 0;
               return;
             }
             if (current !== initialUpdateAt) {
