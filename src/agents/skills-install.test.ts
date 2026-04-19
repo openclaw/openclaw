@@ -6,24 +6,27 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { setTempStateDir } from "./skills-install.download-test-utils.js";
-import { installSkill } from "./skills-install.js";
+import { installSkill, __testing as skillsInstallTesting } from "./skills-install.js";
 import {
   runCommandWithTimeoutMock,
   scanDirectoryWithSummaryMock,
 } from "./skills-install.test-mocks.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./skills/frontmatter.js";
+import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./skills/local-loader.js";
+import type { SkillEntry } from "./skills/types.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../security/skill-scanner.js", async () => ({
-  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
-    "../security/skill-scanner.js",
-  )),
+vi.mock("../security/skill-scanner.js", () => ({
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+}));
+
+vi.mock("./skills/plugin-skills.js", () => ({
+  resolvePluginSkillDirs: () => [],
 }));
 
 async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
@@ -45,31 +48,64 @@ metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-
   return skillDir;
 }
 
+function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
+  const skills = loadSkillsFromDirSafe({
+    dir: path.join(workspaceDir, "skills"),
+    source: "openclaw-workspace",
+  }).skills;
+  return skills.map((skill) => {
+    const frontmatter =
+      readSkillFrontmatterSafe({
+        rootDir: skill.baseDir,
+        filePath: skill.filePath,
+      }) ?? {};
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
+    return {
+      skill,
+      frontmatter,
+      metadata: resolveOpenClawMetadata(frontmatter),
+      invocation,
+      exposure: {
+        includeInRuntimeRegistry: true,
+        includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
+        userInvocable: invocation.userInvocable,
+      },
+    };
+  });
+}
+
 const workspaceSuite = createFixtureSuite("openclaw-skills-install-");
-let tempHome: TempHomeEnv;
 
 beforeAll(async () => {
-  tempHome = await createTempHomeEnv("openclaw-skills-install-home-");
   await workspaceSuite.setup();
 });
 
 afterAll(async () => {
   resetGlobalHookRunner();
+  skillsInstallTesting.setDepsForTest();
   await workspaceSuite.cleanup();
-  await tempHome.restore();
 });
 
 async function withWorkspaceCase(
   run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
   const workspaceDir = await workspaceSuite.createCaseDir("case");
-  const stateDir = setTempStateDir(workspaceDir);
-  await run({ workspaceDir, stateDir });
+  const stateDir = path.join(workspaceDir, "state");
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  try {
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    await run({ workspaceDir, stateDir });
+  } finally {
+    envSnapshot.restore();
+  }
 }
 
 describe("installSkill code safety scanning", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
+    skillsInstallTesting.setDepsForTest({
+      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+    });
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
     runCommandWithTimeoutMock.mockResolvedValue({

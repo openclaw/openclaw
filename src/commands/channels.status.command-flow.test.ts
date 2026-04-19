@@ -99,6 +99,17 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: (opts: unknown, run: () => Promise<unknown>) => mocks.withProgress(opts, run),
 }));
 
+function createTokenAccountSnapshot(cfg: { secretResolved?: boolean }) {
+  return {
+    name: "Primary",
+    enabled: true,
+    configured: true,
+    token: cfg.secretResolved ? "resolved-discord-token" : "",
+    tokenSource: "config",
+    tokenStatus: cfg.secretResolved ? "available" : "configured_unavailable",
+  };
+}
+
 function createTokenOnlyPlugin() {
   return {
     id: "discord",
@@ -113,42 +124,8 @@ function createTokenOnlyPlugin() {
     config: {
       listAccountIds: () => ["default"],
       defaultAccountId: resolveDefaultAccountId,
-      inspectAccount: (cfg: { secretResolved?: boolean }) =>
-        cfg.secretResolved
-          ? {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "resolved-discord-token",
-              tokenSource: "config",
-              tokenStatus: "available",
-            }
-          : {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "",
-              tokenSource: "config",
-              tokenStatus: "configured_unavailable",
-            },
-      resolveAccount: (cfg: { secretResolved?: boolean }) =>
-        cfg.secretResolved
-          ? {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "resolved-discord-token",
-              tokenSource: "config",
-              tokenStatus: "available",
-            }
-          : {
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "",
-              tokenSource: "config",
-              tokenStatus: "configured_unavailable",
-            },
+      inspectAccount: createTokenAccountSnapshot,
+      resolveAccount: createTokenAccountSnapshot,
       isConfigured: () => true,
       isEnabled: () => true,
     },
