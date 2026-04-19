@@ -21,11 +21,15 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
+let replaceRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").replaceRuntimeAuthProfileStoreSnapshots;
 
 async function loadFreshAuthProfilesModuleForTest() {
   vi.resetModules();
-  ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } =
-    await import("./auth-profiles.js"));
+  ({
+    clearRuntimeAuthProfileStoreSnapshots,
+    ensureAuthProfileStore,
+    replaceRuntimeAuthProfileStoreSnapshots,
+  } = await import("./auth-profiles.js"));
 }
 
 async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void | Promise<void>) {
@@ -51,20 +55,39 @@ async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void |
   }
 }
 
-function writeAuthStore(agentDir: string, key: string) {
+function writeAuthStore(
+  agentDir: string,
+  profilesOrKey:
+    | string
+    | Record<
+        string,
+        {
+          type: string;
+          provider: string;
+          key?: string;
+          access?: string;
+          refresh?: string;
+          expires?: number;
+        }
+      >,
+) {
   const authPath = path.join(agentDir, "auth-profiles.json");
+  const profiles =
+    typeof profilesOrKey === "string"
+      ? {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: profilesOrKey,
+          },
+        }
+      : profilesOrKey;
   fs.writeFileSync(
     authPath,
     `${JSON.stringify(
       {
         version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key,
-          },
-        },
+        profiles,
       },
       null,
       2,
@@ -72,6 +95,30 @@ function writeAuthStore(agentDir: string, key: string) {
     "utf8",
   );
   return authPath;
+}
+
+function writeAuthState(
+  agentDir: string,
+  state: {
+    lastGood?: Record<string, string>;
+    order?: Record<string, string[]>;
+    usageStats?: Record<string, { lastUsed?: number }>;
+  },
+) {
+  const statePath = path.join(agentDir, "auth-state.json");
+  fs.writeFileSync(
+    statePath,
+    `${JSON.stringify(
+      {
+        version: AUTH_STORE_VERSION,
+        ...state,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return statePath;
 }
 
 describe("auth profile store cache", () => {
@@ -129,6 +176,96 @@ describe("auth profile store cache", () => {
       expect(reloaded.profiles["openai:default"]).toMatchObject({
         key: "sk-test-2",
       });
+    });
+  });
+
+  it("invalidates runtime snapshots after auth-profiles.json changes on disk", async () => {
+    await withAgentDirEnv("openclaw-auth-runtime-snapshot-auth-", async (agentDir) => {
+      const authPath = writeAuthStore(agentDir, "sk-disk-1");
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-runtime-stale",
+              },
+            },
+          },
+        },
+      ]);
+
+      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
+        key: "sk-runtime-stale",
+      });
+
+      writeAuthStore(agentDir, "sk-disk-2");
+      const bumpedMtime = new Date(Date.now() + 2_000);
+      fs.utimesSync(authPath, bumpedMtime, bumpedMtime);
+
+      const reloaded = ensureAuthProfileStore(agentDir);
+
+      expect(reloaded.profiles["openai:default"]).toMatchObject({
+        key: "sk-disk-2",
+      });
+    });
+  });
+
+  it("invalidates runtime snapshots after auth-state.json changes on disk", async () => {
+    await withAgentDirEnv("openclaw-auth-runtime-snapshot-state-", async (agentDir) => {
+      writeAuthStore(agentDir, {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-default",
+        },
+        "openai:secondary": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-secondary",
+        },
+      });
+      const statePath = writeAuthState(agentDir, {
+        lastGood: { openai: "openai:default" },
+      });
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-default",
+              },
+              "openai:secondary": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-secondary",
+              },
+            },
+            lastGood: { openai: "openai:default" },
+          },
+        },
+      ]);
+
+      expect(ensureAuthProfileStore(agentDir).lastGood?.openai).toBe("openai:default");
+
+      writeAuthState(agentDir, {
+        lastGood: { openai: "openai:secondary" },
+      });
+      const bumpedMtime = new Date(Date.now() + 2_000);
+      fs.utimesSync(statePath, bumpedMtime, bumpedMtime);
+
+      const reloaded = ensureAuthProfileStore(agentDir);
+
+      expect(reloaded.lastGood?.openai).toBe("openai:secondary");
     });
   });
 
