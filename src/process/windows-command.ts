@@ -21,6 +21,18 @@ export function resolveWindowsCommandShim(params: {
   return params.command;
 }
 
+export function resolveEffectiveWindowsPath(env: NodeJS.ProcessEnv | undefined): string {
+  if (env === undefined) {
+    return process.env.PATH ?? "";
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toUpperCase() === "PATH") {
+      return typeof value === "string" ? value : "";
+    }
+  }
+  return "";
+}
+
 function findCmdShimOnPath(name: string, pathEnv: string): string | null {
   for (const dir of pathEnv.split(path.delimiter)) {
     if (!dir) {

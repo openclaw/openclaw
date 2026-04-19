@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWindowsCmdShimArgv, resolveWindowsCommandShim } from "./windows-command.js";
+import {
+  resolveEffectiveWindowsPath,
+  resolveWindowsCmdShimArgv,
+  resolveWindowsCommandShim,
+} from "./windows-command.js";
 
 describe("resolveWindowsCommandShim", () => {
   it("leaves commands unchanged outside Windows", () => {
@@ -175,5 +179,32 @@ describe("resolveWindowsCmdShimArgv", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveEffectiveWindowsPath", () => {
+  it("returns the parent process PATH when env is undefined", () => {
+    expect(resolveEffectiveWindowsPath(undefined)).toBe(process.env.PATH ?? "");
+  });
+
+  it("returns the provided PATH value when env contains it", () => {
+    expect(resolveEffectiveWindowsPath({ PATH: "C:\\custom\\bin" })).toBe("C:\\custom\\bin");
+  });
+
+  it("matches PATH case-insensitively to handle Windows Path / path variants", () => {
+    expect(resolveEffectiveWindowsPath({ Path: "C:\\mixed\\bin" })).toBe("C:\\mixed\\bin");
+    expect(resolveEffectiveWindowsPath({ path: "C:\\lower\\bin" })).toBe("C:\\lower\\bin");
+  });
+
+  it("returns empty string when env is provided without a PATH key (no parent inheritance)", () => {
+    expect(resolveEffectiveWindowsPath({ FOO: "bar" })).toBe("");
+  });
+
+  it("returns empty string when env has PATH set to undefined", () => {
+    expect(resolveEffectiveWindowsPath({ PATH: undefined })).toBe("");
+  });
+
+  it("returns empty string from an empty env object (no parent inheritance)", () => {
+    expect(resolveEffectiveWindowsPath({})).toBe("");
   });
 });
