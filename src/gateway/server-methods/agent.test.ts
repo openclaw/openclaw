@@ -1027,7 +1027,8 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           runId: "task-registry-agent-seam",
           childSessionKey: "agent:main:main",
-          task: "background cli seam task",
+          sourceId: "task-registry-agent-seam",
+          task: expect.stringContaining("background cli seam task"),
         }),
       );
       expect(findTaskByRunId("task-registry-agent-seam")).toMatchObject({
