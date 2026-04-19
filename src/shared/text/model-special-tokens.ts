@@ -85,7 +85,7 @@ export function stripModelSpecialTokens(text: string): string {
       lastChannelDelimiterEnd = end;
     }
   }
-  if (lastChannelDelimiterEnd !== null && lastChannelDelimiterEnd < text.length) {
+  if (lastChannelDelimiterEnd !== null) {
     return collapseStructuredWholeStringRepetition(
       stripModelSpecialTokens(text.slice(lastChannelDelimiterEnd)),
     );

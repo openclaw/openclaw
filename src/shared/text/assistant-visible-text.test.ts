@@ -541,6 +541,12 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("hahaha");
   });
 
+  it("drops a bare trailing control delimiter with no visible suffix", () => {
+    const input = "Internal planning<channel|>";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("");
+  });
+
   it("preserves indentation for a leading fenced block while trimming surrounding blank lines", () => {
     const input = "\n\n  ```js\n  const x = 1;\n  ```\n";
 
