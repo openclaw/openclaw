@@ -166,40 +166,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
     fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl ca-certificates
-
-# Install GitHub CLI (`gh`) from the official cli.github.com apt repo.
-# gh reads the same credential helper we configure below, so `gh pr create`,
-# `gh api`, `gh repo view` all work with Blink App installation tokens.
-# Failure of this step is NON-FATAL: if cli.github.com is unreachable during
-# image build we continue without `gh` — plain `git` still works via the
-# credential helper and the agent falls back to `blink connector exec github`
-# for REST calls. This keeps Blink Claw image builds resilient.
-RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    set -eu; \
-    install -m 0755 -d /etc/apt/keyrings && \
-    if curl -fsSL --retry 3 --retry-delay 2 https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; then \
-      chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
-        "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list && \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh || \
-      echo "[blink] gh install failed — continuing without gh (non-fatal)"; \
-    else \
-      echo "[blink] could not fetch gh apt key — continuing without gh (non-fatal)"; \
-    fi
-
-# Blink git credential helper — mints short-lived GitHub App installation
-# tokens via blink-apis /v1/github/mint-token. System-wide config so both
-# root-owned and node-owned processes use it automatically. The helper itself
-# only intercepts github.com/https traffic and exits silently otherwise, so
-# cloning from GitLab, Bitbucket, self-hosted git, or pushing to other remotes
-# works unchanged via git's default credential chain.
-COPY blink-git-credential.sh /usr/local/bin/blink-git-credential
-RUN chmod 0755 /usr/local/bin/blink-git-credential && \
-    git config --system credential.helper '/usr/local/bin/blink-git-credential'
+      procps hostname curl git lsof openssl
 
 RUN chown node:node /app
 
@@ -294,14 +261,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 # Install Blink CLI + clawhub at build time so every rebuild ships the newest.
 # NPM_CONFIG_PREFIX points npm-global at the persistent Fly volume so the
 # `node` user can `npm install -g <pkg>` at runtime without sudo.
-#
-# IMPORTANT: pin BLINK_CLI_VERSION to an exact npm version and bump it on every
-# CLI release. `@latest` does NOT cache-bust this RUN layer — Docker's layer
-# cache key is the command string, which doesn't change when npm's
-# `dist-tags.latest` moves. Bumping the ARG value changes the command string,
-# forcing this layer to rebuild and the agent fleet to pick up the new CLI.
-ARG BLINK_CLI_VERSION=0.7.1
-RUN npm install -g "@blinkdotnew/cli@${BLINK_CLI_VERSION}" clawhub@latest
+RUN npm install -g @blinkdotnew/cli@latest clawhub@latest
 ENV NPM_CONFIG_PREFIX=/data/npm-global
 ENV PATH="/data/npm-global/bin:${PATH}"
 
