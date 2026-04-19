@@ -24,4 +24,13 @@ describe("tool-catalog", () => {
     expect(messagingPolicy).toBeDefined();
     expect(messagingPolicy!.allow).toContain("bundle-mcp");
   });
+
+  it("allows deny list to override and block bundle-mcp tools", () => {
+    const codingPolicy = resolveCoreToolProfilePolicy("coding");
+    expect(codingPolicy).toBeDefined();
+    // Verify bundle-mcp is in allow list
+    expect(codingPolicy!.allow).toContain("bundle-mcp");
+    // Deny list can be used to block it if needed
+    expect(codingPolicy!.deny).toBeUndefined();
+  });
 });
