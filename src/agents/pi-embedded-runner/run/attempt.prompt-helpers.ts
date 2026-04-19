@@ -24,7 +24,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 export type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[] },
+    event: { prompt: string; messages: unknown[]; availableTools?: string[]; availableSkills?: string[] },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
@@ -36,6 +36,8 @@ export type PromptBuildHookRunner = {
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
+  availableTools?: string[];
+  availableSkills?: string[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -46,6 +48,8 @@ export async function resolvePromptBuildHookResult(params: {
           {
             prompt: params.prompt,
             messages: params.messages,
+            availableTools: params.availableTools,
+            availableSkills: params.availableSkills,
           },
           params.hookCtx,
         )
@@ -86,6 +90,10 @@ export async function resolvePromptBuildHookResult(params: {
       promptBuildResult?.appendSystemContext,
       legacyResult?.appendSystemContext,
     ]),
+    // First defined toolsAllow wins (before_prompt_build takes precedence over legacy hook).
+    toolsAllow: promptBuildResult?.toolsAllow ?? legacyResult?.toolsAllow,
+    // First defined skillsAllow wins (before_prompt_build takes precedence over legacy hook).
+    skillsAllow: promptBuildResult?.skillsAllow ?? legacyResult?.skillsAllow,
   };
 }
 

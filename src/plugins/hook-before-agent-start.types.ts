@@ -16,6 +16,26 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /**
+   * Names of tools available for this turn (after policy pipeline filtering).
+   * Populated on the full prompt-build call in the attempt phase.
+   * Plugins should use this to dynamically select which tools to include via
+   * `toolsAllow` — no hardcoded tool lists needed.
+   *
+   * When `availableTools` is undefined or empty, the plugin is being called in a
+   * context where tool information is not yet available. Return `undefined` for
+   * `toolsAllow` in this case; the full call with populated `availableTools` will
+   * follow.
+   */
+  availableTools?: string[];
+  /**
+   * Names of skills loaded for this session. Plugins can use this to dynamically
+   * select which skills to include in the system prompt via `skillsAllow`.
+   *
+   * When `availableSkills` is undefined or empty, the plugin is being called in a
+   * context where skill information is not yet available.
+   */
+  availableSkills?: string[];
 };
 
 export type PluginHookBeforePromptBuildResult = {
@@ -31,6 +51,37 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+  /**
+   * Optional tool allow-list for this turn. When set, only the listed tools are
+   * sent to the model — the same filtering that `toolsAllow` on cron payloads
+   * already applies (intersection with the owner's static policy, never additive).
+   *
+   * Plugins can use this to dynamically narrow the tool surface per-turn based
+   * on task classification, reducing token overhead and model confusion.
+   *
+   * Applied from the full `before_prompt_build` call in attempt.ts, where
+   * `availableTools` is populated. Plugins that need to inspect available tools
+   * before deciding which to allow should check `event.availableTools`.
+   *
+   * Safety guarantee: this list is intersected with the tools that survive the
+   * existing policy pipeline — it can only *remove* tools, never grant access
+   * to tools the owner denied.
+   */
+  toolsAllow?: string[];
+  /**
+   * Optional skill allow-list for this turn. When set, only the listed skills
+   * have their full descriptions injected into the system prompt. All other
+   * skills are omitted from the skills catalog.
+   *
+   * Plugins can use this to dynamically narrow the skill surface per-turn based
+   * on task classification, reducing token overhead from irrelevant skill
+   * descriptions.
+   *
+   * Safety guarantee: this list is intersected with the skills that are already
+   * loaded — it can only *remove* skills from the prompt, never inject skills
+   * that weren't loaded.
+   */
+  skillsAllow?: string[];
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -38,6 +89,8 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "prependContext",
   "prependSystemContext",
   "appendSystemContext",
+  "toolsAllow",
+  "skillsAllow",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<
