@@ -14,7 +14,7 @@ import type {
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../account-config.js";
+import { resolveMatrixAccountAllowlistConfig } from "../account-config.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -706,17 +706,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         };
         const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
-        const liveAccountCfg = resolveMatrixAccountConfig({
+        const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
           cfg: core.config.loadConfig() as CoreConfig,
           accountId,
         });
         const liveDmAllowFrom = resolveEffectiveMatrixLiveAllowlist({
-          liveEntries: liveAccountCfg.dm?.allowFrom,
+          liveEntries: liveAccountAllowlists.dmAllowFrom,
           startupResolvedEntries: allowFromResolvedEntries,
           fallbackEntries: allowFrom,
         });
         const liveGroupAllowFrom = resolveEffectiveMatrixLiveAllowlist({
-          liveEntries: liveAccountCfg.groupAllowFrom,
+          liveEntries: liveAccountAllowlists.groupAllowFrom,
           startupResolvedEntries: groupAllowFromResolvedEntries,
           fallbackEntries: groupAllowFrom,
         });

@@ -1841,6 +1841,47 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("uses account-scoped live dm.allowFrom overrides", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["@base:example.org"] },
+          accounts: {
+            ops: {
+              dm: { allowFrom: ["@alice:example.org"] },
+            },
+          },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      accountId: "ops",
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["@alice:example.org"],
+      allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-account-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.accounts.ops.dm.allowFrom = [];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-account-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps startup-resolved display names only while the raw input remains configured", async () => {
     const dispatchReplyFromConfig = createDispatchReplyFromConfig();
     const cfg = {
