@@ -77,8 +77,11 @@ gchar* gateway_rpc_request(const gchar *method,
     pending->user_data = user_data;
 
     guint effective_timeout = timeout_ms > 0 ? timeout_ms : GATEWAY_RPC_DEFAULT_TIMEOUT_MS;
-    pending->timeout_id = g_timeout_add(effective_timeout, on_request_timeout,
-                                        g_strdup(request_id));
+    pending->timeout_id = g_timeout_add_full(G_PRIORITY_DEFAULT,
+                                             effective_timeout,
+                                             on_request_timeout,
+                                             g_strdup(request_id),
+                                             g_free);
 
     g_hash_table_insert(pending_requests, pending->request_id, pending);
 
@@ -207,13 +210,11 @@ void gateway_rpc_response_free_members(GatewayRpcResponse *response) {
 static gboolean on_request_timeout(gpointer user_data) {
     gchar *request_id = user_data;
     if (!request_id || !pending_requests) {
-        g_free(request_id);
         return G_SOURCE_REMOVE;
     }
 
     PendingRpcRequest *pending = g_hash_table_lookup(pending_requests, request_id);
     if (!pending) {
-        g_free(request_id);
         return G_SOURCE_REMOVE;
     }
 
@@ -234,7 +235,6 @@ static gboolean on_request_timeout(gpointer user_data) {
     gpointer cb_data = pending->user_data;
 
     g_hash_table_remove(pending_requests, request_id);
-    g_free(request_id);
 
     cb(&response, cb_data);
     gateway_rpc_response_free_members(&response);
