@@ -78,6 +78,36 @@ export function resolveLatestPlanModeFromDisk(params: {
 }
 
 /**
+ * Reads the live `acceptEdits` permission flag for a session,
+ * bypassing the in-memory store cache so a recent `sessions.patch`
+ * approve-with-edits action is visible on the very next tool call.
+ *
+ * Returns `true` only when `postApprovalPermissions.acceptEdits ===
+ * true`. Any other state (no permission object, explicit false, or
+ * disk unreadable) returns `false` so the constraint gate defaults
+ * to "permission not granted" — callers should treat this as a
+ * conservative fail-closed read of the permission, while the gate
+ * itself (applied only when this returns true) is fail-open per
+ * `accept-edits-gate.ts`.
+ */
+export function resolveLatestAcceptEditsFromDisk(params: {
+  storePath?: string;
+  sessionKey?: string;
+}): boolean {
+  const { storePath, sessionKey } = params;
+  if (!storePath || !sessionKey) {
+    return false;
+  }
+  try {
+    const liveStore = loadSessionStore(storePath, { skipCache: true });
+    const liveEntry = liveStore?.[sessionKey];
+    return liveEntry?.postApprovalPermissions?.acceptEdits === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Bug 3+4 v3 helper: read the LATEST persisted SessionEntry for a
  * given sessionKey, bypassing the in-memory session-store cache.
  *

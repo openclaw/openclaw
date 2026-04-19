@@ -1,0 +1,371 @@
+/**
+ * Adversarial tests for the acceptEdits constraint gate.
+ *
+ * The gate blocks three classes of action when `acceptEdits` permission
+ * is active: destructive, self-restart, and config-change. This test
+ * suite exercises positive cases (legit tool use passes) and negative
+ * cases (destructive / restart / config actions blocked) including
+ * shell-escape and obfuscation attempts.
+ */
+
+import { describe, expect, it } from "vitest";
+import { checkAcceptEditsConstraint } from "./accept-edits-gate.js";
+
+describe("checkAcceptEditsConstraint — allowed (baseline)", () => {
+  it("allows an unknown tool with no exec command", () => {
+    expect(checkAcceptEditsConstraint({ toolName: "read" }).blocked).toBe(false);
+    expect(checkAcceptEditsConstraint({ toolName: "custom_mcp.search" }).blocked).toBe(false);
+  });
+
+  it("allows exec with a read-only command", () => {
+    expect(checkAcceptEditsConstraint({ toolName: "exec", execCommand: "ls -la" }).blocked).toBe(
+      false,
+    );
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "git status" }).blocked,
+    ).toBe(false);
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "rg 'TODO' src/" }).blocked,
+    ).toBe(false);
+  });
+
+  it("allows exec with general write commands (not destructive)", () => {
+    // `git commit` is a mutation but not destructive
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "git commit -m 'x'" }).blocked,
+    ).toBe(false);
+    expect(checkAcceptEditsConstraint({ toolName: "exec", execCommand: "pnpm test" }).blocked).toBe(
+      false,
+    );
+    // Generic file write via npm/build tooling — allowed
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "pnpm build" }).blocked,
+    ).toBe(false);
+  });
+
+  it("allows write/edit tools targeting non-protected paths", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "write",
+        filePath: "src/agents/plan-mode/injections.ts",
+      }).blocked,
+    ).toBe(false);
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "edit",
+        filePath: "/tmp/scratch.txt",
+      }).blocked,
+    ).toBe(false);
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "edit",
+        filePath: "~/code/my-project/README.md",
+      }).blocked,
+    ).toBe(false);
+  });
+});
+
+describe("checkAcceptEditsConstraint — destructive (blocked)", () => {
+  it("blocks `rm` prefix", () => {
+    const r = checkAcceptEditsConstraint({ toolName: "exec", execCommand: "rm file.txt" });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("destructive");
+  });
+
+  it("blocks `rm -rf`", () => {
+    const r = checkAcceptEditsConstraint({ toolName: "exec", execCommand: "rm -rf build/" });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("destructive");
+  });
+
+  it("blocks `rmdir`", () => {
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "rmdir dist" }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks `shred`, `trash`, `unlink`, `truncate`", () => {
+    for (const cmd of [
+      "shred -u secret.key",
+      "trash artifacts/",
+      "unlink link.txt",
+      "truncate -s 0 log.txt",
+    ]) {
+      const r = checkAcceptEditsConstraint({ toolName: "exec", execCommand: cmd });
+      expect(r.blocked, `${cmd} should be blocked`).toBe(true);
+    }
+  });
+
+  it("does NOT false-positive on `rmtool` or other prefix look-alikes", () => {
+    // A tool that happens to start with "rm" but isn't the rm command.
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "rmtool --help" }).blocked,
+    ).toBe(false);
+    expect(
+      checkAcceptEditsConstraint({ toolName: "exec", execCommand: "rmate config.toml" }).blocked,
+    ).toBe(false);
+  });
+
+  it("blocks SQL DROP TABLE in psql / sqlite3 invocation", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: `psql -c "DROP TABLE users"`,
+    });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("destructive");
+  });
+
+  it("blocks SQL DELETE FROM in exec", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: `sqlite3 db "DELETE FROM sessions WHERE id > 0"`,
+    });
+    expect(r.blocked).toBe(true);
+  });
+
+  it("blocks TRUNCATE TABLE regardless of surrounding whitespace/case", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: `psql -c "truncate   table users"`,
+    });
+    expect(r.blocked).toBe(true);
+  });
+
+  it("blocks Redis FLUSHALL / FLUSHDB", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "redis-cli FLUSHALL",
+      }).blocked,
+    ).toBe(true);
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "redis-cli -n 2 flushdb",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks `find ... -delete`", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: "find /tmp/cache -type f -delete",
+    });
+    expect(r.blocked).toBe(true);
+  });
+
+  it("blocks `find ... -exec rm`", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: "find . -name '*.tmp' -exec rm {} \\;",
+    });
+    expect(r.blocked).toBe(true);
+  });
+
+  it("blocks destructive actions called via bash tool too", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "bash",
+      execCommand: "rm -rf /tmp/staging",
+    });
+    expect(r.blocked).toBe(true);
+  });
+});
+
+describe("checkAcceptEditsConstraint — self-restart (blocked)", () => {
+  it("blocks `openclaw gateway restart|stop|kill`", () => {
+    for (const action of ["restart", "stop", "kill"]) {
+      const r = checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: `openclaw gateway ${action}`,
+      });
+      expect(r.blocked, `gateway ${action} should block`).toBe(true);
+      expect(r.constraint).toBe("self_restart");
+    }
+  });
+
+  it("blocks `launchctl kickstart` on ai.openclaw.*", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
+    });
+    expect(r.blocked).toBe(true);
+  });
+
+  it("allows `launchctl kickstart` on unrelated services", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: "launchctl kickstart -k com.apple.screensaver",
+    });
+    expect(r.blocked).toBe(false);
+  });
+
+  it("blocks `systemctl restart openclaw`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "systemctl restart openclaw-gateway.service",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks `pkill openclaw`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "pkill -9 -f openclaw",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks `kill` combined with gateway/openclaw on the same line", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "kill -9 $(pgrep openclaw-gateway)",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("allows `kill` of unrelated processes", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "kill -9 12345",
+      }).blocked,
+    ).toBe(false);
+  });
+
+  it("blocks `scripts/restart-mac.sh`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "bash scripts/restart-mac.sh",
+      }).blocked,
+    ).toBe(true);
+  });
+});
+
+describe("checkAcceptEditsConstraint — config change (blocked)", () => {
+  it("blocks `openclaw config set`", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "exec",
+      execCommand: "openclaw config set agents.defaults.planMode.enabled true",
+    });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("config_change");
+  });
+
+  it("blocks `openclaw config delete`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "openclaw config delete some.key",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks `openclaw doctor --fix`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "openclaw doctor --fix --yes",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("allows `openclaw config get` (read-only)", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "openclaw config get agents.defaults.planMode.enabled",
+      }).blocked,
+    ).toBe(false);
+  });
+
+  it("allows `openclaw doctor` without --fix", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "exec",
+        execCommand: "openclaw doctor --verbose",
+      }).blocked,
+    ).toBe(false);
+  });
+
+  it("blocks write/edit to `~/.openclaw/config.toml`", () => {
+    const r = checkAcceptEditsConstraint({
+      toolName: "write",
+      filePath: "~/.openclaw/config.toml",
+    });
+    expect(r.blocked).toBe(true);
+    expect(r.constraint).toBe("config_change");
+  });
+
+  it("blocks write/edit to `~/.claude/config`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "edit",
+        filePath: "~/.claude/config",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks write to `~/.config/openclaw/settings.json`", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "write",
+        filePath: "~/.config/openclaw/settings.json",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("blocks write to `/etc/openclaw/` system config", () => {
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "write",
+        filePath: "/etc/openclaw/gateway.conf",
+      }).blocked,
+    ).toBe(true);
+  });
+
+  it("allows write to non-config paths under a similarly-named parent", () => {
+    // Edge: `~/.openclaw-personal-notes/` is NOT `~/.openclaw/` — must not false-match.
+    expect(
+      checkAcceptEditsConstraint({
+        toolName: "write",
+        filePath: "~/.openclaw-personal-notes/todo.md",
+      }).blocked,
+    ).toBe(false);
+  });
+});
+
+describe("checkAcceptEditsConstraint — no exec command", () => {
+  it("skips exec-pattern checks when execCommand is undefined or empty", () => {
+    expect(checkAcceptEditsConstraint({ toolName: "exec" }).blocked).toBe(false);
+    expect(checkAcceptEditsConstraint({ toolName: "exec", execCommand: "" }).blocked).toBe(false);
+    expect(checkAcceptEditsConstraint({ toolName: "exec", execCommand: "   " }).blocked).toBe(
+      false,
+    );
+  });
+
+  it("skips path checks when filePath is undefined or empty", () => {
+    expect(checkAcceptEditsConstraint({ toolName: "write" }).blocked).toBe(false);
+    expect(checkAcceptEditsConstraint({ toolName: "write", filePath: "" }).blocked).toBe(false);
+  });
+});
+
+describe("checkAcceptEditsConstraint — case insensitivity", () => {
+  it("normalizes tool name case", () => {
+    expect(checkAcceptEditsConstraint({ toolName: "EXEC", execCommand: "rm /tmp/x" }).blocked).toBe(
+      true,
+    );
+    expect(checkAcceptEditsConstraint({ toolName: "Bash", execCommand: "rm -rf /" }).blocked).toBe(
+      true,
+    );
+  });
+
+  it("normalizes destructive exec prefix case", () => {
+    expect(checkAcceptEditsConstraint({ toolName: "exec", execCommand: "RM file" }).blocked).toBe(
+      true,
+    );
+  });
+});
