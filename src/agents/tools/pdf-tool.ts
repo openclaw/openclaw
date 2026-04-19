@@ -47,6 +47,9 @@ const DEFAULT_MAX_PAGES = 20;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
+// Abort the remote PDF fetch if the response body stalls this long, so a
+// stuck CDN connection can no longer wedge the tool call indefinitely.
+const PDF_FETCH_IDLE_TIMEOUT_MS = 30_000;
 
 export const PdfToolSchema = Type.Object({
   prompt: Type.Optional(Type.String()),
@@ -388,10 +391,12 @@ export function createPdfTool(options?: {
               maxBytes,
               sandboxValidated: true,
               readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+              readIdleTimeoutMs: PDF_FETCH_IDLE_TIMEOUT_MS,
             })
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
+              readIdleTimeoutMs: PDF_FETCH_IDLE_TIMEOUT_MS,
             });
 
         if (media.kind !== "document") {

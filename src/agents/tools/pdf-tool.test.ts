@@ -260,6 +260,28 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("passes a fetch idle timeout when loading remote PDFs", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "https://example.com/doc.pdf",
+      });
+
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      const opts = loadSpy.mock.calls[0][1] as { readIdleTimeoutMs?: number } | undefined;
+      expect(opts?.readIdleTimeoutMs).toBeGreaterThan(0);
+    });
+  });
+
   it("tool parameters have correct schema shape", async () => {
     await loadCreatePdfTool();
     const schema = PdfToolSchema;
