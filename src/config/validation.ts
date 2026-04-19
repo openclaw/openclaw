@@ -603,16 +603,14 @@ function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
       continue;
     }
     try {
-      const parsed = new URL(origin);
-      if (
-        parsed.pathname !== "/" ||
-        origin.endsWith("/") ||
-        parsed.search !== "" ||
-        parsed.hash !== ""
-      ) {
+      const canonical = new URL(origin).origin;
+      if (origin !== canonical) {
         issues.push({
           path: "gateway.http.cors.allowedOrigins",
-          message: `gateway.http.cors.allowedOrigins: "${origin}" must be scheme://host[:port] with no trailing slash, path, query, or fragment.`,
+          message:
+            `gateway.http.cors.allowedOrigins: "${origin}" must be the canonical form "${canonical}" ` +
+            "(lowercase scheme and host, no userinfo, default ports omitted, no path, query, or fragment). " +
+            "Browsers send the canonical Origin header, and allowlist lookup is an exact string match.",
         });
       }
     } catch {
