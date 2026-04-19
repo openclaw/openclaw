@@ -18,7 +18,11 @@ export type HeartbeatWakeHandler = (opts: {
 let heartbeatsEnabled = true;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
+  const wasEnabled = heartbeatsEnabled;
   heartbeatsEnabled = enabled;
+  if (!wasEnabled && enabled && handler) {
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+  }
 }
 
 export function areHeartbeatsEnabled(): boolean {

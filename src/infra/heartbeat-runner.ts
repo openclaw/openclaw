@@ -1183,9 +1183,9 @@ export function startHeartbeatRunner(opts: {
       }
       return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
     } finally {
-      // Always re-arm the timer — except for requests-in-flight, where the
-      // wake layer (heartbeat-wake.ts) handles retry via schedule(DEFAULT_RETRY_MS).
-      if (!requestsInFlight) {
+      // Re-arm only when normal scheduling is active. Requests-in-flight retry
+      // is owned by heartbeat-wake.ts, and global disable should pause intervals.
+      if (!requestsInFlight && areHeartbeatsEnabled()) {
         scheduleNext();
       }
     }

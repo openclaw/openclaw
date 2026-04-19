@@ -289,6 +289,46 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("does not re-arm interval timers while heartbeat is globally disabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    setHeartbeatsEnabled(false);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    runner.stop();
+  });
+
+  it("resumes interval scheduling when heartbeat is re-enabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    setHeartbeatsEnabled(false);
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    setHeartbeatsEnabled(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
   it("dispatches targeted ACP wake requests even when heartbeat is globally disabled", async () => {
     useFakeHeartbeatTime();
     setHeartbeatsEnabled(false);
