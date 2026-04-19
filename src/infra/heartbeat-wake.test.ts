@@ -263,6 +263,7 @@ describe("heartbeat-wake", () => {
       reason: "cron:job-1",
       agentId: "ops",
       sessionKey: "agent:ops:discord:channel:alerts",
+      heartbeat: { target: "last" },
       coalesceMs: 0,
     });
 
@@ -272,6 +273,7 @@ describe("heartbeat-wake", () => {
       reason: "cron:job-1",
       agentId: "ops",
       sessionKey: "agent:ops:discord:channel:alerts",
+      heartbeat: { target: "last" },
     });
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -280,6 +282,7 @@ describe("heartbeat-wake", () => {
       reason: "cron:job-1",
       agentId: "ops",
       sessionKey: "agent:ops:discord:channel:alerts",
+      heartbeat: { target: "last" },
     });
   });
 
