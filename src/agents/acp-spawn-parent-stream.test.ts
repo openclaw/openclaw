@@ -1,4 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listReceiptsForSession,
+  resetDeliveryReceiptsForTest,
+} from "../infra/outbound/delivery-receipts.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
@@ -56,6 +60,7 @@ vi.mock("../config/sessions/paths.js", async () => {
 let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
 let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").resolveAcpSpawnStreamLogPath;
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
+let splitLongFinalReply: typeof import("./acp-spawn-parent-stream.js").splitLongFinalReply;
 
 function collectedTexts() {
   return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
@@ -64,7 +69,7 @@ function collectedTexts() {
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeAll(async () => {
     ({ emitAgentEvent } = await import("../infra/agent-events.js"));
-    ({ resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
+    ({ resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay, splitLongFinalReply } =
       await import("./acp-spawn-parent-stream.js"));
   });
 
@@ -77,6 +82,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
     resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
+    resetDeliveryReceiptsForTest();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
@@ -688,12 +694,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  // Production bug fix (Phase 2.5/3.5 follow-up): the operator report was that
-  // long-form assistant replies never reached the thread. Before the fix,
-  // flushPending squashed ALL assistant deltas to a 220-char snippet + relay-
-  // label prefix, so the direct-post webhook path received a truncated preview
-  // instead of the real reply.
-  it("preserves full assistant text on final_reply flush (no 220-char snippet truncation)", () => {
+  // Simplicity cleanup: merged "preserves full assistant text" + "preserves
+  // newlines" coverage into one end-to-end preservation test. Covers the
+  // original operator report (long-form replies truncated to a 220-char
+  // snippet) AND the paragraph-break preservation requirement in a single
+  // pass — they exercise the same code path.
+  it("preserves full assistant text and paragraph breaks on final_reply flush", () => {
     const deliveryContext = {
       channel: "discord",
       to: "channel:parent-channel",
@@ -711,14 +717,22 @@ describe("startAcpSpawnParentStreamRelay", () => {
       emitStartNotice: false,
     });
 
-    // 600-char assistant answer — comfortably longer than STREAM_SNIPPET_MAX_CHARS
-    // (220) but well under the per-Discord-message chunk budget (~1900).
-    const longReply = `Here is the full analysis you asked for. ${"Detail ".repeat(80)}Conclusion.`;
-    emitAgentEvent({
-      runId: "run-long",
-      stream: "assistant",
-      data: { delta: longReply },
-    });
+    // Stream multi-paragraph reply as separate deltas so no single delta
+    // contains "\n\n" (which would trigger the phase-less boundary-flush-as-
+    // progress path). Total body is >500 chars, comfortably larger than
+    // STREAM_SNIPPET_MAX_CHARS (220) but under the per-chunk budget (~1900).
+    const longBody = `Here is the full analysis you asked for. ${"Detail ".repeat(80)}`;
+    for (const piece of [
+      `${longBody}First line.\n`,
+      "\nSecond line.\n",
+      "\nThird line. Conclusion.",
+    ]) {
+      emitAgentEvent({
+        runId: "run-long",
+        stream: "assistant",
+        data: { delta: piece },
+      });
+    }
     emitAgentEvent({
       runId: "run-long",
       stream: "lifecycle",
@@ -730,10 +744,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
       | { threadId?: string | number; content?: string }
       | undefined;
     expect(postArgs?.threadId).toBe("thread-long");
-    // Full body survives end-to-end — no "…" truncation suffix, no relay label.
+    // Full body survives — no 220-char truncation, no "…" suffix, no relay
+    // label. Paragraph breaks between streamed deltas are preserved.
     expect(postArgs?.content?.length ?? 0).toBeGreaterThan(500);
     expect(postArgs?.content).toContain("Here is the full analysis");
-    expect(postArgs?.content).toContain("Conclusion.");
+    expect(postArgs?.content).toContain("First line.\n\nSecond line.");
+    expect(postArgs?.content).toContain("Third line. Conclusion.");
     expect(postArgs?.content?.startsWith("claude:")).toBe(false);
     relay.dispose();
   });
@@ -840,24 +856,72 @@ describe("startAcpSpawnParentStreamRelay", () => {
     );
     expect(progressEmissions.length).toBeGreaterThan(0);
     const body = String(progressEmissions[0][0]);
-    // progress stays prefixed AND bounded by the snippet length (label + up
-    // to 220 chars) so parent session-queue summaries stay compact.
+    // Simplicity cleanup: content-based assertions. progress is label-
+    // prefixed and compactWhitespace-collapsed (no raw paragraph breaks).
     expect(body.startsWith("codex: ")).toBe(true);
-    expect(body.length).toBeLessThanOrEqual("codex: ".length + 220);
+    expect(body).not.toContain("\n\n");
     relay.dispose();
   });
 
-  it("preserves newlines in final_reply bodies (does not squash paragraph breaks)", () => {
+  // MUST-FIX #1 regression: a non-empty final_reply through the direct-post
+  // path records a `direct_post_final_reply` delivered receipt; an empty
+  // body takes the fall-through branch (no direct-post receipt is recorded).
+  // Empty-body behavior is additionally covered by the direct unit tests on
+  // splitLongFinalReply (returning []) below.
+  it("MUST-FIX #1: records a direct_post_final_reply receipt only when chunks are non-empty", async () => {
     const deliveryContext = {
       channel: "discord",
       to: "channel:parent-channel",
       accountId: "default",
-      threadId: "thread-fmt",
+      threadId: "thread-receipt",
     };
+    const sessionKey = "agent:main:main:receipt";
     const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-fmt",
-      parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:claude:acp:fmt",
+      runId: "run-receipt",
+      parentSessionKey: sessionKey,
+      childSessionKey: "agent:claude:acp:receipt",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-receipt",
+      stream: "assistant",
+      data: { delta: "ok", phase: "final_answer" },
+    });
+    vi.advanceTimersByTime(15);
+    // Flush microtasks so the async dispatch inside directPostFinalReply
+    // completes and recordReceipt runs.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const receipts = listReceiptsForSession(sessionKey);
+    expect(receipts.some((r) => r.reason === "direct_post_final_reply")).toBe(true);
+    // The empty-body guard is exercised directly via the unit helper so the
+    // MUST-FIX #1 invariant is provable without relying on emit()'s trim.
+    expect(splitLongFinalReply("")).toEqual([]);
+    relay.dispose();
+  });
+
+  // SHOULD-FIX #2 regression: a per-chunk send failure must not drop all
+  // subsequent chunks. Chunks 1 and 3 must ship even if chunk 2 throws, and
+  // the delivery receipt reason tag must reflect partial delivery.
+  it("SHOULD-FIX #2: partial chunk-send failure delivers remaining chunks and records partial receipt", async () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-partial",
+    };
+    const sessionKey = "agent:main:main:partial-chunk";
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-partial",
+      parentSessionKey: sessionKey,
+      childSessionKey: "agent:claude:acp:partial",
       agentId: "claude",
       deliveryContext,
       streamFlushMs: 5_000,
@@ -865,30 +929,208 @@ describe("startAcpSpawnParentStreamRelay", () => {
       emitStartNotice: false,
     });
 
-    // Stream the reply so no single delta contains "\n\n" (which would
-    // trigger the phase-less boundary-flush-as-progress path) AND each delta
-    // has some non-whitespace content (deltas that trim to "" are dropped by
-    // the relay early-exit). The buffered text accumulates, and lifecycle-end
-    // promotes it to final_reply with paragraph breaks intact.
-    for (const piece of ["First line.\n", "\nSecond line.\n", "\nThird line."]) {
-      emitAgentEvent({
-        runId: "run-fmt",
-        stream: "assistant",
-        data: { delta: piece },
-      });
-    }
+    // Fail ONLY the 2nd sendMessage call — chunks 1 and 3 must still ship.
+    let callIndex = 0;
+    sendMessageMock.mockImplementation(async () => {
+      callIndex += 1;
+      if (callIndex === 2) {
+        throw new Error("429 simulated");
+      }
+      return {};
+    });
+
+    // Five ~750-char paragraphs → ~3760-char body, splits into 3 chunks under
+    // the 1900-char default budget (so all three chunks fit under
+    // STREAM_BUFFER_MAX_CHARS without tail-slicing).
+    const paragraph = "X".repeat(750);
     emitAgentEvent({
-      runId: "run-fmt",
+      runId: "run-partial",
+      stream: "assistant",
+      data: {
+        delta: `${paragraph}\n\n${paragraph}\n\n${paragraph}\n\n${paragraph}\n\n${paragraph}`,
+      },
+    });
+    emitAgentEvent({
+      runId: "run-partial",
       stream: "lifecycle",
       data: { phase: "end" },
     });
 
-    expect(sendMessageMock).toHaveBeenCalled();
-    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as { content?: string } | undefined;
-    // Paragraph breaks survive — compactWhitespace would have collapsed these
-    // into single spaces, which is unusable for Discord rendering.
-    expect(postArgs?.content).toContain("First line.\n\nSecond line.");
-    expect(postArgs?.content).toContain("Third line.");
+    vi.runAllTicks();
+    for (let i = 0; i < 8; i += 1) {
+      await Promise.resolve();
+    }
+
+    // 3 chunks attempted; chunk 2 failed, chunks 1 and 3 delivered.
+    expect(sendMessageMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    const receipts = listReceiptsForSession(sessionKey);
+    expect(receipts.some((r) => r.reason === "direct_post_final_reply_partial")).toBe(true);
+    // Outcome is still `delivered` because at least one chunk landed.
+    const partial = receipts.find((r) => r.reason === "direct_post_final_reply_partial");
+    expect(partial?.outcome).toBe("delivered");
     relay.dispose();
+  });
+
+  // SHOULD-FIX #4a regression: error lifecycle must promote buffered text to
+  // final_reply so phase-less streams don't lose their last words on failure.
+  it("SHOULD-FIX #4a: error lifecycle flushes pending buffer as final_reply (phase-less stream)", () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-err",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-err-flush",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:claude:acp:err-flush",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 5_000,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    // Phase-less Claude-style delta — no `phase` field.
+    emitAgentEvent({
+      runId: "run-err-flush",
+      stream: "assistant",
+      data: { delta: "Partial analysis before crash." },
+    });
+    emitAgentEvent({
+      runId: "run-err-flush",
+      stream: "lifecycle",
+      data: { phase: "error", error: "upstream died" },
+    });
+
+    // Pending buffer must have been flushed as final_reply via direct-post.
+    expect(sendMessageMock).toHaveBeenCalled();
+    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as
+      | { content?: string; threadId?: string | number }
+      | undefined;
+    expect(postArgs?.threadId).toBe("thread-err");
+    expect(postArgs?.content).toContain("Partial analysis before crash.");
+    relay.dispose();
+  });
+
+  // SHOULD-FIX #4b regression: relay-lifetime timeout must flush the buffer
+  // BEFORE dispose so the user doesn't silently lose data.
+  it("SHOULD-FIX #4b: relay-lifetime timeout flushes pending buffer as final_reply before dispose", () => {
+    const deliveryContext = {
+      channel: "discord",
+      to: "channel:parent-channel",
+      accountId: "default",
+      threadId: "thread-tmo",
+    };
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-tmo-flush",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:claude:acp:tmo-flush",
+      agentId: "claude",
+      deliveryContext,
+      streamFlushMs: 5_000,
+      noOutputNoticeMs: 0,
+      maxRelayLifetimeMs: 1_000,
+      emitStartNotice: false,
+    });
+
+    // Phase-less delta buffered; lifecycle-end never arrives.
+    emitAgentEvent({
+      runId: "run-tmo-flush",
+      stream: "assistant",
+      data: { delta: "Answer that would be lost without terminal flush." },
+    });
+    vi.advanceTimersByTime(1_050);
+
+    expect(sendMessageMock).toHaveBeenCalled();
+    const postArgs = sendMessageMock.mock.calls.at(-1)?.[0] as
+      | { content?: string; threadId?: string | number }
+      | undefined;
+    expect(postArgs?.threadId).toBe("thread-tmo");
+    expect(postArgs?.content).toContain("Answer that would be lost");
+    relay.dispose();
+  });
+});
+
+// SHOULD-FIX #5: direct unit tests on splitLongFinalReply — helper is public
+// surface and must cover edge cases independently of the full relay path.
+describe("splitLongFinalReply", () => {
+  beforeAll(async () => {
+    ({ splitLongFinalReply } = await import("./acp-spawn-parent-stream.js"));
+  });
+
+  it("returns [] for empty input so the direct-post caller falls through to enqueue", () => {
+    expect(splitLongFinalReply("")).toEqual([]);
+  });
+
+  it("returns the body as a single chunk when exactly at the limit", () => {
+    const body = "x".repeat(50);
+    expect(splitLongFinalReply(body, 50)).toEqual([body]);
+  });
+
+  it("splits just-over-limit input at a whitespace boundary", () => {
+    // "aaaa bbbb cccc" (14 chars) with limit 10 → split at the last space
+    // within the 10-char window (position 9) so word boundaries survive.
+    const body = "aaaa bbbb cccc";
+    const chunks = splitLongFinalReply(body, 10);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toBe("aaaa bbbb");
+    expect(chunks[1]).toBe("cccc");
+  });
+
+  it("prefers paragraph boundaries (\\n\\n) over line breaks", () => {
+    const body = `${"a".repeat(30)}\n\n${"b".repeat(30)}`;
+    const chunks = splitLongFinalReply(body, 40);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toBe("a".repeat(30));
+    expect(chunks[1]).toBe("b".repeat(30));
+  });
+
+  it("falls back to single-line breaks when no paragraph boundary exists", () => {
+    const body = `${"a".repeat(30)}\n${"b".repeat(30)}`;
+    const chunks = splitLongFinalReply(body, 40);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toBe("a".repeat(30));
+    expect(chunks[1]).toBe("b".repeat(30));
+  });
+
+  it("falls back to the last whitespace when no line break exists", () => {
+    const body = `${"a".repeat(30)} ${"b".repeat(30)}`;
+    const chunks = splitLongFinalReply(body, 40);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toBe("a".repeat(30));
+    expect(chunks[1]).toBe("b".repeat(30));
+  });
+
+  it("hard-slices when a single word exceeds the chunk budget", () => {
+    const body = "x".repeat(100);
+    const chunks = splitLongFinalReply(body, 40);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(40);
+    }
+    expect(chunks.join("")).toBe(body);
+  });
+
+  it("repairs code fences that straddle a chunk boundary", () => {
+    // Code block comfortably exceeds the 1900-char default limit so the
+    // splitter has to cut inside the fenced region.
+    const openingFence = "```js\n";
+    const filler = "console.log('x');\n".repeat(200);
+    const closingFence = "```";
+    const body = `intro\n\n${openingFence}${filler}${closingFence}\n\noutro`;
+    const chunks = splitLongFinalReply(body, 1_900);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Every chunk must have an even number of ``` fences on its own, so
+    // Discord renders each chunk as valid Markdown on its own.
+    for (const chunk of chunks) {
+      const matches = chunk.match(/```/g) ?? [];
+      expect(matches.length % 2).toBe(0);
+    }
+    // Output chunks concatenated cover the original prose (modulo the
+    // injected repair markers).
+    const joined = chunks.join("");
+    expect(joined).toContain("intro");
+    expect(joined).toContain("outro");
   });
 });

@@ -4,7 +4,7 @@ import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { recordReceipt } from "../infra/outbound/delivery-receipts.js";
+import { type DeliveryReceiptTarget, recordReceipt } from "../infra/outbound/delivery-receipts.js";
 import type { MessageClass } from "../infra/outbound/message-class.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { planDelivery, type ResolvedSurfaceTarget } from "../infra/outbound/surface-policy.js";
@@ -74,9 +74,8 @@ const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
 // Discord hard-limits a single message to 2000 chars; webhook execute posts
 // reject longer bodies. We split final_reply bodies under this to keep the
-// webhook identity path functional for long assistant replies. Reserved
-// headroom (~100 chars) accommodates mention rewriting and a small
-// continuation indicator without hitting the wall.
+// webhook identity path functional for long assistant replies. Conservative
+// headroom under Discord's 2000-char limit to tolerate mention rewrites.
 const DIRECT_POST_CHUNK_MAX_CHARS = 1_900;
 
 // Phase 2 Discord Surface Overhaul: provider-agnostic allowlists describing
@@ -129,15 +128,37 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars - 1)}…`;
 }
 
+// Count non-overlapping occurrences of the literal fence marker ``` in `value`.
+function countTripleBackticks(value: string): number {
+  let count = 0;
+  let idx = value.indexOf("```");
+  while (idx !== -1) {
+    count += 1;
+    idx = value.indexOf("```", idx + 3);
+  }
+  return count;
+}
+
 // Split a long final_reply body into chunks that fit under Discord's 2000-char
 // message limit. Prefers paragraph boundaries ("\n\n"), then line boundaries,
 // then word boundaries, and finally a hard slice when a single word exceeds the
-// chunk budget. Returns the input unchanged when it already fits. Chunks are
-// trimmed of trailing whitespace but internal newlines are preserved so the
-// assistant's formatting survives across splits.
-export function splitLongFinalReply(text: string, maxChars: number): string[] {
+// chunk budget. Returns [] for empty input (callers must fall back to the
+// enqueue path so empty text is not recorded as a delivered receipt). Chunks
+// are trimmed of trailing whitespace but internal newlines are preserved so
+// the assistant's formatting survives across splits. When a triple-backtick
+// code fence straddles a chunk boundary we append `\n\`\`\`` to the current
+// chunk and prepend ``` \n `` to the next so each chunk renders as valid
+// Markdown on Discord. Single-backtick, bold/italic, and strikethrough runs
+// are NOT fixed up — known limitation documented on the call site.
+export function splitLongFinalReply(
+  text: string,
+  maxChars: number = DIRECT_POST_CHUNK_MAX_CHARS,
+): string[] {
   const limit = Math.max(1, Math.floor(maxChars));
   const body = text ?? "";
+  // MUST-FIX #1: empty body must return [] (not [body]) so the direct-post
+  // caller knows to fall back to enqueue instead of recording a spurious
+  // "delivered" receipt for no-op dispatch.
   if (!body) {
     return [];
   }
@@ -146,6 +167,7 @@ export function splitLongFinalReply(text: string, maxChars: number): string[] {
   }
   const chunks: string[] = [];
   let remaining = body;
+  let carryPrefix = "";
   while (remaining.length > limit) {
     // Prefer a paragraph break ("\n\n") within the budget; fall back to the
     // last newline, then the last whitespace, then a hard slice.
@@ -155,23 +177,34 @@ export function splitLongFinalReply(text: string, maxChars: number): string[] {
       splitAt = window.lastIndexOf("\n");
     }
     if (splitAt <= 0) {
-      // Last whitespace before the limit so we don't tear words apart.
-      const wsMatch = window.match(/\s[^\s]*$/);
-      if (wsMatch && typeof wsMatch.index === "number" && wsMatch.index > 0) {
-        splitAt = wsMatch.index;
+      const lastSpace = window.lastIndexOf(" ");
+      if (lastSpace > 0) {
+        splitAt = lastSpace;
       }
     }
     if (splitAt <= 0) {
       splitAt = limit;
     }
-    const head = remaining.slice(0, splitAt).replace(/\s+$/, "");
-    if (head) {
-      chunks.push(head);
+    let head = remaining.slice(0, splitAt).replace(/\s+$/, "");
+    let nextCarry = "";
+    // SHOULD-FIX #3: if the current head has an odd count of ``` fences, the
+    // code block is open at the cut point. Close it here and reopen it on the
+    // next chunk so both chunks render as valid Markdown.
+    const combinedHead = `${carryPrefix}${head}`;
+    if (countTripleBackticks(combinedHead) % 2 === 1) {
+      head = `${head}\n\`\`\``;
+      nextCarry = "```\n";
     }
+    if (carryPrefix || head) {
+      chunks.push(`${carryPrefix}${head}`);
+    }
+    carryPrefix = nextCarry;
     remaining = remaining.slice(splitAt).replace(/^\s+/, "");
   }
   if (remaining) {
-    chunks.push(remaining);
+    chunks.push(`${carryPrefix}${remaining}`);
+  } else if (carryPrefix) {
+    chunks.push(carryPrefix);
   }
   return chunks;
 }
@@ -347,10 +380,18 @@ export function startAcpSpawnParentStreamRelay(params: {
   // `drainFormattedSystemEvents`) — the user never sees it in the thread.
   // Fires a void promise; errors are logged at warn and do NOT block the
   // subscriber (sync) caller.
+  //
+  // Ownership contract: when this function returns `true` it takes full
+  // responsibility for recording the delivery receipt (including partial-
+  // delivery outcomes). Callers must NOT record their own receipt in that
+  // branch, or receipts would be double-counted. Returning `false` means the
+  // caller should fall through to the enqueue+receipt path.
   const directPostFinalReply = (
     text: string,
     contextKey: string,
     messageClass: MessageClass,
+    target: DeliveryReceiptTarget,
+    resolvedContextAt: number,
   ): boolean => {
     if (!threadBound || messageClass !== "final_reply") {
       return false;
@@ -376,32 +417,77 @@ export function startAcpSpawnParentStreamRelay(params: {
       // direct-POST fast path. Fall back to enqueue so legacy policy wins.
       return false;
     }
-    const threadIdForPost = ctx.threadId;
     // Discord hard-rejects single webhook messages > 2000 chars. The webhook
     // path in the discord plugin does NOT pre-chunk, so long assistant replies
     // would silently fail here. Split across sequential sends, preserving
     // paragraph/line boundaries where possible. Short replies take the
     // single-send fast path below.
     const chunks = splitLongFinalReply(text, DIRECT_POST_CHUNK_MAX_CHARS);
+    // MUST-FIX #1: empty body → no chunks → fall through to enqueue path so
+    // the caller does not record a "delivered" receipt for a no-op dispatch.
+    if (chunks.length === 0) {
+      return false;
+    }
+    const threadIdForPost = ctx.threadId;
     const threadOption =
       typeof threadIdForPost === "number"
         ? { threadId: threadIdForPost }
         : typeof threadIdForPost === "string" && threadIdForPost
           ? { threadId: threadIdForPost }
           : {};
+    // SHOULD-FIX #2: on per-chunk failure, keep going so a single transient
+    // 429 does not truncate the entire reply. Record a receipt whose reason
+    // tag reflects partial delivery; operators get the specific chunk index
+    // in relayLog.warn.
     const dispatch = async () => {
-      for (const chunk of chunks) {
+      const totalChunks = chunks.length;
+      let deliveredCount = 0;
+      const failedIndices: number[] = [];
+      for (let i = 0; i < chunks.length; i += 1) {
+        const chunk = chunks[i];
         if (!chunk) {
           continue;
         }
-        await sendMessage({
-          channel: surface.channel,
-          to: surface.to,
-          content: chunk,
-          accountId: surface.accountId,
-          ...threadOption,
-          bestEffort: true,
-        });
+        try {
+          await sendMessage({
+            channel: surface.channel,
+            to: surface.to,
+            content: chunk,
+            accountId: surface.accountId,
+            ...threadOption,
+            bestEffort: true,
+          });
+          deliveredCount += 1;
+        } catch (err: unknown) {
+          failedIndices.push(i + 1);
+          relayLog.warn("acp-spawn parent-stream direct final_reply chunk post failed", {
+            runId,
+            parentSessionKey,
+            contextKey,
+            channel: surface.channel,
+            threadId: threadIdForPost,
+            chunkIndex: i + 1,
+            totalChunks,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const reason =
+        failedIndices.length === 0
+          ? "direct_post_final_reply"
+          : deliveredCount === 0
+            ? "direct_post_final_reply_all_failed"
+            : "direct_post_final_reply_partial";
+      recordReceipt(parentSessionKey, {
+        target,
+        messageClass,
+        outcome: deliveredCount > 0 ? "delivered" : "suppressed",
+        reason,
+        ts: Date.now(),
+        resolvedContextAt,
+      });
+      if (deliveredCount > 0) {
+        wake();
       }
     };
     void dispatch().catch((err: unknown) => {
@@ -482,16 +568,10 @@ export function startAcpSpawnParentStreamRelay(params: {
       });
       return;
     }
-    if (directPostFinalReply(payload, contextKey, messageClass)) {
-      recordReceipt(parentSessionKey, {
-        target,
-        messageClass,
-        outcome: "delivered",
-        reason: "direct_post_final_reply",
-        ts: Date.now(),
-        resolvedContextAt,
-      });
-      wake();
+    // directPostFinalReply owns the receipt (sync true-return means it will
+    // record the receipt inside its async dispatcher — see ownership contract
+    // on the function). Do NOT record a receipt here in that branch.
+    if (directPostFinalReply(payload, contextKey, messageClass, target, resolvedContextAt)) {
       return;
     }
     enqueueSystemEvent(payload, {
@@ -592,18 +672,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       stream: "assistant",
       assistantPhase: effectivePhase,
     });
-    // Production bug fix: final_reply content reaches the bound Discord thread
-    // verbatim via directPostFinalReply (and, when no thread is bound, is
-    // spliced into the parent's next turn). Previously we squashed EVERY
-    // assistant flush to a 220-char snippet and prefixed it with the relay
-    // label, which meant long-form Claude/Codex replies never reached the
-    // user — only a truncated 220-char preview with a redundant "codex: "
-    // prefix (the webhook persona "⚙ codex" already conveys identity). For
-    // final_reply we now preserve the full buffered text (trimmed, newlines
-    // intact) and skip the relay-label prefix; directPostFinalReply handles
-    // Discord's 2000-char hard limit by splitting across sequential posts.
-    // progress-class flushes keep the snippet+label format so parent session-
-    // queue summaries stay compact.
+    // Invariants:
+    //   - final_reply: preserve the full buffered text verbatim (trimmed,
+    //     newlines intact); no relay-label prefix (webhook persona conveys it).
+    //   - progress: label-prefixed snippet capped at STREAM_SNIPPET_MAX_CHARS
+    //     so parent session-queue summaries stay compact.
     const body =
       messageClass === "final_reply"
         ? buffered.trim()
@@ -669,6 +742,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (disposed) {
       return;
     }
+    // SHOULD-FIX #4: drain the pending buffer as final_reply BEFORE dispose
+    // so the user does not silently lose the last partial answer when a
+    // phase-less stream times out without a clean lifecycle-end.
+    flushPending({ terminal: true });
     // Relay lifetime timeout is terminal — classify as completion so the
     // surface-policy predicate treats it like a lifecycle end.
     emit(
@@ -748,16 +825,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
       }
-      // Production bug fix: for phase-less streams (Claude ACP deltas omit
-      // `phase`) the SIZE-based immediate flush would split the full assistant
-      // reply into truncated 220-char `progress` snippets, leaving lifecycle-
-      // end with nothing to promote to `final_reply`. Defer size-triggered
-      // flushes until an explicit phase is observed or the buffer truly
-      // overflows STREAM_BUFFER_MAX_CHARS (already tail-sliced above). The
-      // `"\n\n"` boundary-triggered flush is retained so operators can still
-      // receive mid-stream progress summaries from Codex-style (phased)
-      // streams; the timer-flush deferral in `scheduleFlush` covers the time
-      // axis symmetrically for phase-less streams.
+      // Invariant: for phase-less streams (Claude-style), size-triggered
+      // flushes are deferred to scheduleFlush so the terminal lifecycle-end
+      // can promote the buffer to final_reply. Paragraph-boundary flushes
+      // still fire for phased (Codex-style) streams to surface mid-stream
+      // progress summaries.
       const sizeTriggered = pendingText.length >= STREAM_SNIPPET_MAX_CHARS;
       const boundaryTriggered = delta.includes("\n\n");
       if (sizeTriggered && !observedExplicitPhase) {
@@ -809,7 +881,12 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (phase === "error") {
-      flushPending();
+      // SHOULD-FIX #4: promote buffered assistant text to final_reply even on
+      // error-terminated streams. Phase-less (Claude-style) streams that die
+      // without a clean lifecycle-end would otherwise ship their pending
+      // buffer as `progress` (or drop it silently), losing the last visible
+      // words the user needs to interpret the failure.
+      flushPending({ terminal: true });
       const errorText = normalizeOptionalString(
         (event.data as { error?: unknown } | undefined)?.error,
       );
