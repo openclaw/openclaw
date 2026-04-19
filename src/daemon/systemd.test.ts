@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
+const isWSLSyncMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -15,6 +16,14 @@ vi.mock("node:child_process", async () => {
       }) as typeof import("node:child_process").execFile,
     },
   );
+});
+
+vi.mock("../infra/wsl.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/wsl.js")>("../infra/wsl.js");
+  return {
+    ...actual,
+    isWSLSync: isWSLSyncMock,
+  };
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
@@ -842,6 +851,75 @@ describe("systemd service control", () => {
         env: { USER: "", LOGNAME: "" },
       }),
     ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
+  });
+
+  it("reports a user-bus error (not 'systemctl not available') when WSL D-Bus socket is missing", async () => {
+    // Regression for #68380: WSL2's `Failed to connect to bus: No such file or directory`
+    // used to be misclassified as a missing-systemctl error because the `isSystemctlMissing`
+    // matcher loosely matched the "no such file or directory" substring. Ensure we now surface
+    // the bus failure verbatim instead of telling the user that systemctl is not installed.
+    isWSLSyncMock.mockReturnValue(false);
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+        }),
+        "",
+        "",
+      );
+    });
+
+    const thrown = await stopSystemdService({
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      env: { USER: "", LOGNAME: "" },
+    }).then(
+      () => {
+        throw new Error("expected stopSystemdService to reject");
+      },
+      (err: unknown) => err,
+    );
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("Failed to connect to bus: No such file or directory");
+    expect(message).not.toContain("systemctl not available; systemd user services are required");
+    expect(message).not.toContain("D-Bus unavailable on WSL2");
+  });
+
+  it("emits WSL2-specific D-Bus hint when user bus is unreachable under WSL", async () => {
+    // Regression for #68380: the WSL2-only branch in assertSystemdAvailable should point users
+    // at /etc/wsl.conf and `wsl --shutdown` instead of surfacing the generic
+    // `systemctl --user unavailable` message when isWSLSync() reports WSL.
+    isWSLSyncMock.mockReturnValue(true);
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+        }),
+        "",
+        "",
+      );
+    });
+
+    const thrown = await stopSystemdService({
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      env: { USER: "", LOGNAME: "" },
+    }).then(
+      () => {
+        throw new Error("expected stopSystemdService to reject");
+      },
+      (err: unknown) => err,
+    );
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("systemd user D-Bus unavailable on WSL2");
+    expect(message).toContain("Failed to connect to bus: No such file or directory");
+    expect(message).toContain("/etc/wsl.conf");
+    expect(message).toContain("wsl --shutdown");
+    expect(message).not.toContain("systemctl not available; systemd user services are required");
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {

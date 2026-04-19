@@ -5,6 +5,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isWSLSync } from "../infra/wsl.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
@@ -417,14 +418,20 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
     return;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail)) {
+  const kind = classifySystemdUnavailableDetail(detail);
+  if (kind === "missing_systemctl") {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
   }
   if (!detail) {
     throw new Error("systemctl --user unavailable: unknown error");
   }
-  if (!isSystemdUserScopeUnavailable(detail)) {
+  if (kind === null) {
     return;
+  }
+  if (kind === "user_bus_unavailable" && isWSLSync()) {
+    throw new Error(
+      `systemd user D-Bus unavailable on WSL2: ${detail}. Enable systemd by adding \`[boot]\\nsystemd=true\` to /etc/wsl.conf, then run \`wsl --shutdown\` from PowerShell and reopen your distro; verify with \`systemctl --user status\`.`,
+    );
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
