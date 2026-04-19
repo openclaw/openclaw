@@ -140,6 +140,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "models",
   "plugins",
   "secrets",
+  "security",
   "status",
   "update",
   "webhooks",

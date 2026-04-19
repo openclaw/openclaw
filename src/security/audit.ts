@@ -112,6 +112,12 @@ let pluginRegistryLoaderModulePromise:
 let pluginMetadataRegistryLoaderModulePromise:
   | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
   | undefined;
+let bundledChannelModulePromise:
+  | Promise<typeof import("../channels/plugins/bundled.js")>
+  | undefined;
+let channelPluginIdsModulePromise:
+  | Promise<typeof import("../plugins/channel-plugin-ids.js")>
+  | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
@@ -145,6 +151,16 @@ async function loadPluginMetadataRegistryLoaderModule() {
   pluginMetadataRegistryLoaderModulePromise ??=
     import("../plugins/runtime/metadata-registry-loader.js");
   return await pluginMetadataRegistryLoaderModulePromise;
+}
+
+async function loadBundledChannelModule() {
+  bundledChannelModulePromise ??= import("../channels/plugins/bundled.js");
+  return await bundledChannelModulePromise;
+}
+
+async function loadChannelPluginIdsModule() {
+  channelPluginIdsModulePromise ??= import("../plugins/channel-plugin-ids.js");
+  return await channelPluginIdsModulePromise;
 }
 
 async function loadGatewayProbeDeps() {
@@ -1270,6 +1286,54 @@ async function createAuditExecutionContext(
   };
 }
 
+function isReadonlyChannelSecurityPlugin(
+  plugin: unknown,
+): plugin is NonNullable<ReturnType<typeof listChannelPlugins>[number]> {
+  return Boolean(
+    plugin &&
+    typeof plugin === "object" &&
+    "security" in plugin &&
+    "config" in plugin &&
+    asNullableRecord((plugin as { config?: unknown }).config)?.listAccountIds &&
+    asNullableRecord((plugin as { config?: unknown }).config)?.resolveAccount,
+  );
+}
+
+async function resolveChannelSecurityPlugins(
+  context: AuditExecutionContext,
+): Promise<ReturnType<typeof listChannelPlugins>> {
+  if (context.plugins !== undefined) {
+    return context.plugins;
+  }
+  const channelPluginIdsModule = await loadChannelPluginIdsModule();
+  const configuredPluginIds = channelPluginIdsModule.resolveConfiguredChannelPluginIds({
+    config: context.cfg,
+    activationSourceConfig: context.sourceConfig,
+    env: context.env,
+  });
+  if (configuredPluginIds.length === 0) {
+    return [];
+  }
+  const bundledChannelModule = await loadBundledChannelModule();
+  const setupPlugins = configuredPluginIds
+    .map((pluginId) =>
+      bundledChannelModule.getBundledChannelSetupPlugin(
+        pluginId as Parameters<typeof bundledChannelModule.getBundledChannelSetupPlugin>[0],
+      ),
+    )
+    .filter(isReadonlyChannelSecurityPlugin);
+  if (setupPlugins.length === configuredPluginIds.length) {
+    return setupPlugins;
+  }
+  (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
+    scope: "configured-channels",
+    config: context.cfg,
+    activationSourceConfig: context.sourceConfig,
+    env: context.env,
+  });
+  return (await loadChannelPlugins()).listChannelPlugins();
+}
+
 export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
@@ -1348,15 +1412,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     context.includeChannelSecurity &&
     (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
   if (shouldAuditChannelSecurity) {
-    if (context.plugins === undefined) {
-      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
-        scope: "configured-channels",
-        config: cfg,
-        activationSourceConfig: context.sourceConfig,
-        env,
-      });
-    }
-    const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
+    const channelPlugins = await resolveChannelSecurityPlugins(context);
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(
       ...(await collectChannelSecurityFindings({
