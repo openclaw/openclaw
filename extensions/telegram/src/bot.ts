@@ -75,6 +75,9 @@ type TelegramCompatFetch = (
   input: TelegramFetchInput,
   init?: TelegramFetchInit,
 ) => ReturnType<TelegramClientFetch>;
+type AbortSignalLike = Pick<AbortSignal, "aborted" | "addEventListener" | "removeEventListener"> & {
+  readonly reason?: unknown;
+};
 
 function asTelegramClientFetch(
   fetchImpl: TelegramCompatFetch | typeof globalThis.fetch,
@@ -171,8 +174,8 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       const controller = new AbortController();
-      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
-      const shutdownSignal = opts.fetchAbortSignal;
+      const abortWith = (signal: AbortSignalLike) => controller.abort(signal.reason);
+      const shutdownSignal: AbortSignalLike | undefined = opts.fetchAbortSignal;
       const onShutdown = () => {
         if (shutdownSignal) {
           abortWith(shutdownSignal);
@@ -182,7 +185,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
       const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method);
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
-      const requestSignal = init?.signal;
+      const requestSignal = init?.signal as AbortSignalLike | undefined;
       if (shutdownSignal?.aborted) {
         abortWith(shutdownSignal);
       } else if (shutdownSignal) {

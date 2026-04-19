@@ -682,7 +682,7 @@ export function renderNode(params: {
         ${translateConfigUiText(
           "configUi.unsupportedType",
           `Unsupported type: ${type}. Use Raw mode.`,
-          { type: String(type ?? "unknown") },
+          { type: type ?? "unknown" },
         )}
       </div>
     </div>

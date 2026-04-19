@@ -1302,6 +1302,22 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Select Swift 6.2 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.1.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.1.app
+          elif [[ -d /Applications/Xcode_16.3.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_16.3.app
+          else
+            echo "Required Xcode with Swift 6.2+ not found." >&2
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          xcodebuild -version
+          swift --version
+
       - name: Download dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -1372,6 +1388,22 @@ jobs:
         with:
           persist-credentials: false
           submodules: false
+
+      - name: Select Swift 6.2 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.1.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.1.app
+          elif [[ -d /Applications/Xcode_16.3.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_16.3.app
+          else
+            echo "Required Xcode with Swift 6.2+ not found." >&2
+            ls -1 /Applications | grep '^Xcode' || true
+            exit 1
+          fi
+          xcodebuild -version
+          swift --version
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat

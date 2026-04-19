@@ -422,11 +422,11 @@
     "skillsPage.tabs.ready",
     "skillsPage.title"
   ],
-  "generatedAt": "2026-04-17T10:12:33.635Z",
+  "generatedAt": "2026-04-19T16:12:16.292Z",
   "locale": "ja-JP",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "21cd1f5cd82a7f982b79d21831f59de969cee190cf6943ee96ea81f0cfef4286",
+  "sourceHash": "3b6c86eb6fba026f318012c59b1dc9e18fa058f161e6dd84ef5f41a99b761826",
   "totalKeys": 1287,
   "translatedKeys": 866,
   "workflow": 1
