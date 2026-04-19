@@ -61,12 +61,26 @@ export function startPlanSnapshotPersister(params: {
     // means tool-driven, the title field is set, and we have an
     // approvalId to track). Updates / completions don't carry a fresh
     // title; skip them.
+    //
+    // Iter-3 X2 typo fix: the actual event emits `phase: "requested"`
+    // (past tense, see pi-embedded-subscribe.handlers.tools.ts:1660),
+    // not `"request"`. Iter-1 D2 wiring had a silent typo here: the
+    // persister listener skipped EVERY plan submission, so
+    // SessionEntry.planMode.title and .approvalRunId were NEVER
+    // persisted — which in turn broke the iter-1 approval-side
+    // subagent gate (it reads approvalRunId from disk to look up
+    // openSubagentRunIds; if approvalRunId is undefined, the gate
+    // silently bypasses). User-reported live test 17:54-17:58
+    // confirmed: plan_mode_status showed title="(unset)" right after
+    // exit_plan_mode submitted with a real title; that's the smoking
+    // gun. Accept BOTH phase values for robustness in case the event
+    // shape changes again.
     const phase = typeof data.phase === "string" ? data.phase : undefined;
     const kind = typeof data.kind === "string" ? data.kind : undefined;
     const title = typeof data.title === "string" ? data.title : undefined;
     const approvalId = typeof data.approvalId === "string" ? data.approvalId : undefined;
     const isPlanSubmission =
-      phase === "request" &&
+      (phase === "requested" || phase === "request") &&
       kind === "plugin" &&
       title !== undefined &&
       title.length > 0 &&

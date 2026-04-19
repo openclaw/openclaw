@@ -68,6 +68,18 @@ const PLAN_MODE_ALLOWED_TOOLS = new Set([
   // on MUTATION_TOOL_BLOCKLIST above). Belt-and-suspenders allowlist
   // entry in addition to the blocklist removal.
   "sessions_spawn",
+  // Iter-3 D6 followup: read-only plan-mode introspection — must be
+  // allowed in plan mode (the most important place to call it). The
+  // tool is purely read; no state mutation. Without this entry, the
+  // default-deny gate blocks the agent from self-diagnosing while in
+  // plan mode, defeating the entire point of the introspection
+  // surface. (User-reported regression: agent called plan_mode_status
+  // mid-pending-approval and got "Tool not in plan-mode allowlist".)
+  "plan_mode_status",
+  // Read-only sessions tools — useful during plan-mode investigation
+  // and the agent shouldn't have to learn they're allowed.
+  "sessions_list",
+  "sessions_history",
 ]);
 
 /**
