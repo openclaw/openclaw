@@ -64,7 +64,14 @@ export type PlanModeDebugEvent =
   | {
       kind: "tool_call";
       sessionKey: string;
-      tool: "enter_plan_mode" | "exit_plan_mode" | "update_plan";
+      // Codex P1 review #68939 (2026-04-19): added `ask_user_question`
+      // for the question-approvalId persist path in
+      // `plan-snapshot-persister.ts`. Same diagnostic shape as the
+      // existing plan-mode tool kinds; the persister emits this when
+      // it sees an `ask_user_question` approval event so operators
+      // can correlate question-tool calls with answer-validation
+      // patches in the gateway.err.log debug stream.
+      tool: "enter_plan_mode" | "exit_plan_mode" | "update_plan" | "ask_user_question";
       runId: string;
       details?: Record<string, unknown>;
     }

@@ -566,6 +566,34 @@ export async function applySessionsPatchToStore(params: {
       if (!answer) {
         return invalid('planApproval action="answer" requires `answer` text');
       }
+      // Codex P1 review #68939 (2026-04-19): require an `approvalId`
+      // and validate it against `next.pendingQuestionApprovalId`
+      // (written by `plan-snapshot-persister.ts` when a question
+      // approval event fires). Pre-fix, the answer branch only
+      // checked for non-empty text — a stale or accidental
+      // `/plan answer` could overwrite `pendingAgentInjection`
+      // (potentially clobbering a freshly-written `[PLAN_DECISION]`
+      // / `[PLAN_COMPLETE]`). With this guard, only an answer that
+      // matches the most recent `ask_user_question` approvalId is
+      // accepted; mismatched/missing IDs return a friendly error.
+      const incomingApprovalId =
+        normalizeOptionalString(patch.planApproval.approvalId) || undefined;
+      const pendingQuestionApprovalId = next.pendingQuestionApprovalId;
+      if (!pendingQuestionApprovalId) {
+        return invalid(
+          'planApproval action="answer" rejected: no pending ask_user_question for this session',
+        );
+      }
+      if (!incomingApprovalId) {
+        return invalid(
+          'planApproval action="answer" requires `approvalId` (the value emitted with the corresponding ask_user_question approval event)',
+        );
+      }
+      if (incomingApprovalId !== pendingQuestionApprovalId) {
+        return invalid(
+          `planApproval action="answer" rejected: approvalId mismatch (a newer or different question is pending)`,
+        );
+      }
       // PR-11 review fix (Codex P1 cluster #3105216364 / #3105247854 /
       // #3105261556): persist the synthetic `[QUESTION_ANSWER]: <text>`
       // injection on the SessionEntry so the runtime sees it on the
@@ -586,6 +614,10 @@ export async function applySessionsPatchToStore(params: {
         .replace(/@(channel|here|everyone)\b/gi, "@\u{FE6B}$1")
         .replace(/<@/g, "<\u{200B}@");
       next.pendingAgentInjection = `[QUESTION_ANSWER]: ${safeAnswer}`;
+      // Clear the pending-question marker — one question, one
+      // answer. A re-ask requires a fresh `ask_user_question` call
+      // which will re-populate `pendingQuestionApprovalId`.
+      delete next.pendingQuestionApprovalId;
     } else if (action === "auto") {
       // PR-10 auto-mode toggle. Sets the session's autoApprove flag
       // without resolving any specific approval. When enabled, future
@@ -694,7 +726,15 @@ export async function applySessionsPatchToStore(params: {
           );
         }
       }
-      const feedback = normalizeOptionalString(patch.planApproval.feedback) || undefined;
+      // Copilot review #68939 (2026-04-19): post-discriminated-union
+      // refactor — `feedback` is now only available on the "reject"
+      // variant; explicit narrow before accessing. The other actions
+      // (approve, edit) reach this branch with no feedback field, so
+      // the conditional read is correct rather than just type-tickling.
+      const feedback =
+        action === "reject"
+          ? normalizeOptionalString(patch.planApproval.feedback) || undefined
+          : undefined;
       const expectedApprovalId =
         normalizeOptionalString(patch.planApproval.approvalId) || undefined;
       const resolved = resolvePlanApproval(next.planMode, action, feedback, expectedApprovalId);

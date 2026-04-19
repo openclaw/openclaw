@@ -16,7 +16,17 @@ import { buildPlanFilename } from "./plan-archetype-prompt.js";
 
 export interface PersistPlanArchetypeMarkdownInput {
   agentId: string;
-  /** Used to compute the filename slug. Falls back to "plan" inside buildPlanFilename. */
+  /**
+   * Used to compute the filename slug. Falls back to the literal
+   * \`"untitled"\` slug inside \`buildPlanFilenameSlug\` (see
+   * \`plan-archetype-prompt.ts:142-155\`) when the title is empty
+   * after sanitization. Operators looking for a persisted plan with
+   * no title should grep for \`plan-YYYY-MM-DD-untitled.md\`.
+   *
+   * Copilot review #68939 (2026-04-19): doc previously said the
+   * fallback was \`"plan"\` — that was wrong; the helper has always
+   * returned \`"untitled"\`.
+   */
   title: string | undefined;
   markdown: string;
   /** Wall-clock now. Defaults to new Date(); injectable for tests. */

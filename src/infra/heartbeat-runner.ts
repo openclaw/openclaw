@@ -808,7 +808,15 @@ export function buildActivePlanNudge(
     ]);
     const unknownStatuses = steps.map((s) => s.status).filter((s) => !standardStatuses.has(s));
     if (unknownStatuses.length > 0) {
-      log.warn(
+      // Copilot review #68939 (2026-04-19): downgraded warn → debug.
+      // This branch can fire on every heartbeat tick (10/30/60-min
+      // wakeups) for the lifetime of a session with stale or migrated
+      // step statuses, which would spam gateway.err.log with a single
+      // diagnostic message. Operators investigating stale step data
+      // can opt in via debug-level subsystem logging; routine runs
+      // shouldn't see it. The information value is unchanged — only
+      // the log severity is reduced.
+      log.debug(
         `plan-nudge skipped: lastPlanSteps contains non-standard statuses ` +
           `[${[...new Set(unknownStatuses)].join(", ")}] — plan data may be stale or migrated`,
       );

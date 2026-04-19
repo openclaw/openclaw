@@ -319,6 +319,29 @@ export type SessionEntry = {
    * Cleared by the runtime on first read.
    */
   pendingAgentInjection?: string;
+  /**
+   * Codex P1 review #68939 (2026-04-19): tracks the most recent
+   * `ask_user_question` approvalId so the gateway can validate
+   * incoming `/plan answer` patches against an actual pending
+   * question. Without this, a stale or accidental `/plan answer`
+   * would silently overwrite `pendingAgentInjection` with garbage
+   * (potentially clobbering a freshly-written `[PLAN_DECISION]` /
+   * `[PLAN_COMPLETE]`).
+   *
+   * Lifecycle:
+   * - WRITE: set by `plan-snapshot-persister.ts` when a question
+   *   approval event fires (the runtime intercept in
+   *   `pi-embedded-subscribe.handlers.tools.ts:1760` derives the
+   *   approvalId deterministically from the toolCallId).
+   * - VALIDATE: read by `sessions-patch.ts` in the answer branch —
+   *   the incoming `planApproval.approvalId` must match this field
+   *   exactly. Mismatched IDs (stale clicks, retried sends after a
+   *   newer question landed) get rejected with a friendly error.
+   * - CLEAR: deleted by `sessions-patch.ts` after a successful
+   *   answer is persisted (one question, one answer — re-asking
+   *   requires a fresh `ask_user_question` call).
+   */
+  pendingQuestionApprovalId?: string;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;

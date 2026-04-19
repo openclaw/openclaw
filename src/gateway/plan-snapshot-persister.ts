@@ -108,6 +108,40 @@ export function startPlanSnapshotPersister(params: {
       planArray !== null &&
       planArray.length > 0 &&
       !hasQuestionShape;
+    // Codex P1 review #68939 (2026-04-19): when a question approval
+    // event fires, persist its approvalId to
+    // `SessionEntry.pendingQuestionApprovalId` so the
+    // `sessions-patch.ts` answer branch can validate incoming
+    // `/plan answer` patches against an actual pending question.
+    // This is a SEPARATE branch from the plan-submission persist
+    // path because question events have a different lifecycle
+    // (they don't transition planMode at all — see Codex P2 fix
+    // above).
+    const isQuestionSubmission =
+      (phase === "requested" || phase === "request") &&
+      kind === "plugin" &&
+      hasQuestionShape &&
+      typeof approvalId === "string" &&
+      approvalId.length > 0;
+    if (isQuestionSubmission) {
+      logPlanModeDebug({
+        kind: "tool_call",
+        sessionKey,
+        tool: "ask_user_question",
+        runId: evt.runId,
+        details: { approvalId },
+      });
+      void persistPendingQuestionApprovalId({
+        sessionKey,
+        approvalId,
+        emitSessionsChanged: params.emitSessionsChanged,
+      }).catch((err) => {
+        log.warn(
+          `pending question approvalId persist failed: sessionKey=${sessionKey} runId=${evt.runId} err=${String(err)}`,
+        );
+      });
+      return;
+    }
     if (!isPlanSubmission) {
       return;
     }
@@ -237,6 +271,46 @@ async function persistApprovalMetadata(params: {
   params.emitSessionsChanged?.({
     sessionKey: params.sessionKey,
     reason: "plan_approval_metadata_persist",
+  });
+}
+
+/**
+ * Codex P1 review #68939 (2026-04-19): persist a fresh
+ * `pendingQuestionApprovalId` so the gateway's `/plan answer` patch
+ * handler can validate the incoming approvalId. Direct in-place
+ * write (same rationale as `persistApprovalMetadata` above —
+ * server-internal metadata, no public protocol surface needed).
+ *
+ * This is best-effort fire-and-forget — if the write fails (e.g.,
+ * the session was deleted between the question event and the
+ * persist), the answer-validation path will reject the answer with
+ * a friendly "no pending question" error. That's the safe failure
+ * mode (better to silently drop a stale answer than silently
+ * overwrite a fresh injection).
+ */
+async function persistPendingQuestionApprovalId(params: {
+  sessionKey: string;
+  approvalId: string;
+  emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
+}) {
+  const cfg = loadConfig();
+  const target = resolveGatewaySessionStoreTarget({ cfg, key: params.sessionKey });
+  await updateSessionStore(target.storePath, async (store) => {
+    const entry = store[params.sessionKey];
+    if (!entry) {
+      return { ok: false as const };
+    }
+    const nextEntry: SessionEntry = {
+      ...entry,
+      pendingQuestionApprovalId: params.approvalId,
+      updatedAt: Date.now(),
+    };
+    store[params.sessionKey] = nextEntry;
+    return { ok: true as const };
+  });
+  params.emitSessionsChanged?.({
+    sessionKey: params.sessionKey,
+    reason: "pending_question_approval_id_persist",
   });
 }
 

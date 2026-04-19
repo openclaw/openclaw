@@ -179,9 +179,15 @@ export const SessionsPatchParamsSchema = Type.Object(
      * - `null` is treated as `"normal"` (consistent with sibling fields'
      *   null-semantics for clearing state).
      *
-     * Only the literal mode value is exposed on the wire; the full
-     * `PlanModeSessionState` object (approvalId, rejectionCount, etc.)
-     * is internal to the server and persisted on `SessionEntry.planMode`.
+     * Copilot review #68939 (2026-04-19): scope clarification — this
+     * `sessions.patch` INPUT field only accepts the literal mode
+     * toggle. The richer persisted plan-mode state (`approvalId`,
+     * `rejectionCount`, `lastPlanSteps`, `title`, etc.) is managed
+     * server-side on `SessionEntry.planMode` and is NOT writable
+     * through this patch field. (It IS surfaced READ-ONLY on
+     * `sessions.list`/`sessions.changed` payloads via
+     * `GatewaySessionRow.planMode` so the UI mode chip can render
+     * the live state — that wire-side exposure is intentional.)
      */
     planMode: Type.Optional(
       Type.Union([Type.Literal("plan"), Type.Literal("normal"), Type.Null()]),
@@ -203,55 +209,77 @@ export const SessionsPatchParamsSchema = Type.Object(
      * action — surfaces that don't carry the version token (CLI prompts,
      * legacy channels) get best-effort behavior.
      */
+    /**
+     * Copilot review #68939 (2026-04-19): refactored to a
+     * discriminated union keyed on `action`, so each variant
+     * encodes its required fields at the schema layer. Pre-fix,
+     * all per-action fields were Optional and the runtime had to
+     * manually validate (e.g. `action: "answer"` without `answer`,
+     * or `action: "auto"` without `autoEnabled`). The runtime
+     * checks remain as defense-in-depth but are now unreachable on
+     * the happy path because the schema rejects malformed payloads
+     * first.
+     *
+     * Per-variant requirements:
+     * - `approve` / `edit`: only `approvalId` (optional but
+     *   recommended for staleness protection).
+     * - `reject`: optional `feedback` (capped to 8 KiB to bound
+     *   the prompt-cache hash explosion vector — PR-11 H4).
+     * - `answer`: REQUIRES `answer` text and `approvalId` (Codex P1
+     *   review #68939 — the answer-guard validates the approvalId
+     *   against `pendingQuestionApprovalId` server-side; clients
+     *   that don't thread the version token would otherwise be
+     *   able to overwrite a fresh injection with a stale answer).
+     * - `auto`: REQUIRES `autoEnabled` boolean (a malformed patch
+     *   omitting the field used to coerce to `false` and silently
+     *   disable auto-approve — see PR-10 deep-dive review).
+     *
+     * `action: "edit"` semantic note: still equals "approve with no
+     * diff" — the agent executes the ORIGINAL plan. True edit-and-
+     * approve (with a modified step list) is deferred to a follow-
+     * up PR (PR-8 review fix Codex P1 #3098235203 — Decision C
+     * option (b) standing).
+     */
     planApproval: Type.Optional(
-      Type.Object(
-        {
-          // PR-10: extend with "answer" — used by ask_user_question
-          // resolutions. Same approvalId / staleness semantics; the
-          // routed payload differs (carries `answer` instead of plan
-          // approve/reject/edit) and the runtime injects
-          // [QUESTION_ANSWER] into the next agent turn instead of
-          // [PLAN_DECISION].
-          //
-          // PR-10 auto-mode: "auto" — toggles the session's auto-approve
-          // flag without resolving any specific approval. Routed when
-          // the user toggles "Plan (auto)" in the chip / via /plan auto.
-          //
-          // PR-8 review fix (Codex P1 #3098235203 — Decision C option (b)):
-          // `action: "edit"` currently semantically equals "approve with
-          // no diff" — the agent executes the ORIGINAL plan when edit
-          // fires (mode → normal, [PLAN_DECISION]: edited injection).
-          // The wire schema deliberately does NOT carry an edited
-          // step list; clients should NOT send one. True
-          // edit-and-approve UX (where the user submits a modified
-          // step list that the agent executes instead) is deferred to
-          // a follow-up PR which would add `steps` here + a
-          // server-side handler to apply the edit before approving.
-          // For now `edit` is a UX hint signaling "user reviewed" while
-          // executing the original plan as proposed.
-          action: Type.Union([
-            Type.Literal("approve"),
-            Type.Literal("reject"),
-            Type.Literal("edit"),
-            Type.Literal("answer"),
-            Type.Literal("auto"),
-          ]),
-          // PR-11 deep-dive review H4: cap user-controlled text fields
-          // server-side. Without a maxLength, /plan revise can submit
-          // multi-MB feedback that gets persisted to SessionEntry,
-          // re-injected into [PLAN_DECISION] every plan cycle, and
-          // bloats the prompt-cache hash. Same protection for `answer`
-          // (ask_user_question free-text). 8 KB is generous for human-
-          // typed feedback while still bounding the worst case.
-          feedback: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
-          /** PR-10 ask_user_question: chosen / typed answer text. */
-          answer: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
-          /** PR-10 auto-mode: enable (true) / disable (false) auto-approve. */
-          autoEnabled: Type.Optional(Type.Boolean()),
-          approvalId: Type.Optional(NonEmptyString),
-        },
-        { additionalProperties: false },
-      ),
+      Type.Union([
+        Type.Object(
+          {
+            action: Type.Literal("approve"),
+            approvalId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("edit"),
+            approvalId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("reject"),
+            feedback: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+            approvalId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("answer"),
+            answer: Type.String({ minLength: 1, maxLength: 8192 }),
+            approvalId: NonEmptyString,
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("auto"),
+            autoEnabled: Type.Boolean(),
+          },
+          { additionalProperties: false },
+        ),
+      ]),
     ),
     /**
      * PR-8 follow-up: the runtime calls `sessions.patch` with
