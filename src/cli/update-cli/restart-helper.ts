@@ -95,13 +95,17 @@ rm -f "$0"
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-# Try kickstart first (works when the service is still registered).
-# If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart.
-if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
-  launchctl enable 'gui/${uid}/${escaped}' 2>/dev/null
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
-  launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
+service_target='gui/${uid}/${escaped}'
+domain='gui/${uid}'
+plist_path='${escapedPlistPath}'
+# launchd may keep the label loaded but pointing at stale dist chunks after an npm update.
+# Re-bootstrap first so the service definition refreshes to the newly installed entrypoint,
+# then kickstart. Ignore bootstrap failures when the label is already registered.
+launchctl enable "$service_target" >/dev/null 2>&1
+launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true
+if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
+  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
 fi
 # Self-cleanup
 rm -f "$0"

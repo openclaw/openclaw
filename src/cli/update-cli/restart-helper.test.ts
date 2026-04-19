@@ -103,10 +103,11 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
-      // Should clear disabled state and fall back to bootstrap when kickstart fails.
-      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
-      expect(content).toContain("launchctl bootstrap 'gui/501'");
+      expect(content).toContain("service_target='gui/501/ai.openclaw.gateway'");
+      expect(content).toContain("domain='gui/501'");
+      expect(content).toContain('launchctl enable "$service_target" >/dev/null 2>&1');
+      expect(content).toContain('launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || true');
+      expect(content).toContain('if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then');
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -119,7 +120,7 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "default",
         OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
       });
-      expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.openclaw'");
+      expect(content).toContain("service_target='gui/501/com.custom.openclaw'");
       await cleanupScript(scriptPath);
     });
 
