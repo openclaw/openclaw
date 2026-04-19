@@ -158,12 +158,7 @@ export async function processGatewayAllowlist(
       command: params.command,
       resolvedPath,
     });
-  const hasHeredocSegment = allowlistEval.segments.some((segment) =>
-    segment.argv.some((token) => token.startsWith("<<")),
-  );
-  const requiresHeredocApproval =
-    hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
-  const requiresInlineEvalApproval = inlineEvalHit !== null;
+  const hasInlineEvalApproval = inlineEvalHit !== null;
   const requiresAllowlistPlanApproval =
     hostSecurity === "allowlist" &&
     analysisOk &&
@@ -179,13 +174,7 @@ export async function processGatewayAllowlist(
       durableApprovalSatisfied,
     }) ||
     requiresAllowlistPlanApproval ||
-    requiresHeredocApproval ||
-    requiresInlineEvalApproval;
-  if (requiresHeredocApproval) {
-    params.warnings.push(
-      "Warning: heredoc execution requires explicit approval in allowlist mode.",
-    );
-  }
+    hasInlineEvalApproval;
   if (requiresAllowlistPlanApproval) {
     params.warnings.push(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
