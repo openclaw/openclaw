@@ -9,7 +9,7 @@ import {
   summarizeDeviceTokens,
   type PairedDevice as InfraPairedDevice,
 } from "../infra/device-pairing.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { formatRelativeTimestamp, formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -38,6 +38,7 @@ type DeviceTokenSummary = {
   role: string;
   scopes?: string[];
   revokedAtMs?: number;
+  lastUsedAtMs?: number;
 };
 
 type PendingDevice = {
@@ -207,6 +208,22 @@ function selectLatestPendingRequest(pending: PendingDevice[] | undefined) {
   });
 }
 
+function latestTokenUsedAtMs(tokens: DeviceTokenSummary[] | undefined): number | undefined {
+  if (!tokens?.length) {
+    return undefined;
+  }
+  let latest: number | undefined;
+  for (const t of tokens) {
+    if (t.revokedAtMs != null) {
+      continue;
+    }
+    if (typeof t.lastUsedAtMs === "number" && (latest == null || t.lastUsedAtMs > latest)) {
+      latest = t.lastUsedAtMs;
+    }
+  }
+  return latest;
+}
+
 function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   if (!tokens || tokens.length === 0) {
     return "none";
@@ -351,6 +368,8 @@ export function registerDevicesCli(program: Command) {
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
                 { key: "IP", header: "IP", minWidth: 12 },
+                { key: "Created", header: "Created", minWidth: 10 },
+                { key: "Last Used", header: "Last Used", minWidth: 10 },
               ],
               rows: list.paired.map((device) => ({
                 Device: device.displayName || device.deviceId,
@@ -358,6 +377,14 @@ export function registerDevicesCli(program: Command) {
                 Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
                 IP: device.remoteIp ?? "",
+                Created: formatRelativeTimestamp(device.createdAtMs, {
+                  dateFallback: true,
+                  fallback: "",
+                }),
+                "Last Used": formatRelativeTimestamp(latestTokenUsedAtMs(device.tokens), {
+                  dateFallback: true,
+                  fallback: "",
+                }),
               })),
             }).trimEnd(),
           );
