@@ -211,12 +211,14 @@ export async function resolveSlackThreadContextData(params: {
       const historyParts: string[] = [];
       for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const msgSenderName = msgUser?.name ?? "Unknown";
+        const isBot = Boolean(historyMsg.botId);
+        const msgSenderName = msgUser?.name ?? (isBot ? `Bot (${historyMsg.botId})` : "Unknown");
+        const role = isBot ? "assistant" : "user";
         const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({
             channel: "Slack",
-            from: `${msgSenderName} (user)`,
+            from: `${msgSenderName} (${role})`,
             timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
             body: msgWithId,
             chatType: "channel",

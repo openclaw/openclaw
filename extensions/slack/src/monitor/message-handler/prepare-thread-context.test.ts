@@ -174,7 +174,9 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadStarterBody).toBe("other bot starter");
     expect(result.threadLabel).toContain("other bot starter");
     expect(result.threadHistoryBody).toContain("other bot starter");
+    expect(result.threadHistoryBody).toContain("Bot (B2) (assistant)");
     expect(result.threadHistoryBody).toContain("allowed follow-up");
+    expect(result.threadHistoryBody).not.toContain("Unknown (user)");
   });
 
   it("omits self-authored starter text when identified by bot user id", async () => {
