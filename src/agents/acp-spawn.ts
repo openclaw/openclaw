@@ -12,7 +12,15 @@ import {
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
+import {
+  resolveBundledChannelThreadBindingDefaultPlacement,
+  resolveBundledChannelThreadBindingInboundConversation,
+} from "../channels/plugins/thread-binding-api.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -51,7 +59,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -65,6 +73,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
@@ -97,6 +106,10 @@ export type SpawnAcpContext = {
   agentThreadId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
+  /** Group space label (guild/team id) from the originating channel context. */
+  agentGroupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  agentMemberRoleIds?: string[];
   sandboxed?: boolean;
 };
 
@@ -212,64 +225,10 @@ type AcpSpawnBootstrapDeliveryPlan = {
 };
 
 function resolvePlacementWithoutChannelPlugin(params: {
-  channel: string;
   capabilities: { placements: Array<"current" | "child"> };
 }): "current" | "child" {
-  switch (params.channel) {
-    case "discord":
-    case "matrix":
-      return params.capabilities.placements.includes("child") ? "child" : "current";
-    case "line":
-    case "telegram":
-      return "current";
-  }
   return params.capabilities.placements.includes("child") ? "child" : "current";
 }
-
-function normalizeLineConversationIdFallback(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1]?.trim() ?? trimmed;
-  return normalized ? normalized : undefined;
-}
-
-function normalizeTelegramConversationIdFallback(params: {
-  to?: string;
-  threadId?: string | number;
-  groupId?: string;
-}): string | undefined {
-  const explicitGroupId = normalizeOptionalString(params.groupId);
-  const explicitThreadId =
-    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
-  if (
-    explicitGroupId &&
-    explicitThreadId &&
-    /^-?\d+$/.test(explicitGroupId) &&
-    /^\d+$/.test(explicitThreadId)
-  ) {
-    return `${explicitGroupId}:topic:${explicitThreadId}`;
-  }
-
-  const trimmed = normalizeOptionalString(params.to) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.replace(/^telegram:(?:group:|channel:|direct:)?/i, "");
-  const topicMatch = /^(-?\d+):topic:(\d+)$/i.exec(normalized);
-  if (topicMatch?.[1] && topicMatch[2]) {
-    return `${topicMatch[1]}:topic:${topicMatch[2]}`;
-  }
-  return /^-?\d+$/.test(normalized) ? normalized : undefined;
-}
-
-const threadBindingFallbackConversationResolvers = {
-  line: (params: { to?: string; groupId?: string }) =>
-    normalizeLineConversationIdFallback(params.groupId ?? params.to),
-  telegram: (params: { to?: string; threadId?: string | number; groupId?: string }) =>
-    normalizeTelegramConversationIdFallback(params),
-} as const;
 
 function resolvePluginConversationRefForThreadBinding(params: {
   channelId: string;
@@ -277,15 +236,30 @@ function resolvePluginConversationRefForThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): { conversationId: string; parentConversationId?: string } | null {
-  const resolvedConversation = getChannelPlugin(
-    params.channelId,
-  )?.messaging?.resolveInboundConversation?.({
+  const resolverParams = {
     // Keep the live delivery target authoritative; conversationId is only a fallback hint.
     to: params.to,
     conversationId: params.groupId ?? params.to,
     threadId: params.threadId,
     isGroup: true,
-  });
+  };
+  const loadedPluginConversation = getLoadedChannelPlugin(
+    params.channelId,
+  )?.messaging?.resolveInboundConversation?.(resolverParams);
+  const bundledApiConversation =
+    loadedPluginConversation === undefined
+      ? resolveBundledChannelThreadBindingInboundConversation({
+          channelId: params.channelId,
+          ...resolverParams,
+        })
+      : undefined;
+  const resolvedConversation =
+    loadedPluginConversation ??
+    (bundledApiConversation !== undefined
+      ? bundledApiConversation
+      : getChannelPlugin(params.channelId)?.messaging?.resolveInboundConversation?.(
+          resolverParams,
+        ));
   const conversationId = normalizeOptionalString(resolvedConversation?.conversationId);
   if (!conversationId) {
     return null;
@@ -531,7 +505,6 @@ function resolveConversationRefForThreadBinding(params: {
 }): { conversationId: string; parentConversationId?: string } | null {
   const channel = normalizeOptionalLowercaseString(params.channel);
   const normalizedChannelId = channel ? normalizeChannelId(channel) : null;
-  const channelKey = normalizedChannelId ?? channel ?? null;
   const pluginResolvedConversation = normalizedChannelId
     ? resolvePluginConversationRefForThreadBinding({
         channelId: normalizedChannelId,
@@ -542,15 +515,6 @@ function resolveConversationRefForThreadBinding(params: {
     : null;
   if (pluginResolvedConversation) {
     return pluginResolvedConversation;
-  }
-  const compatibilityConversationId =
-    channelKey && Object.hasOwn(threadBindingFallbackConversationResolvers, channelKey)
-      ? threadBindingFallbackConversationResolvers[
-          channelKey as keyof typeof threadBindingFallbackConversationResolvers
-        ](params)
-      : undefined;
-  if (compatibilityConversationId) {
-    return normalizeConversationTargetRef({ conversationId: compatibilityConversationId });
   }
   const parentConversationId = resolveConversationIdFromTargets({
     targets: [params.to],
@@ -644,12 +608,16 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  const pluginPlacement = getChannelPlugin(policy.channel)?.conversationBindings
+  const loadedPluginPlacement = getLoadedChannelPlugin(policy.channel)?.conversationBindings
     ?.defaultTopLevelPlacement;
+  const bundledApiPlacement =
+    loadedPluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(policy.channel);
+  const pluginPlacement =
+    bundledApiPlacement ??
+    getChannelPlugin(policy.channel)?.conversationBindings?.defaultTopLevelPlacement;
   const placementToUse =
     pluginPlacement ??
     resolvePlacementWithoutChannelPlugin({
-      channel: policy.channel,
       capabilities,
     });
   if (!capabilities.bindSupported || !capabilities.placements.includes(placementToUse)) {
@@ -688,6 +656,7 @@ function prepareAcpThreadBinding(params: {
 function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
+  targetAgentId: string;
   ctx: SpawnAcpContext;
 }): AcpSpawnRequesterState {
   const bindingService = getSessionBindingService();
@@ -723,11 +692,16 @@ function resolveAcpSpawnRequesterState(params: {
             requesterAgentId,
           })
         : false,
-    origin: normalizeDeliveryContext({
-      channel: params.ctx.agentChannel,
-      accountId: params.ctx.agentAccountId,
-      to: params.ctx.agentTo,
-      threadId: params.ctx.agentThreadId,
+    origin: resolveRequesterOriginForChild({
+      cfg: params.cfg,
+      targetAgentId: params.targetAgentId,
+      requesterAgentId: normalizeAgentId(requesterAgentId),
+      requesterChannel: params.ctx.agentChannel,
+      requesterAccountId: params.ctx.agentAccountId,
+      requesterTo: params.ctx.agentTo,
+      requesterThreadId: params.ctx.agentThreadId,
+      requesterGroupSpace: params.ctx.agentGroupSpace,
+      requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
   };
 }
@@ -1012,18 +986,6 @@ export async function spawnAcpDirect(
     });
   }
 
-  const requesterState = resolveAcpSpawnRequesterState({
-    cfg,
-    parentSessionKey,
-    ctx,
-  });
-  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
-    spawnMode,
-    requestThreadBinding,
-    streamToParentRequested,
-    requester: requesterState,
-  });
-
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
     cfg,
@@ -1044,6 +1006,18 @@ export async function spawnAcpDirect(
       error: agentPolicyError.message,
     });
   }
+  const requesterState = resolveAcpSpawnRequesterState({
+    cfg,
+    parentSessionKey,
+    targetAgentId,
+    ctx,
+  });
+  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
+    spawnMode,
+    requestThreadBinding,
+    streamToParentRequested,
+    requester: requesterState,
+  });
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
   const runtimeMode = resolveAcpSessionMode(spawnMode);
@@ -1071,10 +1045,10 @@ export async function spawnAcpDirect(
   if (requestThreadBinding) {
     const prepared = prepareAcpThreadBinding({
       cfg,
-      channel: ctx.agentChannel,
-      accountId: ctx.agentAccountId,
-      to: ctx.agentTo,
-      threadId: ctx.agentThreadId,
+      channel: requesterState.origin?.channel,
+      accountId: requesterState.origin?.accountId,
+      to: requesterState.origin?.to,
+      threadId: requesterState.origin?.threadId,
       groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {

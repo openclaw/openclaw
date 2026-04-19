@@ -457,6 +457,14 @@
       "destination": "/channels/telegram"
     },
     {
+      "source": "/channels/openclaw-weixin",
+      "destination": "/channels/wechat"
+    },
+    {
+      "source": "/channels/weixin",
+      "destination": "/channels/wechat"
+    },
+    {
       "source": "/group-messages",
       "destination": "/channels/group-messages"
     },
@@ -976,6 +984,7 @@
                   "install/fly",
                   "install/gcp",
                   "install/hetzner",
+                  "install/hostinger",
                   "install/kubernetes",
                   "vps",
                   "install/macos-vm",
@@ -1027,6 +1036,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "channels/wechat",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1061,7 +1071,8 @@
                   "concepts/agent-workspace",
                   "concepts/soul",
                   "concepts/oauth",
-                  "start/bootstrapping"
+                  "start/bootstrapping",
+                  "concepts/experimental-features"
                 ]
               },
               {
@@ -1264,6 +1275,7 @@
                   "providers/inferrs",
                   "providers/kilocode",
                   "providers/litellm",
+                  "providers/lmstudio",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",

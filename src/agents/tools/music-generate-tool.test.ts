@@ -98,23 +98,25 @@ vi.mock("../../media/web-media.js", () => ({
 vi.mock("../../music-generation/runtime.js", () => musicGenerationRuntimeMocks);
 vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function resetMusicGenerateMocks() {
+  vi.restoreAllMocks();
+  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskExecutorMocks.createRunningTaskRun.mockReset();
+  taskExecutorMocks.completeTaskRunByRunId.mockReset();
+  taskExecutorMocks.failTaskRunByRunId.mockReset();
+  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+}
+
 describe("createMusicGenerateTool", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-    taskExecutorMocks.createRunningTaskRun.mockReset();
-    taskExecutorMocks.completeTaskRunByRunId.mockReset();
-    taskExecutorMocks.failTaskRunByRunId.mockReset();
-    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-  });
+  beforeEach(resetMusicGenerateMocks);
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -167,7 +169,7 @@ describe("createMusicGenerateTool", () => {
       lyrics: ["wake the city up"],
       metadata: { taskId: "music-task-1" },
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/tmp/generated-night-drive.mp3",
       id: "generated-night-drive.mp3",
       size: 11,
@@ -178,6 +180,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
           },
         },
@@ -194,6 +197,13 @@ describe("createMusicGenerateTool", () => {
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("music-bytes"),
+      "audio/mpeg",
+      "tool-music-generation",
+      8 * 1024 * 1024,
+      "night-drive.mp3",
+    );
     expect(text).toContain("Generated 1 track with google/lyria-3-clip-preview.");
     expect(text).toContain("Lyrics returned.");
     expect(text).toContain("MEDIA:/tmp/generated-night-drive.mp3");

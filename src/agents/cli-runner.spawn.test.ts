@@ -18,6 +18,7 @@ import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
 beforeEach(() => {
   resetAgentEventsForTest();
@@ -53,7 +54,7 @@ function buildPreparedCliRunContext(params: {
       : {
           command: "codex",
           args: ["exec", "--json"],
-          resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+          resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
           output: "text" as const,
           input: "arg" as const,
           modelArg: "--model",
@@ -435,7 +436,16 @@ describe("runCliAgent spawn path", () => {
       scopeKey?: string;
     };
     expect(input.mode).toBe("child");
-    expect(input.argv?.[0]).toBe("codex");
+    expect(input.argv).toEqual([
+      "codex",
+      "exec",
+      "resume",
+      "thread-123",
+      "--skip-git-repo-check",
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ]);
     expect(input.timeoutMs).toBe(1_000);
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
@@ -610,16 +620,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("surfaces nested Claude stream-json API errors instead of raw event output", async () => {
-    const message =
-      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
-    const apiError = `API Error: 400 ${JSON.stringify({
-      type: "error",
-      error: {
-        type: "invalid_request_error",
-        message,
-      },
-      request_id: "req_011CZqHuXhFetYCnr8325DQc",
-    })}`;
+    const { message, jsonl } = createClaudeApiErrorFixture();
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -627,26 +628,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 1,
         exitSignal: null,
         durationMs: 50,
-        stdout: [
-          JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
-          JSON.stringify({
-            type: "assistant",
-            message: {
-              model: "<synthetic>",
-              role: "assistant",
-              content: [{ type: "text", text: apiError }],
-            },
-            session_id: "session-api-error",
-            error: "unknown",
-          }),
-          JSON.stringify({
-            type: "result",
-            subtype: "success",
-            is_error: true,
-            result: apiError,
-            session_id: "session-api-error",
-          }),
-        ].join("\n"),
+        stdout: jsonl,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,

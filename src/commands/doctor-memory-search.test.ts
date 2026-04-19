@@ -344,6 +344,53 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn for lmstudio when gateway probe is ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when lmstudio gateway probe reports embeddings are not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "LM API token missing" },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "lmstudio" is configured');
+    expect(message).toContain("embeddings are not ready");
+  });
+
+  it("warns when lmstudio gateway probe is unavailable", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "lmstudio",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false },
+    });
+
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('provider "lmstudio" is configured');
+    expect(message).toContain("could not confirm embeddings are ready");
+    expect(message).toContain("openclaw memory status --deep");
+  });
+
   it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
@@ -398,20 +445,13 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("openclaw configure --section model");
   });
 
-  it("still warns in auto mode when only ollama credentials exist", async () => {
+  it("does not probe unrelated embedding providers in auto mode", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
       remote: {},
     });
-    resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
-      if (provider === "ollama") {
-        return {
-          apiKey: "ollama-local", // pragma: allowlist secret
-          source: "env: OLLAMA_API_KEY",
-          mode: "api-key",
-        };
-      }
+    resolveApiKeyForProvider.mockImplementation(async () => {
       throw new Error("missing key");
     });
 
