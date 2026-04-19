@@ -77,7 +77,7 @@ describe("migrateLegacyTasks", () => {
     expect(result).toBeNull();
   });
 
-  it("imports queued and running tasks as attached", () => {
+  it("imports queued and running tasks as waiting with registered handler names", () => {
     const db = createLegacyDb();
     insertLegacyTask(db, { taskId: "t1", status: "queued", runId: "run-1" });
     insertLegacyTask(db, { taskId: "t2", status: "running", runId: "run-2" });
@@ -95,11 +95,12 @@ describe("migrateLegacyTasks", () => {
     expect(result!.skipped).toBe(2);
 
     const rows = minionStore.db
-      .prepare("SELECT * FROM minion_jobs")
-      .all() as Array<{ status: string; data: string }>;
+      .prepare("SELECT * FROM minion_jobs ORDER BY name")
+      .all() as Array<{ status: string; name: string; data: string }>;
     expect(rows).toHaveLength(2);
     for (const row of rows) {
-      expect(row.status).toBe("attached");
+      expect(row.status).toBe("waiting");
+      expect(row.name).toBe("subagent.spawn");
       const data = JSON.parse(row.data);
       expect(data.reason).toBe("imported_live");
     }

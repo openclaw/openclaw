@@ -349,7 +349,7 @@ export function createSessionsSpawnTool(
       // status='active' with a lock so the worker's claim loop (which only
       // claims 'waiting') won't touch it. Only stall detection can re-queue
       // the row if the gateway crashes and the lock expires.
-      if (result.status !== "error") {
+      if (result.status === "accepted") {
         try {
           const { resolveDurabilityMode } = await import("../../minions/durability-config.js");
           if (resolveDurabilityMode() === "minions") {

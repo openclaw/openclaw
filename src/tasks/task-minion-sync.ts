@@ -8,7 +8,7 @@ const log = createSubsystemLogger("tasks/minion-sync");
 let minionStore: MinionStore | null = null;
 let storeInitAttempted = false;
 
-function getStore(): MinionStore | null {
+async function getStore(): Promise<MinionStore | null> {
   if (minionStore) {
     return minionStore;
   }
@@ -17,7 +17,7 @@ function getStore(): MinionStore | null {
   }
   storeInitAttempted = true;
   try {
-    const { MinionStore: Store } = require("../minions/store.js") as typeof import("../minions/store.js");
+    const { MinionStore: Store } = await import("../minions/store.js");
     minionStore = Store.openDefault();
     return minionStore;
   } catch (err) {
@@ -33,8 +33,8 @@ function getStore(): MinionStore | null {
  * idempotency_key so restarts don't create duplicates (the partial unique
  * index on idempotency_key deduplicates across process lifetimes).
  */
-export function syncTaskToMinions(task: TaskRecord): void {
-  const store = getStore();
+export async function syncTaskToMinions(task: TaskRecord): Promise<void> {
+  const store = await getStore();
   if (!store) {
     return;
   }
@@ -106,8 +106,8 @@ export function syncTaskToMinions(task: TaskRecord): void {
   }
 }
 
-export function syncTaskDeleteToMinions(taskId: string): void {
-  const store = getStore();
+export async function syncTaskDeleteToMinions(taskId: string): Promise<void> {
+  const store = await getStore();
   if (!store) {
     return;
   }

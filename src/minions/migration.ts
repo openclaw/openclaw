@@ -101,7 +101,13 @@ export function migrateLegacyTasks(
     }
 
     try {
-      const minionStatus = isActiveStatus(row.status) ? "attached" : taskStatusToMinionStatus(row.status as TaskStatus);
+      const runtimeToHandler: Record<string, string> = {
+        subagent: "subagent.spawn",
+        acp: "acp.spawn",
+        cli: "cli.spawn",
+        cron: "cron.tick",
+      };
+      const handlerName = runtimeToHandler[row.runtime] ?? `subagent.spawn`;
       const createdAt = coerceNum(row.created_at) ?? now;
 
       minionStore.db
@@ -111,9 +117,9 @@ export function migrateLegacyTasks(
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          `legacy.${row.runtime}`,
+          handlerName,
           "default",
-          minionStatus,
+          "waiting",
           JSON.stringify({
             legacyTaskId: row.task_id,
             runtime: row.runtime,

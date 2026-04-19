@@ -18,7 +18,6 @@ export const subagentSpawnHandler: MinionHandler = async (job: MinionJobContext)
   const {
     task,
     childSessionKey: previousSessionKey,
-    runId: previousRunId,
     label,
     agentId,
     model,
@@ -27,6 +26,11 @@ export const subagentSpawnHandler: MinionHandler = async (job: MinionJobContext)
     cleanup,
     mode,
     lightContext,
+    requesterSessionKey,
+    requesterChannel,
+    requesterAccountId,
+    requesterTo,
+    requesterThreadId,
   } = job.data as {
     task?: string;
     childSessionKey?: string;
@@ -76,7 +80,13 @@ export const subagentSpawnHandler: MinionHandler = async (job: MinionJobContext)
         lightContext,
         expectsCompletionMessage: true,
       },
-      {},
+      {
+        agentSessionKey: requesterSessionKey,
+        agentChannel: requesterChannel as never,
+        agentAccountId: requesterAccountId,
+        agentTo: requesterTo,
+        agentThreadId: requesterThreadId,
+      },
     );
 
     if (result.status === "error") {
