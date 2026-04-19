@@ -29,12 +29,20 @@ const DEFAULT_MAX_TOKENS = 4096;
 // ---------------------------------------------------------------------------
 
 /**
- * Bedrock's ListFoundationModels API returns no token limit information.
- * This map provides correct context window values for known models.
+ * Bedrock's ListFoundationModels and GetFoundationModel APIs return no token
+ * limit information — only model ID, name, modalities, and lifecycle status.
+ * There is currently no Bedrock API to discover context windows or max output
+ * tokens programmatically.
+ *
+ * This map provides correct context window values for known models so that
+ * session management, compaction thresholds, and context overflow detection
+ * work correctly. If AWS adds token metadata to the API in the future, this
+ * table should become a fallback rather than the primary source.
+ *
  * Inference profile prefixes (us., eu., ap., global.) are stripped before lookup.
  *
  * Sources: https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html
- *          https://docs.anthropic.com/en/docs/about-claude/models
+ *          https://platform.claude.com/docs/en/about-claude/models
  */
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
