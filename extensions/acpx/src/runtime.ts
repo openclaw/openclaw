@@ -94,8 +94,31 @@ export class AcpxRuntime implements AcpxRuntimeLike {
     return this.delegate.doctor();
   }
 
+  private static readonly SESSION_ENSURE_TIMEOUT_MS = 15_000;
+
   ensureSession(input: Parameters<AcpRuntime["ensureSession"]>[0]): Promise<AcpRuntimeHandle> {
-    return this.delegate.ensureSession(input);
+    const op = this.delegate.ensureSession(input);
+    const token = Symbol("ensure-session-timeout");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutP = new Promise<typeof token>((resolve) => {
+      timer = setTimeout(() => resolve(token), AcpxRuntime.SESSION_ENSURE_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    return Promise.race([op, timeoutP]).then(
+      (result) => {
+        clearTimeout(timer);
+        if (result === token) {
+          throw new Error(
+            `ACP ensureSession timed out after ${AcpxRuntime.SESSION_ENSURE_TIMEOUT_MS / 1_000}s`,
+          );
+        }
+        return result;
+      },
+      (err) => {
+        clearTimeout(timer);
+        throw err;
+      },
+    );
   }
 
   runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {

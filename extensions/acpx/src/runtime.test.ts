@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpRuntime } from "../runtime-api.js";
 import { AcpxRuntime } from "./runtime.js";
 
@@ -101,5 +101,82 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore.load).not.toHaveBeenCalled();
+  });
+});
+
+describe("AcpxRuntime.ensureSession timeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("throws after 15 seconds when the delegate never resolves", { timeout: 20_000 }, async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const runtime = new AcpxRuntime({
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: { resolve: () => "codex", list: () => ["codex"] },
+      permissionMode: "approve-reads",
+    });
+
+    // Patch delegate to hang forever
+    const delegateEnsureSession = vi.fn(() => new Promise<never>(() => {}));
+    (runtime as unknown as { delegate: { ensureSession: typeof delegateEnsureSession } }).delegate.ensureSession =
+      delegateEnsureSession;
+
+    const resultP = runtime.ensureSession({ sessionKey: "agent:codex:acp:binding:test" } as never);
+    const expectP = expect(resultP).rejects.toThrow("ACP ensureSession timed out after 15s");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expectP;
+  });
+
+  it("clears the timer and returns the result when the delegate resolves in time", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const runtime = new AcpxRuntime({
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: { resolve: () => "codex", list: () => ["codex"] },
+      permissionMode: "approve-reads",
+    });
+
+    const fakeHandle = { sessionKey: "agent:codex:acp:binding:test" } as never;
+    const delegateEnsureSession = vi.fn(async () => fakeHandle);
+    (runtime as unknown as { delegate: { ensureSession: typeof delegateEnsureSession } }).delegate.ensureSession =
+      delegateEnsureSession;
+
+    const result = await runtime.ensureSession({ sessionKey: "agent:codex:acp:binding:test" } as never);
+    expect(result).toBe(fakeHandle);
+  });
+
+  it("clears the timer and propagates the error when the delegate rejects in time", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const runtime = new AcpxRuntime({
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: { resolve: () => "codex", list: () => ["codex"] },
+      permissionMode: "approve-reads",
+    });
+
+    const delegateEnsureSession = vi.fn(async () => {
+      throw new Error("delegate error");
+    });
+    (runtime as unknown as { delegate: { ensureSession: typeof delegateEnsureSession } }).delegate.ensureSession =
+      delegateEnsureSession;
+
+    await expect(
+      runtime.ensureSession({ sessionKey: "agent:codex:acp:binding:test" } as never),
+    ).rejects.toThrow("delegate error");
   });
 });
