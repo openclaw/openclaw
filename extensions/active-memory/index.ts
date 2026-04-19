@@ -615,7 +615,10 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
   return {
     enabled: raw.enabled !== false,
     agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
+      ? raw.agents
+          .filter((agentId): agentId is string => typeof agentId === "string")
+          .map((agentId) => agentId.trim())
+          .filter(Boolean)
       : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:

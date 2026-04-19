@@ -134,6 +134,27 @@ describe("active-memory plugin", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
   });
 
+  it("tolerates non-string entries in pluginConfig.agents without crashing register", async () => {
+    api.pluginConfig = {
+      agents: ["main", null, 42, "", "  support  "] as unknown as string[],
+      logging: false,
+    };
+
+    expect(() => plugin.register(api as unknown as OpenClawPluginApi)).not.toThrow();
+
+    // "support" (trimmed) must have survived normalization so the hook actually runs for it.
+    await hooks.before_prompt_build(
+      { prompt: "defensive agents config", messages: [] },
+      {
+        agentId: "support",
+        trigger: "user",
+        sessionKey: "agent:support:defensive-agents",
+        messageProvider: "webchat",
+      },
+    );
+    expect(runEmbeddedPiAgent).toHaveBeenCalled();
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
