@@ -132,14 +132,12 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             const botUser = d.user;
             runtime.log(`[router] logged in as ${botUser?.id ?? "unknown"} (${botUser?.username})`);
 
-            // Proactively onboard users who haven't been onboarded yet
-            void onboardNewUsers(
-              discordToken,
-              instances,
-              config,
-              runtime,
-              agentTimeoutMs,
-              inflight,
+            // Proactively onboard users who haven't been onboarded yet.
+            // Delay to let containers finish starting before connecting.
+            setTimeout(
+              () =>
+                onboardNewUsers(discordToken, instances, config, runtime, agentTimeoutMs, inflight),
+              10_000,
             );
           }
 
