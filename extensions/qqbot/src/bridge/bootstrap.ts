@@ -1,108 +1,128 @@
 /**
  * Bootstrap the PlatformAdapter for the built-in version.
  *
- * This file is imported as a side-effect by channel.ts to ensure the adapter
- * is registered before any core/ module calls `getPlatformAdapter()`.
+ * ## Design
  *
- * The adapter bridges plugin-sdk platform capabilities into the core/ interface.
+ * The adapter is registered via two complementary mechanisms:
+ *
+ * 1. **Factory registration** (`registerPlatformAdapterFactory`) — a lightweight
+ *    callback stored in `adapter/index.ts` that is invoked lazily by
+ *    `getPlatformAdapter()` on first access. This guarantees the adapter is
+ *    available regardless of module evaluation order or bundler chunk splitting.
+ *
+ * 2. **Eager side-effect** (`ensurePlatformAdapter()`) — called at module
+ *    evaluation time when `channel.ts` imports this file. Provides the adapter
+ *    immediately for code that runs synchronously during startup.
+ *
+ * Heavy `openclaw/plugin-sdk/*` dependencies are lazy-imported inside each
+ * method body so that this module evaluates with minimal overhead and avoids
+ * INEFFECTIVE_DYNAMIC_IMPORT build warnings.
  */
 
-import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { registerPlatformAdapter, hasPlatformAdapter, type PlatformAdapter } from "../engine/adapter/index.js";
+  registerPlatformAdapter,
+  registerPlatformAdapterFactory,
+  hasPlatformAdapter,
+  type PlatformAdapter,
+} from "../engine/adapter/index.js";
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
-const builtinAdapter: PlatformAdapter = {
-  async validateRemoteUrl(_url: string, _options?: { allowPrivate?: boolean }): Promise<void> {
-    // Built-in version delegates SSRF validation to fetchRemoteMedia's ssrfPolicy.
-    // No separate validation step needed.
-  },
+function createBuiltinAdapter(): PlatformAdapter {
+  return {
+    async validateRemoteUrl(_url: string, _options?: { allowPrivate?: boolean }): Promise<void> {
+      // Built-in version delegates SSRF validation to fetchRemoteMedia's ssrfPolicy.
+    },
 
-  async resolveSecret(value): Promise<string | undefined> {
-    if (typeof value === "string") {
-      return value || undefined;
-    }
-    return undefined;
-  },
+    async resolveSecret(value): Promise<string | undefined> {
+      if (typeof value === "string") {
+        return value || undefined;
+      }
+      return undefined;
+    },
 
-  async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
-    const result = await fetchRemoteMedia({ url, filePathHint: filename });
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir, { recursive: true });
-    }
-    const destPath = path.join(destDir, filename ?? "download");
-    fs.writeFileSync(destPath, result.buffer);
-    return destPath;
-  },
+    async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
+      const { fetchRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
+      const result = await fetchRemoteMedia({ url, filePathHint: filename });
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+      }
+      const destPath = path.join(destDir, filename ?? "download");
+      fs.writeFileSync(destPath, result.buffer);
+      return destPath;
+    },
 
-  async fetchMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-    const result = await fetchRemoteMedia({
-      url: options.url,
-      filePathHint: options.filePathHint,
-      maxBytes: options.maxBytes,
-      maxRedirects: options.maxRedirects,
-      ssrfPolicy: options.ssrfPolicy,
-      requestInit: options.requestInit,
-    });
-    return { buffer: result.buffer, fileName: result.fileName };
-  },
-
-  getTempDir(): string {
-    return resolvePreferredOpenClawTmpDir();
-  },
-
-  hasConfiguredSecret(value: unknown): boolean {
-    return hasConfiguredSecretInput(value);
-  },
-
-  normalizeSecretInputString(value: unknown): string | undefined {
-    return normalizeSecretInputString(value) ?? undefined;
-  },
-
-  resolveSecretInputString(params: { value: unknown; path: string }): string | undefined {
-    return normalizeResolvedSecretInputString(params) ?? undefined;
-  },
-
-  async resolveApproval(approvalId: string, decision: string): Promise<boolean> {
-    try {
-      const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
-      const cfg = loadConfig();
-      await resolveApprovalOverGateway({
-        cfg,
-        approvalId,
-        decision: decision as "allow-once" | "allow-always" | "deny",
-        clientDisplayName: "QQBot Approval Handler",
+    async fetchMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
+      const { fetchRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
+      const result = await fetchRemoteMedia({
+        url: options.url,
+        filePathHint: options.filePathHint,
+        maxBytes: options.maxBytes,
+        maxRedirects: options.maxRedirects,
+        ssrfPolicy: options.ssrfPolicy,
+        requestInit: options.requestInit,
       });
-      return true;
-    } catch (err) {
-      getBridgeLogger().error(`[qqbot] resolveApproval failed: ${String(err)}`);
-      return false;
-    }
-  },
-};
+      return { buffer: result.buffer, fileName: result.fileName };
+    },
+
+    getTempDir(): string {
+      const { resolvePreferredOpenClawTmpDir } = require("openclaw/plugin-sdk/temp-path") as typeof import("openclaw/plugin-sdk/temp-path");
+      return resolvePreferredOpenClawTmpDir();
+    },
+
+    hasConfiguredSecret(value: unknown): boolean {
+      const { hasConfiguredSecretInput } = require("openclaw/plugin-sdk/secret-input") as typeof import("openclaw/plugin-sdk/secret-input");
+      return hasConfiguredSecretInput(value);
+    },
+
+    normalizeSecretInputString(value: unknown): string | undefined {
+      const { normalizeSecretInputString: normalize } = require("openclaw/plugin-sdk/secret-input") as typeof import("openclaw/plugin-sdk/secret-input");
+      return normalize(value) ?? undefined;
+    },
+
+    resolveSecretInputString(params: { value: unknown; path: string }): string | undefined {
+      const { normalizeResolvedSecretInputString } = require("openclaw/plugin-sdk/secret-input") as typeof import("openclaw/plugin-sdk/secret-input");
+      return normalizeResolvedSecretInputString(params) ?? undefined;
+    },
+
+    async resolveApproval(approvalId: string, decision: string): Promise<boolean> {
+      try {
+        const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
+        const { resolveApprovalOverGateway } = await import("openclaw/plugin-sdk/approval-gateway-runtime");
+        const cfg = loadConfig();
+        await resolveApprovalOverGateway({
+          cfg,
+          approvalId,
+          decision: decision as "allow-once" | "allow-always" | "deny",
+          clientDisplayName: "QQBot Approval Handler",
+        });
+        return true;
+      } catch (err) {
+        getBridgeLogger().error(`[qqbot] resolveApproval failed: ${String(err)}`);
+        return false;
+      }
+    },
+  };
+}
 
 /**
  * Ensure the built-in PlatformAdapter is registered.
  *
  * Safe to call multiple times — only registers on the first invocation.
- * Exported so that code paths outside the normal channel.ts startup
- * (e.g. the framework-spawned approval handler) can guarantee the
- * adapter is available before calling `getPlatformAdapter()`.
+ * Exported for backward compatibility with code that calls it explicitly.
  */
 export function ensurePlatformAdapter(): void {
   if (!hasPlatformAdapter()) {
-    registerPlatformAdapter(builtinAdapter);
+    registerPlatformAdapter(createBuiltinAdapter());
   }
 }
 
-// Side-effect registration for the normal startup path (imported by channel.ts).
+// Register the adapter factory so getPlatformAdapter() can lazy-init even when
+// this module's side-effect import hasn't executed yet (bundler reordering,
+// framework-spawned approval handlers, etc.).
+registerPlatformAdapterFactory(createBuiltinAdapter);
+
+// Also eagerly register for the normal startup path (imported by channel.ts).
 ensurePlatformAdapter();

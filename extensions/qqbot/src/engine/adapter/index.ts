@@ -6,6 +6,15 @@
  * and calls `registerPlatformAdapter()` during startup.
  *
  * core/ modules access platform capabilities via `getPlatformAdapter()`.
+ *
+ * ## Lazy initialization
+ *
+ * When the adapter has not been explicitly registered yet, `getPlatformAdapter()`
+ * will invoke the factory registered via `registerPlatformAdapterFactory()` to
+ * create and register the adapter on first access. This eliminates fragile
+ * dependency on side-effect import ordering — the adapter is guaranteed to be
+ * available whenever any engine module needs it, regardless of which code path
+ * triggers the first access.
  */
 
 import type { FetchMediaOptions, FetchMediaResult, SecretInputRef } from "./types.js";
@@ -54,14 +63,35 @@ export interface PlatformAdapter {
 }
 
 let _adapter: PlatformAdapter | null = null;
+let _adapterFactory: (() => PlatformAdapter) | null = null;
 
 /** Register the platform adapter. Called once during startup. */
 export function registerPlatformAdapter(adapter: PlatformAdapter): void {
   _adapter = adapter;
 }
 
-/** Get the registered platform adapter. Throws if not registered. */
+/**
+ * Register a factory that creates the PlatformAdapter on first access.
+ *
+ * This decouples adapter availability from side-effect import ordering.
+ * The factory is invoked at most once — on the first `getPlatformAdapter()`
+ * call when no adapter has been explicitly registered yet.
+ */
+export function registerPlatformAdapterFactory(factory: () => PlatformAdapter): void {
+  _adapterFactory = factory;
+}
+
+/**
+ * Get the registered platform adapter.
+ *
+ * If no adapter has been explicitly registered yet but a factory was provided
+ * via `registerPlatformAdapterFactory()`, the factory is invoked to create
+ * and register the adapter automatically.
+ */
 export function getPlatformAdapter(): PlatformAdapter {
+  if (!_adapter && _adapterFactory) {
+    _adapter = _adapterFactory();
+  }
   if (!_adapter) {
     throw new Error(
       "PlatformAdapter not registered. Call registerPlatformAdapter() during bootstrap.",
