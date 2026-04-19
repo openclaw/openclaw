@@ -272,10 +272,17 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Plan Mode Status",
       detailKeys: [],
     },
+    // Copilot review #68939 (2026-04-19): the prior detailKeys
+    // (`question.prompt` / `question.options.0.label`) didn't match
+    // the actual tool result shape — `ask-user-question-tool.ts:113`
+    // returns a FLAT details record (`{ question: string, options:
+    // string[], allowFreetext, ... }`), not a nested
+    // `question.prompt` object. The nested keys resolved to undefined
+    // and the display rendered empty. Realign to the flat shape.
     ask_user_question: {
       emoji: "❓",
       title: "Ask User",
-      detailKeys: ["question.prompt", "question.options.0.label"],
+      detailKeys: ["question", "options.0"],
     },
     gateway: {
       emoji: "🔌",

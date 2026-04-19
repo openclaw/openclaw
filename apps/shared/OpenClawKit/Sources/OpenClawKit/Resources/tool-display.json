@@ -394,8 +394,8 @@
       "emoji": "❓",
       "title": "Ask User",
       "detailKeys": [
-        "question.prompt",
-        "question.options.0.label"
+        "question",
+        "options.0"
       ]
     },
     "gateway": {

@@ -822,8 +822,21 @@ export function buildActivePlanNudge(
     nextPending.status === "in_progress" && nextPending.activeForm
       ? nextPending.activeForm
       : nextPending.step;
+  // Copilot review #68939 (2026-04-19): `display` is agent-controlled
+  // text (lifted from `update_plan` step text or activeForm). It can
+  // contain quotes, newlines, control chars, or other characters that
+  // would distort the surrounding prompt structure. Collapse internal
+  // whitespace to single spaces, then JSON-stringify to safely quote
+  // the string for inclusion in the agent's nudge prompt. This makes
+  // logs deterministic and prevents prompt-structure drift.
+  const safeDisplay = JSON.stringify(
+    display
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim(),
+  );
   return [
-    `Your plan is active. Step ${stepIndex} of ${total} is ${stateLabel}: "${display}".`,
+    `Your plan is active. Step ${stepIndex} of ${total} is ${stateLabel}: ${safeDisplay}.`,
     "Continue from where you left off — call the next concrete tool action without restating the plan.",
     "Use update_plan to mark this step completed (and the next one in_progress) as you advance.",
   ].join(" ");

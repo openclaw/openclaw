@@ -79,12 +79,35 @@ export function startPlanSnapshotPersister(params: {
     const kind = typeof data.kind === "string" ? data.kind : undefined;
     const title = typeof data.title === "string" ? data.title : undefined;
     const approvalId = typeof data.approvalId === "string" ? data.approvalId : undefined;
+    // Codex P2 review #68939 (2026-04-19): the `ask_user_question`
+    // tool emits the same `kind: "plugin"` approval shape as
+    // `exit_plan_mode`, with `title: "Agent has a question"` and
+    // `plan: []` (empty array — see `pi-embedded-subscribe.handlers.
+    // tools.ts:1753-1769`). Pre-fix, those question events tripped
+    // `isPlanSubmission` and overwrote `SessionEntry.planMode.
+    // approvalId/title` with question metadata. If a question event
+    // landed during a pending plan approval window, the user's later
+    // Approve/Reject from the existing plan card would get rejected
+    // by the gateway as a stale approvalId. The fix: also require a
+    // NON-EMPTY `plan` array — `plan: []` is the question-event
+    // tell. The `data.question` field is also a stronger negative
+    // signal (only questions set it), so the predicate explicitly
+    // excludes any payload with `question` set.
+    const hasQuestionShape = Boolean(
+      data &&
+      typeof data === "object" &&
+      "question" in data &&
+      (data as { question?: unknown }).question,
+    );
+    const planArray = Array.isArray(data.plan) ? data.plan : null;
     const isPlanSubmission =
       (phase === "requested" || phase === "request") &&
       kind === "plugin" &&
       title !== undefined &&
       title.length > 0 &&
-      Array.isArray(data.plan);
+      planArray !== null &&
+      planArray.length > 0 &&
+      !hasQuestionShape;
     if (!isPlanSubmission) {
       return;
     }
@@ -284,18 +307,35 @@ async function persistSnapshot(params: {
     // The guard: NEVER auto-close when there's an active pending
     // approval. The pending approval must be explicitly resolved
     // (approve/reject/edit/timeout) before any structural close.
+    //
+    // Codex P1 review #68939 (2026-04-19): tightened the
+    // `isRecentlyApproved` grace window. Pre-fix, the predicate
+    // `approval !== "rejected" && isRecentlyApproved` allowed a
+    // brand-new plan cycle (planMode exists with approval === "none")
+    // to auto-close on the prior cycle's stale `recentlyApprovedAt`
+    // timestamp — bypassing the new cycle's mutation gate without an
+    // explicit approval. The fix: only use the timestamp fallback
+    // when there is NO current-cycle approval state (`approval` is
+    // undefined — i.e., planMode itself is missing because a prior
+    // close deleted it). When planMode exists with approval ===
+    // "none" or "timed_out", the new cycle MUST be explicitly
+    // approved before structural auto-close fires.
     if (approval === "pending") {
       allowAutoClose = false;
     } else if (approval === "approved" || approval === "edited") {
       // Explicit approval signal — close is the right next step.
       allowAutoClose = true;
-    } else if (approval !== "rejected" && isRecentlyApproved) {
-      // Post-approval grace window (planMode may already be deleted
-      // from a prior close; recentlyApprovedAt survives at root).
-      // Skip when current approval is "rejected" — user said no, do
-      // not auto-close around them.
+    } else if (approval === undefined && isRecentlyApproved) {
+      // Post-deletion grace window: planMode is entirely missing
+      // (prior close deleted it) but `recentlyApprovedAt` survives
+      // at root for the 5-minute window. The runtime emitted a
+      // late completion event after the close — accept the close
+      // as the structural answer. No new cycle has started, so
+      // there's no fresh approval state to violate.
       allowAutoClose = true;
     } else {
+      // approval === "none", "rejected", or "timed_out" — a new
+      // cycle is in flight (or the user said no). Do not auto-close.
       allowAutoClose = false;
     }
   }
