@@ -1727,9 +1727,10 @@ describe("runAgentTurnWithFallback", () => {
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
-    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-    expect(sessionEntry.modelOverrideSource).toBe("auto");
+    // After #68706 fix: auto-fallback override is rolled back after successful run
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
@@ -1901,5 +1902,136 @@ describe("runAgentTurnWithFallback", () => {
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
     });
+  });
+});
+
+describe("auto-fallback model override rollback after successful run (#68706)", () => {
+  beforeEach(() => {
+    state.runEmbeddedPiAgentMock.mockReset();
+    state.runWithModelFallbackMock.mockReset();
+    state.isInternalMessageChannelMock.mockReset();
+    state.isInternalMessageChannelMock.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rolls back auto-fallback model override after successful run", async () => {
+    // Simulate fallback: primary is anthropic/claude but run uses openai/gpt-4
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai", "gpt-4"),
+        provider: "openai",
+        model: "gpt-4",
+        attempts: [
+          { provider: "anthropic", model: "claude", error: "rate_limit", reason: "rate_limit" },
+        ],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    // Auto-fallback override should be rolled back after successful run
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+  });
+
+  it("preserves user-initiated model override after fallback run", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai", "gpt-4"),
+        provider: "openai",
+        model: "gpt-4",
+        attempts: [
+          { provider: "anthropic", model: "claude", error: "rate_limit", reason: "rate_limit" },
+        ],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "gpt-4",
+      modelOverrideSource: "user" as const,
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    // User-initiated override should be preserved
+    expect(sessionEntry.modelOverride).toBe("gpt-4");
+    expect(sessionEntry.modelOverrideSource).toBe("user");
+    expect(sessionEntry.providerOverride).toBe("openai");
   });
 });

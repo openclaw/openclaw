@@ -31,11 +31,16 @@ export function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
   defaultProvider: string;
 }): StoredModelOverride | null {
-  const direct = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: params.sessionEntry?.providerOverride,
-    overrideModel: params.sessionEntry?.modelOverride,
-  });
+  // Skip auto-fallback overrides so they don't leak into the next turn.
+  // Only user-initiated model changes (/model) should persist across turns.
+  const isAutoFallback = params.sessionEntry?.modelOverrideSource === "auto";
+  const direct = isAutoFallback
+    ? null
+    : resolvePersistedOverrideModelRef({
+        defaultProvider: params.defaultProvider,
+        overrideProvider: params.sessionEntry?.providerOverride,
+        overrideModel: params.sessionEntry?.modelOverride,
+      });
   if (direct) {
     return { ...direct, source: "session" };
   }
@@ -47,6 +52,10 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   const parentEntry = params.sessionStore[parentKey];
+  const isParentAutoFallback = parentEntry?.modelOverrideSource === "auto";
+  if (isParentAutoFallback) {
+    return null;
+  }
   const parentOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: parentEntry?.providerOverride,

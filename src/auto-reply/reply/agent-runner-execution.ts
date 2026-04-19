@@ -1507,6 +1507,47 @@ export async function runAgentTurnWithFallback(params: {
     }
   }
 
+  // Roll back auto-fallback model override after a successful run so the next
+  // turn starts from the configured primary model instead of the transient
+  // fallback.  User-initiated model changes (modelOverrideSource === "user")
+  // are preserved.  See: https://github.com/openclaw/openclaw/issues/68706
+  if (
+    params.sessionKey &&
+    params.activeSessionStore &&
+    (fallbackProvider !== params.followupRun.run.provider ||
+      fallbackModel !== params.followupRun.run.model)
+  ) {
+    const activeSessionEntry =
+      params.getActiveSessionEntry() ?? params.activeSessionStore?.[params.sessionKey];
+    if (activeSessionEntry && activeSessionEntry.modelOverrideSource === "auto") {
+      delete activeSessionEntry.providerOverride;
+      delete activeSessionEntry.modelOverride;
+      delete activeSessionEntry.modelOverrideSource;
+      activeSessionEntry.updatedAt = Date.now();
+      if (params.sessionKey && params.activeSessionStore) {
+        params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+      }
+      if (params.storePath && params.sessionKey) {
+        try {
+          await updateSessionStore(params.storePath, (store) => {
+            const persistedEntry = store[params.sessionKey!];
+            if (persistedEntry && persistedEntry.modelOverrideSource === "auto") {
+              delete persistedEntry.providerOverride;
+              delete persistedEntry.modelOverride;
+              delete persistedEntry.modelOverrideSource;
+              persistedEntry.updatedAt = Date.now();
+              store[params.sessionKey!] = persistedEntry;
+            }
+          });
+        } catch (error) {
+          logVerbose(
+            `failed to roll back auto-fallback model override after run (non-fatal): ${String(error)}`,
+          );
+        }
+      }
+    }
+  }
+
   // If the run completed but with an embedded context overflow error that
   // wasn't recovered from (e.g. compaction reset already attempted), surface
   // the error to the user instead of silently returning an empty response.
