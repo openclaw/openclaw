@@ -264,11 +264,7 @@ describe("runEmbeddedPiAgent bundle MCP e2e", () => {
 
       const sessionFile = path.join(workspaceDir, "session-bundle-mcp-coding-profile.jsonl");
       const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
-      cfg.agents = {
-        defaults: {
-          toolProfile: "coding",
-        },
-      };
+      cfg.tools = { profile: "coding" };
 
       const result = await runEmbeddedPiAgent({
         sessionId: "bundle-mcp-coding-profile",
@@ -298,11 +294,7 @@ describe("runEmbeddedPiAgent bundle MCP e2e", () => {
 
       const sessionFile = path.join(workspaceDir, "session-bundle-mcp-minimal-profile.jsonl");
       const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
-      cfg.agents = {
-        defaults: {
-          toolProfile: "minimal",
-        },
-      };
+      cfg.tools = { profile: "minimal" };
 
       const result = await runEmbeddedPiAgent({
         sessionId: "bundle-mcp-minimal-profile",

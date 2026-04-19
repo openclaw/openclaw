@@ -117,8 +117,9 @@ describe("tool-policy-pipeline", () => {
     const warnings: string[] = [];
     const profilePolicy = resolveToolProfilePolicy("coding");
     applyToolPolicyPipeline({
-      tools: [{ name: "exec" }] as any,
-      toolMeta: () => undefined,
+      tools: [{ name: "exec" }, { name: "bundleProbe__probe" }] as any,
+      toolMeta: (t: any) =>
+        t.name === "bundleProbe__probe" ? { pluginId: "bundle-mcp" } : undefined,
       warn: (msg) => warnings.push(msg),
       steps: buildDefaultToolPolicyPipelineSteps({
         profile: "coding",
