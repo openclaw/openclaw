@@ -10,8 +10,10 @@ import {
 import ffmpegStatic from "ffmpeg-static";
 import ffprobeInstaller from "@ffprobe-installer/ffprobe";
 
-process.env.FFMPEG_PATH = (ffmpegStatic as unknown as string);
-if (ffprobeInstaller?.path) {
+if (ffmpegStatic && !process.env.FFMPEG_PATH) {
+  process.env.FFMPEG_PATH = ffmpegStatic as unknown as string;
+}
+if (ffprobeInstaller?.path && !process.env.FFPROBE_PATH) {
   process.env.FFPROBE_PATH = ffprobeInstaller.path;
 }
 

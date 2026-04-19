@@ -58,10 +58,13 @@ importers:
         version: 1.1.0
       '@buape/carbon':
         specifier: 0.16.0
-        version: 0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.1.1)
+        version: 0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
+      '@ffprobe-installer/ffprobe':
+        specifier: ^2.1.2
+        version: 2.1.2
       '@google/genai':
         specifier: ^1.50.1
         version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
@@ -149,6 +152,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      ffmpeg-static:
+        specifier: ^5.3.0
+        version: 5.3.0
       file-type:
         specifier: 22.0.1
         version: 22.0.1
@@ -537,10 +543,10 @@ importers:
     dependencies:
       '@buape/carbon':
         specifier: 0.16.0
-        version: 0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.1.1)
+        version: 0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       '@discordjs/voice':
         specifier: ^0.19.2
-        version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.1.1)
+        version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       '@snazzah/davey':
         specifier: ^0.1.11
         version: 0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)
@@ -1924,6 +1930,10 @@ packages:
     resolution: {integrity: sha512-Y6+WUMsTFWE5jb20IFP4YGa5IrGY/+a/FbOSjDF/wz9gepU2hwCYSXRHP/vPwBvwcY3SVMASt4yXxbXNXigmZQ==}
     engines: {node: '>=18'}
 
+  '@derhuerst/http-basic@8.2.4':
+    resolution: {integrity: sha512-F9rL9k9Xjf5blCz8HsJRO4diy111cayL2vkY2XE4r4t3n0yPXVYy3KD3nJ1qbrSn9743UWSXH4IwuCa/HWlGFw==}
+    engines: {node: '>=6.0.0'}
+
   '@discordjs/node-pre-gyp@0.4.5':
     resolution: {integrity: sha512-YJOVVZ545x24mHzANfYoy0BJX5PDyeZlpiJjDkUBM/V/Ao7TFX9lcUvCN4nr0tbr5ubeaXxtEBILUrHtTphVeQ==}
     hasBin: true
@@ -2115,6 +2125,50 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@ffprobe-installer/darwin-arm64@5.0.1':
+    resolution: {integrity: sha512-vwNCNjokH8hfkbl6m95zICHwkSzhEvDC3GVBcUp5HX8+4wsX10SP3B+bGur7XUzTIZ4cQpgJmEIAx6TUwRepMg==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@ffprobe-installer/darwin-x64@5.1.0':
+    resolution: {integrity: sha512-J+YGscZMpQclFg31O4cfVRGmDpkVsQ2fZujoUdMAAYcP0NtqpC49Hs3SWJpBdsGB4VeqOt5TTm1vSZQzs1NkhA==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@ffprobe-installer/ffprobe@2.1.2':
+    resolution: {integrity: sha512-ZNvwk4f2magF42Zji2Ese16SMj9BS7Fui4kRjg6gTYTxY3gWZNpg85n4MIfQyI9nimHg4x/gT6FVkp/bBDuBwg==}
+    engines: {node: '>=14.21.2'}
+
+  '@ffprobe-installer/linux-arm64@5.2.0':
+    resolution: {integrity: sha512-X1VvWtlLs6ScP73biVLuHD5ohKJKsMTa0vafCESOen4mOoNeLAYbxOVxDWAdFz9cpZgRiloFj5QD6nDj8E28yQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@ffprobe-installer/linux-arm@5.2.0':
+    resolution: {integrity: sha512-PF5HqEhCY7WTWHtLDYbA/+rLS+rhslWvyBlAG1Fk8VzVlnRdl93o6hy7DE2kJgxWQbFaR3ZktPQGEzfkrmQHvQ==}
+    cpu: [arm]
+    os: [linux]
+
+  '@ffprobe-installer/linux-ia32@5.2.0':
+    resolution: {integrity: sha512-TFVK5sasXyXhbIG7LtPRDmtkrkOsInwKcL43iEvEw+D9vCS2rc//mn9/0Q+BR0UoJEiMK4+ApYr/3LLVUBPOCQ==}
+    cpu: [ia32]
+    os: [linux]
+
+  '@ffprobe-installer/linux-x64@5.2.0':
+    resolution: {integrity: sha512-D3UeqTLYPNs7pBWPLUYGehPdRVqU8eACox4OZy3pZUZatxye2YKlvBwEfaLdL1v2Z4FOAlLUhms0kY8m8kqSRA==}
+    cpu: [x64]
+    os: [linux]
+
+  '@ffprobe-installer/win32-ia32@5.1.0':
+    resolution: {integrity: sha512-5O3vOoNRxmut0/Nu9vSazTdSHasrr+zPT2B3Hm7kjmO3QVFcIfVImS6ReQnZeSy8JPJOqXts5kX5x/3KOX54XQ==}
+    cpu: [ia32]
+    os: [win32]
+
+  '@ffprobe-installer/win32-x64@5.1.0':
+    resolution: {integrity: sha512-jMGYeAgkrdn4e2vvYt/qakgHRE3CPju4bn5TmdPfoAm1BlX1mY9cyMd8gf5vSzI8gH8Zq5WQAyAkmekX/8TSTg==}
+    cpu: [x64]
+    os: [win32]
 
   '@google/genai@1.50.1':
     resolution: {integrity: sha512-YbkX7H9+1Pt8wOt7DDREy8XSoiL6fRDzZQRyaVBarFf8MR3zHGqVdvM4cLbDXqPhxqvegZShgfxb8kw9C7YhAQ==}
@@ -4126,12 +4180,12 @@ packages:
   '@telegraf/types@7.1.0':
     resolution: {integrity: sha512-kGevOIbpMcIlCDeorKGpwZmdH7kHbqlk/Yj6dEpJMKEQw5lk0KVQY0OLXaCswy8GqlIVLd5625OB+rAntP9xVw==}
 
-  '@thi.ng/bitstream@2.4.46':
-    resolution: {integrity: sha512-p2cZshqkY/YX8EtNZEw29wbNF2vAJfi6A+yTkLUzERMpYIIdQz6bIt8rSJFyPqZcB5cI+tauXWwBXFbbsXuqKg==}
+  '@thi.ng/bitstream@2.4.45':
+    resolution: {integrity: sha512-LKOEJmmEvgUy1LKn79Hpc+EBMekGs5UOTqH3gcftl99w7fpzUAWg4gFmav34f/zw0SbjbnzO8EDmGUyyZW7dcA==}
     engines: {node: '>=18'}
 
-  '@thi.ng/errors@2.6.8':
-    resolution: {integrity: sha512-npKV69U8JYpMLZiqhUWf9dmd9Esjy36o7CxxGUgoLRS4ZmTLuIKqKfFnZuLrx6D5Mmb+D9ARCDR7qXO1QJV8DQ==}
+  '@thi.ng/errors@2.6.7':
+    resolution: {integrity: sha512-jFvECE7RPtB8P3BPL+XYOgGZqRheVtq32DAy3LJwbqgFP2v/lSyTwzvA47KsDKn1VDOGPGBhR5cM8eR7mnNbdQ==}
     engines: {node: '>=18'}
 
   '@tinyhttp/content-disposition@2.2.4':
@@ -4276,6 +4330,9 @@ packages:
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
+
+  '@types/node@10.17.60':
+    resolution: {integrity: sha512-F0KIgDJfy2nA3zMLmWGKxcH2ZVEtCZXHHdOQs2gSaQ27+lNeEfGxzkIw90aXswATX7AZ33tahPbzy6KAfUreVw==}
 
   '@types/node@16.9.1':
     resolution: {integrity: sha512-QpLcX9ZSsq3YYUUnD3nFDY8H7wctAhQj/TFKL8Ya8v5fMm3CFXxo8zStsLAl780ltoYoo1WvKUVGBQK+1ifr7g==}
@@ -4822,6 +4879,9 @@ packages:
     resolution: {integrity: sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==}
     engines: {node: '>= 0.4'}
 
+  caseless@0.12.0:
+    resolution: {integrity: sha512-4tYFyifaFfGacoiObjJegolkwSU4xQNGbVgUiNYVUxbQ2x2lUsFvY4hVgVzGiIe6WLOPqycWXA40l+PWsxthUw==}
+
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
 
@@ -4964,6 +5024,10 @@ packages:
 
   commondir@1.0.1:
     resolution: {integrity: sha512-W9pAhw0ja1Edb5GVdIF1mjZw/ASI0AlShXM83UUGe2DVr5TdAPEA1OA8m/g8zWp9x6On7gqufY+FatDbC3MDQg==}
+
+  concat-stream@2.0.0:
+    resolution: {integrity: sha512-MWufYdFw53ccGjCA+Ol7XJYpAlW6/prSMzuPOTRnJGcGzuhLn4Scrz7qf6o8bROZ514ltazcIFJZevcfbo0x7A==}
+    engines: {'0': node >= 6.0}
 
   console-control-strings@1.1.0:
     resolution: {integrity: sha512-ty/fTekppD2fIwRvnZAVdeOiGd1c7YXEixbgJTNzqcxJWKQnjJ/V1bNEEE6hygpM3WjwHFUVK6HTjWSzV4a8sQ==}
@@ -5248,6 +5312,10 @@ packages:
     resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
     engines: {node: '>=0.12'}
 
+  env-paths@2.2.1:
+    resolution: {integrity: sha512-+h1lkLKhZMTYjog1VEpJNG7NZJWcuc2DDk/qsqSTRRCOXiLjeQ1d1/udrUGhqMxUgAlwKNZ0cf2uqan5GLuS2A==}
+    engines: {node: '>=6'}
+
   env-var@7.5.0:
     resolution: {integrity: sha512-mKZOzLRN0ETzau2W2QXefbFjo5EF4yWq28OyKb9ICdeNhHJlOE/pHHnz4hdYJ9cNZXcJHo5xN4OT4pzuSHSNvA==}
     engines: {node: '>=10'}
@@ -5417,6 +5485,10 @@ packages:
   fetch-blob@3.2.0:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
+
+  ffmpeg-static@5.3.0:
+    resolution: {integrity: sha512-H+K6sW6TiIX6VGend0KQwthe+kaceeH/luE8dIZyOP35ik7ahYojDuqlTV1bOrtEwl01sy2HFNGQfi5IDJvotg==}
+    engines: {node: '>=16'}
 
   file-type@22.0.1:
     resolution: {integrity: sha512-ww5Mhre0EE+jmBvOXTmXAbEMuZE7uX4a3+oRCQFNj8w++g3ev913N6tXQz0XTXbueQ5TWQfm6BdaViEHHn8bhA==}
@@ -5686,6 +5758,9 @@ packages:
   http-proxy-agent@9.0.0:
     resolution: {integrity: sha512-FcF8VhXYLQcxWCnt/cCpT2apKsRDUGeVEeMqGu4HSTu29U8Yw0TLOjdYIlDsYk3IkUh+taX4IDWpPcCqKDhCjA==}
     engines: {node: '>= 20'}
+
+  http-response-object@3.0.2:
+    resolution: {integrity: sha512-bqX0XTF6fnXSQcEJ2Iuyr75yVakyjIDCqroJQ/aHfSdlM743Cwqoi2nDYMzLGWUcuTWGWy8AAvOKXTfiv6q9RA==}
 
   https-proxy-agent@5.0.1:
     resolution: {integrity: sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==}
@@ -6632,6 +6707,9 @@ packages:
   parse-bmfont-xml@1.1.6:
     resolution: {integrity: sha512-0cEliVMZEhrFDwMh4SxIyVJpqYoOWDJ9P895tFuS+XuNzI5UBmBk5U5O4KuJdTnZpSBI4LFA2+ZiJaiwfSwlMA==}
 
+  parse-cache-control@1.0.1:
+    resolution: {integrity: sha512-60zvsJReQPX5/QP0Kzfd/VrpjScIQ7SHBW6bFCYfEP+fp0Eppr1SHhIO5nd1PjZtvclzSzES9D/p5nFJurwfWg==}
+
   parse-ms@2.1.0:
     resolution: {integrity: sha512-kHt7kzLoS9VBZfUsiKjv43mr91ea+U05EyKkEtqp7vNbHxmaVuEqN7XxeEVnGrMtYOAxGrDElSi96K7EgO1zCA==}
     engines: {node: '>=6'}
@@ -6799,6 +6877,10 @@ packages:
 
   process-warning@5.0.0:
     resolution: {integrity: sha512-a39t9ApHNx2L4+HBnQKqxxHNs1r7KF+Intd8Q/g1bUh6q0WIp9voPXJ/x0j+ZL45KF1pJd9+q2jLIRMfvEshkA==}
+
+  progress@2.0.3:
+    resolution: {integrity: sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==}
+    engines: {node: '>=0.4.0'}
 
   promise@7.3.1:
     resolution: {integrity: sha512-nolQXZ/4L+bP/UGlkfaIujX9BKxGwmQ9OT4mOt5yvy8iK1h3wqTEJCijzGANTCCl9nWjY41juyAn2K3Q1hLLTg==}
@@ -7549,6 +7631,9 @@ packages:
   type-is@2.0.1:
     resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
     engines: {node: '>= 0.6'}
+
+  typedarray@0.0.6:
+    resolution: {integrity: sha512-/aCDEGatGvZ2BIk+HmLf4ifCJFwvKFNb9/JeZPMulfgFracn9QFcAf5GO8B/mweUjSoblS5In0cWhqpfs/5PQA==}
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -9033,13 +9118,13 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.1.1)':
+  '@buape/carbon@0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.6.0
       discord-api-types: 0.38.45
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260405.1
-      '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.1.1)
+      '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       '@types/bun': 1.3.11
       '@types/ws': 8.18.1
       ws: 8.20.0
@@ -9053,13 +9138,13 @@ snapshots:
       - opusscript
       - utf-8-validate
 
-  '@buape/carbon@0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.1.1)':
+  '@buape/carbon@0.16.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(ffmpeg-static@5.3.0)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.6.0
       discord-api-types: 0.38.45
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260405.1
-      '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.1.1)
+      '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       '@types/bun': 1.3.11
       '@types/ws': 8.18.1
       ws: 8.20.0
@@ -9198,6 +9283,13 @@ snapshots:
       gonzales-pe: 4.3.0
       node-source-walk: 7.0.1
 
+  '@derhuerst/http-basic@8.2.4':
+    dependencies:
+      caseless: 0.12.0
+      concat-stream: 2.0.0
+      http-response-object: 3.0.2
+      parse-cache-control: 1.0.1
+
   '@discordjs/node-pre-gyp@0.4.5':
     dependencies:
       detect-libc: 2.1.2
@@ -9223,12 +9315,12 @@ snapshots:
       - supports-color
     optional: true
 
-  '@discordjs/voice@0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.1.1)':
+  '@discordjs/voice@0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)':
     dependencies:
       '@snazzah/davey': 0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)
       '@types/ws': 8.18.1
       discord-api-types: 0.38.47
-      prism-media: 1.3.5(@discordjs/opus@0.10.0)(opusscript@0.1.1)
+      prism-media: 1.3.5(@discordjs/opus@0.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       tslib: 2.8.1
       ws: 8.20.0
     transitivePeerDependencies:
@@ -9241,12 +9333,12 @@ snapshots:
       - opusscript
       - utf-8-validate
 
-  '@discordjs/voice@0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.1.1)':
+  '@discordjs/voice@0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(ffmpeg-static@5.3.0)(opusscript@0.1.1)':
     dependencies:
       '@snazzah/davey': 0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
       '@types/ws': 8.18.1
       discord-api-types: 0.38.47
-      prism-media: 1.3.5(@discordjs/opus@0.10.0)(opusscript@0.1.1)
+      prism-media: 1.3.5(@discordjs/opus@0.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1)
       tslib: 2.8.1
       ws: 8.20.0
     transitivePeerDependencies:
@@ -9364,6 +9456,41 @@ snapshots:
   '@exodus/bytes@1.15.0(@noble/hashes@2.0.1)':
     optionalDependencies:
       '@noble/hashes': 2.0.1
+
+  '@ffprobe-installer/darwin-arm64@5.0.1':
+    optional: true
+
+  '@ffprobe-installer/darwin-x64@5.1.0':
+    optional: true
+
+  '@ffprobe-installer/ffprobe@2.1.2':
+    optionalDependencies:
+      '@ffprobe-installer/darwin-arm64': 5.0.1
+      '@ffprobe-installer/darwin-x64': 5.1.0
+      '@ffprobe-installer/linux-arm': 5.2.0
+      '@ffprobe-installer/linux-arm64': 5.2.0
+      '@ffprobe-installer/linux-ia32': 5.2.0
+      '@ffprobe-installer/linux-x64': 5.2.0
+      '@ffprobe-installer/win32-ia32': 5.1.0
+      '@ffprobe-installer/win32-x64': 5.1.0
+
+  '@ffprobe-installer/linux-arm64@5.2.0':
+    optional: true
+
+  '@ffprobe-installer/linux-arm@5.2.0':
+    optional: true
+
+  '@ffprobe-installer/linux-ia32@5.2.0':
+    optional: true
+
+  '@ffprobe-installer/linux-x64@5.2.0':
+    optional: true
+
+  '@ffprobe-installer/win32-ia32@5.1.0':
+    optional: true
+
+  '@ffprobe-installer/win32-x64@5.1.0':
+    optional: true
 
   '@google/genai@1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))':
     dependencies:
@@ -11405,12 +11532,12 @@ snapshots:
 
   '@telegraf/types@7.1.0': {}
 
-  '@thi.ng/bitstream@2.4.46':
+  '@thi.ng/bitstream@2.4.45':
     dependencies:
-      '@thi.ng/errors': 2.6.8
+      '@thi.ng/errors': 2.6.7
     optional: true
 
-  '@thi.ng/errors@2.6.8':
+  '@thi.ng/errors@2.6.7':
     optional: true
 
   '@tinyhttp/content-disposition@2.2.4': {}
@@ -11587,6 +11714,8 @@ snapshots:
   '@types/mime-types@2.1.4': {}
 
   '@types/ms@2.1.0': {}
+
+  '@types/node@10.17.60': {}
 
   '@types/node@16.9.1': {}
 
@@ -11916,7 +12045,6 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   agent-base@7.1.4: {}
 
@@ -12198,6 +12326,8 @@ snapshots:
       call-bind-apply-helpers: 1.0.2
       get-intrinsic: 1.3.0
 
+  caseless@0.12.0: {}
+
   ccount@2.0.1: {}
 
   chai@6.2.2: {}
@@ -12333,6 +12463,13 @@ snapshots:
   commander@7.2.0: {}
 
   commondir@1.0.1: {}
+
+  concat-stream@2.0.0:
+    dependencies:
+      buffer-from: 1.1.2
+      inherits: 2.0.4
+      readable-stream: 3.6.2
+      typedarray: 0.0.6
 
   console-control-strings@1.1.0:
     optional: true
@@ -12590,6 +12727,8 @@ snapshots:
 
   entities@7.0.1: {}
 
+  env-paths@2.2.1: {}
+
   env-var@7.5.0: {}
 
   es-define-property@1.0.1: {}
@@ -12800,6 +12939,15 @@ snapshots:
     dependencies:
       node-domexception: '@nolyfill/domexception@1.0.28'
       web-streams-polyfill: 3.3.3
+
+  ffmpeg-static@5.3.0:
+    dependencies:
+      '@derhuerst/http-basic': 8.2.4
+      env-paths: 2.2.1
+      https-proxy-agent: 5.0.1
+      progress: 2.0.3
+    transitivePeerDependencies:
+      - supports-color
 
   file-type@22.0.1:
     dependencies:
@@ -13161,13 +13309,16 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  http-response-object@3.0.2:
+    dependencies:
+      '@types/node': 10.17.60
+
   https-proxy-agent@5.0.1:
     dependencies:
       agent-base: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
-    optional: true
 
   https-proxy-agent@7.0.6:
     dependencies:
@@ -14255,6 +14406,8 @@ snapshots:
       xml-parse-from-string: 1.0.1
       xml2js: 0.5.0
 
+  parse-cache-control@1.0.1: {}
+
   parse-ms@2.1.0: {}
 
   parse-ms@3.0.0: {}
@@ -14395,14 +14548,17 @@ snapshots:
     dependencies:
       parse-ms: 4.0.0
 
-  prism-media@1.3.5(@discordjs/opus@0.10.0)(opusscript@0.1.1):
+  prism-media@1.3.5(@discordjs/opus@0.10.0)(ffmpeg-static@5.3.0)(opusscript@0.1.1):
     optionalDependencies:
       '@discordjs/opus': 0.10.0
+      ffmpeg-static: 5.3.0
       opusscript: 0.1.1
 
   process-nextick-args@2.0.1: {}
 
   process-warning@5.0.0: {}
+
+  progress@2.0.3: {}
 
   promise@7.3.1:
     dependencies:
@@ -14552,7 +14708,7 @@ snapshots:
 
   qoa-format@1.0.1:
     dependencies:
-      '@thi.ng/bitstream': 2.4.46
+      '@thi.ng/bitstream': 2.4.45
     optional: true
 
   qrcode-terminal@0.12.0: {}
@@ -15300,6 +15456,8 @@ snapshots:
       content-type: 1.0.5
       media-typer: 1.1.0
       mime-types: 3.0.2
+
+  typedarray@0.0.6: {}
 
   typescript@5.9.3: {}
 

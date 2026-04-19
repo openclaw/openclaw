@@ -58,10 +58,12 @@ if (values.index !== undefined) {
   ffmpegArgs.push("-i", inVal, "-vf", "select=eq(n\\,0)", "-vframes", "1", values.out);
 }
 
+const ffmpegBin = ffmpegStatic ?? process.env.FFMPEG_PATH ?? "ffmpeg";
+
 try {
-  execFileSync(ffmpegStatic, ffmpegArgs, { stdio: "inherit" });
+  execFileSync(ffmpegBin, ffmpegArgs, { stdio: "inherit" });
   console.log(values.out);
 } catch (error) {
-  console.error("FFmpeg extraction failed");
+  console.error("FFmpeg extraction failed:", error.message ?? "unknown error");
   process.exit(error.status ?? 1);
 }

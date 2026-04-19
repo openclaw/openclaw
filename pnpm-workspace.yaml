@@ -18,6 +18,7 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@aws-sdk/*"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
