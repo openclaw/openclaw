@@ -19,7 +19,10 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
-import { checkAcceptEditsConstraint } from "./plan-mode/accept-edits-gate.js";
+import {
+  checkAcceptEditsConstraint,
+  extractApplyPatchTargetPaths,
+} from "./plan-mode/accept-edits-gate.js";
 import { checkMutationGate, type PlanMode } from "./plan-mode/index.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -340,10 +343,25 @@ export async function runBeforeToolCallHook(args: {
         filePath = candidate;
       }
     }
+    // Codex P2 review #68939 (post-nuclear-fix-stack): for
+    // `apply_patch`, the target paths live in `params.input` (a
+    // patch text with `*** Update File: <path>` / `*** Add File:
+    // <path>` / `*** Delete File: <path>` headers). Extract them
+    // and feed into the gate's `additionalPaths` so the
+    // protected-config-path block fires for patches that touch
+    // ~/.openclaw/* etc.
+    let additionalPaths: string[] | undefined;
+    if (toolName === "apply_patch" && isPlainObject(params)) {
+      const extracted = extractApplyPatchTargetPaths(params.input);
+      if (extracted.length > 0) {
+        additionalPaths = extracted;
+      }
+    }
     const acceptEditsResult = checkAcceptEditsConstraint({
       toolName,
       execCommand,
       filePath,
+      ...(additionalPaths ? { additionalPaths } : {}),
     });
     if (acceptEditsResult.blocked) {
       return {
