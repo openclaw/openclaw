@@ -138,8 +138,29 @@ function resolveSessionKey(params: {
   }
 
   const user = params.user?.trim();
-  const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
-  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+  if (user) {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: `${params.prefix}-user:${user}`,
+    });
+  }
+
+  // x-openclaw-session provides an agent-scoped stable session identifier for
+  // voice/realtime callers (e.g. LiveKit, Twilio) that cannot set the OpenAI
+  // `user` field. Reusing the same session key across calls avoids a full QMD
+  // re-index on every stateless HTTP request, cutting TTFB significantly.
+  const sessionHint = getHeader(params.req, "x-openclaw-session")?.trim();
+  if (sessionHint) {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: `${params.prefix}-session:${sessionHint}`,
+    });
+  }
+
+  return buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: `${params.prefix}:${randomUUID()}`,
+  });
 }
 
 export function resolveGatewayRequestContext(params: {
