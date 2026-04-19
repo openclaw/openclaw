@@ -48,7 +48,10 @@ async function resolveImageRuntime(params: {
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
-  const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const resolvedRef = normalizeModelRef(
+    params.provider,
+    params.model.startsWith(`${params.provider}/`) ? params.model.slice(params.provider.length + 1) : params.model,
+  );
   const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);

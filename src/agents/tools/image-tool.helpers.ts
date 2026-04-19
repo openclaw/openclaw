@@ -75,5 +75,5 @@ export function resolveProviderVisionModelFromConfig(params: {
   const models = providerCfg?.models ?? [];
   const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
-  return id || null;
+  return id ? `${params.provider}/${id}` : null;
 }
