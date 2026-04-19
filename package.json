@@ -1616,6 +1616,15 @@
   "pnpm": {
     "overrides": {
       "@anthropic-ai/sdk": "0.81.0",
+      "@img/sharp-linux-x64": "0.34.5",
+      "@img/sharp-libvips-linux-x64": "1.2.4",
+      "@img/sharp-darwin-x64": "0.34.5",
+      "@img/sharp-darwin-arm64": "0.34.5",
+      "@img/sharp-linux-arm64": "0.34.5",
+      "@img/sharp-libvips-linux-arm64": "1.2.4",
+      "@img/sharp-libvips-darwin-x64": "1.2.4",
+      "@img/sharp-libvips-darwin-arm64": "1.2.4",
+      "@img/sharp-win32-x64": "0.34.5",
       "hono": "4.12.14",
       "@hono/node-server": "1.19.14",
       "axios": "1.15.0",

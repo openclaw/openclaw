@@ -31,7 +31,7 @@ agents:
           # Optional overrides — all fields here are optional.
           model: claude-sonnet-4-5-20250929
           maxTurns: 20
-          credential: subscription  # "subscription" (default) or "profile"
+          credential: subscription # "subscription" (default) or "profile"
 ```
 
 Nothing else changes. The flag is strictly additive. Any agent that does not set `runtime.type` continues to use the `embedded` driver byte-for-byte identically to pre-opt-in behavior.
@@ -70,20 +70,20 @@ If the inventory build fails (policy resolution error, plugin registry issue, et
 
 Workspace hook entries (see [Hooks](/hooks)) are loaded via `loadWorkspaceHookEntries()` and translated into SDK `HookCallbackMatcher` records. The following OpenClaw event strings map to SDK `HookEvent` values:
 
-| OpenClaw event       | SDK event              |
-| -------------------- | ---------------------- |
-| `session:start`      | `SessionStart`         |
-| `session:end`        | `SessionEnd`           |
-| `tool:pre`           | `PreToolUse`           |
-| `tool:post`          | `PostToolUse`          |
-| `tool:post_failure`  | `PostToolUseFailure`   |
-| `user:prompt`        | `UserPromptSubmit`     |
-| `notification`       | `Notification`         |
-| `stop`               | `Stop`                 |
-| `subagent:start`     | `SubagentStart`        |
-| `subagent:end`       | `SubagentStop`         |
-| `compact:pre`        | `PreCompact`           |
-| `permission:request` | `PermissionRequest`    |
+| OpenClaw event       | SDK event            |
+| -------------------- | -------------------- |
+| `session:start`      | `SessionStart`       |
+| `session:end`        | `SessionEnd`         |
+| `tool:pre`           | `PreToolUse`         |
+| `tool:post`          | `PostToolUse`        |
+| `tool:post_failure`  | `PostToolUseFailure` |
+| `user:prompt`        | `UserPromptSubmit`   |
+| `notification`       | `Notification`       |
+| `stop`               | `Stop`               |
+| `subagent:start`     | `SubagentStart`      |
+| `subagent:end`       | `SubagentStop`       |
+| `compact:pre`        | `PreCompact`         |
+| `permission:request` | `PermissionRequest`  |
 
 Events not in the mapping are logged as a warning (they're dropped for the SDK run, not silently discarded). Handler invocation is lazy — the handler module is imported on the first fire per run.
 
