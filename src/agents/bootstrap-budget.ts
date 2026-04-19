@@ -350,6 +350,7 @@ export function appendBootstrapPromptWarning(
     "Some workspace bootstrap files were truncated before injection.",
     "Treat Project Context as partial and read the relevant files directly if details seem missing.",
     ...normalizedLines.map((line) => `- ${line}`),
+    "⚠ Edits to truncated files may fail (non-unique matches, text not found). If edits fail, use the `write` tool to rewrite the full file, or trim the file to fit within the limit.",
   ].join("\n");
   return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
