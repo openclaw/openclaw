@@ -47,6 +47,7 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
   },
+  { label: "ui:build", kind: "pnpm", pnpmArgs: ["ui:build"] },
   {
     label: "write-build-info",
     kind: "node",
@@ -75,6 +76,7 @@ export const BUILD_ALL_PROFILES = {
     "canvas-a2ui-copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
+    "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
