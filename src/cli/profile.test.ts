@@ -123,7 +123,7 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
   });
 
-  it("uses OPENCLAW_HOME when deriving profile state dir", () => {
+  it("skips profile suffix under OPENCLAW_HOME for daemon/CLI path parity", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_HOME: "/srv/openclaw-home",
       HOME: "/home/other",
@@ -135,10 +135,39 @@ describe("applyCliProfileEnv", () => {
     });
 
     const resolvedHome = path.resolve("/srv/openclaw-home");
-    expect(env.OPENCLAW_STATE_DIR).toBe(path.join(resolvedHome, ".openclaw-work"));
-    expect(env.OPENCLAW_CONFIG_PATH).toBe(
-      path.join(resolvedHome, ".openclaw-work", "openclaw.json"),
-    );
+    const stateDir = path.join(resolvedHome, ".openclaw");
+    expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(stateDir, "openclaw.json"));
+  });
+
+  it("skips profile suffix for dev profile under OPENCLAW_HOME, still sets dev port", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    };
+    applyCliProfileEnv({
+      profile: "dev",
+      env,
+      homedir: () => "/home/fallback",
+    });
+
+    const stateDir = path.join(path.resolve("/srv/openclaw-home"), ".openclaw");
+    expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
+  });
+
+  it("does not skip profile suffix when OPENCLAW_HOME is a string sentinel", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_HOME: "undefined",
+      HOME: "/home/other",
+    };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/fallback",
+    });
+
+    const stateDir = path.join(path.resolve("/home/other"), ".openclaw-work");
+    expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
   });
 });
 

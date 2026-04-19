@@ -65,6 +65,11 @@ function normalizeSafe(homedir: () => string): string | undefined {
   }
 }
 
+/** True when `OPENCLAW_HOME` is a non-empty, non-sentinel value (matches `resolveRawHomeDir` semantics). */
+export function isOpenClawHomeEnvExplicit(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(normalize(env.OPENCLAW_HOME));
+}
+
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
