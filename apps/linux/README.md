@@ -13,7 +13,7 @@ Current foundation:
 - native local gateway client over HTTP + WebSocket
 - `systemd --user` integration for `openclaw-gateway.service`
 - gateway start / stop / restart / refresh
-- diagnostics window with systemd + gateway runtime state
+- integrated main-window Diagnostics section with systemd + gateway runtime state
 
 This is still an early-stage foundation. The goal of this document is to describe the **current, tested baseline** from a clean Ubuntu machine up to a working local gateway + Linux companion flow.
 

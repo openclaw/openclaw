@@ -262,12 +262,12 @@ static void test_dashboard_null_output(void) {
  * Tray display model tests
  * ══════════════════════════════════════════════════════════════════ */
 
-static void test_tray_running(void) {
+static void test_tray_running_service_controllable(void) {
     HealthState hs = {0};
     hs.config_valid = TRUE;
     hs.has_wizard_onboard_marker = TRUE;
     TrayDisplayModel tm;
-    tray_display_model_build(STATE_RUNNING, RUNTIME_EXPECTED_SERVICE_HEALTHY, &hs, &tm);
+    tray_display_model_build(STATE_RUNNING, RUNTIME_EXPECTED_SERVICE_HEALTHY, &hs, TRUE, &tm);
 
     assert_contains(tm.status_label, "Running", "tray_running.label");
     g_assert_nonnull(tm.runtime_label);
@@ -277,10 +277,23 @@ static void test_tray_running(void) {
     g_assert_true(tm.open_dashboard_sensitive);
 }
 
-static void test_tray_stopped(void) {
+static void test_tray_running_service_not_controllable(void) {
+    HealthState hs = {0};
+    hs.config_valid = TRUE;
+    TrayDisplayModel tm;
+    tray_display_model_build(STATE_RUNNING, RUNTIME_EXPECTED_SERVICE_HEALTHY, &hs, FALSE, &tm);
+
+    assert_contains(tm.status_label, "Running", "tray_running_uncontrollable.label");
+    g_assert_false(tm.start_sensitive);
+    g_assert_false(tm.stop_sensitive);
+    g_assert_false(tm.restart_sensitive);
+    g_assert_true(tm.open_dashboard_sensitive);
+}
+
+static void test_tray_stopped_service_controllable(void) {
     HealthState hs = {0};
     TrayDisplayModel tm;
-    tray_display_model_build(STATE_STOPPED, RUNTIME_NONE, &hs, &tm);
+    tray_display_model_build(STATE_STOPPED, RUNTIME_NONE, &hs, TRUE, &tm);
 
     assert_contains(tm.status_label, "Stopped", "tray_stopped.label");
     g_assert_true(tm.start_sensitive);
@@ -289,29 +302,44 @@ static void test_tray_stopped(void) {
     g_assert_false(tm.open_dashboard_sensitive);
 }
 
-static void test_tray_starting(void) {
+static void test_tray_stopped_service_not_controllable(void) {
     HealthState hs = {0};
     TrayDisplayModel tm;
-    tray_display_model_build(STATE_STARTING, RUNTIME_NONE, &hs, &tm);
+    tray_display_model_build(STATE_STOPPED, RUNTIME_NONE, &hs, FALSE, &tm);
 
-    assert_contains(tm.status_label, "Starting", "tray_starting.label");
-    /* Transition: all service actions disabled */
+    assert_contains(tm.status_label, "Stopped", "tray_stopped_uncontrollable.label");
     g_assert_false(tm.start_sensitive);
     g_assert_false(tm.stop_sensitive);
     g_assert_false(tm.restart_sensitive);
+    g_assert_false(tm.open_dashboard_sensitive);
+}
+
+static void test_tray_starting_service_controllable(void) {
+    HealthState hs = {0};
+    TrayDisplayModel tm;
+    tray_display_model_build(STATE_STARTING, RUNTIME_NONE, &hs, TRUE, &tm);
+
+    assert_contains(tm.status_label, "Starting", "tray_starting.label");
+    g_assert_false(tm.start_sensitive);
+    g_assert_true(tm.stop_sensitive);
+    g_assert_false(tm.restart_sensitive);
+    g_assert_false(tm.open_dashboard_sensitive);
 }
 
 static void test_tray_needs_setup(void) {
     HealthState hs = {0};
     TrayDisplayModel tm;
-    tray_display_model_build(STATE_NEEDS_SETUP, RUNTIME_NONE, &hs, &tm);
+    tray_display_model_build(STATE_NEEDS_SETUP, RUNTIME_NONE, &hs, TRUE, &tm);
 
     assert_contains(tm.status_label, "Setup Required", "tray_setup.label");
     g_assert_false(tm.start_sensitive);
+    g_assert_false(tm.stop_sensitive);
+    g_assert_false(tm.restart_sensitive);
+    g_assert_false(tm.open_dashboard_sensitive);
 }
 
 static void test_tray_null_output(void) {
-    tray_display_model_build(STATE_RUNNING, RUNTIME_NONE, NULL, NULL);
+    tray_display_model_build(STATE_RUNNING, RUNTIME_NONE, NULL, TRUE, NULL);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -835,9 +863,16 @@ int main(int argc, char **argv) {
                     test_dashboard_null_output);
 
     /* Tray display model */
-    g_test_add_func("/display_model/tray/running", test_tray_running);
-    g_test_add_func("/display_model/tray/stopped", test_tray_stopped);
-    g_test_add_func("/display_model/tray/starting", test_tray_starting);
+    g_test_add_func("/display_model/tray/running_service_controllable",
+                    test_tray_running_service_controllable);
+    g_test_add_func("/display_model/tray/running_service_not_controllable",
+                    test_tray_running_service_not_controllable);
+    g_test_add_func("/display_model/tray/stopped_service_controllable",
+                    test_tray_stopped_service_controllable);
+    g_test_add_func("/display_model/tray/stopped_service_not_controllable",
+                    test_tray_stopped_service_not_controllable);
+    g_test_add_func("/display_model/tray/starting_service_controllable",
+                    test_tray_starting_service_controllable);
     g_test_add_func("/display_model/tray/needs_setup", test_tray_needs_setup);
     g_test_add_func("/display_model/tray/null_output", test_tray_null_output);
 
