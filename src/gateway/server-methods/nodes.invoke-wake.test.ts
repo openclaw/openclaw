@@ -360,6 +360,24 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
   });
 
+  it("does not retain wake state for unregistered nodes", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+
+    await expect(maybeWakeNodeWithApns("ios-node-no-registration")).resolves.toMatchObject({
+      available: false,
+      throttled: false,
+      path: "no-registration",
+    });
+    await expect(maybeWakeNodeWithApns("ios-node-no-registration")).resolves.toMatchObject({
+      available: false,
+      throttled: false,
+      path: "no-registration",
+    });
+
+    expect(mocks.loadApnsRegistration).toHaveBeenCalledTimes(2);
+    expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+  });
+
   it("wakes and retries invoke after the node reconnects", async () => {
     vi.useFakeTimers();
     mockDirectWakeConfig("ios-node-reconnect");

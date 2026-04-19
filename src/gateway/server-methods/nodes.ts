@@ -310,6 +310,7 @@ export async function maybeWakeNodeWithApns(
   opts?: { force?: boolean; wakeReason?: string },
 ): Promise<NodeWakeAttempt> {
   const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
+  const hadExistingState = nodeWakeById.has(nodeId);
   nodeWakeById.set(nodeId, state);
 
   if (state.inFlight) {
@@ -332,6 +333,9 @@ export async function maybeWakeNodeWithApns(
     try {
       const registration = await loadApnsRegistration(nodeId);
       if (!registration) {
+        if (!hadExistingState) {
+          nodeWakeById.delete(nodeId);
+        }
         return withDuration({ available: false, throttled: false, path: "no-registration" });
       }
 
