@@ -460,6 +460,47 @@ async function persistSnapshot(params: {
       : undefined;
 
   await updateSessionStore(target.storePath, async (store) => {
+    // Codex P1 review #68939 (post-nuclear-fix-stack):
+    // re-evaluate `allowAutoClose` INSIDE the write lock against
+    // the locked store snapshot. Pre-fix, the predicate was
+    // computed from a separate read-only fetch BEFORE this
+    // callback fires, so a concurrent write that started a new
+    // plan cycle (or set approval pending) between the preflight
+    // read and this write could close the newer cycle on the
+    // stale boolean — reopening mutation tools without that
+    // cycle's approval. Re-checking inside the lock makes the
+    // decision atomic with the write.
+    let lockedAllowAutoClose = allowAutoClose;
+    if (params.closeOnComplete) {
+      const lockedEntry = store[params.sessionKey] as Record<string, unknown> | undefined;
+      const lockedPlanMode = lockedEntry?.planMode as Record<string, unknown> | undefined;
+      const lockedApproval = lockedPlanMode?.approval;
+      const lockedRecentlyApprovedAt = lockedEntry?.recentlyApprovedAt;
+      const lockedIsRecentlyApproved =
+        typeof lockedRecentlyApprovedAt === "number" &&
+        Date.now() - lockedRecentlyApprovedAt < 5 * 60_000;
+      // Mirror the same predicate as the preflight read above so
+      // both paths reach the same answer when state hasn't drifted,
+      // but if state HAS drifted the locked snapshot wins.
+      if (lockedApproval === "pending") {
+        lockedAllowAutoClose = false;
+      } else if (lockedApproval === "approved" || lockedApproval === "edited") {
+        lockedAllowAutoClose = true;
+      } else if (lockedApproval === undefined && lockedIsRecentlyApproved) {
+        lockedAllowAutoClose = true;
+      } else {
+        lockedAllowAutoClose = false;
+      }
+      if (lockedAllowAutoClose !== allowAutoClose) {
+        log.warn(
+          `auto-close decision flipped under store lock: ` +
+            `preflight=${allowAutoClose ? "allow" : "deny"} ` +
+            `locked=${lockedAllowAutoClose ? "allow" : "deny"} ` +
+            `lockedApproval=${String(lockedApproval)} sessionKey=${params.sessionKey} ` +
+            `(state drift between preflight read + write lock — locked snapshot wins)`,
+        );
+      }
+    }
     return await applySessionsPatchToStore({
       cfg,
       store,
@@ -498,7 +539,7 @@ async function persistSnapshot(params: {
             : {}),
           ...(s.verifiedCriteria !== undefined ? { verifiedCriteria: s.verifiedCriteria } : {}),
         })),
-        ...(params.closeOnComplete && allowAutoClose ? { planMode: "normal" as const } : {}),
+        ...(params.closeOnComplete && lockedAllowAutoClose ? { planMode: "normal" as const } : {}),
       },
     });
   });

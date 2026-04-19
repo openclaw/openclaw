@@ -56,6 +56,16 @@ export interface AcceptEditsGateParams {
    * checks are skipped.
    */
   filePath?: string;
+  /**
+   * Codex P2 review #68939 (post-nuclear-fix-stack): additional
+   * paths extracted from tool inputs that carry MULTIPLE target
+   * paths (specifically `apply_patch`, where the patch text in
+   * `params.input` contains target paths in its envelope headers).
+   * Each entry is checked against the protected-config-path
+   * prefixes individually. Optional — if the caller can't parse
+   * out additional paths, the single `filePath` field still works.
+   */
+  additionalPaths?: readonly string[];
 }
 
 export interface AcceptEditsGateResult {
@@ -391,14 +401,65 @@ export function checkAcceptEditsConstraint(params: AcceptEditsGateParams): Accep
     }
   }
 
-  if (PATH_WRITER_TOOLS.has(toolName) && params.filePath) {
-    const protectedPath = checkProtectedPath(params.filePath);
-    if (protectedPath) {
-      return protectedPath;
+  if (PATH_WRITER_TOOLS.has(toolName)) {
+    // Codex P2 review #68939 (post-nuclear-fix-stack): check
+    // EVERY candidate path (the singular `filePath` from
+    // params.path / params.filePath / params.file_path PLUS any
+    // additionalPaths the caller extracted from a multi-path
+    // input like `apply_patch`'s patch envelope). Return the
+    // first protected-path hit. Pre-fix, only the singular
+    // `filePath` was checked, which left `apply_patch` calls
+    // (which embed paths in `params.input`) able to bypass the
+    // protected-path block.
+    const candidatePaths: string[] = [];
+    if (params.filePath) {
+      candidatePaths.push(params.filePath);
+    }
+    if (params.additionalPaths) {
+      for (const p of params.additionalPaths) {
+        if (typeof p === "string" && p.length > 0) {
+          candidatePaths.push(p);
+        }
+      }
+    }
+    for (const candidate of candidatePaths) {
+      const protectedPath = checkProtectedPath(candidate);
+      if (protectedPath) {
+        return protectedPath;
+      }
     }
   }
 
   return { blocked: false };
+}
+
+/**
+ * Codex P2 review #68939 (post-nuclear-fix-stack): parse target
+ * paths from an `apply_patch` envelope text. The patch format
+ * uses `*** Update File: <path>` / `*** Add File: <path>` /
+ * `*** Delete File: <path>` headers. Returns all unique paths
+ * found; returns an empty array if `input` is missing/non-string
+ * or no headers match. Tolerant to whitespace and case
+ * variations on the verb token.
+ *
+ * Used by the before-tool-call hook to feed `additionalPaths`
+ * into `checkAcceptEditsConstraint` so the protected-config-
+ * path block fires for `apply_patch` calls under acceptEdits.
+ */
+export function extractApplyPatchTargetPaths(input: unknown): string[] {
+  if (typeof input !== "string" || input.length === 0) {
+    return [];
+  }
+  const re = /^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+?)\s*$/gim;
+  const found = new Set<string>();
+  let match: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration pattern
+  while ((match = re.exec(input)) !== null) {
+    if (match[1]) {
+      found.add(match[1].trim());
+    }
+  }
+  return [...found];
 }
 
 // Exposed for tests + potential future reuse
