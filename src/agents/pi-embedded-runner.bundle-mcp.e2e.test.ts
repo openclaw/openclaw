@@ -251,4 +251,73 @@ describe("runEmbeddedPiAgent bundle MCP e2e", () => {
       expect(toolResultText.some((text) => text.includes("FROM-BUNDLE"))).toBe(true);
     },
   );
+
+  it(
+    "includes bundle MCP tools in coding profile",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      streamCallCount = 0;
+      observedContexts = [];
+
+      const sessionFile = path.join(workspaceDir, "session-bundle-mcp-coding-profile.jsonl");
+      const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
+      cfg.agents = {
+        default: {
+          toolProfile: "coding",
+        },
+      };
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "bundle-mcp-coding-profile",
+        sessionKey: "agent:test:bundle-mcp-coding-profile",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "Use the bundle MCP tool and report its result.",
+        provider: "openai",
+        model: "mock-bundle-mcp",
+        timeoutMs: 30_000,
+        agentDir,
+        runId: "run-bundle-mcp-coding-profile",
+        enqueue: immediateEnqueue,
+      });
+
+      expect(result.payloads?.[0]?.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
+    },
+  );
+
+  it(
+    "excludes bundle MCP tools from minimal profile",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      streamCallCount = 0;
+      observedContexts = [];
+
+      const sessionFile = path.join(workspaceDir, "session-bundle-mcp-minimal-profile.jsonl");
+      const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-bundle-mcp"]);
+      cfg.agents = {
+        default: {
+          toolProfile: "minimal",
+        },
+      };
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "bundle-mcp-minimal-profile",
+        sessionKey: "agent:test:bundle-mcp-minimal-profile",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "Try to use the bundle MCP tool.",
+        provider: "openai",
+        model: "mock-bundle-mcp",
+        timeoutMs: 30_000,
+        agentDir,
+        runId: "run-bundle-mcp-minimal-profile",
+        enqueue: immediateEnqueue,
+      });
+
+      // In minimal profile, bundle MCP tools should not be available
+      expect(result.payloads?.[0]?.text).not.toContain("FROM-BUNDLE");
+    },
+  );
 });
