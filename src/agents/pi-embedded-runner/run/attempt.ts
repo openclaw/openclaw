@@ -79,6 +79,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  shouldShortCircuitForMissingUserTail,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import {
@@ -2181,6 +2182,33 @@ export async function runEmbeddedAttempt(
                 `reserveTokens=${reserveTokens} ` +
                 `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
                 `sessionFile=${params.sessionFile}`,
+            );
+            skipPromptSubmission = true;
+          }
+
+          if (
+            !skipPromptSubmission &&
+            shouldShortCircuitForMissingUserTail({
+              validateAnthropicTurns: transcriptPolicy.validateAnthropicTurns,
+              messages: activeSession.messages,
+              promptText: effectivePrompt,
+              hasImages: imageResult.images.length > 0,
+            })
+          ) {
+            // pi-coding-agent's session.prompt() only appends a new user turn
+            // when the caller passes a non-empty prompt or images. If the
+            // transcript still ends on a non-empty assistant turn AND there is
+            // no fresh user input, the outbound request would end on
+            // `role: assistant`, which Anthropic rejects as an "assistant
+            // message prefill". Empty/aborted trailing assistants were already
+            // dropped by `dropTrailingEmptyAssistantTurns`, so anything still
+            // present is a fully-formed reply we should not re-submit.
+            log.warn(
+              `anthropic transcript guard: skipping provider call because ` +
+                `the transcript already ends on a non-empty assistant turn ` +
+                `and no fresh user prompt or image is available. ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `messages=${activeSession.messages.length}`,
             );
             skipPromptSubmission = true;
           }

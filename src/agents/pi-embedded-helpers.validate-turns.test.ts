@@ -4,6 +4,7 @@ import {
   dropTrailingEmptyAssistantTurns,
   mergeConsecutiveUserTurns,
   messagesEndWithUserTurn,
+  shouldShortCircuitForMissingUserTail,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
@@ -831,6 +832,92 @@ describe("messagesEndWithUserTurn", () => {
 
   it("returns false for an empty list", () => {
     expect(messagesEndWithUserTurn([])).toBe(false);
+  });
+});
+
+describe("shouldShortCircuitForMissingUserTail", () => {
+  const assistantTail = asMessages([
+    { role: "user", content: "x" },
+    { role: "assistant", content: [{ type: "text", text: "complete reply" }] },
+  ]);
+  const userTail = asMessages([
+    { role: "user", content: "x" },
+    { role: "assistant", content: [{ type: "text", text: "y" }] },
+    { role: "user", content: "follow-up" },
+  ]);
+
+  it("short-circuits when transcript tail is assistant and prompt is empty without images", () => {
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: assistantTail,
+        promptText: "",
+        hasImages: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: assistantTail,
+        promptText: "   \n\t",
+        hasImages: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not short-circuit when a fresh user prompt will be appended", () => {
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: assistantTail,
+        promptText: "hello",
+        hasImages: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not short-circuit when an image will be appended", () => {
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: assistantTail,
+        promptText: "",
+        hasImages: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not short-circuit when transcript already ends with a user-like turn", () => {
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: userTail,
+        promptText: "",
+        hasImages: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not short-circuit when Anthropic turn validation is disabled", () => {
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: false,
+        messages: assistantTail,
+        promptText: "",
+        hasImages: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not short-circuit on an empty transcript", () => {
+    expect(
+      shouldShortCircuitForMissingUserTail({
+        validateAnthropicTurns: true,
+        messages: [],
+        promptText: "",
+        hasImages: false,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -68,6 +68,7 @@ export {
   dropTrailingEmptyAssistantTurns,
   mergeConsecutiveUserTurns,
   messagesEndWithUserTurn,
+  shouldShortCircuitForMissingUserTail,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "./pi-embedded-helpers/turns.js";

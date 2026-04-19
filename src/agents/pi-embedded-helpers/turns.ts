@@ -124,6 +124,35 @@ export function messagesEndWithUserTurn(messages: AgentMessage[]): boolean {
   return role === "user" || role === "toolResult" || role === "tool";
 }
 
+/**
+ * Decides whether to short-circuit an Anthropic request because the request
+ * would otherwise end on an `assistant` turn (which Anthropic rejects with
+ * "This model does not support assistant message prefill"). The session
+ * wrapper only appends a new user turn when the caller passes a non-empty
+ * prompt or images, so when neither is available and the transcript still
+ * ends with a non-empty assistant turn, we skip the provider call instead
+ * of letting the API reject it.
+ */
+export function shouldShortCircuitForMissingUserTail(params: {
+  validateAnthropicTurns: boolean;
+  messages: AgentMessage[];
+  promptText: string;
+  hasImages: boolean;
+}): boolean {
+  if (!params.validateAnthropicTurns) {
+    return false;
+  }
+  if (!Array.isArray(params.messages) || params.messages.length === 0) {
+    return false;
+  }
+  const promptHasContent =
+    typeof params.promptText === "string" && params.promptText.trim().length > 0;
+  if (promptHasContent || params.hasImages) {
+    return false;
+  }
+  return !messagesEndWithUserTurn(params.messages);
+}
+
 function extractToolResultMatchIds(record: Record<string, unknown>): Set<string> {
   const ids = new Set<string>();
   for (const value of [
