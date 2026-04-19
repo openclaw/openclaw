@@ -244,8 +244,11 @@ describe("buildExportSessionReply", () => {
     const [, html] = hoisted.writeFileSyncMock.mock.calls.at(-1) ?? [];
     expect(typeof html).toBe("string");
     expect(html).not.toContain("MARKED_JS;");
+    expect(html).not.toContain("<script>\n      {{MARKED_JS}}\n    </script>");
     expect(html).not.toContain("HIGHLIGHT_JS;");
+    expect(html).not.toContain("<script>\n      {{HIGHLIGHT_JS}}\n    </script>");
     expect(html).not.toContain("JS;");
+    expect(html).not.toContain("<script>\n      {{JS}}\n    </script>");
     expect(html).toContain("safeMarkedParse");
   });
 });
