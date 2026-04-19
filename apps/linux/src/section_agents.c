@@ -79,24 +79,6 @@ static gboolean agents_fetch_in_flight = FALSE;
 static gint64 agents_last_fetch_us = 0;
 static guint agents_generation = 1;
 
-typedef struct {
-    guint generation;
-} AgentsRequestContext;
-
-static AgentsRequestContext* agents_request_context_new(void) {
-    AgentsRequestContext *ctx = g_new0(AgentsRequestContext, 1);
-    ctx->generation = agents_generation;
-    return ctx;
-}
-
-static gboolean agents_request_context_is_stale(const AgentsRequestContext *ctx) {
-    return !ctx || ctx->generation != agents_generation;
-}
-
-static void agents_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 static void agents_attach_dropdown_model(GtkStringList *new_model, guint selected, gboolean sensitive) {
     if (!new_model) return;
     ui_dropdown_replace_model(agents_model_dropdown,
@@ -179,13 +161,11 @@ static void agents_rebuild_files(const GPtrArray *files) {
 }
 
 static void on_agents_files_response(const GatewayRpcResponse *response, gpointer user_data) {
-    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
-    if (agents_request_context_is_stale(ctx)) {
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != agents_generation) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale files callback dropped");
-        agents_request_context_free(ctx);
         return;
     }
-    agents_request_context_free(ctx);
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: files callback ok=%d", response ? response->ok : 0);
     g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func((GDestroyNotify)agent_file_row_free);
@@ -251,13 +231,12 @@ static void agents_request_files_for_selected(void) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    AgentsRequestContext *ctx = agents_request_context_new();
+    guint current_gen = agents_generation;
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request agents.files.list");
     g_autofree gchar *rid = gateway_rpc_request("agents.files.list", params, 0,
-                                                on_agents_files_response, ctx);
+                                                on_agents_files_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        agents_request_context_free(ctx);
         agents_rebuild_files(NULL);
     }
 }
@@ -329,27 +308,17 @@ static void agents_rebuild_list(void) {
 }
 
 static void on_agents_update_response(const GatewayRpcResponse *response, gpointer user_data) {
-    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
-    if (agents_request_context_is_stale(ctx)) {
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != agents_generation) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale update callback dropped");
-        agents_request_context_free(ctx);
         return;
     }
-    agents_request_context_free(ctx);
 
     if (!agents_status_label) return;
     if (response->ok) {
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Agent updated");
         section_mark_stale(&agents_last_fetch_us);
     } else {
-        /*
-         * Surface the actual server error so operators can diagnose the
-         * failure without tailing the terminal. A common class of
-         * failure was a torn-down WS after the Logs tab ran into the
-         * oversized-payload ceiling; the fix for that lives in
-         * `gateway_ws.c` / `section_logs.c`, but keeping a useful
-         * error message here is still worthwhile.
-         */
         const gchar *detail = (response->error_msg && response->error_msg[0] != '\0')
             ? response->error_msg
             : (response->error_code && response->error_code[0] != '\0'
@@ -407,14 +376,7 @@ static void on_agents_save_clicked(GtkButton *button, gpointer user_data) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    AgentsRequestContext *ctx = agents_request_context_new();
-    /*
-     * Structured payload log. The schema for `agents.update` accepts
-     * `agentId` plus any optional subset of `name` / `workspace` /
-     * `model` / `emoji` / `avatar`. We log which fields we chose to
-     * include this invocation so the server-side "agent update failed"
-     * response can be triaged without capturing the WebSocket frame.
-     */
+    guint current_gen = agents_generation;
     OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE,
                 "agents.update agentId=%s name=%s workspace=%s avatar=%s model=%s",
                 a->id,
@@ -423,22 +385,19 @@ static void on_agents_save_clicked(GtkButton *button, gpointer user_data) {
                 (avatar && avatar[0] != '\0') ? avatar : "(unset)",
                 (model && model[0] != '\0') ? model : "(unset)");
     g_autofree gchar *rid = gateway_rpc_request("agents.update", params, 0,
-                                                on_agents_update_response, ctx);
+                                                on_agents_update_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid && agents_status_label) {
-        agents_request_context_free(ctx);
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Failed to send update");
     }
 }
 
 static void on_agents_list_response(const GatewayRpcResponse *response, gpointer user_data) {
-    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
-    if (agents_request_context_is_stale(ctx)) {
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != agents_generation) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale agents.list callback dropped");
-        agents_request_context_free(ctx);
         return;
     }
-    agents_request_context_free(ctx);
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: agents.list callback ok=%d", response ? response->ok : 0);
     agents_fetch_in_flight = FALSE;
@@ -532,13 +491,11 @@ static void on_agents_list_response(const GatewayRpcResponse *response, gpointer
 }
 
 static void on_agents_models_response(const GatewayRpcResponse *response, gpointer user_data) {
-    AgentsRequestContext *ctx = (AgentsRequestContext *)user_data;
-    if (agents_request_context_is_stale(ctx)) {
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != agents_generation) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: stale models.list callback dropped");
-        agents_request_context_free(ctx);
         return;
     }
-    agents_request_context_free(ctx);
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: models.list callback ok=%d", response ? response->ok : 0);
     if (agent_models_cache) g_ptr_array_unref(agent_models_cache);
@@ -680,21 +637,18 @@ static void agents_refresh(void) {
     if (!section_is_stale(&agents_last_fetch_us)) return;
 
     agents_fetch_in_flight = TRUE;
-    AgentsRequestContext *list_ctx = agents_request_context_new();
+    guint current_gen = agents_generation;
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request agents.list");
     g_autofree gchar *rid = gateway_rpc_request("agents.list", NULL, 0,
-                                                on_agents_list_response, list_ctx);
-    AgentsRequestContext *models_ctx = agents_request_context_new();
+                                                on_agents_list_response, GUINT_TO_POINTER(current_gen));
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "agents: request models.list");
     g_autofree gchar *mrid = gateway_rpc_request("models.list", NULL, 0,
-                                                 on_agents_models_response, models_ctx);
+                                                 on_agents_models_response, GUINT_TO_POINTER(current_gen));
     if (!rid) {
-        agents_request_context_free(list_ctx);
         agents_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(agents_status_label), "Failed to request agents");
     }
     if (!mrid) {
-        agents_request_context_free(models_ctx);
         agents_set_model_dropdown_placeholder("Models unavailable", FALSE);
     }
     (void)mrid;

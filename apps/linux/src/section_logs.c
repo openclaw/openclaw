@@ -18,24 +18,6 @@ static gboolean logs_fetch_in_flight = FALSE;
 static gint64 logs_last_fetch_us = 0;
 static guint logs_generation = 1;
 
-typedef struct {
-    guint generation;
-} LogsRequestContext;
-
-static LogsRequestContext* logs_request_context_new(void) {
-    LogsRequestContext *ctx = g_new0(LogsRequestContext, 1);
-    ctx->generation = logs_generation;
-    return ctx;
-}
-
-static gboolean logs_request_context_is_stale(const LogsRequestContext *ctx) {
-    return !ctx || ctx->generation != logs_generation;
-}
-
-static void logs_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 static void logs_trigger_fetch(gboolean force);
 
 static void logs_set_text(const gchar *text) {
@@ -45,12 +27,10 @@ static void logs_set_text(const gchar *text) {
 }
 
 static void on_logs_tail_response(const GatewayRpcResponse *response, gpointer user_data) {
-    LogsRequestContext *ctx = (LogsRequestContext *)user_data;
-    if (logs_request_context_is_stale(ctx)) {
-        logs_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != logs_generation) {
         return;
     }
-    logs_request_context_free(ctx);
 
     logs_fetch_in_flight = FALSE;
 
@@ -222,12 +202,11 @@ static void logs_trigger_fetch(gboolean force) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    LogsRequestContext *ctx = logs_request_context_new();
+    guint current_gen = logs_generation;
     g_autofree gchar *rid = gateway_rpc_request("logs.tail", params, 0,
-                                                on_logs_tail_response, ctx);
+                                                on_logs_tail_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        logs_request_context_free(ctx);
         logs_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(logs_status_label), "Failed to request logs.tail");
     }

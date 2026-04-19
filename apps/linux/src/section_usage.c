@@ -26,24 +26,6 @@ static guint usage_generation = 1;
 
 static gint usage_selected_days = 30;
 
-typedef struct {
-    guint generation;
-} UsageRequestContext;
-
-static UsageRequestContext* usage_request_context_new(void) {
-    UsageRequestContext *ctx = g_new0(UsageRequestContext, 1);
-    ctx->generation = usage_generation;
-    return ctx;
-}
-
-static gboolean usage_request_context_is_stale(const UsageRequestContext *ctx) {
-    return !ctx || ctx->generation != usage_generation;
-}
-
-static void usage_request_context_free(gpointer data) {
-    g_free(data);
-}
-
 static void usage_clear_retros(void) {
     if (!usage_retros_box) return;
     section_box_clear(usage_retros_box);
@@ -60,12 +42,10 @@ static void usage_add_retros_line(const gchar *text) {
 static void usage_request_sessions_usage(void);
 
 static void on_usage_sessions_response(const GatewayRpcResponse *response, gpointer user_data) {
-    UsageRequestContext *ctx = (UsageRequestContext *)user_data;
-    if (usage_request_context_is_stale(ctx)) {
-        usage_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != usage_generation) {
         return;
     }
-    usage_request_context_free(ctx);
 
     usage_clear_retros();
 
@@ -134,23 +114,20 @@ static void usage_request_sessions_usage(void) {
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    UsageRequestContext *ctx = usage_request_context_new();
+    guint current_gen = usage_generation;
     g_autofree gchar *rid = gateway_rpc_request("sessions.usage", params, 0,
-                                                on_usage_sessions_response, ctx);
+                                                on_usage_sessions_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        usage_request_context_free(ctx);
         usage_add_retros_line("Failed to request sessions.usage.");
     }
 }
 
 static void on_usage_cost_response(const GatewayRpcResponse *response, gpointer user_data) {
-    UsageRequestContext *ctx = (UsageRequestContext *)user_data;
-    if (usage_request_context_is_stale(ctx)) {
-        usage_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != usage_generation) {
         return;
     }
-    usage_request_context_free(ctx);
 
     if (!usage_cost_label) return;
 
@@ -187,12 +164,10 @@ static void on_usage_cost_response(const GatewayRpcResponse *response, gpointer 
 }
 
 static void on_usage_status_response(const GatewayRpcResponse *response, gpointer user_data) {
-    UsageRequestContext *ctx = (UsageRequestContext *)user_data;
-    if (usage_request_context_is_stale(ctx)) {
-        usage_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != usage_generation) {
         return;
     }
-    usage_request_context_free(ctx);
 
     usage_fetch_in_flight = FALSE;
 
@@ -261,12 +236,11 @@ static void on_usage_status_response(const GatewayRpcResponse *response, gpointe
     JsonNode *params = json_builder_get_root(b);
     g_object_unref(b);
 
-    UsageRequestContext *cost_ctx = usage_request_context_new();
+    guint current_gen = usage_generation;
     g_autofree gchar *rid = gateway_rpc_request("usage.cost", params, 0,
-                                                on_usage_cost_response, cost_ctx);
+                                                on_usage_cost_response, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
     if (!rid) {
-        usage_request_context_free(cost_ctx);
         gtk_label_set_text(GTK_LABEL(usage_cost_label), "Cost: unavailable");
         usage_request_sessions_usage();
     }
@@ -340,11 +314,10 @@ static void usage_refresh(void) {
     if (!section_is_stale(&usage_last_fetch_us)) return;
 
     usage_fetch_in_flight = TRUE;
-    UsageRequestContext *ctx = usage_request_context_new();
+    guint current_gen = usage_generation;
     g_autofree gchar *rid = gateway_rpc_request("usage.status", NULL, 0,
-                                                on_usage_status_response, ctx);
+                                                on_usage_status_response, GUINT_TO_POINTER(current_gen));
     if (!rid) {
-        usage_request_context_free(ctx);
         usage_fetch_in_flight = FALSE;
         gtk_label_set_text(GTK_LABEL(usage_status_label), "Failed to request usage.status");
     }

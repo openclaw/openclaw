@@ -1265,28 +1265,10 @@ typedef struct {
     gchar *label;
 } ConfigModelChoice;
 
-typedef struct {
-    guint generation;
-} ConfigRequestContext;
-
 static gchar* cfg_editor_get_text(void);
 static void cfg_request_reload(void);
 static void cfg_refresh_setup_surface(void);
 static void on_cfg_save_done(const GatewayRpcResponse *response, gpointer user_data);
-
-static ConfigRequestContext* cfg_request_context_new(void) {
-    ConfigRequestContext *ctx = g_new0(ConfigRequestContext, 1);
-    ctx->generation = cfg_generation;
-    return ctx;
-}
-
-static gboolean cfg_request_context_is_stale(const ConfigRequestContext *ctx) {
-    return !ctx || ctx->generation != cfg_generation;
-}
-
-static void cfg_request_context_free(gpointer data) {
-    g_free(data);
-}
 
 static void cfg_model_choice_free(ConfigModelChoice *choice) {
     if (!choice) return;
@@ -1484,10 +1466,9 @@ static void cfg_request_save_text(const gchar *text) {
 
     cfg_request_in_flight = TRUE;
     cfg_refresh_buttons();
-    ConfigRequestContext *ctx = cfg_request_context_new();
-    g_autofree gchar *rid = mutation_config_set(text, cfg_baseline_hash, on_cfg_save_done, ctx);
+    guint current_gen = cfg_generation;
+    g_autofree gchar *rid = mutation_config_set(text, cfg_baseline_hash, on_cfg_save_done, GUINT_TO_POINTER(current_gen));
     if (!rid) {
-        cfg_request_context_free(ctx);
         cfg_request_in_flight = FALSE;
         if (cfg_validation_label) {
             gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Failed to request config.set");
@@ -1598,12 +1579,10 @@ static void cfg_refresh_setup_surface(void) {
 }
 
 static void on_cfg_models_list_done(const GatewayRpcResponse *response, gpointer user_data) {
-    ConfigRequestContext *ctx = (ConfigRequestContext *)user_data;
-    if (cfg_request_context_is_stale(ctx)) {
-        cfg_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != cfg_generation) {
         return;
     }
-    cfg_request_context_free(ctx);
 
     cfg_models_request_in_flight = FALSE;
     if (cfg_models_cache) g_ptr_array_unref(cfg_models_cache);
@@ -1653,10 +1632,9 @@ static void on_cfg_reload_models(GtkButton *button, gpointer user_data) {
 
     cfg_models_request_in_flight = TRUE;
     cfg_refresh_buttons();
-    ConfigRequestContext *ctx = cfg_request_context_new();
-    g_autofree gchar *rid = gateway_rpc_request("models.list", NULL, 0, on_cfg_models_list_done, ctx);
+    guint current_gen = cfg_generation;
+    g_autofree gchar *rid = gateway_rpc_request("models.list", NULL, 0, on_cfg_models_list_done, GUINT_TO_POINTER(current_gen));
     if (!rid) {
-        cfg_request_context_free(ctx);
         cfg_models_request_in_flight = FALSE;
         if (cfg_setup_status_label) {
             gtk_label_set_text(GTK_LABEL(cfg_setup_status_label), "Failed to request models.list.");
@@ -1768,12 +1746,10 @@ static void on_cfg_buffer_changed(GtkTextBuffer *buffer, gpointer user_data) {
 }
 
 static void on_cfg_get_done(const GatewayRpcResponse *response, gpointer user_data) {
-    ConfigRequestContext *ctx = (ConfigRequestContext *)user_data;
-    if (cfg_request_context_is_stale(ctx)) {
-        cfg_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != cfg_generation) {
         return;
     }
-    cfg_request_context_free(ctx);
 
     cfg_request_in_flight = FALSE;
 
@@ -1827,10 +1803,9 @@ static void cfg_request_reload(void) {
     if (cfg_request_in_flight) return;
     cfg_request_in_flight = TRUE;
     cfg_refresh_buttons();
-    ConfigRequestContext *ctx = cfg_request_context_new();
-    g_autofree gchar *rid = mutation_config_get(NULL, on_cfg_get_done, ctx);
+    guint current_gen = cfg_generation;
+    g_autofree gchar *rid = mutation_config_get(NULL, on_cfg_get_done, GUINT_TO_POINTER(current_gen));
     if (!rid) {
-        cfg_request_context_free(ctx);
         cfg_request_in_flight = FALSE;
         if (cfg_validation_label) {
             gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Failed to request config.get");
@@ -1846,12 +1821,10 @@ static void on_cfg_reload(GtkButton *b, gpointer d) {
 }
 
 static void on_cfg_save_done(const GatewayRpcResponse *response, gpointer user_data) {
-    ConfigRequestContext *ctx = (ConfigRequestContext *)user_data;
-    if (cfg_request_context_is_stale(ctx)) {
-        cfg_request_context_free(ctx);
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != cfg_generation) {
         return;
     }
-    cfg_request_context_free(ctx);
 
     cfg_request_in_flight = FALSE;
     if (!response || !response->ok) {
