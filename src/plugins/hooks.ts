@@ -248,6 +248,8 @@ export function createHookRunner(
     }),
     // First plugin to set toolsAllow wins (higher priority).
     toolsAllow: firstDefined(acc?.toolsAllow, next.toolsAllow),
+    // First plugin to set skillsAllow wins (higher priority).
+    skillsAllow: firstDefined(acc?.skillsAllow, next.skillsAllow),
   });
 
   const mergeSubagentSpawningResult = (

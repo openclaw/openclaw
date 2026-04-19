@@ -145,6 +145,7 @@ import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
+import { loadWorkspaceSkillEntries } from "../../skills.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -845,15 +846,14 @@ export async function runEmbeddedAttempt(
       },
     });
 
-    const builtAppendPrompt =
-      resolveSystemPromptOverride({
+    const agentSystemPromptOverride = resolveSystemPromptOverride({
         config: params.config,
         agentId: sessionAgentId,
-      }) ??
-      buildEmbeddedSystemPrompt({
+      });
+    const appendPromptParams = {
         workspaceDir: effectiveWorkspace,
         defaultThinkLevel: params.thinkLevel,
-        reasoningLevel: params.reasoningLevel ?? "off",
+        reasoningLevel: params.reasoningLevel ?? ("off" as const),
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,
         ownerDisplay: ownerDisplay.ownerDisplay,
@@ -879,7 +879,8 @@ export async function runEmbeddedAttempt(
         includeMemorySection: !params.contextEngine || params.contextEngine.info.id === "legacy",
         memoryCitationsMode: params.config?.memory?.citations,
         promptContribution,
-      });
+      };
+    const builtAppendPrompt = agentSystemPromptOverride ?? buildEmbeddedSystemPrompt(appendPromptParams);
     const appendPrompt = transformProviderSystemPrompt({
       provider: params.provider,
       config: params.config,
@@ -1836,6 +1837,11 @@ export async function runEmbeddedAttempt(
           // Use effectiveTools (includes bundled MCP/LSP tools) so plugins
           // see the complete tool surface when making classification decisions.
           availableTools: effectiveTools.map((tool) => tool.name),
+          // Pass loaded skill names so plugins can classify skill relevance.
+          // Use skillEntries if live-loaded, otherwise fall back to snapshot skill names.
+          availableSkills: skillEntries && skillEntries.length > 0
+            ? skillEntries.map((s) => s.skill.name)
+            : params.skillsSnapshot?.skills?.map((s) => s.name) ?? [],
           hookCtx,
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
@@ -1885,6 +1891,67 @@ export async function runEmbeddedAttempt(
             activeSession.setActiveToolsByName(hookResult.toolsAllow);
             log.debug(
               `hooks: toolsAllow narrowed tools ${originalLength} → ${effectiveTools.length} (session tools updated)`,
+            );
+          }
+
+          // Apply skillsAllow from the hook to narrow the skill catalog in the system prompt.
+          // When set, only listed skills have their descriptions injected — reducing prompt
+          // tokens from irrelevant skill guidance.
+          // Skip when the system prompt is fully overridden (no skills prompt to filter).
+          if (
+            hookResult?.skillsAllow &&
+            !agentSystemPromptOverride
+          ) {
+            const skillAllowSet = new Set(hookResult.skillsAllow);
+
+            // Determine original skill count and build filtered prompt.
+            // When skills come from a snapshot, skillEntries is empty — use
+            // the snapshot's resolvedSkills or its skill name list instead.
+            let originalSkillCount: number;
+            let narrowedSkillsPrompt: string;
+
+            if (skillEntries && skillEntries.length > 0) {
+              // Live-loaded path: filter entries and rebuild prompt.
+              originalSkillCount = skillEntries.length;
+              const filteredSkillEntries = skillEntries.filter((s) => skillAllowSet.has(s.skill.name));
+              narrowedSkillsPrompt = resolveSkillsPromptForRun({
+                // Omit snapshot so we don't short-circuit to the pre-built prompt.
+                entries: filteredSkillEntries,
+                config: params.config,
+                workspaceDir: effectiveWorkspace,
+                agentId: sessionAgentId,
+              });
+            } else if (params.skillsSnapshot) {
+              // Snapshot path: load entries on demand and filter.
+              originalSkillCount = params.skillsSnapshot.skills?.length ?? 0;
+              const freshEntries = loadWorkspaceSkillEntries(effectiveWorkspace, {
+                config: params.config,
+                agentId: sessionAgentId,
+              });
+              const filteredEntries = freshEntries.filter((s) => skillAllowSet.has(s.skill.name));
+              narrowedSkillsPrompt = resolveSkillsPromptForRun({
+                // Omit snapshot so we rebuild from filtered entries.
+                entries: filteredEntries,
+                config: params.config,
+                workspaceDir: effectiveWorkspace,
+                agentId: sessionAgentId,
+              });
+            } else {
+              // No skills at all — nothing to filter.
+              originalSkillCount = 0;
+              narrowedSkillsPrompt = "";
+            }
+
+            // Re-apply the system prompt with the narrowed skills catalog.
+            const narrowedAppendPrompt = buildEmbeddedSystemPrompt({
+              ...appendPromptParams,
+              skillsPrompt: narrowedSkillsPrompt,
+            });
+            const narrowedSystemPromptOverride = createSystemPromptOverride(narrowedAppendPrompt);
+            systemPromptText = narrowedSystemPromptOverride();
+            applySystemPromptOverrideToSession(activeSession, systemPromptText);
+            log.debug(
+              `hooks: skillsAllow narrowed skills ${originalSkillCount} → ${hookResult.skillsAllow.length} (system prompt rebuilt)`,
             );
           }
         }

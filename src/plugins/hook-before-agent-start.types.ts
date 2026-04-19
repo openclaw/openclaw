@@ -28,6 +28,14 @@ export type PluginHookBeforePromptBuildEvent = {
    * follow.
    */
   availableTools?: string[];
+  /**
+   * Names of skills loaded for this session. Plugins can use this to dynamically
+   * select which skills to include in the system prompt via `skillsAllow`.
+   *
+   * When `availableSkills` is undefined or empty, the plugin is being called in a
+   * context where skill information is not yet available.
+   */
+  availableSkills?: string[];
 };
 
 export type PluginHookBeforePromptBuildResult = {
@@ -60,6 +68,20 @@ export type PluginHookBeforePromptBuildResult = {
    * to tools the owner denied.
    */
   toolsAllow?: string[];
+  /**
+   * Optional skill allow-list for this turn. When set, only the listed skills
+   * have their full descriptions injected into the system prompt. All other
+   * skills are omitted from the skills catalog.
+   *
+   * Plugins can use this to dynamically narrow the skill surface per-turn based
+   * on task classification, reducing token overhead from irrelevant skill
+   * descriptions.
+   *
+   * Safety guarantee: this list is intersected with the skills that are already
+   * loaded — it can only *remove* skills from the prompt, never inject skills
+   * that weren't loaded.
+   */
+  skillsAllow?: string[];
 };
 
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
@@ -68,6 +90,7 @@ export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "prependSystemContext",
   "appendSystemContext",
   "toolsAllow",
+  "skillsAllow",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
 
 type MissingPluginPromptMutationResultFields = Exclude<
