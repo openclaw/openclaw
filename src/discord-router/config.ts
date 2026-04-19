@@ -139,3 +139,20 @@ export function setOnboardingState(instance: InstanceConfig, state: OnboardingSt
 export function markOnboarded(instance: InstanceConfig): void {
   setOnboardingState(instance, "complete");
 }
+
+/**
+ * Re-read the gateway token from disk. Called before each connection
+ * so the router never uses a stale cached token after container restarts.
+ */
+export function refreshToken(instance: InstanceConfig): string {
+  try {
+    const raw = JSON.parse(fs.readFileSync(instance.configPath, "utf-8"));
+    const token = raw?.gateway?.auth?.token ?? "";
+    if (token && token !== instance.token) {
+      instance.token = token;
+    }
+    return instance.token;
+  } catch {
+    return instance.token;
+  }
+}

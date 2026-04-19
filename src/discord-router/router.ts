@@ -8,7 +8,7 @@ import { convertTimesToDiscordTimestamps } from "../discord/timestamps.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
-import { setOnboardingState } from "./config.js";
+import { refreshToken, setOnboardingState } from "./config.js";
 import { startOAuthCallbackServer } from "./oauth-callback.js";
 
 type AgentResult = {
@@ -570,10 +570,12 @@ async function routeDM(params: {
         }
       }
 
+      // Re-read token from disk so we never use a stale cached value
+      const freshToken = refreshToken(instance);
       const idempotencyKey = randomUUID();
       const result = await callGateway<AgentResult>({
         url: `ws://127.0.0.1:${instance.port}`,
-        token: instance.token || undefined,
+        token: freshToken || undefined,
         method: "agent",
         params: {
           message: messageContent || (gatewayAttachments.length > 0 ? "<media>" : ""),
