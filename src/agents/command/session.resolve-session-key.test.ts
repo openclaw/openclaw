@@ -126,4 +126,40 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
   });
+
+  it("honors sessionId over the agent main-key fallback so parallel callers stay isolated", () => {
+    // With the prior behavior this would have collapsed to `agent:worker:main` and shared state
+    // across every --session-id. Now a new sessionId synthesizes an explicit key instead.
+    const workerStore = {
+      "agent:worker:main": { sessionId: "legacy-main", updatedAt: 1 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/main.json": workerStore });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: { store: "/stores/{agentId}.json" },
+      } satisfies OpenClawConfig,
+      agentId: "worker",
+      sessionId: "fresh-uuid-111",
+    });
+
+    expect(result.sessionKey).toBe("agent:worker:explicit:fresh-uuid-111");
+  });
+
+  it("keeps the agent main-key fallback when no sessionId is provided", () => {
+    mockSessionStores({ "/stores/main.json": {} });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: { store: "/stores/{agentId}.json" },
+      } satisfies OpenClawConfig,
+      agentId: "worker",
+      to: "+15555550123",
+    });
+
+    // With no sessionId, resolveExplicitAgentSessionKey is mocked to undefined and resolveSessionKey
+    // returns whatever the scope picks — key is unset in this minimal setup. The important
+    // regression guard is that we did NOT eagerly synthesize an explicit-session key.
+    expect(result.sessionKey).not.toMatch(/:explicit:/);
+  });
 });

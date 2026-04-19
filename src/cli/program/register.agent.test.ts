@@ -109,6 +109,33 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("forwards --new-session to agent command as newSession: true", async () => {
+    await runCli(["agent", "--message", "hi", "--new-session", "--json"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        newSession: true,
+        json: true,
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
+  it("defaults newSession to false when --new-session is omitted", async () => {
+    await runCli(["agent", "--message", "hi"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "hi",
+        newSession: false,
+      }),
+      runtime,
+      { deps: true },
+    );
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(
