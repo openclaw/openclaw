@@ -9,6 +9,7 @@ import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js
 export {
   ANNOUNCE_SKIP_TOKEN,
   REPLY_SKIP_TOKEN,
+  extractAnnouncePayload,
   isAnnounceSkip,
   isReplySkip,
 } from "./sessions-send-tokens.js";
@@ -114,8 +115,9 @@ export function buildAgentToAgentAnnounceContext(params: {
       : "Round 1 reply: (not available).",
     params.latestReply ? `Latest reply: ${params.latestReply}` : "Latest reply: (not available).",
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
-    "Any other reply will be posted to the target channel.",
-    "After this reply, the agent-to-agent conversation is over.",
+    "Otherwise, wrap your final user-facing message in <announce>...</announce> tags.",
+    "Only the content inside <announce> tags will be delivered. Text outside the tags is discarded.",
+    "Do not include operational narration, status updates, or internal reasoning in the announce tags.",
   ].filter(Boolean);
   return lines.join("\n");
 }

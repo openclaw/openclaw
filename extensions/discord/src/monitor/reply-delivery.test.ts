@@ -627,4 +627,67 @@ describe("deliverDiscordReply", () => {
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
   });
+
+  it("uses webhook identity when delivering from a different session key via thread-id fallback", async () => {
+    const threadBindings = await createBoundThreadBindings({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetSessionKey: "agent:codex:acp:child-session",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+    });
+
+    await deliverDiscordReply({
+      replies: [{ text: "Completion from main session" }],
+      target: "channel:thread-1",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      // Main session key — different from the child session that owns the binding.
+      sessionKey: "agent:main:discord:channel:parent-1",
+      threadBindings,
+    });
+
+    // Should find binding via thread-id fallback and use webhook.
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledWith(
+      "Completion from main session",
+      expect.objectContaining({
+        webhookId: "wh_1",
+        webhookToken: "tok_1",
+        threadId: "thread-1",
+      }),
+    );
+  });
+
+  it("still uses session-key primary lookup when session key matches the binding", async () => {
+    const threadBindings = await createBoundThreadBindings({
+      threadId: "thread-1",
+      channelId: "parent-1",
+      targetSessionKey: "agent:codex:acp:child-session",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+    });
+
+    await deliverDiscordReply({
+      replies: [{ text: "Direct child session reply" }],
+      target: "channel:thread-1",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      sessionKey: "agent:codex:acp:child-session",
+      threadBindings,
+    });
+
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledWith(
+      "Direct child session reply",
+      expect.objectContaining({
+        webhookId: "wh_1",
+        webhookToken: "tok_1",
+      }),
+    );
+  });
 });

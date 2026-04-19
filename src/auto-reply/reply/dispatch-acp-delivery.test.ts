@@ -17,26 +17,27 @@ const deliveryMocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
 
+type VisibilityFn = (params: { kind: "tool" | "block" | "final"; text?: string }) => boolean;
+const blockTextVisible: VisibilityFn = ({ kind, text }) =>
+  kind === "block" && typeof text === "string" && text.trim().length > 0;
+const blockTextNotVisible: VisibilityFn = () => false;
+
 const channelPluginMocks = vi.hoisted(() => ({
-  shouldTreatDeliveredTextAsVisible: (({
-    kind,
-    text,
-  }: {
-    kind: "tool" | "block" | "final";
-    text?: string;
-  }) => kind === "block" && typeof text === "string" && text.trim().length > 0) as
-    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
-    | undefined,
-  shouldTreatRoutedTextAsVisible: undefined as
-    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
-    | undefined,
+  shouldTreatDeliveredTextAsVisibleOverride: undefined as VisibilityFn | undefined | null,
+  shouldTreatRoutedTextAsVisible: undefined as VisibilityFn | undefined,
   getChannelPlugin: vi.fn((channelId: string) => {
     if (channelId !== "discord" && channelId !== "telegram") {
       return undefined;
     }
+    const delivered =
+      channelPluginMocks.shouldTreatDeliveredTextAsVisibleOverride !== undefined
+        ? channelPluginMocks.shouldTreatDeliveredTextAsVisibleOverride
+        : channelId === "discord"
+          ? blockTextNotVisible
+          : blockTextVisible;
     return {
       outbound: {
-        shouldTreatDeliveredTextAsVisible: channelPluginMocks.shouldTreatDeliveredTextAsVisible,
+        shouldTreatDeliveredTextAsVisible: delivered,
         shouldTreatRoutedTextAsVisible: channelPluginMocks.shouldTreatRoutedTextAsVisible,
       },
     };
@@ -94,13 +95,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     deliveryMocks.runMessageAction.mockClear();
     deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     channelPluginMocks.getChannelPlugin.mockClear();
-    channelPluginMocks.shouldTreatDeliveredTextAsVisible = ({
-      kind,
-      text,
-    }: {
-      kind: "tool" | "block" | "final";
-      text?: string;
-    }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
+    channelPluginMocks.shouldTreatDeliveredTextAsVisibleOverride = undefined;
     channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
   });
 
@@ -205,18 +200,18 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
-  it("treats direct discord block text as visible", async () => {
+  it("does not treat direct discord block text as visible", async () => {
     const coordinator = createCoordinator();
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
     await coordinator.settleVisibleText();
 
-    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
   });
 
   it("honors the legacy routed visibility hook name for plugin compatibility", async () => {
-    channelPluginMocks.shouldTreatDeliveredTextAsVisible = undefined;
+    channelPluginMocks.shouldTreatDeliveredTextAsVisibleOverride = null;
     channelPluginMocks.shouldTreatRoutedTextAsVisible = ({
       kind,
       text,
@@ -426,7 +421,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
   });
 
-  it("treats routed discord block text as visible", async () => {
+  it("does not treat routed discord block text as visible", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
       ctx: buildTestCtx({
@@ -443,8 +438,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(1);
+  });
+
+  it("routed discord block text does not suppress final reply delivery", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "working on it" }, { skipTts: true });
+    await coordinator.deliver("final", { text: "done" }, { skipTts: true });
+
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    expect(coordinator.getRoutedCounts().block).toBe(1);
+    expect(coordinator.getRoutedCounts().final).toBe(1);
   });
 });

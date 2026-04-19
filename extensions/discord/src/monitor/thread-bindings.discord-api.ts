@@ -1,7 +1,10 @@
 import { ChannelType, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
+const log = createSubsystemLogger("discord/thread-bindings-api");
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
@@ -266,6 +269,13 @@ export async function resolveChannelIdForBinding(params: {
     }
     return channelId || null;
   } catch (err) {
+    log.warn("discord thread binding channel resolve failed", {
+      threadId: params.threadId,
+      accountId: params.accountId,
+      status: extractDiscordErrorStatus(err),
+      code: extractDiscordErrorCode(err),
+      error: summarizeDiscordError(err),
+    });
     logVerbose(
       `discord thread binding channel resolve failed for ${params.threadId}: ${summarizeDiscordError(err)}`,
     );
@@ -296,6 +306,14 @@ export async function createThreadForBinding(params: {
     const createdId = normalizeOptionalString(created?.id) ?? "";
     return createdId || null;
   } catch (err) {
+    log.warn("discord thread binding auto-thread create failed", {
+      channelId: params.channelId,
+      accountId: params.accountId,
+      hasToken: Boolean(params.token),
+      status: extractDiscordErrorStatus(err),
+      code: extractDiscordErrorCode(err),
+      error: summarizeDiscordError(err),
+    });
     logVerbose(
       `discord thread binding auto-thread create failed for ${params.channelId}: ${summarizeDiscordError(err)}`,
     );

@@ -9,8 +9,10 @@ vi.mock("../run-wait.js", () => ({
   readLatestAssistantReply: vi.fn().mockResolvedValue("Test announce reply"),
 }));
 
+const mockRunAgentStep = vi.fn().mockResolvedValue("<announce>Test announce reply</announce>");
+
 vi.mock("./agent-step.js", () => ({
-  runAgentStep: vi.fn().mockResolvedValue("Test announce reply"),
+  runAgentStep: (...args: unknown[]) => mockRunAgentStep(...args),
 }));
 
 describe("runSessionsSendA2AFlow announce delivery", () => {
@@ -19,6 +21,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     gatewayCalls = [];
+    mockRunAgentStep.mockResolvedValue("<announce>Test announce reply</announce>");
     __testing.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions) => {
         gatewayCalls.push(opts);
@@ -65,5 +68,75 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     const sendParams = sendCall?.params as Record<string, unknown>;
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.threadId).toBeUndefined();
+  });
+
+  it("delivers only inner content from <announce> tags", async () => {
+    mockRunAgentStep.mockResolvedValue(
+      "Internal reasoning here\n<announce>User-facing summary</announce>\nMore internal text",
+    );
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    expect(sendCall).toBeDefined();
+    const sendParams = sendCall?.params as Record<string, unknown>;
+    expect(sendParams.message).toBe("User-facing summary");
+  });
+
+  it("blocks untagged announce replies from being externalized", async () => {
+    mockRunAgentStep.mockResolvedValue(
+      "I have completed the task. The worker finished processing the request successfully.",
+    );
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    expect(sendCall).toBeUndefined();
+  });
+
+  it("blocks empty <announce> tags from being externalized", async () => {
+    mockRunAgentStep.mockResolvedValue("<announce>   </announce>");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    expect(sendCall).toBeUndefined();
+  });
+
+  it("handles ANNOUNCE_SKIP token as before", async () => {
+    mockRunAgentStep.mockResolvedValue("ANNOUNCE_SKIP");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    expect(sendCall).toBeUndefined();
   });
 });

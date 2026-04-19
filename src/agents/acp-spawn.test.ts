@@ -2096,4 +2096,34 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
+
+  it("passes parentConversationId through to binding for child thread creation without threadId", async () => {
+    const result = await spawnAcpDirect(
+      createSpawnRequest({ thread: true }),
+      createRequesterContext({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: undefined,
+      }),
+    );
+
+    expectAcceptedSpawn(result);
+    // The bind call must include both conversationId and the correct placement.
+    // parentConversationId may be stripped by normalizeConversationTargetRef when
+    // equal to conversationId, so we assert the adapter received the conversation
+    // shape that triggers successful child thread creation.
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetKind: "session",
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: expect.stringContaining("parent-channel"),
+        }),
+      }),
+    );
+  });
 });

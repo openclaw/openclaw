@@ -526,7 +526,7 @@ function resolveConversationRefForThreadBinding(params: {
   if (genericConversationId) {
     return normalizeConversationTargetRef({
       conversationId: genericConversationId,
-      parentConversationId: params.threadId != null ? parentConversationId : undefined,
+      parentConversationId,
     });
   }
   return null;

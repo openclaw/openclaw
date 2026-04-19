@@ -145,13 +145,15 @@ function resolveDiscordAttachedOutboundTarget(params: {
   return threadId ? `channel:${threadId}` : params.to;
 }
 
-function shouldTreatDiscordDeliveredTextAsVisible(params: {
+function shouldTreatDiscordDeliveredTextAsVisible(_params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
-  return (
-    params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
-  );
+  // Discord block/tool text is streamed projection, not a final visible reply.
+  // Only the upstream "final" kind (handled by the shared delivery coordinator)
+  // should satisfy visible-delivery tracking.  Returning true for "block" here
+  // previously suppressed the actual final reply in routed thread sessions.
+  return false;
 }
 
 function resolveRuntimeDiscordMessageActions() {

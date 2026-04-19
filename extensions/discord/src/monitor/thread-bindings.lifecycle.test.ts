@@ -29,6 +29,7 @@ const hoisted = vi.hoisted(() => {
     },
   }));
   const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
+  const closeDiscordThreadSessions = vi.fn(async (_params?: unknown) => 0);
   const readAcpSessionEntry = vi.fn();
   return {
     sendMessageDiscord,
@@ -37,6 +38,7 @@ const hoisted = vi.hoisted(() => {
     restPost,
     createDiscordRestClient,
     createThreadDiscord,
+    closeDiscordThreadSessions,
     readAcpSessionEntry,
   };
 });
@@ -53,6 +55,10 @@ vi.mock("../send.js", async () => {
 
 vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
+}));
+
+vi.mock("./thread-session-close.js", () => ({
+  closeDiscordThreadSessions: hoisted.closeDiscordThreadSessions,
 }));
 
 const { __testing, createThreadBindingManager } = await import("./thread-bindings.manager.js");
@@ -93,6 +99,7 @@ describe("thread binding lifecycle", () => {
       },
     }));
     hoisted.createThreadDiscord.mockReset().mockResolvedValue({ id: "thread-created" });
+    hoisted.closeDiscordThreadSessions.mockReset().mockResolvedValue(0);
     hoisted.readAcpSessionEntry.mockReset().mockReturnValue(null);
     vi.spyOn(discordClientModule, "createDiscordRestClient").mockImplementation(
       (...args) =>
@@ -351,11 +358,41 @@ describe("thread binding lifecycle", () => {
     }
   });
 
-  it("unbinds when thread sweep probe reports unknown channel", async () => {
+  it("unbinds and closes matching sessions when thread sweep probe reports archived", async () => {
     vi.useFakeTimers();
     try {
       const manager = createDefaultSweeperManager();
       await bindDefaultThreadTarget(manager);
+      setRuntimeConfigSnapshot({} as OpenClawConfig);
+
+      hoisted.restGet.mockResolvedValueOnce({
+        id: "thread-1",
+        type: 11,
+        parent_id: "parent-1",
+        thread_metadata: { archived: true },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      await __testing.runThreadBindingSweepForAccount("default");
+
+      expect(manager.getByThreadId("thread-1")).toBeUndefined();
+      expect(hoisted.closeDiscordThreadSessions).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        accountId: "default",
+        threadId: "thread-1",
+      });
+      expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unbinds and closes matching sessions when thread sweep probe reports unknown channel", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createDefaultSweeperManager();
+      await bindDefaultThreadTarget(manager);
+      setRuntimeConfigSnapshot({} as OpenClawConfig);
 
       hoisted.restGet.mockRejectedValueOnce({
         status: 404,
@@ -366,6 +403,11 @@ describe("thread binding lifecycle", () => {
       await __testing.runThreadBindingSweepForAccount("default");
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
+      expect(hoisted.closeDiscordThreadSessions).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        accountId: "default",
+        threadId: "thread-1",
+      });
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -1752,5 +1794,135 @@ describe("thread binding lifecycle", () => {
       }
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
+  });
+
+  describe("identity prefix stripping for Discord API calls", () => {
+    it("strips channel: prefix from conversationId for child thread creation", async () => {
+      createThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+
+      hoisted.createThreadDiscord.mockClear();
+      hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "new-thread-123" });
+
+      const bound = await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:test-prefix",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1492794036396757072",
+        },
+        placement: "child",
+        metadata: {
+          threadName: "test-thread",
+          agentId: "codex",
+          boundBy: "system",
+        },
+      });
+
+      expect(bound).toBeTruthy();
+      // createThreadDiscord must receive a raw snowflake, not "channel:1492794036396757072".
+      expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+        "1492794036396757072",
+        expect.any(Object),
+        expect.any(Object),
+      );
+    });
+
+    it("strips channel: prefix from parentConversationId for child thread creation", async () => {
+      createThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+
+      hoisted.createThreadDiscord.mockClear();
+      hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "new-thread-456" });
+
+      const bound = await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:test-parent-prefix",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1492794036396757072",
+          parentConversationId: "channel:1492794036396757072",
+        },
+        placement: "child",
+        metadata: {
+          threadName: "test-thread",
+          agentId: "codex",
+          boundBy: "system",
+        },
+      });
+
+      expect(bound).toBeTruthy();
+      expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+        "1492794036396757072",
+        expect.any(Object),
+        expect.any(Object),
+      );
+    });
+
+    it("passes raw snowflake through unchanged for child thread creation", async () => {
+      createThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+
+      hoisted.createThreadDiscord.mockClear();
+      hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "new-thread-789" });
+
+      const bound = await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:test-raw",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "1492794036396757072",
+        },
+        placement: "child",
+        metadata: {
+          threadName: "test-thread",
+          agentId: "codex",
+          boundBy: "system",
+        },
+      });
+
+      expect(bound).toBeTruthy();
+      expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+        "1492794036396757072",
+        expect.any(Object),
+        expect.any(Object),
+      );
+    });
+
+    it("preserves user: prefix in binding record for current DM placement", async () => {
+      createThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+      });
+
+      const bound = await getSessionBindingService().bind({
+        targetSessionKey: "agent:codex:acp:test-dm",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:181946122980425728",
+        },
+        placement: "current",
+      });
+
+      expect(bound).toBeTruthy();
+      // For current placement, the conversationId is used as threadId in the
+      // binding record and should preserve the user: prefix for routing identity.
+      expect(bound?.conversation.conversationId).toBe("user:181946122980425728");
+    });
   });
 });

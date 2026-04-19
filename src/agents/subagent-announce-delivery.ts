@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+
+const log = createSubsystemLogger("agents/subagent-announce-delivery");
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
@@ -9,6 +12,7 @@ import {
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
@@ -234,6 +238,24 @@ export async function resolveSubagentCompletionOrigin(params: {
     );
   }
 
+  // When requesterOrigin is internal (webchat) and no binding was found, try
+  // to resolve from the child session's own delivery context before falling
+  // back to the webchat origin. This prevents completions from misrouting to
+  // the main session's stale lastChannel/lastTo (e.g., a Telegram DM).
+  if (
+    requesterOrigin?.channel &&
+    isInternalMessageChannel(requesterOrigin.channel) &&
+    params.childSessionKey
+  ) {
+    const childEntry = loadSessionEntryByKey(params.childSessionKey);
+    if (childEntry) {
+      const childDelivery = deliveryContextFromSession(childEntry);
+      if (childDelivery?.channel && !isInternalMessageChannel(childDelivery.channel)) {
+        return mergeDeliveryContext(childDelivery, requesterOrigin);
+      }
+    }
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("subagent_delivery_target")) {
     return requesterOrigin;
@@ -441,14 +463,23 @@ async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const deliveryTarget = !params.requesterIsSubagent
-      ? resolveExternalBestEffortDeliveryTarget({
-          channel: effectiveDirectOrigin?.channel,
-          to: effectiveDirectOrigin?.to,
-          accountId: effectiveDirectOrigin?.accountId,
-          threadId: effectiveDirectOrigin?.threadId,
-        })
-      : { deliver: false };
+    // For thread-bound ACP completions, keep the announce internal so the
+    // thread stays clean — only ACP harness output should appear there.
+    // The main agent still sees the completion on its next turn.
+    const isThreadBoundAnnounce =
+      !params.requesterIsSubagent &&
+      effectiveDirectOrigin?.threadId != null &&
+      params.sourceChannel === INTERNAL_MESSAGE_CHANNEL &&
+      params.sourceTool === "subagent_announce";
+    const deliveryTarget =
+      !params.requesterIsSubagent && !isThreadBoundAnnounce
+        ? resolveExternalBestEffortDeliveryTarget({
+            channel: effectiveDirectOrigin?.channel,
+            to: effectiveDirectOrigin?.to,
+            accountId: effectiveDirectOrigin?.accountId,
+            threadId: effectiveDirectOrigin?.threadId,
+          })
+        : { deliver: false };
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
       : undefined;
@@ -463,6 +494,23 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+
+    // Delivery trace: log the resolved target for subagent completion announce.
+    log.info("[delivery-trace] subagent announce direct delivery", {
+      targetRequesterSessionKey: params.targetRequesterSessionKey,
+      sourceSessionKey: params.sourceSessionKey,
+      sourceChannel: params.sourceChannel,
+      sourceTool: params.sourceTool,
+      isThreadBoundAnnounce,
+      deliver: deliveryTarget.deliver,
+      effectiveChannel: effectiveDirectOrigin?.channel,
+      effectiveTo: effectiveDirectOrigin?.to,
+      effectiveThreadId: effectiveDirectOrigin?.threadId,
+      requesterSessionChannel: requesterSessionOrigin?.channel,
+      requesterSessionTo: requesterSessionOrigin?.to,
+      expectsCompletionMessage: params.expectsCompletionMessage,
+    });
+
     await runAnnounceDeliveryWithRetry({
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"

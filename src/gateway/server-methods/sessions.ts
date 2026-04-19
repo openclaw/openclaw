@@ -38,6 +38,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -499,15 +500,54 @@ async function handleSessionSend(params: {
     typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
       ? rawIdempotencyKey.trim()
       : randomUUID();
+  // Resolve external delivery context from the session entry. When the session
+  // has an external channel (e.g., thread-bound ACP sessions), pass explicit
+  // origin fields so chat.send bypasses the canInheritDeliverableRoute scope
+  // check — ACP session keys ("acp:UUID") don't pass that check by design.
+  const sessionDeliveryChannel = entry.deliveryContext?.channel ?? entry.lastChannel;
+  const sessionDeliveryTo = entry.deliveryContext?.to ?? entry.lastTo;
+  const sessionDeliveryAccountId =
+    entry.deliveryContext?.accountId ?? entry.lastAccountId ?? undefined;
+  const sessionDeliveryThreadId =
+    entry.deliveryContext?.threadId ?? entry.lastThreadId ?? undefined;
+  const hasExternalChannel =
+    Boolean(sessionDeliveryChannel) && !isInternalMessageChannel(sessionDeliveryChannel);
+  // Pass explicitOrigin only when both channel AND target are known — this
+  // bypasses the canInheritDeliverableRoute scope check in chat.ts which
+  // rejects ACP session keys. When only channel is known (no target), still
+  // pass deliver:true so chat.ts can attempt its own route resolution.
+  const hasExplicitOrigin = hasExternalChannel && Boolean(sessionDeliveryTo);
+
+  // When the session has external delivery context (e.g., thread-bound Discord),
+  // frame the message so the ACP harness knows its direct text reply will be
+  // posted externally. Without this, harnesses like Codex may attempt tool-based
+  // delivery (gateway loopback) instead of producing a clean reply.
+  const rawMessage = (p as { message: string }).message;
+  const messageForSend =
+    hasExplicitOrigin && sessionDeliveryThreadId != null
+      ? `[Thread delivery: your text reply will be posted directly to the bound Discord thread. Do not use tools, shell commands, or gateway API calls to deliver. Reply with the text you want posted.]\n\n${rawMessage}`
+      : rawMessage;
+
   await chatHandlers["chat.send"]({
     req: params.req,
     params: {
       sessionKey: canonicalKey,
-      message: (p as { message: string }).message,
+      message: messageForSend,
       thinking: (p as { thinking?: string }).thinking,
       attachments: (p as { attachments?: unknown[] }).attachments,
       timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
       idempotencyKey,
+      ...(hasExternalChannel ? { deliver: true } : {}),
+      ...(hasExplicitOrigin
+        ? {
+            originatingChannel: sessionDeliveryChannel,
+            originatingTo: sessionDeliveryTo,
+            ...(sessionDeliveryAccountId ? { originatingAccountId: sessionDeliveryAccountId } : {}),
+            ...(sessionDeliveryThreadId != null
+              ? { originatingThreadId: String(sessionDeliveryThreadId) }
+              : {}),
+          }
+        : {}),
     },
     respond: (ok, payload, error, meta) => {
       sendAcked = ok;

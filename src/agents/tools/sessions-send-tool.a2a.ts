@@ -10,9 +10,10 @@ import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
-  isAnnounceSkip,
+  extractAnnouncePayload,
   isReplySkip,
 } from "./sessions-send-helpers.js";
+import { classifyAnnounceDropReason } from "./sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -128,13 +129,24 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    const announcePayload = extractAnnouncePayload(announceReply);
+    if (!announcePayload) {
+      const dropReason = classifyAnnounceDropReason(announceReply);
+      log.info("[delivery-trace] A2A announce payload dropped", {
+        runId: runContextId,
+        targetSessionKey: params.targetSessionKey,
+        dropReason,
+        hasAnnounceTarget: Boolean(announceTarget),
+        replyPreview: (announceReply ?? "").slice(0, 120),
+      });
+    }
+    if (announceTarget && announcePayload) {
       try {
         await sessionsSendA2ADeps.callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
-            message: announceReply.trim(),
+            message: announcePayload,
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
             threadId: announceTarget.threadId,

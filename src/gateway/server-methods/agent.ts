@@ -31,6 +31,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   classifySessionKeyShape,
@@ -81,6 +82,8 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+
+const log = createSubsystemLogger("gateway/agent");
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import {
@@ -856,6 +859,21 @@ export const agentHandlers: GatewayRequestHandlers = {
         : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+
+    // Diagnostic: attribute outbound thread delivery for thread-bound ACP debugging.
+    if (deliver && deliveryPlan.resolvedThreadId) {
+      log.info("[thread-attribution] outbound thread delivery", {
+        sessionKey: resolvedSessionKey,
+        channel: resolvedChannel,
+        to: resolvedTo,
+        threadId: deliveryPlan.resolvedThreadId,
+        provenanceKind: inputProvenance?.kind,
+        provenanceSourceTool: (inputProvenance as Record<string, unknown> | undefined)?.sourceTool,
+        provenanceSourceChannel: (inputProvenance as Record<string, unknown> | undefined)
+          ?.sourceChannel,
+        idem,
+      });
+    }
 
     const accepted = {
       runId,

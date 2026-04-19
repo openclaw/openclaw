@@ -7,6 +7,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   getRuntimeConfigSnapshot,
@@ -14,6 +15,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
+const log = createSubsystemLogger("discord/thread-bindings");
 import { createDiscordRestClient } from "../client.js";
 import {
   createThreadForBinding,
@@ -62,6 +65,7 @@ import {
   type ThreadBindingManager,
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
+import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 function registerManager(manager: ThreadBindingManager) {
   MANAGERS_BY_ACCOUNT_ID.set(manager.accountId, manager);
@@ -124,6 +128,20 @@ function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
 function isDirectConversationBindingId(value?: string | null): boolean {
   const trimmed = normalizeOptionalString(value);
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
+}
+
+/** Strip `channel:` / `user:` identity prefix — Discord API expects raw snowflake IDs. */
+function stripDiscordConversationPrefix(value?: string | null): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  for (const prefix of ["channel:", "user:"]) {
+    if (trimmed.startsWith(prefix)) {
+      return trimmed.slice(prefix.length);
+    }
+  }
+  return trimmed;
 }
 
 function toSessionBindingRecord(
@@ -292,6 +310,16 @@ export function createThreadBindingManager(
             reason: "thread-archived",
             sendFarewell: true,
           });
+          // Reset session-store entries so the next inbound message starts a
+          // fresh conversation — mirrors the live THREAD_UPDATE archive path.
+          const cfg = resolveCurrentCfg();
+          if (cfg) {
+            void closeDiscordThreadSessions({
+              cfg,
+              accountId,
+              threadId: binding.threadId,
+            });
+          }
         }
       } catch (err) {
         if (isDiscordThreadGoneError(err)) {
@@ -303,6 +331,15 @@ export function createThreadBindingManager(
             reason: "thread-delete",
             sendFarewell: false,
           });
+          // Reset session-store entries for deleted threads too.
+          const cfg = resolveCurrentCfg();
+          if (cfg) {
+            void closeDiscordThreadSessions({
+              cfg,
+              accountId,
+              threadId: binding.threadId,
+            });
+          }
           continue;
         }
         logVerbose(
@@ -635,19 +672,28 @@ export function createThreadBindingManager(
 
       if (placement === "child") {
         createThread = true;
+        // For child placement the conversationId is the target channel where
+        // the new thread should be created. Use it directly when no explicit
+        // parent channel is available, instead of the API-resolution fallback.
+        // Strip identity prefix (channel:, user:) since Discord API expects
+        // raw snowflake IDs for thread creation.
         if (!channelId && conversationId) {
-          const cfg = resolveCurrentCfg();
-          channelId =
-            (await resolveChannelIdForBinding({
-              cfg,
-              accountId,
-              token: resolveCurrentToken(),
-              threadId: conversationId,
-            })) ?? undefined;
+          channelId = stripDiscordConversationPrefix(conversationId);
         }
+        channelId = stripDiscordConversationPrefix(channelId);
       } else {
         threadId = conversationId || undefined;
       }
+      log.info("discord thread binding adapter bind attempt", {
+        placement,
+        channelId,
+        threadId,
+        conversationId,
+        rawConversationId: input.conversation.conversationId,
+        rawParentConversationId: input.conversation.parentConversationId,
+        createThread,
+        hasToken: Boolean(resolveCurrentToken()),
+      });
       const bound = await manager.bindTarget({
         threadId,
         channelId,

@@ -36,20 +36,30 @@ const routeMocks = vi.hoisted(() => ({
 
 const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "discord" && channelId !== "slack" && channelId !== "telegram") {
-      return undefined;
+    if (channelId === "discord") {
+      return {
+        outbound: {
+          shouldTreatDeliveredTextAsVisible: (_params: {
+            kind: "tool" | "block" | "final";
+            text?: string;
+          }) => false,
+        },
+      };
     }
-    return {
-      outbound: {
-        shouldTreatDeliveredTextAsVisible: ({
-          kind,
-          text,
-        }: {
-          kind: "tool" | "block" | "final";
-          text?: string;
-        }) => kind === "block" && typeof text === "string" && text.trim().length > 0,
-      },
-    };
+    if (channelId === "slack" || channelId === "telegram") {
+      return {
+        outbound: {
+          shouldTreatDeliveredTextAsVisible: ({
+            kind,
+            text,
+          }: {
+            kind: "tool" | "block" | "final";
+            text?: string;
+          }) => kind === "block" && typeof text === "string" && text.trim().length > 0,
+        },
+      };
+    }
+    return undefined;
   }),
 }));
 
@@ -1002,7 +1012,7 @@ describe("tryDispatchAcpReply", () => {
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not deliver final fallback text when routed discord block text was already visible", async () => {
+  it("delivers final reply even after routed discord block text (block is not visible)", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1021,15 +1031,8 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(0);
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:1478836151241412759",
-        payload: expect.objectContaining({ text: "Received your test message." }),
-      }),
-    );
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
   });
 
   it("does not deliver final fallback text when routed Slack block text was already visible", async () => {
@@ -1088,7 +1091,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("does not deliver final fallback text when direct discord block text was already visible", async () => {
+  it("delivers final reply even after direct discord block text (block is not visible)", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1114,7 +1117,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Received." }),
     );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalled();
   });
 
   it("does not deliver final fallback text when direct Slack block text was already visible", async () => {

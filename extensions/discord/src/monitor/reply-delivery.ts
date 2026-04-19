@@ -2,6 +2,7 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
@@ -20,6 +21,8 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+
+const log = createSubsystemLogger("discord/reply-delivery");
 import { isLikelyDiscordVideoMedia } from "../media-detection.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
@@ -36,6 +39,7 @@ export type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  getByThreadId?: (threadId: string) => DiscordThreadBindingLookupRecord | undefined;
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
@@ -208,19 +212,26 @@ function resolveBoundThreadBinding(params: {
   sessionKey?: string;
   target: string;
 }): DiscordThreadBindingLookupRecord | undefined {
-  const sessionKey = params.sessionKey?.trim();
-  if (!params.threadBindings || !sessionKey) {
-    return undefined;
-  }
-  const bindings = params.threadBindings.listBySessionKey(sessionKey);
-  if (bindings.length === 0) {
+  if (!params.threadBindings) {
     return undefined;
   }
   const targetChannelId = resolveTargetChannelId(params.target);
   if (!targetChannelId) {
     return undefined;
   }
-  return bindings.find((entry) => entry.threadId === targetChannelId);
+  // Primary: look up by session key (exact match for the bound session).
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    const bindings = params.threadBindings.listBySessionKey(sessionKey);
+    const match = bindings.find((entry) => entry.threadId === targetChannelId);
+    if (match) {
+      return match;
+    }
+  }
+  // Fallback: look up by thread ID directly — catches deliveries from the
+  // requester/main session into a child-bound thread, where the binding is
+  // indexed by the child session key but delivery uses the main session key.
+  return params.threadBindings.getByThreadId?.(targetChannelId) ?? undefined;
 }
 
 function createPayloadReplyToResolver(params: {
@@ -393,6 +404,21 @@ export async function deliverDiscordReply(params: {
     target: params.target,
   });
   const persona = resolveBindingPersona(params.cfg, binding);
+
+  // Diagnostic: attribute Discord thread delivery — webhook (ACP identity) vs bot (richardbots).
+  if (binding) {
+    const firstText = params.replies[0]?.text?.slice(0, 80) ?? "";
+    log.info("[thread-attribution] discord reply delivery", {
+      target: params.target,
+      sessionKey: params.sessionKey,
+      sendPath: binding.webhookId ? "webhook" : "bot",
+      bindingThreadId: binding.threadId,
+      bindingAccountId: binding.accountId,
+      personaUsername: persona.username,
+      textPreview: firstText,
+      replyCount: params.replies.length,
+    });
+  }
   // Pre-resolve channel ID and retry runner once to avoid per-chunk overhead.
   // This eliminates redundant channel-type GET requests and client creation that
   // can cause ordering issues when multiple chunks share the RequestClient queue.

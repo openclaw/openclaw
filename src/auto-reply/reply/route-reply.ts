@@ -9,6 +9,9 @@
 
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("reply/route-reply");
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -201,6 +204,17 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
+    // Diagnostic: attribute outbound thread delivery.
+    if (resolvedThreadId != null) {
+      log.info("[thread-attribution] route-reply thread delivery", {
+        channel: channelId,
+        to,
+        threadId: resolvedThreadId,
+        sessionKey: params.sessionKey,
+        mirror: params.mirror !== false,
+      });
+    }
+
     const results = await deliverOutboundPayloads({
       cfg,
       channel: channelId,
