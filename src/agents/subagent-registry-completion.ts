@@ -42,6 +42,15 @@ export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): bo
   );
 }
 
+export function shouldUpdateRunOutcome(
+  current: SubagentRunOutcome | undefined,
+  next: SubagentRunOutcome | undefined,
+): boolean {
+  return (
+    !runOutcomesEqual(current, next) || (!runOutcomeHasTiming(current) && runOutcomeHasTiming(next))
+  );
+}
+
 export function resolveLifecycleOutcomeFromRunOutcome(
   outcome: SubagentRunOutcome | undefined,
 ): SubagentLifecycleEndedOutcome {

@@ -68,6 +68,18 @@ describe("emitSubagentEndedHookOnce", () => {
         { status: "ok" },
       ),
     ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok" },
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(false);
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {

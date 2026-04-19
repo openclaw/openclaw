@@ -23,7 +23,7 @@ import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
-import { runOutcomeHasTiming, runOutcomesEqual } from "./subagent-registry-completion.js";
+import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -594,10 +594,7 @@ export function createSubagentRegistryLifecycleController(params: {
       startedAt: entry.startedAt,
       endedAt,
     });
-    const shouldPersistOutcome =
-      !runOutcomesEqual(entry.outcome, outcome) ||
-      (!runOutcomeHasTiming(entry.outcome) && runOutcomeHasTiming(outcome));
-    if (shouldPersistOutcome) {
+    if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
       entry.outcome = outcome;
       mutated = true;
     }
