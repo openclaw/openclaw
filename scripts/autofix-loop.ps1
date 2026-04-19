@@ -32,7 +32,7 @@ $ErrorActionPreference = "Stop"
 if (-not $Repo)     { $Repo = "openclaw/openclaw" }
 if (-not $PrNumber) { $PrNumber = 68135 }
 
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$RepoRoot = Split-Path -Parent $PSScriptRoot
 $LogDir = Join-Path $env:USERPROFILE ".openclaw\autofix"
 $LockFile = Join-Path $LogDir "autofix.lock"
 

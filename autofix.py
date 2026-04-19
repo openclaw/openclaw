@@ -530,12 +530,18 @@ def _force_rmtree(path: Path) -> None:
         return
 
 
-def _sweep_stale_autofix_work_dirs(tmp_base: Path) -> None:
+def _sweep_stale_autofix_work_dirs(tmp_base: Path, *, exclude: Optional[str] = None) -> None:
     """Best-effort cleanup of leftover autofix-work-* directories from
-    crashed previous runs. Safe no-op if nothing matches."""
+    crashed previous runs. Safe no-op if nothing matches.
+    
+    Args:
+        exclude: Optional directory name to skip (current run's workdir).
+    """
     try:
         for child in tmp_base.iterdir():
             if child.is_dir() and child.name.startswith("autofix-work"):
+                if exclude and child.name == exclude:
+                    continue
                 _force_rmtree(child)
     except OSError:
         pass
@@ -561,10 +567,6 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
     tmp_base = Path(tmp_base_str)
     tmp_base.mkdir(parents=True, exist_ok=True)
 
-    # Sweep any leftover autofix-work-* dirs from crashed previous runs
-    # so they don't pile up in %TEMP% over time.
-    _sweep_stale_autofix_work_dirs(tmp_base)
-
     # Use a unique mkdtemp-assigned directory per run. Previously we used
     # a fixed `autofix-work` dir that we tried to clear with
     # `shutil.rmtree(ignore_errors=True)`; on Windows the git pack files
@@ -574,11 +576,30 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
     # the race entirely -- a fresh unique name every run.
     work_dir = Path(tempfile.mkdtemp(prefix="autofix-work-", dir=str(tmp_base)))
 
+    # Sweep any leftover autofix-work-* dirs from crashed previous runs,
+    # excluding the directory we just created to avoid concurrent deletion.
+    _sweep_stale_autofix_work_dirs(tmp_base, exclude=work_dir.name)
+
     # Wrap the rest in try/finally so we always attempt cleanup on exit,
     # even on push failure or unexpected exception.
     try:
         token = os.environ["GITHUB_TOKEN"]
-        remote_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+        # Use GIT_ASKPASS to provide credentials without embedding the
+        # token in the remote URL, preventing potential exposure in git
+        # error messages across different git versions.
+        askpass_script = work_dir / "git-askpass.sh"
+        askpass_script.write_text(
+            f"#!/bin/sh\necho '{token}'\n",
+            encoding="utf-8"
+        )
+        if sys.platform != "win32":
+            askpass_script.chmod(0o700)
+        
+        env = os.environ.copy()
+        env["GIT_ASKPASS"] = str(askpass_script)
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        
+        remote_url = f"https://github.com/{repo}.git"
 
         # SHA-pinned fetch: initialize an empty repo and pull exactly
         # `head_sha`, not the current branch tip. This removes the race
@@ -591,16 +612,34 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
         # for both public and private repos. If the SHA is no longer
         # reachable (e.g., branch force-pushed in the window) the fetch
         # fails cleanly and we abort rather than clobber newer commits.
-        init_result = git("init", str(work_dir))
+        init_result = subprocess.run(
+            ["git", "init", str(work_dir)],
+            capture_output=True,
+            text=True,
+            env=env,
+            **_WIN_NO_WINDOW,
+        )
         if init_result.returncode != 0:
             print(f"git init failed: {init_result.stderr}", file=sys.stderr)
             return False
-        remote_add = git("remote", "add", "origin", remote_url, cwd=str(work_dir))
+        remote_add = subprocess.run(
+            ["git", "remote", "add", "origin", remote_url],
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            env=env,
+            **_WIN_NO_WINDOW,
+        )
         if remote_add.returncode != 0:
             print(f"git remote add failed: {remote_add.stderr}", file=sys.stderr)
             return False
-        fetch_result = git(
-            "fetch", "--depth=1", "origin", head_sha, cwd=str(work_dir)
+        fetch_result = subprocess.run(
+            ["git", "fetch", "--depth=1", "origin", head_sha],
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            env=env,
+            **_WIN_NO_WINDOW,
         )
         if fetch_result.returncode != 0:
             print(
@@ -609,8 +648,13 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
                 file=sys.stderr,
             )
             return False
-        checkout_result = git(
-            "checkout", "-b", branch, "FETCH_HEAD", cwd=str(work_dir)
+        checkout_result = subprocess.run(
+            ["git", "checkout", "-b", branch, "FETCH_HEAD"],
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            env=env,
+            **_WIN_NO_WINDOW,
         )
         if checkout_result.returncode != 0:
             print(f"git checkout -b failed: {checkout_result.stderr}", file=sys.stderr)
@@ -679,7 +723,14 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
             print(f"autofix: nothing to commit: {commit.stderr}", file=sys.stderr)
             return False
 
-        push = git("push", "origin", branch, cwd=str(work_dir))
+        push = subprocess.run(
+            ["git", "push", "origin", branch],
+            cwd=str(work_dir),
+            capture_output=True,
+            text=True,
+            env=env,
+            **_WIN_NO_WINDOW,
+        )
         if push.returncode != 0:
             print(f"autofix: push failed: {push.stderr}", file=sys.stderr)
             return False
@@ -718,7 +769,17 @@ def run_pipeline(repo: str, pr: int, dry_run: bool = False) -> int:
         return 0
 
     comments = fetch_review_comments(repo, pr)
-    top_comments = [c for c in comments if c.in_reply_to_id is None]
+    # Filter out comments that already have an "Autofix applied" reply
+    all_comment_ids = {c.id for c in comments}
+    replied_ids = {
+        c.in_reply_to_id
+        for c in comments
+        if c.in_reply_to_id and "Autofix applied" in c.body
+    }
+    top_comments = [
+        c for c in comments
+        if c.in_reply_to_id is None and c.id not in replied_ids
+    ]
     if not top_comments:
         print("autofix: no top-level review comments to fix.")
         return 0

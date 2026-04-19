@@ -304,11 +304,12 @@ class ComfyUISupervisor:
             log_line("INFO", f"comfyui started pid={self.proc.pid}")
         except OSError as exc:
             log_line("ERROR", f"comfyui spawn failed: {exc}")
+            self.proc = None
+        finally:
             try:
                 log_file.close()
             except OSError:
                 pass
-            self.proc = None
 
     def _run_forever(self) -> None:
         while not self._stop_requested:

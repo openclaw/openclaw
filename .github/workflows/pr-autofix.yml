@@ -40,7 +40,7 @@ concurrency:
   # don't trigger parallel runs that race to push. cancel-in-progress:
   # false means the second run waits for the first to finish rather
   # than killing it mid-flight.
-  group: autofix-pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  group: autofix-pr-${{ github.event.issue.number || github.event.inputs.pr_number }}
   cancel-in-progress: false
 
 permissions:
@@ -68,7 +68,7 @@ jobs:
             echo "number=${{ inputs.pr_number }}" >> "$GITHUB_OUTPUT"
             echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
           else
-            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -122,8 +122,8 @@ jobs:
           #   (b) restrict the workflow to fork-side runs where a
           #       persistent ~/.claude/ credential mount is available.
           # For (a), uncomment the next two lines and set the secret.
-          # AUTOFIX_AUTH_MODE: api-key
-          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AUTOFIX_AUTH_MODE: api-key
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AUTOFIX_MODEL: "claude-sonnet-4-5-20250929"
           AUTOFIX_MAX_FILES: "10"
           # Verification gate: autofix will run this before pushing. If
