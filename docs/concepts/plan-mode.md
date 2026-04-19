@@ -80,15 +80,17 @@ You can also click "Plan view" in the chat controls to see the same plan in the 
 
 Plan mode is multi-channel by design:
 
-- **Webchat** — inline card with buttons + side-panel view
-- **Telegram** — `/plan ...` text commands today; inline-button card + markdown document attachment delivery is _deferred to a follow-up PR_ (the bridge persists the markdown to disk under `~/.openclaw/agents/<id>/plans/` even on Telegram sessions, but document attachment + inline-keyboard wiring await re-rebasing onto the new plugin-sdk surface)
-- **Slack** — inline-button card in the originating thread
-- **Discord** — inline-button card with `/plan` slash commands as fallback
-- **CLI** — `/plan accept` / `/plan revise` / `/plan answer` text commands
+- **Webchat** — inline approval card with buttons + side-panel view
+- **Telegram** — text-rendered plan plus `/plan` commands
+- **Slack** — text-rendered plan plus `/plan` commands
+- **Discord** — text-rendered plan plus `/plan` commands
+- **CLI** — text-rendered plan plus `/plan accept` / `/plan revise` / `/plan answer` commands
 
-Approvals from any channel are deduplicated server-side by `approvalId`, so clicking Approve on Telegram while the webchat card is also open won't double-fire.
+On non-web channels, the current shipped experience is text-reduced: the plan is rendered in chat and you respond with `/plan` commands rather than inline buttons. Telegram markdown/document attachment delivery and inline-button cards are deferred and are not part of the current shipped behavior — the bridge persists the markdown to disk under `~/.openclaw/agents/<id>/plans/` for audit, but channel-side delivery awaits re-rebasing onto the new plugin-sdk surface. See "Long-term follow-ups (deferred)" in `docs/plans/PLAN-MODE-ARCHITECTURE.md`.
 
-> **Doc accuracy note (2026-04-19, Copilot review #68939):** Telegram inline-button cards and markdown attachment delivery were both flagged as documented-but-deferred. The `/plan ...` text-command path is shipped and works on Telegram today; the richer UI surfaces land in a follow-up PR once the upstream plugin-sdk restructure is mapped. See "Long-term follow-ups (deferred)" in `docs/plans/PLAN-MODE-ARCHITECTURE.md`.
+Approvals from any channel are deduplicated server-side by `approvalId`, so approving from one surface while the same plan is open elsewhere won't double-fire.
+
+> **Doc accuracy note (2026-04-19, Copilot review #68939):** Earlier drafts of this section overstated Telegram and Slack as inline-button surfaces. Per the wave-6 review, all non-web channels are scoped to text-only `/plan` commands today; richer UI surfaces land in a follow-up PR.
 
 ## Persisted plans
 

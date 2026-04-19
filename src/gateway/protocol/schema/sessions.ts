@@ -205,9 +205,20 @@ export const SessionsPatchParamsSchema = Type.Object(
      * `approvalId` is the version token the runtime emitted with the
      * approval event; the server uses it to ignore stale clicks (e.g.
      * the user clicking Approve on a plan that was already rejected on
-     * another surface). When omitted, the server still applies the
-     * action — surfaces that don't carry the version token (CLI prompts,
-     * legacy channels) get best-effort behavior.
+     * another surface).
+     *
+     * Copilot review #68939 (2026-04-19): clarified per-variant
+     * approvalId requirement. For `approve`, `edit`, and `reject`,
+     * omitting `approvalId` still applies the action on a best-
+     * effort basis so surfaces that don't carry the version token
+     * (CLI prompts, legacy channels) remain usable. `action:
+     * "answer"` is the EXCEPTION: it requires `approvalId`
+     * (enforced at the discriminated-union schema layer below) and
+     * is rejected without it — the answer-guard in sessions-patch.ts
+     * also validates the incoming approvalId against
+     * `pendingQuestionApprovalId` server-side. Client implementers
+     * should always thread the approvalId for `answer` flows; the
+     * other variants degrade gracefully.
      */
     /**
      * Copilot review #68939 (2026-04-19): refactored to a

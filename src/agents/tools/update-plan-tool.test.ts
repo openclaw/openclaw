@@ -15,7 +15,14 @@ describe("update_plan tool", () => {
 
     // PR-8 follow-up: returns non-empty text content (lossless-claw fix);
     // the exact summary text varies by step count and terminal-state.
-    expect(Array.isArray(result.content) && result.content.length > 0).toBe(true);
+    //
+    // Copilot review #68939 (2026-04-19): split the combined
+    // `Array.isArray(...) && length > 0` assertion into two
+    // separate assertions so test failures pinpoint whether the
+    // problem was "wrong type" vs "empty content" instead of just
+    // "expected true got false".
+    expect(result.content).toBeInstanceOf(Array);
+    expect(result.content.length).toBeGreaterThan(0);
     expect(result.details).toEqual({
       status: "updated",
       explanation: "Started work",

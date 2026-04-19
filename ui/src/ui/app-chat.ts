@@ -479,6 +479,23 @@ async function dispatchSlashCommand(
     host.onSlashAction?.("toggle-plan-view");
   }
 
+  // Codex P1 review #68939 (2026-04-19): for /plan accept|revise|
+  // answer the executor returns a synthetic [PLAN_DECISION] /
+  // [QUESTION_ANSWER] message that we send via the same chat path
+  // the user types into. This triggers an immediate agent run so
+  // the persisted pendingAgentInjection actually fires —
+  // pre-fix, the agent stayed idle until an unrelated later
+  // message or heartbeat consumed the injection. Mirrors the
+  // inline-card path in `app.ts:handlePlanApprovalDecision()` /
+  // `handlePlanApprovalAnswer()` which already does this.
+  // Fire-and-forget — the run lifecycle owns its own success/
+  // failure surface; failures here surface via host.lastError.
+  if (result.triggerPlanRunResumeMessage) {
+    void handleSendChat(host, result.triggerPlanRunResumeMessage).catch((err: unknown) => {
+      host.lastError = `Plan command succeeded but failed to trigger agent run: ${String(err)}`;
+    });
+  }
+
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 

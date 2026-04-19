@@ -1457,7 +1457,20 @@ export function renderChat(props: ChatProps) {
             onReviseDraftChange: (text) => props.onPlanApprovalReviseDraftChange?.(text),
             onReviseSubmit: () => {
               const draft = (props.planApprovalReviseDraft ?? "").trim();
-              void props.onPlanApprovalDecision!("reject", draft || undefined);
+              // Codex P2 review #68939 (2026-04-19): block empty
+              // submits client-side. The wire schema's reject
+              // variant now requires `feedback: minLength: 1`
+              // (closes the "reject with no guidance" loophole),
+              // so passing `undefined` for empty drafts would
+              // produce a server-side validation error and the
+              // user would see a confusing "request failed" toast
+              // instead of the expected "type something" affordance.
+              // The textarea remains visible for the user to type
+              // into; only the submit is suppressed when empty.
+              if (!draft) {
+                return;
+              }
+              void props.onPlanApprovalDecision!("reject", draft);
             },
             onOpenPlan: () => {
               if (props.planApprovalRequest && props.onOpenPlanInSidebar) {

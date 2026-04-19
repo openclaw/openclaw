@@ -101,13 +101,20 @@ function appendMissingToolResults(
     }
   }
   if (repaired.length > TRANSPORT_REPAIR_PER_TURN_LOG_CAP) {
+    // Copilot review #68939 (2026-04-19): cap the aggregate id
+    // list too — extreme failure modes (hundreds of dropped
+    // pairings) would otherwise produce an oversized log line
+    // that itself becomes incident-time noise. Show the first 20
+    // remaining ids + a count of additional ones beyond that.
+    const TRANSPORT_REPAIR_AGGREGATE_ID_LIST_CAP = 20;
+    const remaining = repaired.slice(TRANSPORT_REPAIR_PER_TURN_LOG_CAP);
+    const idList = remaining.slice(0, TRANSPORT_REPAIR_AGGREGATE_ID_LIST_CAP).map((r) => r.id);
+    const additional = remaining.length - idList.length;
     log.warn(
       `transport-repair: synthesized ${repaired.length} placeholders this turn ` +
         `(only first ${TRANSPORT_REPAIR_PER_TURN_LOG_CAP} logged individually); ` +
-        `remaining tool_use ids: ${repaired
-          .slice(TRANSPORT_REPAIR_PER_TURN_LOG_CAP)
-          .map((r) => r.id)
-          .join(", ")}`,
+        `next ${idList.length} tool_use ids: ${idList.join(", ")}` +
+        (additional > 0 ? ` (+${additional} more)` : ""),
     );
   }
 }

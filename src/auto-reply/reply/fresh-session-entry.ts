@@ -41,24 +41,37 @@ export function resolveLatestPlanModeFromDisk(params: {
     if (mode === "plan") {
       return "plan";
     }
-    // mode === "normal" OR planMode object deleted (post-approval) OR
-    // any unrecognized value (corruption / forward-compat). Per the
-    // deletion-as-normal contract documented above + the
-    // corruption-tolerance contract codified in
-    // `fresh-session-entry.test.ts:294-306`, all of these collapse
-    // to "normal" so consumers don't false-positive on a stale
-    // "plan" cached snapshot AND don't permanently block the user
-    // out when on-disk state is corrupt.
-    //
-    // (Copilot review #68939 (2026-04-19) suggested returning
-    // `undefined` for unknown values to preserve forward-compat
-    // gating — that would FAIL CLOSED in the corruption case the
-    // existing test exercises, locking the user out indefinitely.
-    // The fail-open-to-normal trade-off is intentional and lives in
-    // the test contract; tightening it would need a separate design
-    // discussion + new mutation-gate-side fail-closed semantics for
-    // unknown values.)
-    return "normal";
+    if (mode === "normal" || mode === undefined) {
+      // mode === "normal" OR planMode object deleted (post-approval).
+      // Per the deletion-as-normal contract documented above, both
+      // collapse to "normal" so consumers don't false-positive on a
+      // stale "plan" cached snapshot.
+      return "normal";
+    }
+    // Copilot review #68939 (2026-04-19): unrecognized / forward-
+    // compat / corrupt mode values now return `undefined` (not
+    // "normal") so the caller falls back to the cached snapshot
+    // chain. Previously this collapsed to "normal" — that's a
+    // FAIL-OPEN behavior that would unintentionally unlock
+    // mutation tools when on-disk state is malformed (corruption
+    // or partial write). The new fallback chain in
+    // `pi-tools.before-tool-call.ts:234-235` is
+    // `liveMode !== undefined ? liveMode : args.ctx?.planMode` —
+    // returning undefined here lets it use the in-memory cached
+    // snapshot, which preserves both:
+    //   - SECURITY: if the session was in plan mode pre-corruption,
+    //     the cached snapshot is "plan" so the mutation gate stays
+    //     armed (no fail-open).
+    //   - RECOVERY: if the session was in normal mode, the cached
+    //     snapshot is "normal" so the user isn't locked out.
+    // Operators see the warn-log so they can investigate +
+    // manually correct the corrupt entry. The previous test
+    // contract (fresh-session-entry.test.ts:294-306) is updated
+    // alongside this change.
+    console.warn(
+      `resolveLatestPlanModeFromDisk: unknown planMode.mode value ${JSON.stringify(mode)} for sessionKey=${sessionKey}; returning undefined so caller falls back to cached snapshot (safer than fail-open-to-normal)`,
+    );
+    return undefined;
   } catch {
     return undefined;
   }

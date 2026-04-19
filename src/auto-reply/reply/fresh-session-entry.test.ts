@@ -291,17 +291,24 @@ describe("resolveLatestPlanModeFromDisk — Bug A iter-2 deletion-as-normal", ()
     expect(result).toBeUndefined();
   });
 
-  it("returns 'normal' even when planMode.mode is corrupt/unrecognized", () => {
-    // Defensive: if the disk has corrupt mode value, treat as
-    // "normal" rather than undefined — fail-closed against false
-    // "plan" cached snapshots. Better to wrongly let a tool through
-    // than to wrongly block one indefinitely.
+  it("returns undefined for unknown/corrupt planMode.mode (Copilot review #68939)", () => {
+    // Copilot review #68939 (2026-04-19): the previous behavior was
+    // to collapse unknown values to "normal" (fail-open) — flagged
+    // as a security concern because plan mode is the mutation gate.
+    // Now we return `undefined` so the caller falls back to the
+    // in-memory cached snapshot. The fallback chain in
+    // `pi-tools.before-tool-call.ts:234-235` preserves SECURITY (a
+    // session that was in plan mode keeps the gate armed via
+    // cached "plan") AND RECOVERY (a normal-mode session isn't
+    // locked out — cached snapshot stays "normal"). Operators see
+    // the warn log to investigate + manually correct the corrupt
+    // entry.
     writeStore({
       "test-key": makeEntry({
         planMode: { ...planMode("plan"), mode: "garbage" as never },
       }),
     });
     const result = resolveLatestPlanModeFromDisk({ storePath, sessionKey: "test-key" });
-    expect(result).toBe("normal");
+    expect(result).toBeUndefined();
   });
 });
