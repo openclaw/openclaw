@@ -21697,6 +21697,61 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional HTTP response security headers applied by the gateway process itself. Prefer setting these at your reverse proxy when TLS terminates there.",
               },
+              cors: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Gateway HTTP CORS Enabled",
+                    description:
+                      "Enable CORS on API endpoints (chatCompletions, responses, toolsInvoke, models). Keep disabled unless browser clients need cross-origin access.",
+                  },
+                  allowedOrigins: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Gateway HTTP CORS Allowed Origins",
+                    description:
+                      'Allowed origins for CORS. Exact match against the browser Origin header. Use ["*"] for wildcard (forces allowCredentials=false). Example: ["https://mysite.com"].',
+                  },
+                  allowCredentials: {
+                    type: "boolean",
+                    title: "Gateway HTTP CORS Allow Credentials",
+                    description:
+                      'Send Access-Control-Allow-Credentials: true. Forbidden when allowedOrigins contains "*". Default: false.',
+                  },
+                  allowedHeaders: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Gateway HTTP CORS Allowed Headers",
+                    description:
+                      "Extra request headers the browser may send. Authorization, Content-Type, and X-Request-ID are always implicitly allowed.",
+                  },
+                  exposedHeaders: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Gateway HTTP CORS Exposed Headers",
+                    description: "Response headers the browser JS can read via fetch. No defaults.",
+                  },
+                  maxAge: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Gateway HTTP CORS Max Age",
+                    description:
+                      "Preflight cache duration in seconds (Access-Control-Max-Age). Default: 600.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Gateway HTTP CORS",
+                description:
+                  "CORS configuration for Gateway HTTP API endpoints. Enables cross-origin browser access to a defined subset of API routes. Default disabled; explicit opt-in required.",
+              },
             },
             additionalProperties: false,
             title: "Gateway HTTP API",
@@ -23473,6 +23528,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Strict Transport Security Header",
       help: "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
       tags: ["network"],
+    },
+    "gateway.http.cors": {
+      label: "Gateway HTTP CORS",
+      help: "CORS configuration for Gateway HTTP API endpoints. Enables cross-origin browser access to a defined subset of API routes. Default disabled; explicit opt-in required.",
+      tags: ["network"],
+    },
+    "gateway.http.cors.enabled": {
+      label: "Gateway HTTP CORS Enabled",
+      help: "Enable CORS on API endpoints (chatCompletions, responses, toolsInvoke, models). Keep disabled unless browser clients need cross-origin access.",
+      tags: ["network"],
+    },
+    "gateway.http.cors.allowedOrigins": {
+      label: "Gateway HTTP CORS Allowed Origins",
+      help: 'Allowed origins for CORS. Exact match against the browser Origin header. Use ["*"] for wildcard (forces allowCredentials=false). Example: ["https://mysite.com"].',
+      tags: ["access", "network"],
+    },
+    "gateway.http.cors.allowCredentials": {
+      label: "Gateway HTTP CORS Allow Credentials",
+      help: 'Send Access-Control-Allow-Credentials: true. Forbidden when allowedOrigins contains "*". Default: false.',
+      tags: ["access", "network"],
+    },
+    "gateway.http.cors.allowedHeaders": {
+      label: "Gateway HTTP CORS Allowed Headers",
+      help: "Extra request headers the browser may send. Authorization, Content-Type, and X-Request-ID are always implicitly allowed.",
+      tags: ["access", "network"],
+    },
+    "gateway.http.cors.exposedHeaders": {
+      label: "Gateway HTTP CORS Exposed Headers",
+      help: "Response headers the browser JS can read via fetch. No defaults.",
+      tags: ["network"],
+    },
+    "gateway.http.cors.maxAge": {
+      label: "Gateway HTTP CORS Max Age",
+      help: "Preflight cache duration in seconds (Access-Control-Max-Age). Default: 600.",
+      tags: ["network", "performance"],
     },
     "gateway.remote.url": {
       label: "Remote Gateway URL",
