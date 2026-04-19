@@ -273,8 +273,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       waitForRetry: async (delayMs) => {
         await this.waitForEmbeddingRetry(delayMs, "retrying");
       },
-      maxAttempts: this.embeddingRetryMaxAttempts(),
-      baseDelayMs: this.embeddingRetryBaseDelayMs(),
+      maxAttempts: this.embeddingRetryMaxAttempts,
+      baseDelayMs: this.embeddingRetryBaseDelayMs,
     });
   }
 
@@ -305,8 +305,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       waitForRetry: async (delayMs) => {
         await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
       },
-      maxAttempts: this.embeddingRetryMaxAttempts(),
-      baseDelayMs: this.embeddingRetryBaseDelayMs(),
+      maxAttempts: this.embeddingRetryMaxAttempts,
+      baseDelayMs: this.embeddingRetryBaseDelayMs,
     });
   }
 
@@ -314,7 +314,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const waitMs = resolveMemoryEmbeddingRetryDelay(
       delayMs,
       Math.random(),
-      this.embeddingRetryMaxDelayMs(),
+      this.embeddingRetryMaxDelayMs,
     );
     log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -480,7 +480,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : this.embeddingIndexConcurrency();
+    return this.batch.enabled ? this.batch.concurrency : this.embeddingIndexConcurrency;
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {
