@@ -288,6 +288,13 @@ export class CallManager {
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
+    // Skip initial message in realtime mode — the realtime handler manages its own
+    // greeting via onReady → triggerGreeting. Speaking here would overwrite the
+    // TwiML <Connect><Stream> with a REST API <Say>, breaking the realtime bridge.
+    if (this.config.realtime?.enabled) {
+      return;
+    }
+
     const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
 
     if (!initialMessage) {
