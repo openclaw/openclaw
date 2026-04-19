@@ -1,6 +1,6 @@
+import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -12,6 +12,7 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   ErrorCodes,
   errorShape,
@@ -25,7 +26,6 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 async function assertConfiguredAnnounceChannel(params: {
@@ -39,7 +39,7 @@ async function assertConfiguredAnnounceChannel(params: {
 
   const configuredChannels = listPotentialConfiguredChannelIds(params.cfg, process.env, {
     includePersistedAuthState: false,
-  }).sort();
+  }).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
