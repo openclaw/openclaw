@@ -1,0 +1,30 @@
+{
+  "id": "memory-hebbian",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "default": "http://localhost:8888",
+        "description": "Hebbian graph memory REST API base URL"
+      },
+      "strengthenAmount": {
+        "type": "number",
+        "default": 0.05,
+        "description": "How much to strengthen coaccessed edges (Hebbian learning rate)"
+      },
+      "maxResults": {
+        "type": "number",
+        "default": 5,
+        "description": "Maximum number of Hebbian results to include"
+      },
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable Hebbian graph memory augmentation (falls back to memory-core when disabled)"
+      }
+    }
+  }
+}

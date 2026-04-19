@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop.
 - Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default.
 - Heartbeat: add `agents.defaults.heartbeat.anchor="clock"` to align heartbeat ticks to UTC epoch boundaries (for example `every="2h"` + `anchor="clock"` fires at 00:00, 02:00, 04:00 UTC) instead of the seed-derived per-agent phase.
+- Memory: restore the bundled `memory-hebbian` plugin (Hebbian graph memory augmentation over `memory-core`, REST endpoint configurable via `plugins.entries.memory-hebbian.config.endpoint`).
 
 ### Fixes
 

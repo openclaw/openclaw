@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/memory-hebbian",
+  "version": "2026.2.13",
+  "private": true,
+  "description": "OpenClaw memory search plugin with Hebbian graph memory augmentation",
+  "type": "module",
+  "dependencies": {
+    "@openclaw/memory-core": "workspace:*"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
