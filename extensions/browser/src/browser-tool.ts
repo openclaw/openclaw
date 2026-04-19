@@ -410,11 +410,20 @@ export function createBrowserTool(opts?: {
         }
       }
 
-      const nodeTarget = await resolveBrowserNodeTarget({
-        requestedNode: requestedNode ?? undefined,
-        target,
-        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-      });
+      let nodeTarget: BrowserNodeTarget | null = null;
+      try {
+        nodeTarget = await resolveBrowserNodeTarget({
+          requestedNode: requestedNode ?? undefined,
+          target,
+          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+        });
+      } catch (error) {
+        // Keep the logged-in user browser usable on the host when auto-discovery
+        // of browser nodes fails transiently. Explicit node requests still fail.
+        if (!(isUserBrowserProfile && !target && !requestedNode)) {
+          throw error;
+        }
+      }
       if (isUserBrowserProfile && !target && !requestedNode && !nodeTarget) {
         target = "host";
       }

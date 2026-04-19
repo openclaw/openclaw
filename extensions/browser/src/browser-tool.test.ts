@@ -495,6 +495,21 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it("falls back to the host for profile=user when node discovery errors", async () => {
+    nodesUtilsMocks.listNodes.mockRejectedValueOnce(new Error("gateway unavailable"));
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "user" }),
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it('allows profile="user" with target="node"', async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
