@@ -64,15 +64,6 @@ type SignalTarget =
 import { resolveSignalQuoteParams } from "./send-quote.js";
 export { resolveSignalQuoteParams };
 
-let signalConfigRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
-  | undefined;
-
-async function loadSignalConfigRuntime() {
-  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
-  return await signalConfigRuntimePromise;
-}
-
 async function resolveSignalRpcAccountInfo(
   opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
 ) {
@@ -227,7 +218,7 @@ export async function sendMessageSignal(
       readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
+    const kind = kindFromMime(resolved.contentType);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
