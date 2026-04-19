@@ -442,6 +442,22 @@ function getBundledChannelPluginForRoot(
   try {
     const metadata = resolveBundledChannelMetadata(id, rootScope);
     const plugin = entry.loadChannelPlugin();
+    if (!plugin) {
+      // Defensive: `entry.loadChannelPlugin()` is typed as `() => ChannelPlugin`
+      // but a malformed or legacy bundled plugin module can still yield
+      // undefined at runtime (e.g. a module whose default export isn't a
+      // ChannelPlugin object). Without this check, the next line crashes with
+      //   TypeError: Cannot read properties of undefined (reading 'id')
+      // deep inside a legacy-config-migration read path, which surfaces to
+      // users as noisy but non-fatal stack traces on `openclaw cron --help`,
+      // `openclaw cron list`, and similar commands. Returning undefined here
+      // lets callers degrade gracefully — they already null-check the result
+      // of this function (see `getLoadedChannelPluginForRead` and friends).
+      // We intentionally don't populate the cache on this path: the Map is
+      // typed as `Map<ChannelId, ChannelPlugin>` (no negative sentinel), so
+      // we just let a subsequent lookup retry the load.
+      return undefined;
+    }
     const normalizedPlugin = {
       ...plugin,
       meta: normalizeChannelMeta({
