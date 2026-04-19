@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -333,6 +334,10 @@ describe("local embedding normalization", () => {
     vi.resetModules();
     vi.unstubAllGlobals();
     vi.doUnmock("./node-llama.js");
+  });
+
+  it("uses bge-m3 Q8_0 as the default local embedding model", () => {
+    expect(DEFAULT_LOCAL_MODEL).toBe("hf:ggml-org/bge-m3-Q8_0-GGUF/bge-m3-q8_0.gguf");
   });
 
   it("normalizes local embeddings to magnitude ~1.0", async () => {
