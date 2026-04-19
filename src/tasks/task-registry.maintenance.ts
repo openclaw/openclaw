@@ -29,6 +29,21 @@ const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
+ * When true, lost-detection is disabled in the maintenance sweep — minions
+ * handleStalled/handleTimeouts owns that responsibility via lock-heartbeat.
+ * Retention cleanup and cleanup-after stamping remain active.
+ */
+let minionsOwnLostDetection = false;
+
+export function setMinionsOwnLostDetection(enabled: boolean): void {
+  minionsOwnLostDetection = enabled;
+}
+
+export function getMinionsOwnLostDetection(): boolean {
+  return minionsOwnLostDetection;
+}
+
+/**
  * Number of tasks to process before yielding to the event loop.
  * Keeps the main thread responsive during large sweeps.
  */
@@ -257,7 +272,7 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let cleanupStamped = 0;
   let pruned = 0;
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
-    if (shouldMarkLost(task, now)) {
+    if (!minionsOwnLostDetection && shouldMarkLost(task, now)) {
       reconciled += 1;
       continue;
     }
@@ -305,7 +320,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     if (!current) {
       continue;
     }
-    if (shouldMarkLost(current, now)) {
+    if (!minionsOwnLostDetection && shouldMarkLost(current, now)) {
       const next = markTaskLost(current, now);
       if (next.status === "lost") {
         reconciled += 1;

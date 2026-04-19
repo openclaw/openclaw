@@ -345,6 +345,39 @@ export function createSessionsSpawnTool(
         },
       );
 
+      // Track the spawned subagent in minions for crash recovery.
+      // Best-effort: if minions is unavailable, the spawn already succeeded.
+      if (result.status !== "error") {
+        try {
+          const { resolveDurabilityMode } = await import("../../minions/durability-config.js");
+          if (resolveDurabilityMode() === "minions") {
+            const { MinionQueue } = await import("../../minions/queue.js");
+            const { MinionStore } = await import("../../minions/store.js");
+            const store = MinionStore.openDefault();
+            const minionQueue = new MinionQueue(store);
+            minionQueue.add("subagent.spawn", {
+              task,
+              childSessionKey: result.childSessionKey,
+              runId: result.runId,
+              label: label || undefined,
+              agentId: requestedAgentId,
+              model: modelOverride,
+              thinking: thinkingOverrideRaw,
+              runTimeoutSeconds,
+              cleanup,
+              mode,
+              lightContext,
+              requesterSessionKey: opts?.agentSessionKey,
+            }, {
+              idempotencyKey: result.runId ? `spawn:${result.runId}` : undefined,
+              timeoutMs: runTimeoutSeconds ? runTimeoutSeconds * 1000 : undefined,
+            });
+          }
+        } catch {
+          // Best-effort: minion tracking failure doesn't fail the spawn.
+        }
+      }
+
       return jsonResult(result);
     },
   };

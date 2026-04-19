@@ -19,6 +19,7 @@ import {
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
+import { syncTaskDeleteToMinions, syncTaskToMinions } from "./task-minion-sync.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
@@ -221,32 +222,30 @@ function persistTaskUpsert(task: TaskRecord) {
       task,
       ...(deliveryState ? { deliveryState } : {}),
     });
-    return;
-  }
-  if (store.upsertTask) {
+  } else if (store.upsertTask) {
     store.upsertTask(task);
-    return;
+  } else {
+    store.saveSnapshot({
+      tasks,
+      deliveryStates: taskDeliveryStates,
+    });
   }
-  store.saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
-  });
+  syncTaskToMinions(task);
 }
 
 function persistTaskDelete(taskId: string) {
   const store = getTaskRegistryStore();
   if (store.deleteTaskWithDeliveryState) {
     store.deleteTaskWithDeliveryState(taskId);
-    return;
-  }
-  if (store.deleteTask) {
+  } else if (store.deleteTask) {
     store.deleteTask(taskId);
-    return;
+  } else {
+    store.saveSnapshot({
+      tasks,
+      deliveryStates: taskDeliveryStates,
+    });
   }
-  store.saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
-  });
+  syncTaskDeleteToMinions(taskId);
 }
 
 function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {
