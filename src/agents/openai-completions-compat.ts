@@ -77,7 +77,7 @@ export function resolveOpenAICompletionsCompatDefaults(
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
-      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
+      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat || endpointClass === "local"),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
