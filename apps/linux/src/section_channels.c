@@ -243,12 +243,10 @@ static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpo
     
     /* TRUE deep copy: serialize stored config and re-parse to get isolated mutable tree.
      * session->full_config_obj must remain unchanged in memory during save preparation. */
-    g_autofree gchar *stored_config_json = json_to_string(
-        json_node_new(JSON_NODE_OBJECT), FALSE);
+    g_autofree gchar *stored_config_json = NULL;
     {
         JsonNode *temp_node = json_node_new(JSON_NODE_OBJECT);
         json_node_set_object(temp_node, session->full_config_obj);
-        g_free(stored_config_json);
         stored_config_json = json_to_string(temp_node, FALSE);
         json_node_unref(temp_node);
     }
