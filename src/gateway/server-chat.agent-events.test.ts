@@ -1398,7 +1398,13 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("suppresses heartbeat ack-like chat output when showOk is false", () => {
+  it("suppresses heartbeat chat output when showAlerts is false", () => {
+    vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: true,
+    });
+
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({
       now: 2_000,
     });
@@ -1432,9 +1438,14 @@ describe("agent event handler", () => {
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
   });
 
-  it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {
+  it("keeps heartbeat alert text in final chat output when showAlerts is true and remainder exceeds ackMaxChars", () => {
     vi.mocked(loadConfig).mockReturnValue({
       agents: { defaults: { heartbeat: { ackMaxChars: 10 } } },
+    });
+    vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
+      showOk: false,
+      showAlerts: true,
+      useIndicator: true,
     });
 
     const { broadcast, chatRunState, handler } = createHarness({ now: 3_000 });
@@ -1460,11 +1471,21 @@ describe("agent event handler", () => {
 
     emitLifecycleEnd(handler, "run-heartbeat-alert");
 
-    const payload = expectSingleFinalChatPayload(broadcast) as {
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls.length).toBeGreaterThanOrEqual(1);
+
+    const finalCall = [...chatCalls].toReversed().find(([, payload]) => {
+      return (payload as { state?: string }).state === "final";
+    });
+    expect(finalCall).toBeDefined();
+
+    const payload = finalCall?.[1] as {
+      state?: string;
       message?: { content?: Array<{ text?: string }> };
     };
+    expect(payload.state).toBe("final");
     expect(payload.message?.content?.[0]?.text).toBe(
-      "Disk usage crossed 95 percent on /data and needs cleanup now.",
+      "HEARTBEAT_OK Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
 });
