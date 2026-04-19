@@ -1,6 +1,12 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const exportHtmlDir = path.join(__dirname, "export-html");
 
 const hoisted = vi.hoisted(() => ({
   resolveDefaultSessionStorePathMock: vi.fn(() => "/tmp/target-store/sessions.json"),
@@ -197,24 +203,15 @@ describe("buildExportSessionReply", () => {
   it("inlines export scripts instead of leaving raw placeholder tokens", async () => {
     const { buildExportSessionReply } = await import("./commands-export-session.js");
     const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const templateHtml = actualFs.readFileSync(
-      "/Users/m1/openclaw/src/auto-reply/reply/export-html/template.html",
-      "utf8",
-    );
-    const templateCss = actualFs.readFileSync(
-      "/Users/m1/openclaw/src/auto-reply/reply/export-html/template.css",
-      "utf8",
-    );
-    const templateJs = actualFs.readFileSync(
-      "/Users/m1/openclaw/src/auto-reply/reply/export-html/template.js",
-      "utf8",
-    );
+    const templateHtml = actualFs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
+    const templateCss = actualFs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
+    const templateJs = actualFs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
     const markedJs = actualFs.readFileSync(
-      "/Users/m1/openclaw/src/auto-reply/reply/export-html/vendor/marked.min.js",
+      path.join(exportHtmlDir, "vendor", "marked.min.js"),
       "utf8",
     );
     const highlightJs = actualFs.readFileSync(
-      "/Users/m1/openclaw/src/auto-reply/reply/export-html/vendor/highlight.min.js",
+      path.join(exportHtmlDir, "vendor", "highlight.min.js"),
       "utf8",
     );
 
