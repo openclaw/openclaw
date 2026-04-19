@@ -4,6 +4,11 @@
 id: medium-game-plan-pi-harness
 title: Medium game plan PI harness
 surface: workspace
+coverage:
+  primary:
+    - workspace.planning
+  secondary:
+    - agents.pi-harness
 objective: Verify GPT-5.4 can use the PI harness to plan and build a medium-complex self-contained browser game.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary model is openai/gpt-5.4.

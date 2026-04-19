@@ -4,6 +4,11 @@
 id: character-vibes-gollum
 title: "Late-night deploy helper chat"
 surface: character
+coverage:
+  primary:
+    - character.persona
+  secondary:
+    - workspace.artifacts
 objective: Capture a natural multi-turn character conversation with real workspace help so another model can later grade naturalness, vibe, and funniness from the raw transcript.
 successCriteria:
   - Agent gets a natural multi-turn conversation, and any missed replies stay visible in the transcript instead of aborting capture.

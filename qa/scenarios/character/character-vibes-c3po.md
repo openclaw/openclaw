@@ -4,6 +4,11 @@
 id: character-vibes-c3po
 title: "Nervous release protocol chat"
 surface: character
+coverage:
+  primary:
+    - character.persona
+  secondary:
+    - workspace.artifacts
 objective: Capture a natural multi-turn C-3PO-flavored character conversation with real workspace help so another model can later grade naturalness, vibe, and funniness from the raw transcript.
 successCriteria:
   - Agent gets a natural multi-turn conversation, and any missed replies stay visible in the transcript instead of aborting capture.

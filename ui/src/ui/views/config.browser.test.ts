@@ -361,43 +361,46 @@ describe("config view", () => {
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
-  it("renders structured SecretRef values as read-only text inputs without stringifying", () => {
+  it("renders structured SecretRef values without stringifying", () => {
     const onFormPatch = vi.fn();
-    const { container } = renderConfigView({
-      schema: {
-        type: "object",
-        properties: {
-          channels: {
-            type: "object",
-            properties: {
-              discord: {
-                type: "object",
-                properties: {
-                  token: { type: "string" },
-                },
+    const secretRefSchema = {
+      type: "object" as const,
+      properties: {
+        channels: {
+          type: "object" as const,
+          properties: {
+            discord: {
+              type: "object" as const,
+              properties: {
+                token: { type: "string" as const },
               },
             },
           },
         },
       },
+    };
+    const secretRefValue = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
+        },
+      },
+    };
+    const secretRefOriginalValue = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    };
+    const { container } = renderConfigView({
+      schema: secretRefSchema,
       uiHints: {
         "channels.discord.token": { sensitive: true },
       },
       formMode: "form",
-      formValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
-          },
-        },
-      },
-      originalValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      },
+      formValue: secretRefValue,
+      originalValue: secretRefOriginalValue,
       onFormPatch,
     });
 
@@ -415,50 +418,27 @@ describe("config view", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onFormPatch).not.toHaveBeenCalled();
-  });
 
-  it("uses a file-edit placeholder for structured SecretRefs when raw mode is unavailable", () => {
-    const { container } = renderConfigView({
-      rawAvailable: false,
-      formMode: "raw",
-      schema: {
-        type: "object",
-        properties: {
-          channels: {
-            type: "object",
-            properties: {
-              discord: {
-                type: "object",
-                properties: {
-                  token: { type: "string" },
-                },
-              },
-            },
-          },
+    render(
+      renderConfig({
+        ...baseProps(),
+        rawAvailable: false,
+        formMode: "raw",
+        schema: secretRefSchema,
+        uiHints: {
+          "channels.discord.token": { sensitive: true },
         },
-      },
-      uiHints: {
-        "channels.discord.token": { sensitive: true },
-      },
-      formValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
-          },
-        },
-      },
-      originalValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      },
-    });
+        formValue: secretRefValue,
+        originalValue: secretRefOriginalValue,
+      }),
+      container,
+    );
 
-    const input = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(input).not.toBeNull();
-    expect(input?.placeholder).toBe("Structured value (SecretRef) - edit the config file directly");
+    const rawUnavailableInput = container.querySelector<HTMLInputElement>(".cfg-input");
+    expect(rawUnavailableInput).not.toBeNull();
+    expect(rawUnavailableInput?.placeholder).toBe(
+      "Structured value (SecretRef) - edit the config file directly",
+    );
   });
 
   it("keeps malformed non-SecretRef object values editable when raw mode is unavailable", () => {

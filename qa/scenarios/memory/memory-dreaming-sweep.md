@@ -4,6 +4,9 @@
 id: memory-dreaming-sweep
 title: Memory dreaming sweep
 surface: memory
+coverage:
+  primary:
+    - memory.dreaming
 objective: Verify enabling dreaming creates the managed sweep, stages light and REM artifacts, and consolidates repeated recall signals into durable memory.
 successCriteria:
   - Dreaming can be enabled and doctor.memory.status reports the managed sweep cron.

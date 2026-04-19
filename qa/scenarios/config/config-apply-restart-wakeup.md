@@ -4,6 +4,11 @@
 id: config-apply-restart-wakeup
 title: Config apply restart wake-up
 surface: config
+coverage:
+  primary:
+    - config.restart-apply
+  secondary:
+    - runtime.gateway-restart
 objective: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
 successCriteria:
   - config.apply schedules a restart-required change.

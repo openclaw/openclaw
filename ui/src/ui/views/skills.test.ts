@@ -98,12 +98,14 @@ describe("renderSkills", () => {
     }
   });
 
-  it("opens the skill detail dialog as a modal and routes close events", async () => {
+  it("opens detail dialogs and routes ClawHub actions", async () => {
     const container = document.createElement("div");
     const onDetailClose = vi.fn();
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
+    const onClawHubDetailOpen = vi.fn();
+    const onClawHubInstall = vi.fn();
 
     installDialogMethod("showModal", showModal);
     installDialogMethod("close", function (this: HTMLDialogElement) {
@@ -128,12 +130,6 @@ describe("renderSkills", () => {
     container.querySelector<HTMLButtonElement>(".md-preview-dialog__header .btn")?.click();
 
     expect(onDetailClose).toHaveBeenCalledTimes(1);
-  });
-
-  it("renders ClawHub search results and routes detail/install actions", async () => {
-    const container = document.createElement("div");
-    const onClawHubDetailOpen = vi.fn();
-    const onClawHubInstall = vi.fn();
 
     render(
       renderSkills(
@@ -156,7 +152,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const text = normalizeText(container);
+    let text = normalizeText(container);
     expect(text).toContain("GitHub");
     expect(text).toContain("GitHub integration for OpenClaw");
     expect(text).toContain("v1.2.3");
@@ -170,15 +166,9 @@ describe("renderSkills", () => {
     expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
-  });
 
-  it("opens the ClawHub detail dialog and renders install feedback", async () => {
-    const container = document.createElement("div");
-    const showModal = vi.fn(function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
-    const onClawHubInstall = vi.fn();
-    installDialogMethod("showModal", showModal);
+    onClawHubInstall.mockClear();
+    showModal.mockClear();
 
     render(
       renderSkills(
@@ -215,7 +205,7 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    const text = normalizeText(container);
+    text = normalizeText(container);
     expect(text).toContain("rate limited");
     expect(text).toContain("Installed github");
     expect(text).toContain("By OpenClaw (@openclaw)");

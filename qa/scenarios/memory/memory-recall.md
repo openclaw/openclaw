@@ -35,6 +35,9 @@
 id: memory-recall
 title: Memory recall after context switch
 surface: memory
+coverage:
+  primary:
+    - memory.recall
 objective: Verify the agent can store a fact, switch topics, then recall the fact accurately later.
 successCriteria:
   - Agent acknowledges the seeded fact.

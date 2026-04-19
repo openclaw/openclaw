@@ -4,6 +4,9 @@
 id: subagent-handoff
 title: Subagent handoff
 surface: subagents
+coverage:
+  primary:
+    - agents.subagents
 objective: Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.
 successCriteria:
   - Agent launches a bounded subagent task.

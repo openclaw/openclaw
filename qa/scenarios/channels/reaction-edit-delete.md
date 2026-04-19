@@ -4,6 +4,11 @@
 id: reaction-edit-delete
 title: Reaction, edit, delete lifecycle
 surface: message-actions
+coverage:
+  primary:
+    - channels.message-actions
+  secondary:
+    - channels.qa-channel
 objective: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
 successCriteria:
   - Agent adds at least one reaction.

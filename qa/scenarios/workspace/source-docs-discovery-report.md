@@ -4,6 +4,11 @@
 id: source-docs-discovery-report
 title: Source and docs discovery report
 surface: discovery
+coverage:
+  primary:
+    - workspace.repo-discovery
+  secondary:
+    - docs.discovery
 objective: Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.
 successCriteria:
   - Agent reads docs and source before proposing more tests.

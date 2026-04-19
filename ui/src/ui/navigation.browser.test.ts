@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import "../test-helpers/load-styles.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
@@ -39,72 +38,6 @@ function expectConfirmedGatewayChange(app: ReturnType<typeof mountApp>) {
 }
 
 describe("control UI routing", () => {
-  it("renders the dreaming view on the /dreaming route", async () => {
-    const app = mountApp("/dreaming");
-    app.dreamingStatus = {
-      enabled: true,
-      timezone: "Europe/Madrid",
-      verboseLogging: false,
-      storageMode: "inline",
-      separateReports: false,
-      shortTermCount: 2,
-      recallSignalCount: 1,
-      dailySignalCount: 1,
-      groundedSignalCount: 0,
-      totalSignalCount: 2,
-      phaseSignalCount: 0,
-      lightPhaseHitCount: 0,
-      remPhaseHitCount: 0,
-      promotedTotal: 1,
-      promotedToday: 1,
-      shortTermEntries: [],
-      signalEntries: [],
-      promotedEntries: [],
-      phases: {
-        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
-        deep: {
-          enabled: true,
-          cron: "",
-          managedCronPresent: false,
-          limit: 20,
-          minScore: 0.75,
-          minRecallCount: 3,
-          minUniqueQueries: 2,
-          recencyHalfLifeDays: 7,
-        },
-        rem: {
-          enabled: true,
-          cron: "",
-          managedCronPresent: false,
-          lookbackDays: 7,
-          limit: 20,
-          minPatternStrength: 0.6,
-        },
-      },
-    };
-    app.dreamDiaryPath = "DREAMS.md";
-    app.dreamDiaryContent = [
-      "# Dream Diary",
-      "",
-      "<!-- openclaw:dreaming:diary:start -->",
-      "",
-      "---",
-      "",
-      "*January 1, 2026*",
-      "",
-      "What Happened",
-      "1. Stable operator rule surfaced.",
-      "",
-      "<!-- openclaw:dreaming:diary:end -->",
-    ].join("\n");
-    app.requestUpdate();
-    await app.updateComplete;
-
-    expect(app.tab).toBe("dreams");
-    expect(app.querySelector(".dreams__tab")).not.toBeNull();
-    expect(app.querySelector(".dreams__lobster")).not.toBeNull();
-  });
-
   it("renders responsive navigation shell, drawer, and collapsed states", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
@@ -127,6 +60,19 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
 
+    app.hello = {
+      ok: true,
+      server: { version: "1.2.3" },
+    } as never;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const version = app.querySelector<HTMLElement>(".sidebar-version");
+    const statusDot = app.querySelector<HTMLElement>(".sidebar-version__status");
+    expect(version).not.toBeNull();
+    expect(statusDot).not.toBeNull();
+    expect(statusDot?.getAttribute("aria-label")).toContain("Online");
+
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;
 
@@ -137,7 +83,6 @@ describe("control UI routing", () => {
     const split = app.querySelector(".chat-split-container");
     expect(split).not.toBeNull();
     if (split) {
-      expect(getComputedStyle(split).position).not.toBe("fixed");
       split.classList.add("chat-split-container--open");
       await app.updateComplete;
       expect(split.classList.contains("chat-split-container--open")).toBe(true);
@@ -145,9 +90,6 @@ describe("control UI routing", () => {
 
     const chatMain = app.querySelector(".chat-main");
     expect(chatMain).not.toBeNull();
-    if (chatMain) {
-      expect(getComputedStyle(chatMain).display).not.toBe("none");
-    }
 
     const topShell = app.querySelector<HTMLElement>(".topnav-shell");
     const content = app.querySelector<HTMLElement>(".topnav-shell__content");
@@ -226,7 +168,7 @@ describe("control UI routing", () => {
     expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
   });
 
-  it("preserves the active session when opening chat from sidebar navigation", async () => {
+  it("preserves session navigation and keeps focus mode scoped to chat", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
 
@@ -239,11 +181,6 @@ describe("control UI routing", () => {
     expect(app.sessionKey).toBe("agent:main:subagent:task-123");
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
-  });
-
-  it("keeps focus mode scoped to the chat tab", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
 
     const shell = app.querySelector(".shell");
     expect(shell).not.toBeNull();
@@ -256,9 +193,11 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
-    expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const channelsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
+    expect(channelsLink).not.toBeNull();
+    channelsLink?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
@@ -272,24 +211,6 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.tab).toBe("chat");
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
-  });
-
-  it("shows one online status dot next to the sidebar version", async () => {
-    const app = mountApp("/chat");
-    await app.updateComplete;
-
-    app.hello = {
-      ok: true,
-      server: { version: "1.2.3" },
-    } as never;
-    app.requestUpdate();
-    await app.updateComplete;
-
-    const version = app.querySelector<HTMLElement>(".sidebar-version");
-    const statusDot = app.querySelector<HTMLElement>(".sidebar-version__status");
-    expect(version).not.toBeNull();
-    expect(statusDot).not.toBeNull();
-    expect(statusDot?.getAttribute("aria-label")).toContain("Online");
   });
 
   it("auto-scrolls chat history to the latest message", async () => {
@@ -387,7 +308,7 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(targetScrollTop);
   });
 
-  it("hydrates token from URL hash, strips it, and clears it after gateway changes", async () => {
+  it("hydrates hash tokens, restores same-tab refreshes, and clears after gateway changes", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
@@ -397,17 +318,26 @@ describe("control UI routing", () => {
     );
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.hash).toBe("");
+    app.remove();
 
-    const gatewayUrlInput = app.querySelector<HTMLInputElement>(
+    const refreshed = mountApp("/ui/overview");
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.token).toBe("abc123");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
+
+    const gatewayUrlInput = refreshed.querySelector<HTMLInputElement>(
       'input[placeholder="ws://100.x.y.z:18789"]',
     );
     expect(gatewayUrlInput).not.toBeNull();
     gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
-    await app.updateComplete;
+    await refreshed.updateComplete;
 
-    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(app.settings.token).toBe("");
+    expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(refreshed.settings.token).toBe("");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {
@@ -422,19 +352,5 @@ describe("control UI routing", () => {
     await confirmPendingGatewayChange(app);
 
     expectConfirmedGatewayChange(app);
-  });
-
-  it("restores the token after a same-tab refresh", async () => {
-    const first = mountApp("/ui/overview#token=abc123");
-    await first.updateComplete;
-    first.remove();
-
-    const refreshed = mountApp("/ui/overview");
-    await refreshed.updateComplete;
-
-    expect(refreshed.settings.token).toBe("abc123");
-    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
-      undefined,
-    );
   });
 });

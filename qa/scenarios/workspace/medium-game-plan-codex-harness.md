@@ -4,6 +4,11 @@
 id: medium-game-plan-codex-harness
 title: Medium game plan Codex harness
 surface: workspace
+coverage:
+  primary:
+    - workspace.planning
+  secondary:
+    - models.codex-cli
 objective: Verify the Codex app-server harness can plan and build a medium-complex self-contained browser game.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary model is codex/gpt-5.4.

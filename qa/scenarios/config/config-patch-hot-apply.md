@@ -4,6 +4,11 @@
 id: config-patch-hot-apply
 title: Config patch skill disable
 surface: config
+coverage:
+  primary:
+    - config.hot-apply
+  secondary:
+    - plugins.skills
 objective: Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.
 successCriteria:
   - config.patch succeeds for the skill toggle change.

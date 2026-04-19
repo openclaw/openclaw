@@ -4,6 +4,11 @@
 id: bundled-plugin-skill-runtime
 title: Bundled plugin skill runtime
 surface: skills
+coverage:
+  primary:
+    - plugins.skills
+  secondary:
+    - plugins.runtime
 objective: Verify packaged bundled plugin skills load from dist-runtime instead of being skipped by path-containment checks.
 successCriteria:
   - The runtime-packaged bundled plugin tree is used as OPENCLAW_BUNDLED_PLUGINS_DIR.

@@ -4,6 +4,11 @@
 id: anthropic-opus-setup-token-smoke
 title: Anthropic Opus setup-token smoke
 surface: model-provider
+coverage:
+  primary:
+    - models.provider-auth
+  secondary:
+    - models.anthropic
 objective: Verify the regular Anthropic Opus lane can complete a quick chat turn using setup-token auth.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is anthropic.

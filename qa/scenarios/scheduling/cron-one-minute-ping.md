@@ -4,6 +4,11 @@
 id: cron-one-minute-ping
 title: Cron one-minute ping
 surface: cron
+coverage:
+  primary:
+    - scheduling.cron
+  secondary:
+    - channels.qa-channel
 objective: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.
 successCriteria:
   - Agent schedules a cron reminder roughly one minute ahead.

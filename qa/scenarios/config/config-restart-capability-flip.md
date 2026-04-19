@@ -4,6 +4,11 @@
 id: config-restart-capability-flip
 title: Config restart capability flip
 surface: config
+coverage:
+  primary:
+    - config.restart-apply
+  secondary:
+    - plugins.capabilities
 objective: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
 successCriteria:
   - Capability is absent before the restart-triggering patch.

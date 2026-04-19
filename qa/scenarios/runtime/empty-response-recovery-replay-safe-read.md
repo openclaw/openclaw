@@ -4,6 +4,11 @@
 id: empty-response-recovery-replay-safe-read
 title: Empty-response recovery after replay-safe read
 surface: runtime
+coverage:
+  primary:
+    - runtime.empty-response-recovery
+  secondary:
+    - runtime.retry-policy
 objective: Verify an empty visible GPT turn after a replay-safe read auto-continues into a visible answer.
 successCriteria:
   - Scenario is mock-openai only so live lanes do not pick it up implicitly.
