@@ -255,7 +255,6 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
                     mimeType: nil,
                     fileName: nil,
                     content: nil,
-                    contentCodingKey: nil,
                     id: nil,
                     name: nil,
                     arguments: nil),

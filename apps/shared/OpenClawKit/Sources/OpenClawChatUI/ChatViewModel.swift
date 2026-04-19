@@ -513,7 +513,6 @@ public final class OpenClawChatViewModel {
                 mimeType: nil,
                 fileName: nil,
                 content: nil,
-                contentCodingKey: nil,
                 id: nil,
                 name: nil,
                 arguments: nil),
