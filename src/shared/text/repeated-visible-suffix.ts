@@ -1,6 +1,8 @@
 const STRUCTURED_REPEAT_HINT_RE = /[\s\d_\-~"'.,:;!?()[\]{}/\\]/;
 const MIN_STRUCTURED_REPEAT_UNIT_LENGTH = 8;
 const VISIBLE_SUFFIX_BOUNDARY_RE = /[.!?:;)\]}>`'"]$/;
+const INTERNAL_PREAMBLE_HINT_RE =
+  /\b(?:the user|instruction|output content|reply with|reply to|final response|general instruction|i will|i must|internal planning|plan:)\b/i;
 
 function looksStructuredRepeatedUnit(unit: string): boolean {
   return unit.length >= MIN_STRUCTURED_REPEAT_UNIT_LENGTH || STRUCTURED_REPEAT_HINT_RE.test(unit);
@@ -17,6 +19,17 @@ function endsAtVisibleSuffixBoundary(prefix: string): boolean {
   }
 
   return VISIBLE_SUFFIX_BOUNDARY_RE.test(trimmedPrefixEnd);
+}
+
+function looksLikeInternalPreamble(prefix: string): boolean {
+  const trimmed = prefix.trim();
+  if (trimmed.length < 120 || !INTERNAL_PREAMBLE_HINT_RE.test(trimmed)) {
+    return false;
+  }
+
+  const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const sentenceCount = (trimmed.match(/[.!?](?:\s|$)/g) ?? []).length;
+  return lines.length >= 2 || sentenceCount >= 3;
 }
 
 export function collapseStructuredRepeatedPrefixPattern(text: string): string {
@@ -83,7 +96,12 @@ export function extractStructuredRepeatedVisibleSuffix(text: string): string {
         start -= unitLength;
         fullRepeats += 1;
       }
-      if (fullRepeats < 2 || !endsAtVisibleSuffixBoundary(text.slice(0, start))) {
+      const prefix = text.slice(0, start);
+      if (
+        fullRepeats < 2 ||
+        !endsAtVisibleSuffixBoundary(prefix) ||
+        !looksLikeInternalPreamble(prefix)
+      ) {
         continue;
       }
 

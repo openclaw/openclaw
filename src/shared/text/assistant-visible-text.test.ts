@@ -558,6 +558,15 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("visiblefix5-1776638721");
   });
 
+  it("does not collapse repeated structured text in ordinary prose without scaffolding", () => {
+    expect(sanitizeAssistantVisibleText("Here is the pattern: abc-123abc-123")).toBe(
+      "Here is the pattern: abc-123abc-123",
+    );
+    expect(sanitizeAssistantVisibleText("Repeat twice: 2024-04-202024-04-20")).toBe(
+      "Repeat twice: 2024-04-202024-04-20",
+    );
+  });
+
   it("does not collapse short unstructured repeated prose after a control delimiter", () => {
     const input = "Internal planning<channel|>hahaha";
 
