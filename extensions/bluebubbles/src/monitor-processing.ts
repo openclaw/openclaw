@@ -14,6 +14,7 @@ import {
   fetchBlueBubblesMessageAttachments,
 } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
@@ -79,7 +80,6 @@ import {
   isAllowedBlueBubblesSender,
   normalizeBlueBubblesHandle,
 } from "./targets.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
@@ -108,10 +108,6 @@ function normalizeSnippet(value: string): string {
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
-
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined) {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
-}
 
 function extractBlueBubblesChatGuid(chat: BlueBubblesChatRecord): string | undefined {
   const candidates = [chat.chatGuid, chat.guid, chat.chat_guid];
@@ -161,25 +157,22 @@ async function queryBlueBubblesChats(params: {
   limit: number;
   allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesChatRecord[]> {
-  const url = buildBlueBubblesApiUrl({
+  const client = createBlueBubblesClientFromParts({
     baseUrl: params.baseUrl,
-    path: "/api/v1/chat/query",
     password: params.password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs,
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        limit: params.limit,
-        offset: params.offset,
-        with: ["participants"],
-      }),
+  const res = await client.request({
+    method: "POST",
+    path: "/api/v1/chat/query",
+    body: {
+      limit: params.limit,
+      offset: params.offset,
+      with: ["participants"],
     },
-    params.timeoutMs,
-    blueBubblesPolicy(params.allowPrivateNetwork),
-  );
+    timeoutMs: params.timeoutMs,
+  });
   if (!res.ok) {
     return [];
   }
