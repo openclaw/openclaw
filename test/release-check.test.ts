@@ -322,7 +322,6 @@ describe("collectForbiddenPackPaths", () => {
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
-      "dist/extensions/qa-lab/runtime-api.js",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
@@ -346,6 +345,25 @@ describe("collectForbiddenPackPaths", () => {
       expect(collectForbiddenPackContentPaths(["dist/entry.js", "CHANGELOG.md"], tempRoot)).toEqual(
         ["dist/entry.js"],
       );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-inventory-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+        JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),
+        "utf8",
+      );
+
+      expect(
+        collectForbiddenPackContentPaths([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], tempRoot),
+      ).toEqual([]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -392,6 +410,8 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,

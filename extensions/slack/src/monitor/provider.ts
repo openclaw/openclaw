@@ -66,7 +66,10 @@ type SlackSocketShutdownClient = {
 };
 type Constructor = abstract new (...args: never[]) => unknown;
 
-function isConstructorFunction<T extends Constructor>(value: unknown): value is T {
+function isConstructorFunction<
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Constructor guard preserves the requested concrete Slack constructor type.
+  T extends Constructor,
+>(value: unknown): value is T {
   return typeof value === "function";
 }
 
@@ -511,7 +514,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             summarizeMapping("slack channels", mapping, unresolved, runtime);
           }
         } catch (err) {
-          runtime.log?.(`slack channel resolve failed; using config entries. ${String(err)}`);
+          runtime.log?.(
+            `slack channel resolve failed; using config entries. ${formatUnknownError(err)}`,
+          );
         }
       }
 
@@ -532,7 +537,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           ctx.allowFrom = normalizeAllowList(allowFrom);
           summarizeMapping("slack users", mapping, unresolved, runtime);
         } catch (err) {
-          runtime.log?.(`slack user resolve failed; using config entries. ${String(err)}`);
+          runtime.log?.(
+            `slack user resolve failed; using config entries. ${formatUnknownError(err)}`,
+          );
         }
       }
 
@@ -564,7 +571,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             summarizeMapping("slack channel users", mapping, unresolved, runtime);
           } catch (err) {
             runtime.log?.(
-              `slack channel user resolve failed; using config entries. ${String(err)}`,
+              `slack channel user resolve failed; using config entries. ${formatUnknownError(err)}`,
             );
           }
         }
