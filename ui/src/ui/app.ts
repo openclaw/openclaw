@@ -92,6 +92,7 @@ import type {
   HealthSummary,
   LogEntry,
   LogLevel,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
@@ -250,6 +251,7 @@ export class OpenClawApp extends LitElement {
   @state() wikiMemoryPalaceError: string | null = null;
   @state() wikiMemoryPalace: WikiMemoryPalace | null = null;
   @state() configFormDirty = false;
+  @state() configSettingsMode: "quick" | "advanced" = "quick";
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
@@ -395,6 +397,11 @@ export class OpenClawApp extends LitElement {
   usageQueryDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
+  @state() cronQuickCreateOpen = false;
+  @state() cronQuickCreateStep: import("./views/cron-quick-create.ts").CronQuickCreateStep = "what";
+  @state() cronQuickCreateDraft:
+    | import("./views/cron-quick-create.ts").CronQuickCreateDraft
+    | null = null;
   @state() cronJobsLoadingMore = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
@@ -465,6 +472,10 @@ export class OpenClawApp extends LitElement {
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
+
+  @state() modelAuthStatusLoading = false;
+  @state() modelAuthStatusResult: ModelAuthStatusResult | null = null;
+  @state() modelAuthStatusError: string | null = null;
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
@@ -657,8 +668,8 @@ export class OpenClawApp extends LitElement {
     return [active, ...rest];
   }
 
-  async loadOverview() {
-    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  async loadOverview(opts?: { refresh?: boolean }) {
+    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0], opts);
   }
 
   async loadCron() {
