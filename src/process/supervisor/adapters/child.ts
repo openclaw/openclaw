@@ -11,7 +11,7 @@ const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx", "claude"],
+    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
   });
 }
 

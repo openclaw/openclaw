@@ -21,6 +21,17 @@ export function resolveWindowsCommandShim(params: {
   return params.command;
 }
 
+function findCmdShimOnPath(name: string, pathEnv: string): string | null {
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export function resolveWindowsCmdShimArgv(
   argv: readonly string[],
   options?: { platform?: NodeJS.Platform; pathEnv?: string },
@@ -29,20 +40,25 @@ export function resolveWindowsCmdShimArgv(
   if ((options?.platform ?? process.platform) !== "win32") {
     return result;
   }
-  let shimPath = result[0];
-  if (!shimPath || !shimPath.toLowerCase().endsWith(".cmd")) {
-    return result;
-  }
-  if (!shimPath.includes("\\") && !shimPath.includes("/")) {
-    const pathEnv = options?.pathEnv ?? process.env.PATH ?? "";
-    for (const dir of pathEnv.split(path.delimiter)) {
-      if (!dir) continue;
-      const candidate = path.join(dir, shimPath);
-      if (fs.existsSync(candidate)) {
-        shimPath = candidate;
-        break;
-      }
+  const first = result[0];
+  if (!first) return result;
+  const hasSeparator = first.includes("\\") || first.includes("/");
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(first));
+  let shimPath: string;
+  if (ext === ".cmd") {
+    if (hasSeparator) {
+      shimPath = first;
+    } else {
+      const resolved = findCmdShimOnPath(first, options?.pathEnv ?? process.env.PATH ?? "");
+      if (!resolved) return result;
+      shimPath = resolved;
     }
+  } else if (!ext && !hasSeparator) {
+    const resolved = findCmdShimOnPath(`${first}.cmd`, options?.pathEnv ?? process.env.PATH ?? "");
+    if (!resolved) return result;
+    shimPath = resolved;
+  } else {
+    return result;
   }
   let shimContent: string;
   try {
@@ -50,7 +66,7 @@ export function resolveWindowsCmdShimArgv(
   } catch {
     return result;
   }
-  const match = shimContent.match(/"%(?:~?dp0)%\\?([^"]+\.(?:exe|js))"/i);
+  const match = shimContent.match(/"%(?:~?dp0)%\\?([^"]+\.(?:exe|js))"\s+%\*/i);
   if (!match) {
     return result;
   }

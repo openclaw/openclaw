@@ -109,4 +109,71 @@ describe("resolveWindowsCmdShimArgv", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("resolves a bare name (no extension) via <name>.cmd on PATH", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const exePath = path.join(dir, "tool.exe");
+    const shimPath = path.join(dir, "tool.cmd");
+    fs.writeFileSync(exePath, "");
+    fs.writeFileSync(shimPath, `@echo off\r\nSET dp0=%~dp0\r\n"%dp0%tool.exe" %*\r\n`);
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual([exePath, "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a bare name unchanged when no <name>.cmd is on PATH", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual(["tool", "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a bare .cmd name unchanged when not found on PATH (no CWD fallthrough)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["definitely-not-on-path.cmd", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual(["definitely-not-on-path.cmd", "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches the real command line in shims that check for a local node.exe first", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-shim-"));
+    const jsPath = path.join(dir, "cli.js");
+    const shimPath = path.join(dir, "tool.cmd");
+    fs.writeFileSync(jsPath, "");
+    fs.writeFileSync(
+      shimPath,
+      `@echo off\r\nSET dp0=%~dp0\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n"%_prog%" "%dp0%cli.js" %*\r\n`,
+    );
+    try {
+      expect(
+        resolveWindowsCmdShimArgv(["tool", "--flag"], {
+          platform: "win32",
+          pathEnv: dir,
+        }),
+      ).toEqual([process.execPath, jsPath, "--flag"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
