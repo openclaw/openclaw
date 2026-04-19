@@ -238,6 +238,48 @@ describe("subagent registry lifecycle hardening", () => {
     );
   });
 
+  it("enriches registered-run outcomes with persisted timing before cleanup", async () => {
+    const persist = vi.fn();
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const entry = createRunEntry({
+      startedAt: 2_000,
+      expectsCompletionMessage: false,
+    });
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_250,
+        outcome: { status: "timeout" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    const enrichedOutcome = {
+      status: "timeout" as const,
+      startedAt: 2_000,
+      endedAt: 4_250,
+      elapsedMs: 2_250,
+    };
+    expect(entry.outcome).toEqual(enrichedOutcome);
+    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "timed_out",
+      }),
+    );
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startedAt: 2_000,
+        endedAt: 4_250,
+        outcome: enrichedOutcome,
+      }),
+    );
+    expect(persist).toHaveBeenCalled();
+  });
+
   it("does not wait for a completion reply when the run does not expect one", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,

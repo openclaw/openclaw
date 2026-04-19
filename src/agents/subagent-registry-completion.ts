@@ -24,9 +24,11 @@ export function runOutcomesEqual(
     return false;
   }
   if (a.status === "error" && b.status === "error") {
-    return (a.error ?? "") === (b.error ?? "");
+    if ((a.error ?? "") !== (b.error ?? "")) {
+      return false;
+    }
   }
-  return true;
+  return a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.elapsedMs === b.elapsedMs;
 }
 
 export function resolveLifecycleOutcomeFromRunOutcome(

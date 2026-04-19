@@ -9,6 +9,7 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
@@ -589,8 +590,12 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedAt = endedAt;
       mutated = true;
     }
-    if (!runOutcomesEqual(entry.outcome, completeParams.outcome)) {
-      entry.outcome = completeParams.outcome;
+    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
+      startedAt: entry.startedAt,
+      endedAt,
+    });
+    if (!runOutcomesEqual(entry.outcome, outcome)) {
+      entry.outcome = outcome;
       mutated = true;
     }
     if (entry.endedReason !== completeParams.reason) {
@@ -607,7 +612,7 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     safeFinalizeSubagentTaskRun({
       entry,
-      outcome: completeParams.outcome,
+      outcome,
     });
 
     try {

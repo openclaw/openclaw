@@ -63,6 +63,42 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
+function readFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function withSubagentOutcomeTiming(
+  outcome: SubagentRunOutcome,
+  timing: {
+    startedAt?: number;
+    endedAt?: number;
+  },
+): SubagentRunOutcome;
+export function withSubagentOutcomeTiming(
+  outcome: SubagentRunOutcome | undefined,
+  timing: {
+    startedAt?: number;
+    endedAt?: number;
+  },
+): SubagentRunOutcome | undefined {
+  if (!outcome) {
+    return undefined;
+  }
+  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
+  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
+  if (typeof startedAt === "number") {
+    nextTiming.startedAt = startedAt;
+  }
+  if (typeof endedAt === "number") {
+    nextTiming.endedAt = endedAt;
+  }
+  if (typeof startedAt === "number" && typeof endedAt === "number") {
+    nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
+  }
+  return { ...outcome, ...nextTiming };
+}
+
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
@@ -300,29 +336,21 @@ export function applySubagentWaitOutcome(params: {
     startedAt: params.startedAt,
     endedAt: params.endedAt,
   };
-  if (typeof params.wait?.startedAt === "number" && !next.startedAt) {
+  if (typeof params.wait?.startedAt === "number" && typeof next.startedAt !== "number") {
     next.startedAt = params.wait.startedAt;
   }
-  if (typeof params.wait?.endedAt === "number" && !next.endedAt) {
+  if (typeof params.wait?.endedAt === "number" && typeof next.endedAt !== "number") {
     next.endedAt = params.wait.endedAt;
-  }
-  const timing: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
-  if (typeof next.startedAt === "number") {
-    timing.startedAt = next.startedAt;
-  }
-  if (typeof next.endedAt === "number") {
-    timing.endedAt = next.endedAt;
-  }
-  if (typeof next.startedAt === "number" && typeof next.endedAt === "number") {
-    timing.elapsedMs = Math.max(0, next.endedAt - next.startedAt);
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
   if (params.wait?.status === "timeout") {
-    next.outcome = { status: "timeout", ...timing };
+    next.outcome = withSubagentOutcomeTiming({ status: "timeout" }, next);
   } else if (params.wait?.status === "error") {
-    next.outcome = { status: "error", error: waitError, ...timing };
+    next.outcome = withSubagentOutcomeTiming({ status: "error", error: waitError }, next);
   } else if (params.wait?.status === "ok") {
-    next.outcome = { status: "ok", ...timing };
+    next.outcome = withSubagentOutcomeTiming({ status: "ok" }, next);
+  } else {
+    next.outcome = withSubagentOutcomeTiming(next.outcome, next);
   }
   return next;
 }

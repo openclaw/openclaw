@@ -66,6 +66,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
+    expect(result.details).not.toHaveProperty("role");
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "build feature",
@@ -82,6 +83,46 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "error" as const, error: "spawn failed" },
+    { status: "forbidden" as const, error: "not allowed" },
+  ])("adds requested role to forwarded subagent $status results", async (spawnResult) => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce(spawnResult);
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-role-error", {
+      task: "build feature",
+      agentId: "reviewer",
+    });
+
+    expect(result.details).toMatchObject({
+      ...spawnResult,
+      role: "reviewer",
+    });
+  });
+
+  it("does not add role to forwarded failures when agentId is absent", async () => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "error",
+      error: "spawn failed",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-no-role-error", {
+      task: "build feature",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "spawn failed",
+    });
+    expect(result.details).not.toHaveProperty("role");
   });
 
   it("supports legacy timeoutSeconds alias", async () => {
@@ -196,6 +237,30 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("adds requested role to forwarded ACP failures", async () => {
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "forbidden",
+      error: "ACP disabled",
+      errorCode: "acp_disabled",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-role-error", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "ACP disabled",
+      errorCode: "acp_disabled",
+      role: "codex",
+    });
   });
 
   it("forwards ACP sandbox options and requester sandbox context", async () => {
