@@ -175,6 +175,23 @@ describe("sortAndCapQueue", () => {
     sortAndCapQueue(q);
     expect(JSON.stringify(q)).toBe(snapshot);
   });
+
+  it("is deterministic when priority AND createdAt tie (wave-1 fix)", () => {
+    // Without an id tiebreaker this test would be engine-dependent and
+    // flaky across runs / Node versions. The tertiary sort on id
+    // guarantees a single canonical order.
+    const q: PendingAgentInjectionEntry[] = [
+      mkEntry("plan_decision", "zebra", 1000),
+      mkEntry("plan_decision", "apple", 1000),
+      mkEntry("plan_decision", "middle", 1000),
+    ];
+    const sorted = sortAndCapQueue(q);
+    expect(sorted.map((e) => e.id)).toEqual(["apple", "middle", "zebra"]);
+    // Second call with reversed input should yield identical output.
+    const reversed = q.toReversed();
+    const sortedAgain = sortAndCapQueue(reversed);
+    expect(sortedAgain.map((e) => e.id)).toEqual(["apple", "middle", "zebra"]);
+  });
 });
 
 describe("composePromptWithPendingInjections", () => {
@@ -407,5 +424,26 @@ describe("enqueuePendingAgentInjection + consumePendingAgentInjections (e2e)", (
       createdAt: 1,
     });
     expect(ok).toBe(false);
+  });
+
+  it("consume drops captured entries when disk write fails (wave-1 fix)", async () => {
+    // Seed queue on disk so there's something to capture.
+    await writeStore("agent:main:s1", { sessionId: "s1", updatedAt: 1 });
+    await enqueuePendingAgentInjection("agent:main:s1", {
+      id: "plan-decision-abc",
+      kind: "plan_decision",
+      text: "[PLAN_DECISION]: approved",
+      createdAt: 1000,
+    });
+    // Sabotage the store path so the clear-write throws (point at a
+    // directory so fs.writeFile fails with EISDIR).
+    tmpStorePath.value = tmpDir;
+    const warn = vi.fn();
+    const result = await consumePendingAgentInjections("agent:main:s1", { warn });
+    // Captured entries must be dropped — returning them would cause
+    // the next consumer call (on recovery) to double-deliver the
+    // same injection because disk still has it.
+    expect(result.injections).toHaveLength(0);
+    expect(result.composedText).toBeUndefined();
   });
 });
