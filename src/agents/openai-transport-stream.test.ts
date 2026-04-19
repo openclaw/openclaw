@@ -1783,8 +1783,13 @@ describe("openai transport stream", () => {
     });
 
     it("does not replay thought_signature across a different provider/model", () => {
+      const altProviderModel = {
+        ...geminiModel,
+        provider: "openai",
+        id: "gpt-5.4",
+      } satisfies Model<"openai-completions">;
       const params = buildOpenAICompletionsParams(
-        { ...geminiModel, provider: "openai", id: "gpt-5.4" } as Model<"openai-completions">,
+        altProviderModel,
         {
           systemPrompt: "system",
           messages: [
@@ -1876,6 +1881,57 @@ describe("openai transport stream", () => {
         }>;
       };
       expect(assistant?.tool_calls?.[0]?.function).toBeDefined();
+      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+    });
+
+    it("does not replay thought_signature captured on a different API surface for the same provider/model", () => {
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              // Same provider + model, different API surface. The signature is
+              // only valid for replay on the API that produced it.
+              api: "google-generative-ai",
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "exec",
+                  arguments: { cmd: "ls" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_abc",
+              toolName: "exec",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+      const assistant = params.messages.find((m) => m.role === "assistant") as {
+        tool_calls?: Array<{ extra_content?: Record<string, unknown> }>;
+      };
       expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
     });
   });

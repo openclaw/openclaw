@@ -1359,8 +1359,13 @@ function injectToolCallThoughtSignatures(
     if ((msg as { role?: string }).role !== "assistant") {
       continue;
     }
-    const m = msg as { provider?: string; model?: string; content?: unknown };
-    if (m.provider !== model.provider || m.model !== model.id) {
+    const m = msg as { api?: string; provider?: string; model?: string; content?: unknown };
+    // Scope replay to the same API surface as well as provider+model: the signature
+    // is opaque to openclaw and only valid for replay on the route that produced it.
+    // Mixing `google-generative-ai` and `openai-completions` turns for the same
+    // Gemini model would otherwise cross API boundaries and reintroduce the same
+    // class of 400 this path is trying to prevent.
+    if (m.api !== model.api || m.provider !== model.provider || m.model !== model.id) {
       continue;
     }
     if (!Array.isArray(m.content)) {
