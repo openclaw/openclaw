@@ -1699,6 +1699,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         });
         throw err;
       }
+      await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+        // best-effort; rename may not preserve source file mode
+      });
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit(
