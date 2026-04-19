@@ -90,6 +90,34 @@ function captureCacheBoundaryPayloadHook(onPayload: PayloadHook) {
   return { model, onPayload: transportOptions.onPayload };
 }
 
+function buildExpectedCacheBoundaryPayload(messageText: string) {
+  return {
+    system: [
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: "Dynamic suffix",
+      },
+    ],
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: messageText,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("createAnthropicVertexStreamFn", () => {
   beforeAll(async () => {
     ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
@@ -205,59 +233,9 @@ describe("createAnthropicVertexStreamFn", () => {
 
     const nextPayload = await transportPayloadHook?.(payload, model);
 
-    expect(onPayload).toHaveBeenCalledWith(
-      {
-        system: [
-          {
-            type: "text",
-            text: "Stable prefix",
-            cache_control: { type: "ephemeral" },
-          },
-          {
-            type: "text",
-            text: "Dynamic suffix",
-          },
-        ],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Hello",
-                cache_control: { type: "ephemeral" },
-              },
-            ],
-          },
-        ],
-      },
-      model,
-    );
-    expect(nextPayload).toEqual({
-      system: [
-        {
-          type: "text",
-          text: "Stable prefix",
-          cache_control: { type: "ephemeral" },
-        },
-        {
-          type: "text",
-          text: "Dynamic suffix",
-        },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Hello",
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-        },
-      ],
-    });
+    const expectedPayload = buildExpectedCacheBoundaryPayload("Hello");
+    expect(onPayload).toHaveBeenCalledWith(expectedPayload, model);
+    expect(nextPayload).toEqual(expectedPayload);
   });
 
   it("reapplies Anthropic cache-boundary shaping when payload hooks return a fresh payload", async () => {
@@ -285,31 +263,7 @@ describe("createAnthropicVertexStreamFn", () => {
       model,
     );
 
-    expect(nextPayload).toEqual({
-      system: [
-        {
-          type: "text",
-          text: "Stable prefix",
-          cache_control: { type: "ephemeral" },
-        },
-        {
-          type: "text",
-          text: "Dynamic suffix",
-        },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Hello again",
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-        },
-      ],
-    });
+    expect(nextPayload).toEqual(buildExpectedCacheBoundaryPayload("Hello again"));
   });
 
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {

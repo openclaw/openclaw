@@ -1,6 +1,7 @@
 import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 
 function withCdpHostnameAllowed(
   profile: ResolvedBrowserProfile,
@@ -12,12 +13,7 @@ function withCdpHostnameAllowed(
   if (isPrivateNetworkAllowedByPolicy(ssrfPolicy)) {
     return ssrfPolicy;
   }
-  return {
-    ...ssrfPolicy,
-    allowedHostnames: Array.from(
-      new Set([...(ssrfPolicy.allowedHostnames ?? []), profile.cdpHost]),
-    ),
-  };
+  return withAllowedHostname(ssrfPolicy, profile.cdpHost);
 }
 
 export function resolveCdpReachabilityPolicy(
