@@ -49,7 +49,7 @@ describe("emitSubagentEndedHookOnce", () => {
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 
-  it("treats timing differences as different run outcomes", () => {
+  it("treats timing differences as different only after both outcomes have timing", () => {
     expect(
       mod.runOutcomesEqual(
         { status: "timeout", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
@@ -60,6 +60,12 @@ describe("emitSubagentEndedHookOnce", () => {
       mod.runOutcomesEqual(
         { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
         { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
       ),
     ).toBe(true);
   });

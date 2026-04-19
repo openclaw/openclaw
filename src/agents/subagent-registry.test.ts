@@ -191,7 +191,12 @@ describe("subagent registry seam flow", () => {
         task: "finish the task",
         cleanup: "delete",
         roundOneReply: "final completion reply",
-        outcome: { status: "ok" },
+        outcome: {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          elapsedMs: 111,
+        },
       }),
     );
 

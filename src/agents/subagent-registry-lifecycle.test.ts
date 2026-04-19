@@ -62,11 +62,6 @@ vi.mock("./subagent-registry-cleanup.js", () => ({
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
 }));
 
-vi.mock("./subagent-registry-completion.js", () => ({
-  runOutcomesEqual: (left: unknown, right: unknown) =>
-    JSON.stringify(left) === JSON.stringify(right),
-}));
-
 vi.mock("./subagent-registry-helpers.js", () => ({
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS: 30 * 60_000,
   ANNOUNCE_EXPIRY_MS: 5 * 60_000,
@@ -277,6 +272,35 @@ describe("subagent registry lifecycle hardening", () => {
         outcome: enrichedOutcome,
       }),
     );
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("persists timing when a preexisting outcome matches without timing", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      startedAt: 2_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: false,
+    });
+
+    const controller = createLifecycleController({ entry, persist });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_250,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(entry.outcome).toEqual({
+      status: "ok",
+      startedAt: 2_000,
+      endedAt: 4_250,
+      elapsedMs: 2_250,
+    });
     expect(persist).toHaveBeenCalled();
   });
 

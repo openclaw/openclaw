@@ -28,7 +28,18 @@ export function runOutcomesEqual(
       return false;
     }
   }
+  if (!runOutcomeHasTiming(a) || !runOutcomeHasTiming(b)) {
+    return true;
+  }
   return a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.elapsedMs === b.elapsedMs;
+}
+
+export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
+  return (
+    Number.isFinite(outcome?.startedAt) ||
+    Number.isFinite(outcome?.endedAt) ||
+    Number.isFinite(outcome?.elapsedMs)
+  );
 }
 
 export function resolveLifecycleOutcomeFromRunOutcome(
