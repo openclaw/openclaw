@@ -136,13 +136,23 @@ export async function runCodexAppServerAttempt(
       pendingNotifications.push(notification);
       return;
     }
-    await projector.handleNotification(notification);
-    if (
-      notification.method === "turn/completed" &&
-      isTurnNotification(notification.params, turnId)
-    ) {
-      completed = true;
-      resolveCompletion?.();
+    // Determine terminal-turn status before invoking the projector so a throw
+    // inside projector.handleNotification still releases the session lane.
+    // See openclaw/openclaw#67996.
+    const isTurnCompletion =
+      notification.method === "turn/completed" && isTurnNotification(notification.params, turnId);
+    try {
+      await projector.handleNotification(notification);
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server projector notification threw", {
+        method: notification.method,
+        error,
+      });
+    } finally {
+      if (isTurnCompletion) {
+        completed = true;
+        resolveCompletion?.();
+      }
     }
   };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
