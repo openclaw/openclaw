@@ -282,6 +282,28 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["gemma-visible-ok"]);
   });
 
+  it("collapses repeated exact-text suffixes before emitting a text_end block reply", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: [
+        "The user is instructing me to reply with a very specific string and nothing else.",
+        "I will output the text directly as the final response.",
+        "<channel|>dupcheck-a-1776635100573dupcheck-a-1776635100573",
+      ].join("\n"),
+      id: "item_repeated_suffix",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("dupcheck-a-1776635100573");
+    expect(subscription.assistantTexts).toEqual(["dupcheck-a-1776635100573"]);
+  });
+
   it("emits the final answer at message_end when commentary was streamed first", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

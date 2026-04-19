@@ -516,6 +516,31 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("collapses duplicated exact-text suffixes after a control delimiter", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string and nothing else.",
+      "I will output the text directly as the final response.",
+      "<channel|>dupcheck-a-1776635100573dupcheck-a-1776635100573",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("dupcheck-a-1776635100573");
+  });
+
+  it("collapses repeated visible suffixes even when the suffix is repeated more than twice", () => {
+    const input = [
+      "Internal planning about the final response.",
+      "<channel|>dupcheck-b-1776635100574dupcheck-b-1776635100574dupcheck-b-1776635100574dupcheck-b-1776635100574",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("dupcheck-b-1776635100574");
+  });
+
+  it("does not collapse short unstructured repeated prose after a control delimiter", () => {
+    const input = "Internal planning<channel|>hahaha";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("hahaha");
+  });
+
   it("preserves indentation for a leading fenced block while trimming surrounding blank lines", () => {
     const input = "\n\n  ```js\n  const x = 1;\n  ```\n";
 
