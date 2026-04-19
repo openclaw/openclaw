@@ -8,9 +8,11 @@ Docs: https://docs.openclaw.ai
 
 - Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
 - Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
+- Agents/CLI: add `--new-session` flag to `openclaw agent` that generates a fresh session id, returns it at the top level of `--json` output and on stdout otherwise, and routes the turn through an isolated session key so parallel callers do not collide. Addresses #54864.
 
 ### Fixes
 
+- Agents/CLI: honor `--session-id` on `openclaw agent` even when `--agent <id>` is also passed, so parallel callers can keep isolated sessions per UUID instead of silently collapsing into `agent:<id>:main`. The explicit-session key path (`agent:<id>:explicit:<sessionId>`) was already implemented but unreachable because `resolveExplicitAgentSessionKey` preempted it; reorder `resolveSessionKeyForRequest` to prefer caller-supplied `sessionId` over the agent main-key fallback. Fixes #22085.
 - Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
 - Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
 - Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
