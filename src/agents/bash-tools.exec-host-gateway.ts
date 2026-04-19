@@ -209,8 +209,16 @@ function commandRequiresSecurityAuditSuppressionApproval(params: {
   return textMentionsSecurityAuditSuppressions(params.command);
 }
 
-function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
-  return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
+function formatOutcomeExitLabel(outcome: {
+  exitCode: number | null;
+  status?: string;
+  timedOut: boolean;
+}): string {
+  return outcome.status === "killed"
+    ? "killed"
+    : outcome.timedOut
+      ? "timeout"
+      : `code ${outcome.exitCode ?? "?"}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
