@@ -114,12 +114,16 @@ function queuePendingWakeReason(params?: {
     pendingWakes.set(wakeTargetKey, next);
     return;
   }
+  const merged =
+    (next.heartbeat ?? previous.heartbeat)
+      ? { ...next, heartbeat: next.heartbeat ?? previous.heartbeat }
+      : next;
   if (next.priority > previous.priority) {
-    pendingWakes.set(wakeTargetKey, next);
+    pendingWakes.set(wakeTargetKey, merged);
     return;
   }
   if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
-    pendingWakes.set(wakeTargetKey, next);
+    pendingWakes.set(wakeTargetKey, merged);
   }
 }
 
