@@ -5,7 +5,7 @@ description: >
   Slack, Discord, Google (Gmail, Drive, Calendar, Docs, Sheets, Slides),
   HubSpot, Airtable, Microsoft (Outlook, Teams, OneDrive, Calendar), LinkedIn,
   Salesforce, GitHub, Jira, Asana, Linear, Attio, Pipedrive, Zoom, Stripe,
-  Shopify, Figma, Twitter, Instagram, TikTok, YouTube, Loom, Mailchimp,
+  Shopify, Figma, Twitter / X, Instagram, TikTok, YouTube, Loom, Mailchimp,
   Typeform, Calendly, Etsy, Vercel, Reddit, Facebook, Monday, Amplitude,
   Google Analytics, Zendesk, Apollo, Datagma, Mixpanel, PeopleDataLabs,
   Google BigQuery, Supabase.
@@ -96,6 +96,7 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | PeopleDataLabs | `composio_peopledatalabs` | `https://api.peopledatalabs.com/v5/` |
 | Google BigQuery | `composio_bigquery` | `https://bigquery.googleapis.com/bigquery/v2/` |
 | Supabase | `composio_supabase` | `https://api.supabase.com/v1/` |
+| Twitter / X | `composio_twitter` | `https://api.twitter.com/2/` |
 
 ## Examples by Provider
 
@@ -627,16 +628,31 @@ blink connector exec clickup list/LIST_ID/task GET
 blink connector exec clickup list/LIST_ID/task POST '{"name":"New Task","description":"Details","priority":3}'
 ```
 
-### Twitter (X)
+### Twitter / X
 ```bash
+# Blink ships Twitter via the Composio connector (composio_twitter).
+# Check `blink connector status` — it will show `composio_twitter`.
+
 # Get my user info
-blink connector exec twitter users/me GET '{"user.fields":"name,username,profile_image_url"}'
+blink connector exec composio_twitter users/me GET '{"user.fields":"name,username,profile_image_url"}'
 
 # Search tweets
-blink connector exec twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10"}'
+blink connector exec composio_twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10"}'
 
 # Post a tweet
-blink connector exec twitter tweets POST '{"text":"Hello from Blink!"}'
+blink connector exec composio_twitter tweets POST '{"text":"Hello from Blink!"}'
+
+# Reply to a tweet
+blink connector exec composio_twitter tweets POST '{"text":"great point","reply":{"in_reply_to_tweet_id":"TWEET_ID"}}'
+
+# Like a tweet (USER_ID = your numeric id from users/me)
+blink connector exec composio_twitter users/USER_ID/likes POST '{"tweet_id":"TWEET_ID"}'
+
+# Retweet
+blink connector exec composio_twitter users/USER_ID/retweets POST '{"tweet_id":"TWEET_ID"}'
+
+# Get a user's tweets
+blink connector exec composio_twitter users/USER_ID/tweets GET '{"max_results":"10"}'
 ```
 
 ### Instagram
