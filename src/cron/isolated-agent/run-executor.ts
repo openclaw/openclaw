@@ -233,7 +233,7 @@ export function createCronPromptExecutor(params: {
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
-    fallbackAttempts = [...fallbackAttempts, ...fallbackResult.attempts];
+    fallbackAttempts = [...fallbackAttempts, ...(fallbackResult.attempts ?? [])];
     params.liveSelection.provider = fallbackResult.provider;
     params.liveSelection.model = fallbackResult.model;
     runEndedAt = Date.now();

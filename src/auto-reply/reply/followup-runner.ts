@@ -371,7 +371,7 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
-        fallbackAttempts = fallbackResult.attempts;
+        fallbackAttempts = fallbackResult.attempts ?? [];
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
