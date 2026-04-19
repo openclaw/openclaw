@@ -8,11 +8,14 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { installSkill } from "./skills-install.js";
+import { installSkill, __testing as skillsInstallTesting } from "./skills-install.js";
 import {
   runCommandWithTimeoutMock,
   scanDirectoryWithSummaryMock,
 } from "./skills-install.test-mocks.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./skills/frontmatter.js";
+import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./skills/local-loader.js";
+import type { SkillEntry } from "./skills/types.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -45,6 +48,32 @@ metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-
   return skillDir;
 }
 
+function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
+  const skills = loadSkillsFromDirSafe({
+    dir: path.join(workspaceDir, "skills"),
+    source: "openclaw-workspace",
+  }).skills;
+  return skills.map((skill) => {
+    const frontmatter =
+      readSkillFrontmatterSafe({
+        rootDir: skill.baseDir,
+        filePath: skill.filePath,
+      }) ?? {};
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
+    return {
+      skill,
+      frontmatter,
+      metadata: resolveOpenClawMetadata(frontmatter),
+      invocation,
+      exposure: {
+        includeInRuntimeRegistry: true,
+        includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
+        userInvocable: invocation.userInvocable,
+      },
+    };
+  });
+}
+
 const workspaceSuite = createFixtureSuite("openclaw-skills-install-");
 
 beforeAll(async () => {
@@ -53,6 +82,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   resetGlobalHookRunner();
+  skillsInstallTesting.setDepsForTest();
   await workspaceSuite.cleanup();
 });
 
@@ -73,6 +103,9 @@ async function withWorkspaceCase(
 describe("installSkill code safety scanning", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
+    skillsInstallTesting.setDepsForTest({
+      loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+    });
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
     runCommandWithTimeoutMock.mockResolvedValue({

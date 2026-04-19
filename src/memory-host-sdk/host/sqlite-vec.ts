@@ -2,10 +2,16 @@ import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
-let sqliteVecModulePromise: Promise<typeof import("sqlite-vec")> | null = null;
+type SqliteVecModule = {
+  getLoadablePath: () => string;
+  load: (db: DatabaseSync) => void;
+};
 
-async function loadSqliteVecModule(): Promise<typeof import("sqlite-vec")> {
-  sqliteVecModulePromise ??= import("sqlite-vec");
+const SQLITE_VEC_MODULE_ID = "sqlite-vec";
+let sqliteVecModulePromise: Promise<SqliteVecModule> | null = null;
+
+async function loadSqliteVecModule(): Promise<SqliteVecModule> {
+  sqliteVecModulePromise ??= import(SQLITE_VEC_MODULE_ID) as Promise<SqliteVecModule>;
   return sqliteVecModulePromise;
 }
 
