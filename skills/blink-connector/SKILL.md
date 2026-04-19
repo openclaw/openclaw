@@ -2,14 +2,22 @@
 
 ## name: blink-connector
 description: >
-  Call any linked Blink Connector via the Blink CLI. Supports Notion,
-  Slack, Discord, Google (Gmail, Drive, Calendar, Docs, Sheets, Slides),
-  HubSpot, Airtable, Microsoft (Outlook, Teams, OneDrive, Calendar), LinkedIn,
-  Salesforce, GitHub, Jira, Asana, Linear, Attio, Pipedrive, Zoom, Stripe,
-  Shopify, Figma, Twitter / X, Instagram, TikTok, YouTube, Loom, Mailchimp,
-  Typeform, Calendly, Etsy, Vercel, Reddit, Facebook, Monday, Amplitude,
-  Google Analytics, Zendesk, Apollo, Datagma, Mixpanel, PeopleDataLabs,
-  Google BigQuery, Supabase.
+  Call any linked Blink Connector via the Blink CLI. Three layers, use the
+  most specific one for your task:
+  (1) Ergonomic wrappers for heavy-use platforms: `blink twitter` (post with
+  images/video, reply, quote, like, retweet, delete) and `blink linkedin`.
+  (2) Raw HTTP proxy for everything else: `blink connector exec <provider>
+  <endpoint> <method> <args>` — covers Notion, Slack, Discord, Google
+  (Gmail, Drive, Calendar, Docs, Sheets, Slides), HubSpot, Airtable,
+  Microsoft (Outlook, Teams, OneDrive, Calendar), Salesforce, GitHub, Jira,
+  Asana, Linear, Attio, Pipedrive, Zoom, Stripe, Shopify, Figma, Instagram,
+  TikTok, YouTube, Loom, Mailchimp, Typeform, Calendly, Etsy, Vercel,
+  Reddit, Facebook, Monday, Amplitude, Google Analytics, Zendesk, Apollo,
+  Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase.
+  (3) Native Composio tool catalog (file uploads, attachments, complex
+  writes): `blink connector tool-execute <composio_provider> <TOOL_SLUG>
+  '<json>'` — unlocks 1000+ Composio tools, auto-uploads URL/path file
+  arguments to S3.
   Use when the user asks you to interact with a connected third-party service.
 metadata:
   { "blink": { "requires_env": ["BLINK_API_KEY", "BLINK_AGENT_ID"] } }
@@ -715,31 +723,56 @@ blink connector exec clickup list/LIST_ID/task POST '{"name":"New Task","descrip
 ```
 
 ### Twitter / X
+
+Use the dedicated `blink twitter …` subcommands — they wrap Composio's native
+Twitter tools and handle image/video upload + processing-status polling for
+you. The old `blink connector exec composio_twitter …` HTTP-proxy path also
+works for reads but can't do media upload.
+
 ```bash
-# Blink ships Twitter via the Composio connector (composio_twitter).
-# Check `blink connector status` — it will show `composio_twitter`.
+# Profile lookup
+blink twitter me
 
-# Get my user info
-blink connector exec composio_twitter users/me GET '{"user.fields":"name,username,profile_image_url"}'
+# Plain text tweet
+blink twitter post "Shipping today 🚀"
 
-# Search tweets
-blink connector exec composio_twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10"}'
+# With one image (URL or local path — Composio uploads for you)
+blink twitter post "Launch day" --image https://cdn.blink.new/hero.png
 
-# Post a tweet
-blink connector exec composio_twitter tweets POST '{"text":"Hello from Blink!"}'
+# Multiple images (up to 4)
+blink twitter post "Carousel" --image ./a.png --image ./b.png --image ./c.png --image ./d.png
 
-# Reply to a tweet
-blink connector exec composio_twitter tweets POST '{"text":"great point","reply":{"in_reply_to_tweet_id":"TWEET_ID"}}'
+# With video (uploads chunked + polls processing; blocks up to 3 min)
+blink twitter post "Demo video" --video ./demo.mp4
 
-# Like a tweet (USER_ID = your numeric id from users/me)
-blink connector exec composio_twitter users/USER_ID/likes POST '{"tweet_id":"TWEET_ID"}'
+# Reply (= public comment). Optionally with media.
+blink twitter reply 1820000000000000000 "My take on this"
+blink twitter reply 1820000000000000000 "With a screenshot" --image ./reply.png
 
-# Retweet
-blink connector exec composio_twitter users/USER_ID/retweets POST '{"tweet_id":"TWEET_ID"}'
+# Quote tweet
+blink twitter quote 1820000000000000000 "This changes everything"
 
-# Get a user's tweets
-blink connector exec composio_twitter users/USER_ID/tweets GET '{"max_results":"10"}'
+# Like / retweet / delete
+blink twitter like    1820000000000000000
+blink twitter retweet 1820000000000000000
+blink twitter delete  1820000000000000000
+
+# Chain tweets (capture the new id → thread it)
+ROOT=$(blink twitter post "Thread 🧵 1/"            --json | jq -r .id)
+blink twitter reply $ROOT  "2/ Here's the detail"
+blink twitter reply $ROOT  "3/ And the conclusion"
 ```
+
+Read-only / search / timelines still work through the HTTP-proxy path:
+
+```bash
+blink connector exec composio_twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10"}'
+blink connector exec composio_twitter users/me GET '{"user.fields":"username,name,profile_image_url"}'
+```
+
+If you need a Composio Twitter tool that isn't wrapped by `blink twitter …`,
+drop down to the raw tool catalog — see the "Native Composio tools" section
+below.
 
 ### Instagram
 
@@ -907,3 +940,45 @@ If a connector is connected to the workspace but not linked to this agent:
 blink connector link <provider>
 ```
 
+## Native Composio tools (power users)
+
+`blink connector exec` talks to upstream APIs directly through Composio's HTTP
+proxy — great for reads and simple writes, but it can't do multipart uploads
+(no media/attachments). For that, use Composio's first-class tool catalog via
+`blink connector tool-execute`. This unlocks every Composio tool across every
+`composio_*` provider (1000+ tools total).
+
+```bash
+# Shape:
+blink connector tool-execute <composio_provider> <TOOL_SLUG> '<json-args>' [--account <id>]
+```
+
+File arguments (images, videos, PDFs, attachments) accept **URLs or local file
+paths** — Composio's SDK auto-uploads them to S3 and substitutes a proper file
+descriptor before running the tool. Zero base64 or multipart wiring on your
+side.
+
+```bash
+# Send a Gmail with an attachment
+blink connector tool-execute composio_gmail GMAIL_SEND_EMAIL_WITH_ATTACHMENT \
+  '{"recipient_email":"x@y.com","subject":"Report","body":"See attached","attachment":"https://cdn.blink.new/report.pdf"}'
+
+# Upload a file to Slack
+blink connector tool-execute composio_slack SLACK_FILES_UPLOAD \
+  '{"channels":"C123","initial_comment":"New doc","file":"./spec.md"}'
+
+# Create a Notion page with rich blocks
+blink connector tool-execute composio_notion NOTION_CREATE_PAGE_WITH_BLOCKS \
+  '{"parent_page_id":"abc-...","title":"Launch plan","blocks":[...]}'
+
+# Low-level Twitter media dance (what `blink twitter post --image` does for you)
+MEDIA=$(blink connector tool-execute composio_twitter TWITTER_UPLOAD_MEDIA \
+    '{"media":"https://cdn.blink.new/hero.png","media_type":"image/png","media_category":"tweet_image"}' \
+    --json | jq -r '.data.data.media_id_string')
+blink connector tool-execute composio_twitter TWITTER_CREATION_OF_A_POST \
+    '{"text":"Manual path","media_media_ids":["'"$MEDIA"'"]}'
+```
+
+Tool slugs follow the pattern `<TOOLKIT>_<ACTION>`. Browse the full catalog
+at [docs.composio.dev/toolkits](https://docs.composio.dev/toolkits.md) — each
+toolkit page lists every tool with its input schema.
