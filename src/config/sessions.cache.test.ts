@@ -186,13 +186,12 @@ describe("Session Store Cache", () => {
     expect(loaded).toEqual({});
   });
 
-  it("should handle invalid JSON gracefully", async () => {
-    // Write invalid JSON
+  it("should throw when an existing store file contains invalid JSON", async () => {
     fs.writeFileSync(storePath, "not valid json {");
 
-    // Should return empty store
-    const loaded = loadSessionStore(storePath);
-    expect(loaded).toEqual({});
+    expect(() => loadSessionStore(storePath)).toThrow(
+      `failed to load session store ${storePath}:`,
+    );
   });
 
   it("should refresh cache when file is rewritten within the same mtime tick", async () => {
