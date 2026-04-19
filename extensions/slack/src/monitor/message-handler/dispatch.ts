@@ -560,10 +560,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${formatErrorMessage(err)}, falling back`),
       );
       streamFailed = true;
+      const fallbackThreadTs = streamSession?.threadTs ?? plannedThreadTs;
+      if (
+        deliveryTracker.hasDelivered({
+          kind: params.kind,
+          payload: params.payload,
+          threadTs: fallbackThreadTs,
+        })
+      ) {
+        return;
+      }
       await deliverNormally({
         payload: params.payload,
         kind: params.kind,
-        forcedThreadTs: streamSession?.threadTs ?? plannedThreadTs,
+        forcedThreadTs: fallbackThreadTs,
       });
     }
   };
