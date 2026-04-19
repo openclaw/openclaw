@@ -5,6 +5,7 @@ import {
   cancelTaskById,
   createTaskRecord,
   findLatestTaskForFlowId,
+  getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
@@ -708,9 +709,16 @@ export async function cancelFlowByIdForOwner(params: {
 }
 
 export async function cancelDetachedTaskRunById(params: { cfg: OpenClawConfig; taskId: string }) {
+  const task = getTaskById(params.taskId);
+  if (!task) {
+    return cancelTaskById(params);
+  }
   const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
   if (registeredRuntime) {
-    return await registeredRuntime.cancelDetachedTaskRunById(params);
+    const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
+    if (cancelled.found) {
+      return cancelled;
+    }
   }
   return cancelTaskById(params);
 }

@@ -2183,6 +2183,23 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
   });
 
+  it("clears stale detached task runtime registrations on active reloads when no plugin re-registers one", () => {
+    useNoBundledPlugins();
+    registerDetachedTaskLifecycleRuntime("stale-runtime", createDetachedTaskRuntimeStub("stale"));
+
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [] },
+          allow: [],
+        },
+      },
+    });
+
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+  });
+
   it("restores cached memory capability public artifacts on cache hits", async () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();

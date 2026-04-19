@@ -1480,6 +1480,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearAgentHarnesses();
       clearPluginCommands();
       clearPluginInteractiveHandlers();
+      clearDetachedTaskLifecycleRuntimeRegistration();
       clearMemoryPluginState();
     }
 
