@@ -11,7 +11,7 @@ const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
 const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
 const dispatchReplyWithDispatcherMock = vi.hoisted(() =>
-  vi.fn(async () => ({ counts: { final: 1, tool: 0, block: 0 } })),
+  vi.fn(async (_opts: Record<string, unknown>) => ({ counts: { final: 1, tool: 0, block: 0 } })),
 );
 const resolveAgentRouteMock = vi.hoisted(() =>
   vi.fn(() => ({ agentId: "test", sessionKey: "test:session", accountId: "default" })),
@@ -2073,7 +2073,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("wakes agent session when reply button is clicked", async () => {
-    const { ctx, runtimeLog, getHandler } = createContext();
+    const { ctx, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
