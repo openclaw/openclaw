@@ -6,7 +6,7 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+import { drainSystemEventEntries, drainWakeRequestedEvents } from "../../infra/system-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,6 +18,8 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  isHeartbeat?: boolean;
+  isEventDrivenHeartbeat?: boolean;
 }): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
@@ -83,7 +85,17 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
+  // Event-driven heartbeats (exec completion, cron) drain all events so the
+  // agent can act on results referenced by their prompt.
+  //
+  // Periodic heartbeats only drain events whose dedicated wake was missed
+  // (wakeRequested=true) — e.g. when heartbeats were temporarily disabled
+  // at the time the event was enqueued.  Non-wake events (model switch,
+  // presence updates) stay queued for the next user turn or event-driven wake.
+  const isPeriodicOnly = params.isHeartbeat && !params.isEventDrivenHeartbeat;
+  const queued = isPeriodicOnly
+    ? drainWakeRequestedEvents(params.sessionKey)
+    : drainSystemEventEntries(params.sessionKey);
   systemLines.push(
     ...queued.flatMap((event) => {
       const compacted = compactSystemEvent(event.text);

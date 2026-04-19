@@ -289,6 +289,7 @@ export function buildGatewayCronService(params: {
         sessionKey,
         contextKey: opts?.contextKey,
         trusted: opts?.trusted,
+        ...(opts?.wakeRequested ? { wakeRequested: true } : {}),
       });
     },
     requestHeartbeatNow: (opts) => {

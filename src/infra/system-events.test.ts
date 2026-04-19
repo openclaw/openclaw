@@ -570,6 +570,46 @@ describe("removeSystemEventsMatching", () => {
     expect(reAddedFresh).toBe(true);
     expect(peekSystemEvents(key)).toEqual(["presence update", "presence update 2"]);
   });
+
+  it("preserves cron events enqueued after an inspection snapshot when cleanup is ts-scoped", async () => {
+    // Regression: the heartbeat-runner base-cron cleanup previously removed
+    // every queued cron:* event, including ones enqueued during the heartbeat
+    // turn (after preflight snapshot). Scoping the predicate by a
+    // preflight-derived ts cutoff keeps later-ts events in the queue so the
+    // next turn can surface them.
+    const key = "agent:main:test-remove-inspected-ts-cutoff";
+    enqueueSystemEvent("cron hit A", { sessionKey: key, contextKey: "cron:job-a" });
+    enqueueSystemEvent("cron hit B", { sessionKey: key, contextKey: "cron:job-b" });
+
+    // Simulate preflight snapshot of the base queue's cron entries.
+    const inspected = peekSystemEventEntries(key).filter(
+      (event) => event.contextKey?.startsWith("cron:") === true,
+    );
+    const inspectedMaxTs = inspected.reduce(
+      (max, event) => (event.ts > max ? event.ts : max),
+      0,
+    );
+
+    // A concurrent cron tick enqueues a new event mid-heartbeat (later ts).
+    // Wait long enough that Date.now() is guaranteed to advance past the
+    // snapshot cutoff on coarse-resolution timers.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    enqueueSystemEvent("cron hit C (concurrent)", {
+      sessionKey: key,
+      contextKey: "cron:job-c",
+    });
+
+    // Apply the same ts-scoped cleanup the runner does after consuming the
+    // inspected snapshot.
+    const removed = removeSystemEventsMatching(
+      key,
+      (event) =>
+        event.contextKey?.startsWith("cron:") === true && event.ts <= inspectedMaxTs,
+    );
+
+    expect(removed.map((event) => event.text)).toEqual(["cron hit A", "cron hit B"]);
+    expect(peekSystemEvents(key)).toEqual(["cron hit C (concurrent)"]);
+  });
 });
 
 describe("isCronSystemEvent", () => {

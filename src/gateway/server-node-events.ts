@@ -588,6 +588,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey,
         contextKey: `notification:${keyRaw}`,
         trusted: false,
+        wakeRequested: true,
       });
       if (queued) {
         requestHeartbeatNow({ reason: "notifications-event", sessionKey });
@@ -688,6 +689,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey,
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
+        wakeRequested: true,
       });
       if (queued) {
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback

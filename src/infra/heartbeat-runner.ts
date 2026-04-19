@@ -101,6 +101,7 @@ import {
 import {
   consumeSystemEventEntries,
   peekSystemEventEntries,
+  removeSystemEventsMatching,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
 
@@ -508,6 +509,23 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   skipReason?: HeartbeatSkipReason;
   tasks?: HeartbeatTask[];
   heartbeatFileContent?: string;
+  /**
+   * Events peeked from the primary queue that this run will drain — the
+   * isolated `:heartbeat` queue when isolatedSession is on without a
+   * forced key, otherwise the session.sessionKey queue (base or forced).
+   * Consumed in full via consumeSystemEventEntries' exact-prefix match.
+   */
+  isolatedQueueEvents: ReturnType<typeof peekSystemEventEntries>;
+  /**
+   * Cron events visible from the base session queue that should reach an
+   * isolated heartbeat. Populated only when the primary queue is distinct
+   * from the base queue (i.e., isolated mode without a forced key); empty
+   * in every other case to avoid double-counting the same queue.
+   * Removed via removeSystemEventsMatching so the remaining non-cron
+   * base-queue events survive for the next user turn.
+   */
+  baseCronEvents: ReturnType<typeof peekSystemEventEntries>;
+  sessionKeyForEvents: string;
 };
 
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
@@ -533,33 +551,57 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+
+  // Resolve the queue this run will actually drain. Isolated mode without a
+  // forced key executes on the `:heartbeat` sub-key queue; a forced key or
+  // non-isolated mode stays on session.sessionKey. Keeping peek and consume
+  // pointed at the same queue is what the P1 forced-session fix established,
+  // and what the P2 rework below relies on to use exact-prefix consume.
+  const preflightIsolatedSession = params.heartbeat?.isolatedSession === true;
+  let sessionKeyForEvents = session.sessionKey;
+  if (preflightIsolatedSession && !params.forcedSessionKey) {
+    const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      sessionKey: session.sessionKey,
+      configuredSessionKey: session.sessionKey,
+      sessionEntry: session.entry,
+    });
+    sessionKeyForEvents = isolatedSessionKey;
+  }
+
+  const isolatedQueueEvents = peekSystemEventEntries(sessionKeyForEvents);
+  // Cron events are enqueued to the base session queue by cron/timer/jobs so
+  // they can fire cross-session (e.g., an isolated heartbeat picks up a cron
+  // targeted at the base agent). Only peek a second queue when it is actually
+  // distinct from the one we already peeked, otherwise the same events show
+  // up twice.
+  const crossSessionCronVisible =
+    preflightIsolatedSession && sessionKeyForEvents !== session.sessionKey;
+  const baseCronEvents = crossSessionCronVisible
+    ? peekSystemEventEntries(session.sessionKey).filter((event) =>
+        event.contextKey?.startsWith("cron:"),
+      )
+    : [];
+  // Inspection view: merge the queues we will drain. Every downstream reader
+  // (delivery context resolution, trust checks, classifier, replay guards)
+  // sees the union of events this run owns. The separate consume recipe uses
+  // isolatedQueueEvents and baseCronEvents directly so it never has to
+  // filter the merged list and fall out of exact-prefix consume semantics.
+  const pendingEventEntries = [...isolatedQueueEvents, ...baseCronEvents];
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
-  // Wake-triggered runs should only inspect pending events when preflight peeks
-  // the same queue that the run itself will execute/drain.
-  const shouldInspectWakePendingEvents = (() => {
-    if (!reasonFlags.isWakeReason) {
-      return false;
-    }
-    if (params.heartbeat?.isolatedSession !== true) {
-      return true;
-    }
-    const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
-    const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
-      sessionKey: session.sessionKey,
-      configuredSessionKey: configuredSession.sessionKey,
-      sessionEntry: session.entry,
-    });
-    return isolatedSessionKey === session.sessionKey;
-  })();
+  // `hasPendingWakeDrain` governs the empty-heartbeat-file gate below: even
+  // when the file is empty and no tasks are defined, we should still run if
+  // an event producer has queued wake-tagged events waiting for a heartbeat
+  // to surface them. The check runs against the primary queue because that
+  // is the one the selective drain will actually consume.
+  const hasPendingWakeDrain = isolatedQueueEvents.some((event) => event.wakeRequested);
   const shouldInspectPendingEvents =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
-    shouldInspectWakePendingEvents ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    reasonFlags.isWakeReason;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
@@ -572,6 +614,9 @@ async function resolveHeartbeatPreflight(params: {
     turnSourceDeliveryContext,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
+    isolatedQueueEvents,
+    baseCronEvents,
+    sessionKeyForEvents,
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
   if (shouldBypassFileGates) {
@@ -584,7 +629,11 @@ async function resolveHeartbeatPreflight(params: {
   try {
     heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && tasks.length === 0) {
+    if (
+      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
+      tasks.length === 0 &&
+      !hasPendingWakeDrain
+    ) {
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",
@@ -603,12 +652,21 @@ async function resolveHeartbeatPreflight(params: {
       // Missing HEARTBEAT.md is intentional in some setups (for example, when
       // heartbeat instructions live outside the file), so keep the run active.
       // The heartbeat prompt already says "if it exists".
-      return basePreflight;
+      // When consuming wake events, always proceed even without a heartbeat file.
+      return {
+        ...basePreflight,
+        tasks: [],
+        heartbeatFileContent: undefined,
+      };
     }
     // For other read errors, proceed with heartbeat as before.
   }
 
-  return basePreflight;
+  return {
+    ...basePreflight,
+    tasks: [],
+    heartbeatFileContent,
+  };
 }
 
 type HeartbeatPromptResolution = {
@@ -827,11 +885,32 @@ export async function runHeartbeatOnce(opts: {
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
     // Wake-triggered events should stay queued when the run short-circuits:
-    // no reply turn ran, so there is nothing that actually consumed that wake payload.
-    const shouldConsumeInspectedEvents =
-      !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
-    if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
-      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    // no reply turn ran, so there is nothing that actually consumed that
+    // wake payload. For non-wake runs, consume the inspected events so the
+    // queue does not accumulate state that was already surfaced.
+    if (
+      !preflight.isWakeReason &&
+      preflight.shouldInspectPendingEvents &&
+      preflight.pendingEventEntries.length > 0
+    ) {
+      if (preflight.isolatedQueueEvents.length > 0) {
+        consumeSystemEventEntries(preflight.sessionKeyForEvents, preflight.isolatedQueueEvents);
+      }
+      if (preflight.baseCronEvents.length > 0) {
+        // Scope cleanup to entries that existed at preflight time. Cron
+        // events enqueued during this run (later ts) must survive so the
+        // next turn can surface them — a broad predicate would silently
+        // drop them.
+        const inspectedMaxTs = preflight.baseCronEvents.reduce(
+          (max, event) => (event.ts > max ? event.ts : max),
+          0,
+        );
+        removeSystemEventsMatching(
+          preflight.session.sessionKey,
+          (event) =>
+            event.contextKey?.startsWith("cron:") === true && event.ts <= inspectedMaxTs,
+        );
+      }
     }
     return { status: "skipped", reason: "no-tasks-due" };
   }
@@ -939,7 +1018,36 @@ export async function runHeartbeatOnce(opts: {
     if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
       return;
     }
-    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    // Consume from each source queue directly. The isolated/forced queue was
+    // peeked in full into preflight.isolatedQueueEvents, so consuming that
+    // exact list via consumeSystemEventEntries satisfies its strict
+    // queue-head prefix requirement — no filter step, no silent no-op when
+    // the queue contains interleaved non-matching events.
+    if (preflight.isolatedQueueEvents.length > 0) {
+      consumeSystemEventEntries(preflight.sessionKeyForEvents, preflight.isolatedQueueEvents);
+    }
+    // Cross-session cron events live alongside unrelated base-queue events
+    // (presence updates, model switches) meant for the next user turn.
+    // Removing them by predicate preserves the order of those survivors and
+    // avoids the earlier bug where filter-then-consume would tear the
+    // exact-prefix contract and replay events indefinitely.
+    //
+    // Scope the removal to entries that existed at preflight time via a ts
+    // cutoff: cron events can be enqueued concurrently (e.g. a tick that
+    // fires during this heartbeat's model turn), and those later-ts events
+    // must survive for the next turn to inspect — a broad cron:* predicate
+    // would silently drop them.
+    if (preflight.baseCronEvents.length > 0) {
+      const inspectedMaxTs = preflight.baseCronEvents.reduce(
+        (max, event) => (event.ts > max ? event.ts : max),
+        0,
+      );
+      removeSystemEventsMatching(
+        preflight.session.sessionKey,
+        (event) =>
+          event.contextKey?.startsWith("cron:") === true && event.ts <= inspectedMaxTs,
+      );
+    }
   };
 
   const ctx = {
@@ -1010,8 +1118,35 @@ export async function runHeartbeatOnce(opts: {
       typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    // Event-driven heartbeats (exec completion, cron, hook/wake, node
+    // notifications, etc.) must drain system events so the agent can see the
+    // results referenced by their prompt.  Only truly periodic heartbeats
+    // (interval timer, retry) skip the drain to avoid silently consuming
+    // events that won't be persisted to the session transcript.
+    //
+    // We invert the check: instead of enumerating every event-driven reason,
+    // we treat everything as event-driven UNLESS it's a known periodic reason.
+    // This is safer — new event sources get drain by default.
+    //
+    // Safety net: even periodic runs check whether events are queued.  Normally
+    // each event type triggers its own event-driven wake (e.g. exec completions
+    // fire reason "exec:<id>:exit" → reasonKind "other" → drain).  But if a
+    // wake was missed (e.g. heartbeats were temporarily disabled when the event
+    // arrived), the next interval run is the only chance to pick them up.
+    // Without this fallback, those events would stay stuck until a user message
+    // or another event-driven wake happens to drain the queue.
+    const reasonKind = resolveHeartbeatReasonKind(opts.reason);
+    const isPeriodicHeartbeat = reasonKind === "interval" || reasonKind === "retry";
+    // Periodic heartbeats drain tagged cron events normally (hasCronEvents →
+    // isEventDriven) and selectively drain wakeRequested events via the
+    // session-system-events layer.  We intentionally do NOT treat arbitrary
+    // queued events as event-driven — some (model switch, fast-mode toggle)
+    // are enqueued without requestHeartbeatNow and are meant for the next
+    // user turn.
+    const isEventDriven = !isPeriodicHeartbeat || hasCronEvents;
     const replyOpts = {
       isHeartbeat: true,
+      isEventDrivenHeartbeat: isEventDriven,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
       // Heartbeat timeout is a per-run override so user turns keep the global default.
