@@ -431,20 +431,23 @@ function appendDirectoryFingerprint(hash, rootDir, currentDir = rootDir) {
   for (const entry of entries) {
     const fullPath = path.join(currentDir, entry.name);
     const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, "/");
-    if (entry.isSymbolicLink()) {
+    // On Windows, some pnpm-materialized files can look symlink-like at the
+    // Dirent layer even when lstat reports a regular file. Re-check the path
+    // before calling readlink so runtime fingerprinting stays stable.
+    const entryStats = fs.lstatSync(fullPath);
+    if (entryStats.isSymbolicLink()) {
       hash.update(`symlink:${relativePath}->${fs.readlinkSync(fullPath).replace(/\\/g, "/")}\n`);
       continue;
     }
-    if (entry.isDirectory()) {
+    if (entryStats.isDirectory()) {
       hash.update(`dir:${relativePath}\n`);
       appendDirectoryFingerprint(hash, rootDir, fullPath);
       continue;
     }
-    if (!entry.isFile()) {
+    if (!entryStats.isFile()) {
       continue;
     }
-    const stat = fs.statSync(fullPath);
-    hash.update(`file:${relativePath}:${stat.size}\n`);
+    hash.update(`file:${relativePath}:${entryStats.size}\n`);
     hash.update(fs.readFileSync(fullPath));
   }
 }

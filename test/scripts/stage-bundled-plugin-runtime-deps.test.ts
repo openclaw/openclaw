@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectRuntimeDependencyInstallManifest,
   collectRuntimeDependencyInstallSpecs,
@@ -9,6 +9,10 @@ import {
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("stageBundledPluginRuntimeDeps", () => {
   function createBundledPluginFixture(params: {
@@ -280,6 +284,70 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(
       fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
     ).toBe("module.exports = 'second';\n");
+  });
+
+  it("ignores dirent symlink false positives for runtime fingerprinting", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const packageJsonPath = path.join(directDir, "package.json");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      packageJsonPath,
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'runtime';\n", "utf8");
+
+    const originalReaddirSync = fs.readdirSync.bind(fs);
+    const readlinkSpy = vi.spyOn(fs, "readlinkSync");
+
+    vi.spyOn(fs, "readdirSync").mockImplementation(
+      ((targetPath: Parameters<typeof fs.readdirSync>[0], options?: unknown) => {
+        if (
+          String(targetPath) === directDir &&
+          typeof options === "object" &&
+          options !== null &&
+          "withFileTypes" in options &&
+          (options as { withFileTypes?: boolean }).withFileTypes === true
+        ) {
+          const makeDirent = (
+            name: string,
+            kind: "file" | "directory" | "symlink",
+          ): fs.Dirent<string> =>
+            ({
+              name,
+              isBlockDevice: () => false,
+              isCharacterDevice: () => false,
+              isDirectory: () => kind === "directory",
+              isFIFO: () => false,
+              isFile: () => kind === "file",
+              isSocket: () => false,
+              isSymbolicLink: () => kind === "symlink",
+            }) as fs.Dirent<string>;
+          return [
+            makeDirent("index.js", "file"),
+            makeDirent("package.json", "symlink"),
+          ] as ReturnType<typeof fs.readdirSync>;
+        }
+        return originalReaddirSync(
+          targetPath,
+          options as Parameters<typeof fs.readdirSync>[1],
+        ) as ReturnType<typeof fs.readdirSync>;
+      }) as typeof fs.readdirSync,
+    );
+
+    expect(() => stageBundledPluginRuntimeDeps({ cwd: repoRoot })).not.toThrow();
+    expect(readlinkSpy).not.toHaveBeenCalledWith(packageJsonPath);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'runtime';\n");
   });
 
   it("refuses to replace a symlinked plugin node_modules directory", () => {
