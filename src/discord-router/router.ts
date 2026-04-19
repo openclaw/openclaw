@@ -334,7 +334,7 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             const state = instance.onboardingState;
             if (state === "greeted") {
               // User is responding with their name
-              content = `[System: The user just told you their name. Acknowledge it warmly in ONE short sentence only (e.g. "Nice to meet you, Horse! 🐴"). Do NOT ask any questions or offer help. Just the name acknowledgment.]\n${content}`;
+              content = `[System: The user just told you their name. Acknowledge it warmly in ONE short sentence only (e.g. "Nice to meet you, {name}! 👋"). Do NOT ask any questions or offer help. Just the name acknowledgment.]\n${content}`;
             } else if (state === "named") {
               // Named but auth link wasn't sent (e.g. router restarted mid-flow).
               // Re-send the Google auth link now.
