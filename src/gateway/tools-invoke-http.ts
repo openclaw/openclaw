@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
-import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { isKnownCoreToolId, isCoreToolPluginImplemented } from "../agents/tool-catalog.js";
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
@@ -248,7 +248,7 @@ export async function handleToolsInvokeHttpRequest(
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
     surface: "http",
-    disablePluginTools: isKnownCoreToolId(toolName),
+    disablePluginTools: isKnownCoreToolId(toolName) && !isCoreToolPluginImplemented(toolName),
     senderIsOwner,
   });
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
