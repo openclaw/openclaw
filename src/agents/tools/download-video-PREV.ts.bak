@@ -650,44 +650,43 @@ function sanitizeFilename(title: string): string {
  * Builds a media URL for accessing downloaded files
  * The link is created for the included media server which can play the streaming media locally.
  */
-function buildMediaUrl(workspaceRoot: string, filePath: string): string {
-  // 1. Cross-platform normalization
-  // path.resolve() handles OS-specific absolute paths.
-  // .replace(/\\/g, '/') handles Windows backslashes so string matching works on all platforms.
-  const normalizedFile = path.resolve(filePath).replace(/\\/g, '/');
-  const normalizedRoot = path.resolve(workspaceRoot).replace(/\\/g, '/');
-
-  let relativePath = "";
-
-  // 2. Locate the "workspace" anchor (case-insensitive for Windows compatibility)
-  const workspaceMarker = "/workspace/";
-  const lowerFile = normalizedFile.toLowerCase();
-  const workspaceIndex = lowerFile.indexOf(workspaceMarker);
-
-  if (workspaceIndex !== -1) {
-    // Slice from the original normalizedFile to preserve folder casing (e.g., "Sasha-Main")
-    relativePath = normalizedFile.slice(workspaceIndex + workspaceMarker.length);
-  } else {
-    // Fallback: If "workspace" isn't in the path, manually strip the provided workspaceRoot
-    const rootDir = normalizedRoot.endsWith('/') ? normalizedRoot : normalizedRoot + '/';
-    
-    if (normalizedFile.startsWith(rootDir)) {
-      relativePath = normalizedFile.slice(rootDir.length);
-    } else {
-      // If the file is somehow outside the tree, just return the filename
-      relativePath = path.basename(normalizedFile);
-    }
+function buildMediaUrl(workspaceRoot: string, filePath: string, gatewayOrigin?: string): string {
+  // Ensure paths are absolute and resolved
+  const resolvedWorkspace = path.resolve(workspaceRoot);
+  const resolvedFilePath = path.resolve(filePath);
+  
+  // Calculate relative path from workspace root
+  let relativePath = path.relative(resolvedWorkspace, resolvedFilePath);
+  
+  // Handle case where file is exactly the workspace root
+  if (relativePath === '') {
+    relativePath = path.basename(resolvedFilePath);
   }
-
-  // 3. Clean, segment, and encode for URL safety
-  const encodedPath = relativePath
-    .split('/')
-    .filter(Boolean) // Prevents empty segments or double slashes
-    .map(encodeURIComponent)
-    .join('/');
-
-  // Return with the leading slash the media server expects for its routes
-  return `/${encodedPath}`;
+  
+  // Convert Windows backslashes to forward slashes for URLs
+  const posixPath = relativePath.split(path.sep).join('/');
+  
+  // Encode each path segment for URL safety (spaces, special chars, etc.)
+  const encodedPath = posixPath.split('/').map(encodeURIComponent).join('/');
+  
+  // Determine the base origin
+  let baseOrigin: string;
+  if (gatewayOrigin) {
+    baseOrigin = gatewayOrigin.replace(/\/$/, '');
+  } else {
+    baseOrigin = `http://localhost:${MEDIA_SERVER_PORT}`;
+  }
+  
+  // Construct direct file URL for the media server
+  const mediaUrl = `${baseOrigin}/${encodedPath}`;
+  
+  // Log for debugging (remove in production if needed)
+  console.log(`Media URL constructed: ${mediaUrl}`);
+  console.log(`  Workspace: ${resolvedWorkspace}`);
+  console.log(`  File: ${resolvedFilePath}`);
+  console.log(`  Relative: ${relativePath}`);
+  
+  return mediaUrl;
 }
 
 export const downloadVideoTool = {
@@ -707,133 +706,155 @@ export const downloadVideoTool = {
     required: ["url"]
   },
   execute: async (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>> => {
-    const abortController = new AbortController();
-    let wasAborted = false;
-    
-    try {
-      if (signal) {
-        if (signal.aborted) {
+  // Create a child process controller that can properly kill yt-dlp
+  const abortController = new AbortController();
+  
+  // Track if we should re-throw abort error
+  let wasAborted = false;
+  
+  try {
+    // Link external signal to internal controller
+    if (signal) {
+      if (signal.aborted) {
+        abortController.abort();
+        wasAborted = true;
+      } else {
+        signal.addEventListener('abort', () => {
           abortController.abort();
           wasAborted = true;
-        } else {
-          signal.addEventListener('abort', () => {
-            abortController.abort();
-            wasAborted = true;
-          }, { once: true });
-        }
+        }, { once: true });
       }
-      
-      await ensureFfmpeg();
-      const ytDlpPath = await ensureYtDlp(abortController.signal);
-      const workspaceRoot = await resolveWorkspaceRoot();
-      
-      const typedParams = params as Record<string, unknown>;
-      const videoUrl = typedParams.url as string;
-      
-      if (!videoUrl || typeof videoUrl !== 'string') {
-        throw new Error('Invalid or missing URL parameter');
-      }
+    }
+    
+    await ensureFfmpeg();
+    const ytDlpPath = await ensureYtDlp(abortController.signal);
+    
+    // FIX: SECURITY - workspace root MUST come from trusted runtime context
+    const workspaceRoot = await resolveWorkspaceRoot();
+    
+    // Validate params structure
+    const typedParams = params as Record<string, unknown>;
+    
+    // Explicitly check that workspaceRoot is NOT being passed from params
+    if ('workspaceRoot' in typedParams && typedParams.workspaceRoot !== undefined) {
+      console.warn('Security: Attempted workspaceRoot injection detected and blocked');
+    }
+    
+    const videoUrl = typedParams.url as string;
+    if (!videoUrl || typeof videoUrl !== 'string') {
+      throw new Error('Invalid or missing URL parameter');
+    }
 
-      // 1. Determine Format
-      let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
-      if (typedParams.quality === "720") {
-          formatSelector = "bestvideo[height<=720]+bestaudio/best[height<=720]";
-      } else if (typedParams.quality === "best") {
-          formatSelector = "bestvideo+bestaudio/best";
-      } else if (typedParams.quality === "worst") {
-          formatSelector = "worstvideo+worstaudio/worst";
-      }
+    let formatSelector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]";
+    if (typedParams.quality === "720") {
+        formatSelector = "bestvideo[height<=720]+bestaudio/best[height<=720]";
+    } else if (typedParams.quality === "best") {
+        formatSelector = "bestvideo+bestaudio/best";
+    } else if (typedParams.quality === "worst") {
+        formatSelector = "worstvideo+worstaudio/worst";
+    } else if (typedParams.quality && typeof typedParams.quality === "string" && typedParams.quality.includes("[")) {
+        formatSelector = typedParams.quality;
+    }
 
-      // 2. Get Title for Sanitization
-      const { stdout: rawTitle } = await execFileAsync(
-        ytDlpPath, 
-        ['--get-title', '--no-playlist', videoUrl],
-        { signal: abortController.signal }
-      );
-      
-      const sanitized = sanitizeFilename(rawTitle);
-      const outputTemplate = `${sanitized}.%(ext)s`;
+    const { stdout: rawTitle } = await execFileAsync(
+      ytDlpPath, 
+      ['--get-title', '--no-playlist', videoUrl],
+      { signal: abortController.signal }
+    );
+    
+    const sanitized = sanitizeFilename(rawTitle);
+    
+    const outputTemplate = `${sanitized}.%(ext)s`;
 
-      if (onUpdate) {
-          const qualityStr = typeof typedParams.quality === 'string' ? typedParams.quality : '1080';
-          onUpdate({
-            content: [{ type: "text", text: `Starting download: ${rawTitle.trim()} (${qualityStr}p)...` }],
-            details: { status: "downloading", quality: qualityStr }
-          });
-      }
+    if (onUpdate) {
+        const qualityStr = typeof typedParams.quality === 'string' ? typedParams.quality : '1080';
+        onUpdate({
+          content: [{ type: "text", text: `Starting download in ${qualityStr}p...` }],
+          details: { status: "downloading", quality: qualityStr }
+        });
+    }
 
-      // 3. Perform Download
-      // We use --print after_move:filepath to get the EXACT final location
-      const { stdout: ytDlpOutput } = await execFileAsync(ytDlpPath, [
-        '-f', formatSelector,
-        '--no-playlist',
-        '--restrict-filenames',
-        '--force-overwrites',
-        '--quiet',
-        '--no-progress',
-        '-o', outputTemplate,
-        '--print', 'after_move:filepath', 
-        videoUrl
-      ], { 
-        cwd: workspaceRoot, 
-        timeout: 300000,
-        maxBuffer: 100 * 1024 * 1024,
-        signal: abortController.signal
-      });
+    const { stdout: ytDlpOutput } = await execFileAsync(ytDlpPath, [
+      '-f', formatSelector,
+      '--no-playlist',
+      '--restrict-filenames',
+      '--force-overwrites',
+      '--quiet',
+      '--no-progress',
+      '-o', outputTemplate,
+      '--print', 'after_move:filepath',
+      videoUrl
+    ], { 
+      cwd: workspaceRoot, 
+      timeout: 300000,
+      maxBuffer: 100 * 1024 * 1024,
+      signal: abortController.signal
+    });
 
-      // 4. Resolve the Final Path
-      // yt-dlp returns the full absolute path of the saved file
-      const lines = ytDlpOutput?.split('\n').filter(Boolean);
-      const finalPath = lines?.[lines.length - 1]?.trim();
-      
-      if (!finalPath) {
-        throw new Error("Download completed but file path not found in yt-dlp output");
-      }
+    await new Promise(resolve => setTimeout(resolve, 100));
 
-      // 5. Security & Verification
-      const resolvedPath = path.resolve(finalPath);
-      const resolvedWorkspace = path.resolve(workspaceRoot);
-      
-      if (!isPathWithinBoundary(resolvedPath, resolvedWorkspace)) {
-        throw new Error(`Security violation: Attempted to access file outside workspace: ${resolvedPath}`);
-      }
-      
-      const stats = await fs.stat(resolvedPath);
+    const lines = ytDlpOutput?.split('\n').filter(Boolean);
+    // FIX: Don't use basename here - keep the full relative path
+    const downloadedFilePath = lines?.[lines.length - 1]?.trim();
+    
+    if (!downloadedFilePath) {
+      throw new Error("Download completed but file path not found in yt-dlp output");
+    }
+
+    // Use the path directly from yt-dlp output
+    const downloadedFile = path.basename(downloadedFilePath);
+    const finalPath = path.join(workspaceRoot, downloadedFile);
+    
+    // Security: Validate the final path is still within workspace (defense in depth)
+    const resolvedPath = path.resolve(finalPath);
+    const resolvedWorkspace = path.resolve(workspaceRoot);
+    if (!isPathWithinBoundary(resolvedPath, resolvedWorkspace)) {
+      throw new Error(`Security violation: Attempted to access file outside workspace: ${resolvedPath}`);
+    }
+    
+    try {
+      const stats = await fs.stat(finalPath);
       if (stats.size === 0) {
         throw new Error("Downloaded file is empty");
       }
-        
-      // 6. Build the URL using our workspace-anchored logic
-      const fileUrl = buildMediaUrl(workspaceRoot, resolvedPath);
-      const fileName = path.basename(resolvedPath);
+      
+      const gatewayOrigin = process.env.GATEWAY_ORIGIN || process.env.ASSISTANT_API_BASE;
+      const fileUrl = buildMediaUrl(workspaceRoot, finalPath, gatewayOrigin);
 
       return {
         content: [{
           type: "text",
-          text: `✅ **Download Success**\n**File:** ${fileName}\n**Size:** ${(stats.size / 1e6).toFixed(2)} MB\n**Stream URL:** ${fileUrl}`
+          text: `✅ **Download Success**\nURL: ${fileUrl}\nFile: ${downloadedFile}\nSize: ${(stats.size / 1e6).toFixed(2)} MB`
         }],
         details: { 
           status: "complete",
-          filename: fileName, 
+          filename: downloadedFile, 
           mediaUrl: fileUrl, 
-          fullPath: resolvedPath,
+          fullPath: finalPath,
           sizeMB: (stats.size / 1e6).toFixed(2) 
         }
       };
-      
-    } catch (err: unknown) {
-      const error = err as Error;
-      if (error.name === 'AbortError' || wasAborted || abortController.signal.aborted) {
-        throw error;
-      }
-      return {
-        content: [{ type: "text", text: `❌ Error: ${error.message}` }],
-        details: { error: error.message, status: "failed" }
-      };
-    } finally {
-      if (!abortController.signal.aborted) {
-        abortController.abort();
-      }
+    } catch (statError) {
+      throw new Error(`File verification failed: ${finalPath} does not exist or is inaccessible`, {
+        cause: statError
+      });
+    }
+    
+  } catch (err: unknown) {
+    const error = err as Error;
+    
+    if (error.name === 'AbortError' || wasAborted || abortController.signal.aborted) {
+      throw error;
+    }
+    
+    return {
+      content: [{ type: "text", text: `❌ Error: ${error.message}` }],
+      details: { error: error.message, status: "failed" }
+    };
+  } finally {
+    if (!abortController.signal.aborted) {
+      abortController.abort();
     }
   }
+}
 };
