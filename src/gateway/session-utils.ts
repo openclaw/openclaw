@@ -1181,7 +1181,10 @@ export function resolveSessionModelIdentityRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride" | "modelIsFromFallback">,
+    | Pick<
+        SessionEntry,
+        "model" | "modelProvider" | "modelOverride" | "providerOverride" | "modelIsFromFallback"
+      >,
   agentId?: string,
   fallbackModelRef?: string,
 ): { provider?: string; model: string } {
@@ -1379,8 +1382,9 @@ export function buildGatewaySessionRow(params: {
       model,
       entry,
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
+  const isEntryFromFallback = entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback;
   const contextTokens =
-    resolvePositiveNumber(entry?.contextTokens) ??
+    (!isEntryFromFallback ? resolvePositiveNumber(entry?.contextTokens) : undefined) ??
     resolvePositiveNumber(transcriptUsage?.contextTokens) ??
     resolvePositiveNumber(
       resolveContextTokensForModel({
