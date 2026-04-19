@@ -20,6 +20,10 @@ type PluginToolMeta = {
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 
+export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
+  pluginToolMeta.set(tool, meta);
+}
+
 export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
 }
