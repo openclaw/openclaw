@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
@@ -53,6 +54,36 @@ function prioritizeProvider(
   return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
 }
 
+function replaceOutsideCodeRegions(
+  text: string,
+  regex: RegExp,
+  replacer: (match: RegExpMatchArray) => string,
+  shouldPreserveMatch: (
+    match: RegExpMatchArray,
+    start: number,
+    codeRegions: { start: number; end: number }[],
+  ) => boolean = (_match, start, codeRegions) => isInsideCode(start, codeRegions),
+): string {
+  regex.lastIndex = 0;
+  const codeRegions = findCodeRegions(text);
+  let out = "";
+  let cursor = 0;
+
+  for (const match of text.matchAll(regex)) {
+    const start = match.index ?? 0;
+    out += text.slice(cursor, start);
+    if (shouldPreserveMatch(match, start, codeRegions)) {
+      out += match[0];
+    } else {
+      out += replacer(match);
+    }
+    cursor = start + match[0].length;
+  }
+
+  out += text.slice(cursor);
+  return out;
+}
+
 export function parseTtsDirectives(
   text: string,
   policy: SpeechModelOverridePolicy,
@@ -69,16 +100,34 @@ export function parseTtsDirectives(
   let hasDirective = false;
 
   const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
-  cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
-    hasDirective = true;
-    if (policy.allowText && overrides.ttsText == null) {
-      overrides.ttsText = inner.trim();
-    }
-    return "";
-  });
+  const ttsTextOpenTagLength = "[[tts:text]]".length;
+  const ttsTextCloseTagLength = "[[/tts:text]]".length;
+  cleanedText = replaceOutsideCodeRegions(
+    cleanedText,
+    blockRegex,
+    (match) => {
+      const inner = match[1] ?? "";
+      hasDirective = true;
+      if (policy.allowText && overrides.ttsText == null) {
+        overrides.ttsText = inner.trim();
+      }
+      return "";
+    },
+    (match, start, codeRegions) => {
+      const end = start + match[0].length;
+      const closingTagStart = end - ttsTextCloseTagLength;
+      return (
+        isInsideCode(start, codeRegions) ||
+        isInsideCode(start + ttsTextOpenTagLength - 1, codeRegions) ||
+        isInsideCode(closingTagStart, codeRegions) ||
+        isInsideCode(closingTagStart + ttsTextCloseTagLength - 1, codeRegions)
+      );
+    },
+  );
 
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
-  cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
+  cleanedText = replaceOutsideCodeRegions(cleanedText, directiveRegex, (match) => {
+    const body = match[1] ?? "";
     hasDirective = true;
     const tokens = body.split(/\s+/).filter(Boolean);
 

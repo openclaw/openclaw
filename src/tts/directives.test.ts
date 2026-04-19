@@ -144,4 +144,63 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
     expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
   });
+
+  it("ignores directive-like tags inside inline code spans", () => {
+    const input = '`messages.tts.auto = "tagged"` -> need `[[tts:text]]` tag';
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(false);
+    expect(result.cleanedText).toBe(input);
+    expect(result.overrides).toEqual({});
+  });
+
+  it("ignores TTS directive blocks inside fenced code blocks", () => {
+    const input = "Example:\n```md\n[[tts:text]]\nquoted example\n[[/tts:text]]\n```\nDone.";
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(false);
+    expect(result.cleanedText).toBe(input);
+    expect(result.overrides).toEqual({});
+  });
+
+  it("keeps parsing real TTS text blocks when their body contains code", () => {
+    const input = "[[tts:text]]Use `pnpm test` here.\n```sh\necho hello\n```\n[[/tts:text]]";
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("");
+    expect(result.ttsText).toBe("Use `pnpm test` here.\n```sh\necho hello\n```");
+  });
+
+  it("still parses real directives outside code regions", () => {
+    const input =
+      "`[[tts:text]]` is literal here, but [[tts:provider=minimax speed=1.2]] should still apply.";
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toContain("`[[tts:text]]`");
+    expect(result.cleanedText).not.toContain("[[tts:provider=minimax speed=1.2]]");
+    expect(result.overrides.provider).toBe("minimax");
+    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
+  });
+
+  it("still parses real text blocks that contain inline code", () => {
+    const input = "[[tts:text]]Read `[[tts:text]]` literally.[[/tts:text]]";
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("");
+    expect(result.ttsText).toBe("Read `[[tts:text]]` literally.");
+    expect(result.overrides).toEqual({ ttsText: "Read `[[tts:text]]` literally." });
+  });
 });
