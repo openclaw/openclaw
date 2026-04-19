@@ -6,5 +6,7 @@ export {
   buildApprovedPlanInjection,
   buildAcceptEditsPlanInjection,
   DEFAULT_APPROVAL_CONFIG,
+  MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE,
+  SUBAGENT_SETTLE_GRACE_MS,
   type PlanApprovalConfig,
 } from "./approval.js";
