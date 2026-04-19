@@ -55,6 +55,8 @@ const MOONSHOT_MODEL_CATALOG = [
   },
 ] as const;
 
+export { MOONSHOT_MODEL_CATALOG };
+
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
   return supportsNativeStreamingUsageCompat({
     providerId: "moonshot",
