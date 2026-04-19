@@ -141,6 +141,23 @@ export function resolvePlanApproval(
 }
 
 /**
+ * Grace window (ms) after a subagent completes during plan mode
+ * before exit_plan_mode and sessions.patch approve/edit can fire.
+ * Lets completion events propagate and parent announce-turns settle.
+ * Tuned conservatively: log-forensics shows most event-propagation
+ * lag is < 2s; 10s gives 5× headroom with minimal user-visible
+ * friction.
+ */
+export const SUBAGENT_SETTLE_GRACE_MS = 10_000;
+
+/**
+ * Maximum concurrent subagents allowed during plan mode. Prevents
+ * spawn-stacking during plan investigation which would multiply the
+ * race-window surface at exit_plan_mode time.
+ */
+export const MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE = 1;
+
+/**
  * Builds the context injection for an approved plan.
  * Tells the agent to execute the approved plan without re-planning.
  *

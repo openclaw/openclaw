@@ -324,6 +324,20 @@ export type AgentRunContext = {
    * change actions even when general normal-mode execution is allowed.
    */
   getLatestAcceptEdits?: () => boolean;
+  /**
+   * Timestamp (ms since epoch) of the most-recent `openSubagentRunIds`
+   * drain-to-zero event. Used by the subagent grace-window gate in
+   * `exit_plan_mode` and in `sessions.patch { planApproval }` so a
+   * parent can't submit a plan OR the user can't approve one in the
+   * instant after a subagent completion — the short window lets
+   * completion events propagate and announce-turns settle before the
+   * approval flow proceeds.
+   *
+   * Undefined when no subagent has ever been spawned (or completed) in
+   * this run. The grace gate short-circuits on undefined (no grace
+   * window to enforce).
+   */
+  lastSubagentSettledAt?: number;
 };
 
 type AgentEventState = {
@@ -355,8 +369,21 @@ function getAgentEventState(): AgentEventState {
  */
 export function drainCompletedSubagentFromParents(childRunId: string): void {
   const state = getAgentEventState();
+  const now = Date.now();
   for (const ctx of state.runContextById.values()) {
-    ctx.openSubagentRunIds?.delete(childRunId);
+    const set = ctx.openSubagentRunIds;
+    if (!set) {
+      continue;
+    }
+    const hadChild = set.delete(childRunId);
+    // Grace-window fix: when this drain brings the set to zero, stamp
+    // the settle time so the exit_plan_mode tool-side gate and the
+    // sessions.patch approval-side gate can both enforce a short
+    // post-completion delay. Prevents the announce-turn-races-the-
+    // approval-resume-turn failure mode.
+    if (hadChild && set.size === 0) {
+      ctx.lastSubagentSettledAt = now;
+    }
   }
 }
 

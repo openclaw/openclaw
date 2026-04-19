@@ -4,6 +4,7 @@ import { callGateway } from "../../gateway/call.js";
 import { getAgentRunContext } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE } from "../plan-mode/index.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -252,6 +253,23 @@ export function createSessionsSpawnTool(
         });
       }
 
+      // Subagent concurrency cap during plan mode. Without this, an
+      // agent in plan mode could spawn N research children and build
+      // up a race surface where each completion fires an announce-
+      // turn that could collide with exit_plan_mode submission or
+      // approval resolution. Cap is 1 — subsequent spawns are
+      // rejected with a ToolInputError (agent learns to sequence).
+      const spawnParentCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
+      if (
+        spawnParentCtx?.inPlanMode === true &&
+        (spawnParentCtx.openSubagentRunIds?.size ?? 0) >= MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE
+      ) {
+        throw new ToolInputError(
+          `Plan mode allows only ${MAX_CONCURRENT_SUBAGENTS_IN_PLAN_MODE} concurrent research subagent. ` +
+            "Wait for the current child to return before spawning another.",
+        );
+      }
+
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
         if (Array.isArray(attachments) && attachments.length > 0) {
@@ -282,8 +300,6 @@ export function createSessionsSpawnTool(
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
             agentGroupId: opts?.agentGroupId ?? undefined,
-            agentGroupSpace: opts?.agentGroupSpace,
-            agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
           },
         );
@@ -410,7 +426,6 @@ export function createSessionsSpawnTool(
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
-          agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
         },

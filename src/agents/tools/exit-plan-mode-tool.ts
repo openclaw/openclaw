@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { getAgentRunContext } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { SUBAGENT_SETTLE_GRACE_MS } from "../plan-mode/index.js";
 import { logPlanModeDebug } from "../plan-mode/plan-mode-debug-log.js";
 
 // Live-test iter-3 R6a: always-on logger for the tool-side subagent
@@ -288,6 +289,23 @@ export function createExitPlanModeTool(options?: CreateExitPlanModeToolOptions):
               `children as a blocking dependency of the investigation phase — ` +
               `'research launched' is not 'research complete.'`,
           );
+        }
+        // Subagent grace window. When the last subagent completed
+        // less than SUBAGENT_SETTLE_GRACE_MS ago, exit_plan_mode is
+        // blocked so the completion events can propagate and any
+        // parent announce-turns can settle before the approval-
+        // resume turn fires. Prevents the announce-turn-races-
+        // approval race window (RW1 in the fix plan).
+        const settledAt = ctx?.lastSubagentSettledAt;
+        if (typeof settledAt === "number") {
+          const sinceSettled = Date.now() - settledAt;
+          if (sinceSettled < SUBAGENT_SETTLE_GRACE_MS) {
+            const remainSec = Math.ceil((SUBAGENT_SETTLE_GRACE_MS - sinceSettled) / 1000);
+            throw new ToolInputError(
+              `Subagent just returned. Wait ${remainSec}s for completion events and ` +
+                `parent announce-turns to settle before submitting the plan.`,
+            );
+          }
         }
       }
       // PR-8 follow-up: return non-empty content. Empty content arrays

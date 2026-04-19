@@ -10,6 +10,7 @@ import {
   buildAcceptEditsPlanInjection,
   buildApprovedPlanInjection,
   resolvePlanApproval,
+  SUBAGENT_SETTLE_GRACE_MS,
 } from "../agents/plan-mode/index.js";
 import { appendToInjectionQueue } from "../agents/plan-mode/injections.js";
 import { logPlanModeDebug } from "../agents/plan-mode/plan-mode-debug-log.js";
@@ -768,6 +769,27 @@ export async function applySessionsPatchToStore(params: {
               "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS",
               { openSubagentRunIds: [...open] },
             );
+          }
+          // Subagent grace window. Even when no subagents are open,
+          // if the last one settled recently there's a risk that a
+          // parent announce-turn is in flight and will collide with
+          // the approval-resume turn. Only gates approve/edit;
+          // reject is intentionally always allowed (users can
+          // always reject).
+          if (action === "approve" || action === "edit") {
+            const settledAt = parentCtx?.lastSubagentSettledAt;
+            if (typeof settledAt === "number") {
+              const sinceSettled = Date.now() - settledAt;
+              if (sinceSettled < SUBAGENT_SETTLE_GRACE_MS) {
+                const retryAfterMs = SUBAGENT_SETTLE_GRACE_MS - sinceSettled;
+                const remainSec = Math.ceil(retryAfterMs / 1000);
+                return invalid(
+                  `Subagent recently settled. Wait ${remainSec}s for state to stabilize before approving.`,
+                  "PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE",
+                  { retryAfterMs },
+                );
+              }
+            }
           }
         } else {
           // Diagnostic: gate can't fire because approvalRunId wasn't
