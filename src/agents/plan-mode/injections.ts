@@ -161,6 +161,32 @@ export function upsertIntoQueue(
 }
 
 /**
+ * In-place mutator: appends an entry to a session's injection queue,
+ * migrating any legacy scalar in the same pass. SYNCHRONOUS — for use
+ * inside an existing `updateSessionStoreEntry` callback where the store
+ * lock is already held. Do NOT call `enqueuePendingAgentInjection` from
+ * such a context; it would deadlock on the re-entrant lock.
+ *
+ * Mutates `entry` in place. Returns nothing; the caller is expected to
+ * return the mutated `entry` (or a Partial that includes the updated
+ * queue) from their update callback.
+ */
+export function appendToInjectionQueue(
+  entry: SessionEntry,
+  newEntry: PendingAgentInjectionEntry,
+  log?: Log,
+): void {
+  const now = Date.now();
+  const migrated = migrateLegacyPendingInjection(entry, now);
+  const next = upsertIntoQueue(migrated.queue, newEntry);
+  const capped = sortAndCapQueue(next, log);
+  entry.pendingAgentInjections = capped;
+  if (migrated.migrated) {
+    delete entry.pendingAgentInjection;
+  }
+}
+
+/**
  * Atomically enqueues a pending injection for a session. Any existing
  * legacy scalar `pendingAgentInjection` on the entry is migrated into
  * the queue as part of the same write. Same-id entries are upserted.

@@ -4,6 +4,7 @@ export { checkMutationGate, type MutationGateResult } from "./mutation-gate.js";
 export {
   resolvePlanApproval,
   buildApprovedPlanInjection,
+  buildAcceptEditsPlanInjection,
   DEFAULT_APPROVAL_CONFIG,
   type PlanApprovalConfig,
 } from "./approval.js";

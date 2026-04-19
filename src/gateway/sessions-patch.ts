@@ -6,7 +6,12 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
-import { resolvePlanApproval } from "../agents/plan-mode/index.js";
+import {
+  buildAcceptEditsPlanInjection,
+  buildApprovedPlanInjection,
+  resolvePlanApproval,
+} from "../agents/plan-mode/index.js";
+import { appendToInjectionQueue } from "../agents/plan-mode/injections.js";
 import { logPlanModeDebug } from "../agents/plan-mode/plan-mode-debug-log.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -511,9 +516,10 @@ export async function applySessionsPatchToStore(params: {
         const isFirstPlanModeEntry = next.planModeIntroDeliveredAt === undefined;
         if (isFirstPlanModeEntry) {
           next.planModeIntroDeliveredAt = planNow;
-          // Don't overwrite an existing pendingAgentInjection (e.g. a
-          // simultaneous [QUESTION_ANSWER]: from a prior turn). Append
-          // intro to it so both signals reach the agent's next turn.
+          // Enqueue the one-shot intro as a typed queue entry.
+          // Priority is low (plan_intro=3) so a concurrently-queued
+          // [QUESTION_ANSWER] or [PLAN_DECISION] drains first — the
+          // intro is purely informational.
           const introLines = [
             "[PLAN_MODE_INTRO]: Plan mode is now active for the first time on this session. Quick lifecycle:",
             "  1. Investigate read-only (read, grep, web_search, lcm_*); track progress with update_plan.",
@@ -523,10 +529,12 @@ export async function applySessionsPatchToStore(params: {
             "Hard rules: do NOT post chat after exit_plan_mode in the same turn; wait for ALL spawned subagents BEFORE exit_plan_mode; update_plan does NOT submit (only exit_plan_mode does).",
             "Full reference: see the bootstrap-injected plan-mode reference card above (state diagram + tag taxonomy + slash commands + debugging tips). Run `/plan self-test` to verify your local install end-to-end.",
           ].join("\n");
-          next.pendingAgentInjection =
-            next.pendingAgentInjection !== undefined
-              ? `${next.pendingAgentInjection}\n\n${introLines}`
-              : introLines;
+          appendToInjectionQueue(next, {
+            id: `plan-intro-${storeKey}-${planNow}`,
+            kind: "plan_intro",
+            text: introLines,
+            createdAt: planNow,
+          });
         }
         next.planMode = {
           mode: "plan",
@@ -634,7 +642,21 @@ export async function applySessionsPatchToStore(params: {
       const safeAnswer = answer
         .replace(/@(channel|here|everyone)\b/gi, "@\u{FE6B}$1")
         .replace(/<@/g, "<\u{200B}@");
-      next.pendingAgentInjection = `[QUESTION_ANSWER]: ${safeAnswer}`;
+      // Layered: our wave-3/4 answer-guard validation chain (above)
+      // already verified pendingQuestionApprovalId match + option
+      // membership. Now enqueue via the typed queue (commit
+      // 11d72adf9b) — supersedes the prior scalar
+      // `next.pendingAgentInjection = ...` write so concurrent
+      // writers don't clobber each other. The approvalId is
+      // guaranteed non-empty here (the validation above returned
+      // early on missing approvalId).
+      appendToInjectionQueue(next, {
+        id: `question-answer-${pendingQuestionApprovalId}`,
+        approvalId: pendingQuestionApprovalId,
+        kind: "question_answer",
+        text: `[QUESTION_ANSWER]: ${safeAnswer}`,
+        createdAt: now,
+      });
       // Clear the pending-question markers — one question, one
       // answer. A re-ask requires a fresh `ask_user_question` call
       // which will re-populate the trio.
@@ -793,8 +815,31 @@ export async function applySessionsPatchToStore(params: {
       // runtime consumer.
       if (action === "approve" || action === "edit") {
         next.recentlyApprovedAt = now;
-        const decisionLabel = action === "approve" ? "approved" : "edited";
-        next.pendingAgentInjection = `[PLAN_DECISION]: ${decisionLabel}`;
+        // Read the plan steps BEFORE the planMode.mode === "normal"
+        // branch below deletes `next.planMode` entirely. The approved
+        // plan must flow into the injection so the agent has concrete
+        // context about what was approved — prior to this wire-up, the
+        // injection was just the label `[PLAN_DECISION]: approved` and
+        // the model had no steps to execute from (correlated with the
+        // "accept-with-edits → no response" failure mode).
+        const approvedSteps: string[] = (next.planMode?.lastPlanSteps ?? []).map((step) =>
+          step.activeForm ? `${step.step} (${step.activeForm})` : step.step,
+        );
+        const approvalId =
+          normalizeOptionalString(next.planMode?.approvalId) ||
+          normalizeOptionalString(patch.planApproval.approvalId) ||
+          `decision-${storeKey}-${now}`;
+        const injectionText =
+          action === "approve"
+            ? buildApprovedPlanInjection(approvedSteps)
+            : buildAcceptEditsPlanInjection(approvedSteps);
+        appendToInjectionQueue(next, {
+          id: `plan-decision-${approvalId}`,
+          approvalId,
+          kind: "plan_decision",
+          text: injectionText,
+          createdAt: now,
+        });
         // Live-test iteration 1 Bug 4: log the successful approval +
         // synthetic injection write. Pair-up with the rejection log
         // above so debug tail shows the full approval lifecycle.
@@ -809,16 +854,27 @@ export async function applySessionsPatchToStore(params: {
           kind: "synthetic_injection",
           sessionKey: storeKey,
           tag: "[PLAN_DECISION]",
-          preview: decisionLabel,
+          preview: action === "approve" ? "approved" : "edited",
         });
       } else if (action === "reject") {
         // On reject, agent stays in plan mode and revises.
         const safeFeedback = (feedback ?? "")
           .replace(/@(channel|here|everyone)\b/gi, "@\u{FE6B}$1")
           .replace(/<@/g, "<\u{200B}@");
-        next.pendingAgentInjection = safeFeedback
+        const rejectText = safeFeedback
           ? `[PLAN_DECISION]: rejected\nfeedback: ${safeFeedback}`
           : `[PLAN_DECISION]: rejected`;
+        const rejectApprovalId =
+          normalizeOptionalString(next.planMode?.approvalId) ||
+          normalizeOptionalString(patch.planApproval.approvalId) ||
+          `decision-${storeKey}-${now}`;
+        appendToInjectionQueue(next, {
+          id: `plan-decision-${rejectApprovalId}`,
+          approvalId: rejectApprovalId,
+          kind: "plan_decision",
+          text: rejectText,
+          createdAt: now,
+        });
       }
       // Approve / edit transition the mode to "normal" — the approval
       // resolution unlocks mutations. Clear the per-session planMode entry

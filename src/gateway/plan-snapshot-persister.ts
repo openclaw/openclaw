@@ -515,18 +515,24 @@ async function persistSnapshot(params: {
     if (completionInjection) {
       try {
         const { updateSessionStoreEntry } = await import("../config/sessions/store.js");
+        const { appendToInjectionQueue } = await import("../agents/plan-mode/injections.js");
         await updateSessionStoreEntry({
           storePath: target.storePath,
           sessionKey: params.sessionKey,
           update: async (entry) => {
-            // Don't clobber an existing pending injection (e.g.,
-            // [QUESTION_ANSWER] or [PLAN_DECISION] from a recent
-            // sessions.patch). Append instead so both signals land in
-            // the agent's next turn.
-            const existing = entry.pendingAgentInjection;
-            entry.pendingAgentInjection = existing
-              ? `${existing}\n\n${completionInjection}`
-              : completionInjection;
+            // Enqueue [PLAN_COMPLETE] into the typed injection queue.
+            // Priority defaults to 9 (just below plan_decision=10) so a
+            // concurrently-queued approval decision still drains first.
+            // Dedup id is scoped to the session+timestamp so repeat
+            // auto-close events (rare — the allowAutoClose gate above
+            // prevents double-fire on the happy path) upsert rather
+            // than duplicate.
+            appendToInjectionQueue(entry, {
+              id: `plan-complete-${params.sessionKey}-${Date.now()}`,
+              kind: "plan_complete",
+              text: completionInjection,
+              createdAt: Date.now(),
+            });
             return entry;
           },
         });

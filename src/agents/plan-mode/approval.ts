@@ -143,12 +143,62 @@ export function resolvePlanApproval(
 /**
  * Builds the context injection for an approved plan.
  * Tells the agent to execute the approved plan without re-planning.
+ *
+ * Prefixed with the canonical one-line tag `[PLAN_DECISION]: approved`
+ * so downstream tooling (chat renderers that hide synthetic markers,
+ * debug log filters) match uniformly with the reject / timed_out /
+ * question_answer / complete variants.
  */
 export function buildApprovedPlanInjection(planSteps: string[]): string {
   const stepList = planSteps.map((s, i) => `${i + 1}. ${s}`).join("\n");
   return (
+    "[PLAN_DECISION]: approved\n\n" +
     "The user has approved the following plan. Execute it now without re-planning. " +
     "If a step is no longer viable, mark it cancelled and add a revised step.\n\n" +
+    stepList
+  );
+}
+
+/**
+ * Builds the context injection for a plan approved with the
+ * acceptEdits permission. Mirrors Claude Code's `acceptEdits` mode —
+ * the user is granting the AGENT permission to self-modify the plan
+ * during execution when ≥95% confident, NOT claiming to have edited
+ * the plan themselves (there is no user-side plan editor today; the
+ * webchat affordance simply surfaces this permission mode).
+ *
+ * Three hard constraints override acceptEdits regardless of confidence
+ * level:
+ *   1. No destructive actions (delete db, delete files, truncate, etc.)
+ *   2. No self-restart (gateway restart, kill the running process)
+ *   3. No configuration changes (openclaw config set, ~/.openclaw/*)
+ *
+ * Prompt teaches the rule; a runtime constraint gate (added in a
+ * follow-up commit) enforces the rule in code. Both layers required.
+ */
+export function buildAcceptEditsPlanInjection(planSteps: string[]): string {
+  const stepList = planSteps.map((s, i) => `${i + 1}. ${s}`).join("\n");
+  return (
+    "[PLAN_DECISION]: edited\n\n" +
+    "The user has approved the following plan with acceptEdits permission. " +
+    "Execute it now. You may self-modify the plan via update_plan during " +
+    "execution when you are ≥95% confident that:\n" +
+    "  - A step needs to be added to reach the goal, OR\n" +
+    "  - A step is no longer necessary (mark it cancelled), OR\n" +
+    "  - The plan needs to pivot based on new information.\n\n" +
+    "Before modifying the plan, briefly state:\n" +
+    "  1. What you're changing\n" +
+    "  2. Your confidence level (must be ≥95%)\n" +
+    "  3. The evidence justifying the change\n\n" +
+    "If confidence is <95%, ask the user instead of modifying.\n\n" +
+    "Hard constraints (OVERRIDE acceptEdits — require explicit user confirmation):\n" +
+    "  - No destructive actions (rm, rmdir, DROP TABLE, DELETE FROM, truncate, " +
+    "overwrites of protected files)\n" +
+    "  - No self-restart (openclaw gateway restart, launchctl kickstart, " +
+    "kill the gateway process)\n" +
+    "  - No configuration changes (openclaw config set, writes to " +
+    "~/.openclaw/config.toml or ~/.claude/config)\n\n" +
+    "The approved plan:\n\n" +
     stepList
   );
 }
