@@ -535,6 +535,29 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("dupcheck-b-1776635100574");
   });
 
+  it("collapses repeated structured suffixes even when the final repeat is truncated", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `visiblefix-1776638338` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response, as per the general instruction to reply in the current session.",
+      "<channel|>visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-1776638338visiblefix-177",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("visiblefix-1776638338");
+  });
+
+  it("extracts a repeated structured suffix even when no control delimiter was emitted", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `visiblefix5-1776638721` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response, as per the general instruction to reply in the current session.visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visiblefix5-1776638721visible",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("visiblefix5-1776638721");
+  });
+
   it("does not collapse short unstructured repeated prose after a control delimiter", () => {
     const input = "Internal planning<channel|>hahaha";
 

@@ -14,12 +14,11 @@
  * @see https://github.com/openclaw/openclaw/issues/40020
  */
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
+import { collapseStructuredRepeatedPrefixPattern } from "./repeated-visible-suffix.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
-const STRUCTURED_REPEAT_HINT_RE = /[\s\d_\-`~"'.,:;!?()[\]{}/\\]/;
-const MIN_STRUCTURED_REPEAT_UNIT_LENGTH = 8;
 
 function overlapsCodeRegion(
   start: number,
@@ -31,36 +30,6 @@ function overlapsCodeRegion(
 
 function shouldInsertSeparator(before: string | undefined, after: string | undefined): boolean {
   return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
-}
-
-function collapseStructuredWholeStringRepetition(text: string): string {
-  if (!text) {
-    return text;
-  }
-
-  for (let unitLength = 1; unitLength <= Math.floor(text.length / 2); unitLength += 1) {
-    if (text.length % unitLength !== 0) {
-      continue;
-    }
-
-    const repeatCount = text.length / unitLength;
-    if (repeatCount < 2) {
-      continue;
-    }
-
-    const unit = text.slice(0, unitLength);
-    const looksStructured =
-      unitLength >= MIN_STRUCTURED_REPEAT_UNIT_LENGTH || STRUCTURED_REPEAT_HINT_RE.test(unit);
-    if (!looksStructured) {
-      continue;
-    }
-
-    if (unit.repeat(repeatCount) === text) {
-      return unit;
-    }
-  }
-
-  return text;
 }
 
 export function stripModelSpecialTokens(text: string): string {
@@ -86,7 +55,7 @@ export function stripModelSpecialTokens(text: string): string {
     }
   }
   if (lastChannelDelimiterEnd !== null) {
-    return collapseStructuredWholeStringRepetition(
+    return collapseStructuredRepeatedPrefixPattern(
       stripModelSpecialTokens(text.slice(lastChannelDelimiterEnd)),
     );
   }
