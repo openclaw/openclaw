@@ -229,6 +229,7 @@ void tray_display_model_build(
     AppState state,
     RuntimeMode runtime_mode,
     const HealthState *health,
+    gboolean service_controllable,
     TrayDisplayModel *out)
 {
     if (!out) return;
@@ -239,20 +240,35 @@ void tray_display_model_build(
     RuntimeModePresentation rmp;
     runtime_mode_describe(runtime_mode, &rmp);
     out->runtime_label = rmp.label;
+    (void)health;
 
-    /* Action sensitivities mirror dashboard logic but simplified */
-    gboolean can_act = (state != STATE_STARTING && state != STATE_STOPPING);
-    gboolean is_stoppable = (state == STATE_RUNNING ||
-                             state == STATE_RUNNING_WITH_WARNING ||
-                             state == STATE_DEGRADED);
-    gboolean is_startable = (state == STATE_STOPPED ||
-                             state == STATE_ERROR);
-
-    out->start_sensitive = is_startable && can_act;
-    out->stop_sensitive = is_stoppable && can_act;
-    out->restart_sensitive = is_stoppable && can_act;
     out->refresh_sensitive = TRUE;
-    out->open_dashboard_sensitive = (health && health->config_valid);
+
+    switch (state) {
+    case STATE_STOPPED:
+    case STATE_ERROR:
+        out->start_sensitive = service_controllable;
+        break;
+    case STATE_STARTING:
+        out->stop_sensitive = service_controllable;
+        break;
+    case STATE_RUNNING:
+    case STATE_RUNNING_WITH_WARNING:
+    case STATE_DEGRADED:
+        out->stop_sensitive = service_controllable;
+        out->restart_sensitive = service_controllable;
+        out->open_dashboard_sensitive = TRUE;
+        break;
+    case STATE_STOPPING:
+    case STATE_NEEDS_SETUP:
+    case STATE_NEEDS_GATEWAY_INSTALL:
+    case STATE_NEEDS_ONBOARDING:
+    case STATE_USER_SYSTEMD_UNAVAILABLE:
+    case STATE_SYSTEM_UNSUPPORTED:
+    case STATE_CONFIG_INVALID:
+    default:
+        break;
+    }
 }
 
 /* ── Pairing status (app footer) ──

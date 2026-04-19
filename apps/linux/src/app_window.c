@@ -924,26 +924,39 @@ static void on_gen_quit(GtkButton *b, gpointer d) {
     if (app) g_application_quit(app);
 }
 
-static void on_gen_reveal_config(GtkButton *b, gpointer d) {
-    (void)b; (void)d;
-    GatewayConfig *cfg = gateway_client_get_config();
-    if (cfg && cfg->config_path) {
-        g_autofree gchar *dir = g_path_get_dirname(cfg->config_path);
-        g_autofree gchar *uri = g_filename_to_uri(dir, NULL, NULL);
-        if (uri) g_app_info_launch_default_for_uri(uri, NULL, NULL);
-    }
-}
+static void general_resolve_effective_paths(RuntimeEffectivePaths *out) {
+    if (!out) return;
 
-static void on_gen_reveal_state_dir(GtkButton *b, gpointer d) {
-    (void)b; (void)d;
     g_autofree gchar *profile = NULL;
     g_autofree gchar *state_dir = NULL;
     g_autofree gchar *config_path = NULL;
     systemd_get_runtime_context(&profile, &state_dir, &config_path);
-    if (state_dir) {
-        g_autofree gchar *uri = g_filename_to_uri(state_dir, NULL, NULL);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, out);
+}
+
+static void on_gen_reveal_config(GtkButton *b, gpointer d) {
+    (void)b; (void)d;
+    RuntimeEffectivePaths effective_paths = {0};
+    general_resolve_effective_paths(&effective_paths);
+    if (effective_paths.effective_config_path) {
+        g_autofree gchar *dir = g_path_get_dirname(effective_paths.effective_config_path);
+        g_autofree gchar *uri = g_filename_to_uri(dir, NULL, NULL);
         if (uri) g_app_info_launch_default_for_uri(uri, NULL, NULL);
     }
+    runtime_effective_paths_clear(&effective_paths);
+}
+
+static void on_gen_reveal_state_dir(GtkButton *b, gpointer d) {
+    (void)b; (void)d;
+    RuntimeEffectivePaths effective_paths = {0};
+    general_resolve_effective_paths(&effective_paths);
+    if (effective_paths.effective_state_dir) {
+        g_autofree gchar *uri = g_filename_to_uri(effective_paths.effective_state_dir, NULL, NULL);
+        if (uri) g_app_info_launch_default_for_uri(uri, NULL, NULL);
+    }
+    runtime_effective_paths_clear(&effective_paths);
 }
 
 /* Helper: create a row with a bold label and a value label */
@@ -1164,12 +1177,16 @@ static void refresh_general_content(void) {
 
     /* Paths & profile */
     g_autofree gchar *profile = NULL;
-    g_autofree gchar *state_dir = NULL;
-    g_autofree gchar *config_path = NULL;
-    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+    systemd_get_runtime_context(&profile, NULL, NULL);
+
+    RuntimeEffectivePaths effective_paths = {0};
+    general_resolve_effective_paths(&effective_paths);
 
     RuntimePathStatus general_paths = {0};
-    runtime_path_status_build(config_path, state_dir, NULL, &general_paths);
+    runtime_path_status_build(effective_paths.effective_config_path,
+                              effective_paths.effective_state_dir,
+                              NULL,
+                              &general_paths);
 
     g_autofree gchar *profile_display = NULL;
     if (profile && profile[0] != '\0') {
@@ -1190,6 +1207,7 @@ static void refresh_general_content(void) {
         profile_display);
 
     runtime_path_status_clear(&general_paths);
+    runtime_effective_paths_clear(&effective_paths);
 
     /* Button sensitivity */
     gtk_widget_set_sensitive(gen_btn_start, dm.can_start);
@@ -2227,8 +2245,6 @@ static void refresh_diagnostics_content(void) {
  * ══════════════════════════════════════════════════════════════════ */
 
 static GtkWidget *env_checks_box = NULL;
-
-extern void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path);
 
 static void populate_env_checks(GtkWidget *container) {
     /* Clear previous children */

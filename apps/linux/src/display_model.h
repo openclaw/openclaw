@@ -104,6 +104,7 @@ void tray_display_model_build(
     AppState state,
     RuntimeMode runtime_mode,
     const HealthState *health,
+    gboolean service_controllable,
     TrayDisplayModel *out);
 
 /* ── Pairing status (app footer) ──

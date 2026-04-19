@@ -296,6 +296,7 @@ void tray_update_from_state(const AppState state) {
     
     /* Get systemd state via correct API */
     SystemdState *sys = state_get_systemd();
+    HealthState *health = state_get_health();
     
     /* A1: Compute service controllability - required for correct Stop/Restart gating.
      * A service is controllable only if:
@@ -315,50 +316,17 @@ void tray_update_from_state(const AppState state) {
     const gchar *status_str = state_get_current_string();
     g_autofree gchar *status_line = g_strdup_printf("STATE:%s\n", status_str);
     send_line_to_helper(status_line, NULL);
-    
     OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state state=%s controllable=%d", 
                  status_str, service_controllable);
-    
-    /* A3: Compute action sensitivities from BOTH app state AND service controllability.
-     * Stop/Restart are only sensitive if the service is actually controllable.
-     */
-    gboolean can_start = FALSE;
-    gboolean can_stop = FALSE;
-    gboolean can_restart = FALSE;
-    gboolean can_open_dashboard = FALSE;
-    
-    switch (state) {
-        case STATE_NEEDS_SETUP:
-        case STATE_NEEDS_GATEWAY_INSTALL:
-        case STATE_NEEDS_ONBOARDING:
-        case STATE_USER_SYSTEMD_UNAVAILABLE:
-        case STATE_SYSTEM_UNSUPPORTED:
-        case STATE_CONFIG_INVALID:
-            /* No actions possible in these states */
-            break;
-        case STATE_STOPPED:
-        case STATE_ERROR:
-            can_start = service_controllable;
-            break;
-        case STATE_STARTING:
-            can_stop = service_controllable;
-            break;
-        case STATE_STOPPING:
-            /* In stopping state, no actions until settled */
-            break;
-        case STATE_RUNNING:
-        case STATE_RUNNING_WITH_WARNING:
-        case STATE_DEGRADED:
-            can_stop = service_controllable;
-            can_restart = service_controllable;
-            can_open_dashboard = TRUE;
-            break;
-    }
+
+    RuntimeMode rm = state_get_runtime_mode();
+    TrayDisplayModel tdm;
+    tray_display_model_build(state, rm, health, service_controllable, &tdm);
     
     /* A4: Send DASHBOARD_URL first (if available) with redacted logging.
      * Send real URL to helper but redact token fragment in logs.
      */
-    if (can_open_dashboard) {
+    if (tdm.open_dashboard_sensitive) {
         GatewayConfig *cfg = gateway_client_get_config();
         if (cfg) {
             g_autofree gchar *url = gateway_config_dashboard_url(cfg);
@@ -382,12 +350,12 @@ void tray_update_from_state(const AppState state) {
      * "Chat blocked" state, so we keep OPEN_CHAT sensitive whenever the
      * dashboard is too.
      */
-    gboolean can_open_chat = can_open_dashboard;
+    gboolean can_open_chat = tdm.open_dashboard_sensitive;
 
-    g_autofree gchar *sensitive_start = g_strdup_printf("SENSITIVE:START:%d\n", can_start ? 1 : 0);
-    g_autofree gchar *sensitive_stop = g_strdup_printf("SENSITIVE:STOP:%d\n", can_stop ? 1 : 0);
-    g_autofree gchar *sensitive_restart = g_strdup_printf("SENSITIVE:RESTART:%d\n", can_restart ? 1 : 0);
-    g_autofree gchar *sensitive_dashboard = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n", can_open_dashboard ? 1 : 0);
+    g_autofree gchar *sensitive_start = g_strdup_printf("SENSITIVE:START:%d\n", tdm.start_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_stop = g_strdup_printf("SENSITIVE:STOP:%d\n", tdm.stop_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_restart = g_strdup_printf("SENSITIVE:RESTART:%d\n", tdm.restart_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_dashboard = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n", tdm.open_dashboard_sensitive ? 1 : 0);
     g_autofree gchar *sensitive_chat = g_strdup_printf("SENSITIVE:OPEN_CHAT:%d\n", can_open_chat ? 1 : 0);
 
     /*
@@ -405,10 +373,6 @@ void tray_update_from_state(const AppState state) {
     /* A6: Send runtime mode label if available.
      * tray_helper.c supports RUNTIME:<label> for the runtime menu item.
      */
-    RuntimeMode rm = state_get_runtime_mode();
-    TrayDisplayModel tdm;
-    HealthState *health = state_get_health();
-    tray_display_model_build(state, rm, health, &tdm);
     if (tdm.runtime_label) {
         g_autofree gchar *runtime_line = g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
         send_line_to_helper(runtime_line, NULL);
