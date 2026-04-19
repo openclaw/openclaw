@@ -1,0 +1,15 @@
+{
+  "id": "token-budget",
+  "name": "Token Budget",
+  "description": "Monthly token usage limit with warning and Azure OpenAI GPT-4o fallback",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "monthlyLimit": { "type": "number", "default": 2000000 },
+      "warningThreshold": { "type": "number", "default": 0.9 },
+      "fallbackProvider": { "type": "string", "default": "azure-openai" },
+      "fallbackModel": { "type": "string", "default": "gpt-4o" }
+    }
+  }
+}

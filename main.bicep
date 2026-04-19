@@ -47,6 +47,15 @@ param slackBotToken string
 @description('JSON array of Slack member IDs allowed to interact with the bot (e.g., \'["U12345","U67890"]\').')
 param slackAllowedMembers string = '["*"]'
 
+@description('Name of the Azure OpenAI resource for token budget fallback.')
+param openAiAccountName string = 'openclaw-aoai-${uniqueString(resourceGroup().id)}'
+
+@description('SKU for the Azure OpenAI resource.')
+param openAiSku string = 'S0'
+
+@description('GPT-4o deployment capacity in thousands of tokens per minute.')
+param gpt4oCapacity int = 10
+
 // 1. Log Analytics Workspace
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: '${environmentName}-logs'
@@ -78,6 +87,41 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
 // 3. Azure File Share (The "Trailer")
 resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2022-09-01' = {
   name: '${storageAccount.name}/default/openclaw-workspace'
+}
+
+// 3b. Azure OpenAI Resource (Token Budget Fallback)
+resource openAiAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+  name: openAiAccountName
+  location: location
+  tags: {
+    Component: 'OpenClaw'
+    Purpose: 'Token Budget Fallback'
+  }
+  kind: 'OpenAI'
+  sku: {
+    name: openAiSku
+  }
+  properties: {
+    customSubDomainName: openAiAccountName
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// 3c. GPT-4o Model Deployment
+resource gpt4oDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: openAiAccount
+  name: 'gpt-4o'
+  sku: {
+    name: 'Standard'
+    capacity: gpt4oCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-4o'
+      version: '2024-11-20'
+    }
+  }
 }
 
 // 4. Container Apps Environment
@@ -159,6 +203,10 @@ resource openclawApp 'Microsoft.App/containerApps@2023-05-01' = {
         {
           name: 'slack-bot-token'
           value: slackBotToken
+        }
+        {
+          name: 'azure-openai-api-key'
+          value: openAiAccount.listKeys().key1
         }
       ]
       registries: [
@@ -286,6 +334,18 @@ You receive a fully-formed plan from the planner agent and carry it out step by 
 - Use available tools (web_search, rag-search, asireon-function-call, bash, etc.) as needed.
 - Return a structured summary of what was done and any outputs or artefacts produced.
 EXECUTOR_EOF
+# ── Token Budget Plugin ──────────────────────────────────────────
+# Copy plugin files from the Docker image to the Azure File Share.
+# Source files live in custom-plugins/token-budget/ in the repo.
+cp -r /app/custom-plugins/token-budget /home/node/.openclaw/extensions/token-budget
+# Token budget plugin config
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.enabled true
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.monthlyLimit 2000000
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.warningThreshold 0.9
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackProvider '"azure-openai"'
+node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.fallbackModel '"gpt-4o"'
+# Azure OpenAI provider for token budget fallback
+node --require /tmp/patch.js openclaw.mjs config set models.providers.azure-openai.baseUrl "$AZURE_OPENAI_BASE_URL"
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
           ]
@@ -345,6 +405,16 @@ exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bi
             {
               name: 'OPENCLAW_SLACK_ALLOWED_MEMBERS'
               value: slackAllowedMembers
+            }
+
+            // Azure OpenAI (Token Budget Fallback — provisioned by this template)
+            {
+              name: 'AZURE_OPENAI_API_KEY'
+              secretRef: 'azure-openai-api-key'
+            }
+            {
+              name: 'AZURE_OPENAI_BASE_URL'
+              value: openAiAccount.properties.endpoint
             }
           ]
           volumeMounts: [
