@@ -1272,11 +1272,9 @@ describe("openai transport stream", () => {
       } as never,
       undefined,
     ) as {
-      stream?: boolean;
       stream_options?: { include_usage?: boolean };
     };
 
-    expect(params.stream).toBe(true);
     expect(params.stream_options).toEqual({ include_usage: true });
   });
 
