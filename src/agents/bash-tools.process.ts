@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { removeExecEventsForSession } from "../infra/system-events.js";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -304,6 +305,9 @@ export function createProcessTool(
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
+          // Suppress maybeNotifyOnExit while poll is actively waiting;
+          // the poll result itself is the notification path.
+          scopedSession.pollWaitingCount = (scopedSession.pollWaitingCount ?? 0) + 1;
           if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
@@ -316,6 +320,17 @@ export function createProcessTool(
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
+          // Close the notification gate BEFORE releasing the poll-waiting
+          // counter. If we released the counter first, a concurrent
+          // maybeNotifyOnExit triggered by the child process's exit signal
+          // could see count === 0 && exitNotified === undefined and enqueue a
+          // duplicate event before the poll result reaches the caller. Setting
+          // exitNotified first makes the suppression gate atomic with the
+          // decrement from the perspective of future notify attempts.
+          if (exited) {
+            scopedSession.exitNotified = true;
+          }
+          scopedSession.pollWaitingCount = Math.max(0, (scopedSession.pollWaitingCount ?? 1) - 1);
           if (exited) {
             const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
@@ -324,6 +339,15 @@ export function createProcessTool(
               scopedSession.exitSignal ?? null,
               status,
             );
+            // Belt-and-suspenders cleanup for any exec-completion event that
+            // may have been enqueued before the `pollWaitingCount = 1` write
+            // became visible to the exit notifier (e.g. if the process exited
+            // concurrently with the caller entering this block). With the
+            // reorder above, the race window for a future event is closed, so
+            // this only needs to scrub pre-existing entries.
+            if (scopedSession.sessionKey) {
+              removeExecEventsForSession(scopedSession.sessionKey, scopedSession.id);
+            }
           }
           const status = exited
             ? exitCode === 0 && exitSignal == null
