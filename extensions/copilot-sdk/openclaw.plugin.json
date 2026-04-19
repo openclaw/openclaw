@@ -1,0 +1,40 @@
+{
+  "id": "copilot-sdk",
+  "enabledByDefault": false,
+  "providers": ["copilot-sdk"],
+  "autoEnableWhenConfiguredProviders": ["copilot-sdk"],
+  "providerAuthChoices": [
+    {
+      "provider": "copilot-sdk",
+      "method": "sdk",
+      "choiceId": "copilot-sdk",
+      "choiceLabel": "Copilot SDK (experimental)",
+      "choiceHint": "Proxy chat completions through the @github/copilot CLI",
+      "groupId": "copilot",
+      "groupLabel": "Copilot",
+      "groupHint": "GitHub + local proxy"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535,
+        "default": 9527,
+        "description": "Local loopback port for the OpenAI-compatible shim server."
+      },
+      "rejectToolRequests": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true, reject chat-completion requests that declare `tools`. The Copilot CLI acts as a pure LLM and cannot execute OpenClaw-dispatched tool calls through this path; disabling the reject causes silent degradation."
+      },
+      "cliPath": {
+        "type": "string",
+        "description": "Optional override for the @github/copilot CLI binary path (defaults to the SDK-bundled CLI)."
+      }
+    }
+  }
+}

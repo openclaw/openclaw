@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/copilot-sdk",
+  "version": "2026.4.16",
+  "private": true,
+  "description": "OpenClaw provider plugin that proxies chat completions through the @github/copilot CLI via @github/copilot-sdk",
+  "type": "module",
+  "dependencies": {
+    "@github/copilot-sdk": "0.2.2"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
