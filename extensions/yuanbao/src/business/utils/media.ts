@@ -1,11 +1,11 @@
 /**
- * Media file processing module
+ * Media file processing module.
  *
- * 支持Image/文件在插件环境的上传/下载。
- * - 上传：调用元宝 API 获取 COS 预签配置，再通过 cos-js-sdk-v5 上传
- * - 下载：支持从 URL/本地路径下载为 Buffer
+ * Supports image/file upload and download in the plugin environment.
+ * - Upload: calls Yuanbao API for COS pre-signed config, then uploads via cos-js-sdk-v5
+ * - Download: supports downloading from URL/local path to Buffer
  *
- * Note:此模块运行在 Node.js ESM 环境，不依赖浏览器 API（Blob/File/localStorage 等）。
+ * Note: runs in Node.js ESM environment, no browser API dependencies.
  */
 
 import { randomBytes, createHash } from "node:crypto";
@@ -19,41 +19,41 @@ import { apiGetDownloadUrl, apiGetUploadInfo } from "../../access/api.js";
 import type { CosUploadConfig } from "../../access/api.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
-/** 上传结果 */
+/** Upload result */
 export type MediaUploadResult = {
-  /** 资源公网 URL */
+  /** Public URL */
   url: string;
-  /** 文件名 */
+  /** Filename */
   filename: string;
   /** File size (bytes) */
   size: number;
-  /** MIME 类型 */
+  /** MIME type */
   mimeType: string;
-  /** 文件内容 MD5（hex），可用作Image UUID */
+  /** File content MD5 (hex), usable as image UUID */
   uuid: string;
-  /** Image尺寸（仅Image类型时存在） */
+  /** Image dimensions (only for image types) */
   imageInfo?: { width: number; height: number };
-  /** 资源 ID（若服务端返回） */
+  /** Resource ID (if returned by server) */
   resourceId?: string;
 };
 
-/** Media文件Description */
+/** Media file descriptor */
 export type MediaFile = {
-  /** 文件原始名称（含扩展名） */
+  /** Original filename (with extension) */
   filename: string;
-  /** 文件内容（Buffer） */
+  /** File content (Buffer) */
   data: Buffer;
-  /** MIME 类型，如 image/jpeg、application/pdf */
+  /** MIME type, e.g. image/jpeg, application/pdf */
   mimeType: string;
 };
 
-// ============ 常量 ============
+// ============ Constants ============
 
 const DEFAULT_MAX_MB = 20;
 
-/** Image扩展名集合（小写） */
+/** Image extension set (lowercase) */
 export const IMAGE_EXTS = new Set([
   ".jpg",
   ".jpeg",
@@ -69,10 +69,7 @@ export const IMAGE_EXTS = new Set([
 // ============ Utility functions ============
 
 /**
- * 根据文件名判断 MIME 类型
- *
- * @param filename - 文件名（含扩展名，如 photo.jpg）
- * @returns MIME 类型字符串，无法识别时返回 "application/octet-stream"
+ * Guess MIME type from filename.
  */
 export function guessMimeType(filename: string): string {
   const ext = extname(filename).toLowerCase();
@@ -107,7 +104,7 @@ export function guessMimeType(filename: string): string {
 }
 
 /**
- * 判断是否为Image类型（MIME 或扩展名）
+ * Check if file is an image type (by MIME or extension).
  */
 function isImage(filename: string, mimeType?: string): boolean {
   if (mimeType?.startsWith("image/")) {
@@ -117,25 +114,22 @@ function isImage(filename: string, mimeType?: string): boolean {
 }
 
 /**
- * 生成随机文件 ID（用于 fileId 参数）
+ * Generate a random file ID.
  */
 function generateFileId(): string {
   return randomBytes(16).toString("hex");
 }
 
 /**
- * 计算 Buffer 的 MD5 哈希，返回 hex 字符串
+ * Compute MD5 hash of a Buffer, returning hex string.
  */
 function md5Hex(buffer: Buffer): string {
   return createHash("md5").update(buffer).digest("hex");
 }
 
 /**
- * 从Image Buffer 中解析宽高（支持 JPEG / PNG / GIF / WebP），无需额外依赖。
- * 依次尝试各格式的魔数匹配，首个命中即返回；全部未命中则返回 undefined。
- *
- * @param buf - Image文件的原始二进制数据
- * @returns 解析成功时返回 `{ width, height }`（单位：像素），无法识别格式时返回 `undefined`
+ * Parse image dimensions from Buffer (supports JPEG/PNG/GIF/WebP), no extra dependencies.
+ * Tries each format's magic number in order; returns undefined if none match.
  */
 export function parseImageSize(buf: Buffer): { width: number; height: number } | undefined {
   return parsePngSize(buf) ?? parseJpegSize(buf) ?? parseGifSize(buf) ?? parseWebpSize(buf);
@@ -215,19 +209,10 @@ function parseWebpSize(buf: Buffer): { width: number; height: number } | undefin
   return undefined;
 }
 
-// ============ 本地路径工具 ============
+// ============ Local path utilities ============
 
 /**
- * 判断给定字符串是否为本地文件路径（而非远程 URL）。
- *
- * Matches the following patterns:
- * - `file://` 协议
- * - tilde 路径：`~`、`~/`、`~\`
- * - Unix 绝对路径：`/`
- * - Windows 盘符路径：`C:\`、`C:/`
- * - Windows UNC 路径：`\\`
- * - 相对路径：`./`、`../`、`.\`、`..\`
- * - 裸文件名（无 scheme，不含 `://`）：`hello.md`、`subdir/file.txt`
+ * Check if a string is a local file path (not a remote URL).
  */
 function isLocalPath(s: string): boolean {
   return (
@@ -242,16 +227,16 @@ function isLocalPath(s: string): boolean {
     s.startsWith("../") ||
     s.startsWith(".\\") ||
     s.startsWith("..\\") ||
-    !s.includes("://") // 无 scheme → 本地路径（裸文件名 / 裸相对路径）
+    !s.includes("://") // No scheme -> local path (bare filename / bare relative path)
   );
 }
 
 /**
  * Normalize local path:
- * 1. 去除首尾空白
- * 2. 剥离 `file://` 前缀并 URI decode
- * 3. 展开 tilde（`~`）为真实 home Directory
- * 4. 将相对路径（含裸文件名）解析为绝对路径
+ * 1. Trim whitespace
+ * 2. Strip `file://` prefix and URI decode
+ * 3. Expand tilde (`~`) to real home directory
+ * 4. Resolve relative paths to absolute
  */
 function normalizePath(s: string): string {
   let p = s.trim();
@@ -271,9 +256,9 @@ function normalizePath(s: string): string {
   return p;
 }
 
-// ============ 下载 ============
+// ============ Download ============
 
-/** 将 content-type 映射到文件扩展名 */
+/** Map content-type to file extension */
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
@@ -284,8 +269,8 @@ const MIME_TO_EXT: Record<string, string> = {
 };
 
 /**
- * 从 HTTP 响应头的 content-disposition 中Extract文件名。
- * 支持 `filename=` 和 `filename*=UTF-8''` 两种格式。
+ * Extract filename from content-disposition header.
+ * Supports both `filename=` and `filename*=UTF-8''` formats.
  */
 function extractFilenameFromContentDisposition(contentDisp: string): string {
   const match = contentDisp.match(/filename\*?=(?:UTF-8'')?["']?([^;"'\r\n]+)/i);
@@ -296,15 +281,9 @@ function extractFilenameFromContentDisposition(contentDisp: string): string {
 }
 
 /**
- * 根据 HTTP 响应推断文件名（兜底逻辑，调用方应优先使用消息元数据中的文件名）。
- * Priority:content-disposition > URL 路径 > 随机 hex + 扩展名
- *
- * @param response - fetch 响应对象，用于读取 content-disposition 头
- * @param fetchUrl - 实际请求的 URL，用于从路径中Extract文件名
- * @param contentType - 响应的 MIME 类型，用于在无扩展名时补充后缀
- * @returns 推断出的文件名字符串
- */
-function inferFilenameFromResponse(
+ * Infer filename from HTTP response (fallback logic; callers should prefer message metadata).
+ * Priority: content-disposition > URL path > random hex + extension
+ */function inferFilenameFromResponse(
   response: Response,
   fetchUrl: string,
   contentType: string,
@@ -317,23 +296,23 @@ function inferFilenameFromResponse(
     return fromDisp;
   }
 
-  // 2. URL 路径末段
+  // 2. URL path last segment
   const fromPath = basename(new URL(fetchUrl).pathname).trim();
   if (fromPath) {
-    // 无扩展名时从 content-type 补充
+    // No extension: supplement from content-type
     const inferredExt =
       MIME_TO_EXT[contentType] ??
       (contentType.startsWith("image/") ? `.${contentType.split("/")[1]}` : "");
     return extname(fromPath) ? fromPath : `${fromPath}${inferredExt}`;
   }
 
-  // 3. 随机兜底
+  // 3. Random fallback
   const inferredExt = MIME_TO_EXT[contentType] ?? "";
   return `${randomBytes(8).toString("hex")}${inferredExt}`;
 }
 
 /**
- * 解析实际下载 URL：若含 resourceId 参数则通过元宝接口换取真实下载地址。
+ * Resolve actual download URL: if it contains a resourceId param, exchange for real download URL via Yuanbao API.
  */
 async function resolveFetchUrl(url: string, account?: ResolvedYuanbaoAccount): Promise<string> {
   const parsed = new URL(url);
@@ -345,18 +324,13 @@ async function resolveFetchUrl(url: string, account?: ResolvedYuanbaoAccount): P
 }
 
 /**
- * 从 URL 下载文件到 Buffer。
+ * Download file from URL to Buffer.
  *
  * Supports two sources:
- * - `file://` 或绝对路径 — 本地文件，直接读取
- * - `http(s)://` — 远程 URL，若含 `resourceId` 查询参数则自动换取元宝真实下载地址
+ * - `file://` or absolute path — local file, read directly
+ * - `http(s)://` — remote URL, auto-resolves Yuanbao download URL if `resourceId` param present
  *
- * Note:返回的 `filename` 仅作兜底，调用方应优先使用消息元数据中的 `mediaName`。
- *
- * @param url - 资源 URL 或本地路径
- * @param maxMb - 最大允许大小（MB）
- * @param account - 可选，含 resourceId 时用于换取下载地址
- * @returns Media文件对象（含 Buffer、文件名、MIME 类型）
+ * Note: returned `filename` is a fallback; callers should prefer `mediaName` from message metadata.
  */
 export async function downloadMediaForYuanbao(
   url: string,
@@ -365,7 +339,7 @@ export async function downloadMediaForYuanbao(
 ): Promise<MediaFile> {
   const maxBytes = maxMb * 1024 * 1024;
 
-  // 本地文件（file://、绝对路径、tilde 路径、相对路径等）
+  // Local file (file://, absolute path, tilde path, relative path, etc.)
   if (isLocalPath(url)) {
     const filePath = normalizePath(url);
     const stat = statSync(filePath);
@@ -386,7 +360,7 @@ export async function downloadMediaForYuanbao(
     return { filename, data, mimeType: guessMimeType(filename) };
   }
 
-  // 远程 URL
+  // Remote URL
   const fetchUrl = await resolveFetchUrl(url, account);
   const response = await fetch(fetchUrl);
   if (!response.ok) {
@@ -411,16 +385,9 @@ export async function downloadMediaForYuanbao(
 }
 
 /**
- * 通过 OpenClaw SDK 加载Media资源并转换为 MediaFile。
- * 与 {@link downloadMediaForYuanbao} 不同，此函数依赖 core.media.loadWebMedia 处理本地路径解析和大小限制，
- * 适用于插件环境下需要受 localRoots 沙箱约束的场景。
- *
- * @param url - Media资源 URL 或本地路径
- * @param core - OpenClaw PluginRuntime 实例，用于调用 media.loadWebMedia 加载资源
- * @param mediaLocalRoots - 允许访问的本地Directory白名单，限制本地文件读取范围
- * @param account - 元宝账号配置，用于获取 mediaMaxMb 大小限制
- * @returns 包含文件内容 Buffer、文件名和 MIME 类型的Media文件对象
- * @throws {Error} 当 account 未提供时抛出，因为需要从中读取上传大小限制
+ * Download media via OpenClaw SDK and convert to MediaFile.
+ * Unlike {@link downloadMediaForYuanbao}, this relies on core.media.loadWebMedia
+ * for local path resolution and size limits, suitable for localRoots sandbox scenarios.
  */
 async function downloadMediaForLocal(
   url: string,
@@ -446,19 +413,16 @@ async function downloadMediaForLocal(
     // loadWebMedia failed, fall through to downloadMediaForYuanbao
   }
 
-  // 降级：downloadMediaForYuanbao 已支持 HTTP URL 和本地路径（含 file://、绝对路径、tilde 等），
-  // 且在读取前会校验文件大小，避免加载超限文件。
+  // Fallback: downloadMediaForYuanbao supports HTTP URLs and local paths (including file://, absolute, tilde),
+  // and validates file size before reading.
   return downloadMediaForYuanbao(url, account.mediaMaxMb, account);
 }
 
-// ============ COS 上传 ============
+// ============ COS upload ============
 
 /**
- * 最小化 COS 上传实现（Node.js Buffer，不依赖浏览器 API）
- * 复用 cos-js-sdk-v5 SDK，参数与元宝 Web 端一致。
- *
- * @param params - 上传参数（COS 预签配置、文件 Buffer、文件名、MIME 类型、进度回调）
- * @returns COS 资源公网 URL
+ * Minimal COS upload implementation (Node.js Buffer, no browser API dependencies).
+ * Reuses cos-js-sdk-v5 SDK with params matching Yuanbao Web client.
  */
 async function uploadBufferToCos(params: {
   config: CosUploadConfig;
@@ -469,22 +433,22 @@ async function uploadBufferToCos(params: {
 }): Promise<string> {
   const { config, data, filename, mimeType } = params;
 
-  // 动态 import，避免在未安装 SDK 时报错
-  // cos-nodejs-sdk-v5 使用 CommonJS export = 语法，需兼容处理
+  // Dynamic import to avoid errors when SDK is not installed
+  // cos-nodejs-sdk-v5 uses CommonJS export = syntax, needs compat handling
   let COS: unknown;
   try {
-    // 优先用 require（Node.js CJS 兼容路径）
+    // Prefer require (Node.js CJS compat path)
     COS = require("cos-nodejs-sdk-v5");
     if ((COS as Record<string, unknown>)?.default) {
       COS = (COS as Record<string, unknown>).default;
     }
   } catch {
-    // CJS require 失败，尝试 ESM import
+    // CJS require failed, try ESM import
     try {
       const pkg = await import("cos-nodejs-sdk-v5" as string);
       COS = pkg.default ?? pkg;
     } catch {
-      // CJS 和 ESM 均失败，抛出明确错误
+      // Both CJS and ESM failed, throw clear error
       throw new Error("缺少依赖 cos-nodejs-sdk-v5，请运行 pnpm add cos-nodejs-sdk-v5");
     }
   }
@@ -505,7 +469,7 @@ async function uploadBufferToCos(params: {
     UseAccelerate: true,
   });
 
-  // 构造请求头
+  // Construct request headers
   const headers: Record<string, string> = {};
   if (isImage(filename, mimeType)) {
     headers["Content-Type"] = mimeType || `image/${extname(filename).slice(1)}`;
@@ -533,15 +497,10 @@ async function uploadBufferToCos(params: {
   return config.resourceUrl;
 }
 
-// ============ 主要公开 API ============
+// ============ Main public API ============
 
 /**
- * 上传 Buffer 到 COS（通过 api.ts 获取预签配置，自动处理鉴权）
- *
- * @param mediaFile - Media文件（含 data、filename、mimeType）
- * @param account - 账号配置（用于自动获取鉴权 token）
- * @param onProgress - 进度回调（0-100）
- * @returns 上传结果（含公网 URL）
+ * Upload Buffer to COS (auto-fetches pre-signed config via api.ts).
  */
 export async function uploadMediaToCos(
   mediaFile: MediaFile,
@@ -561,10 +520,10 @@ export async function uploadMediaToCos(
   const uuid = md5Hex(data);
   const imageInfo = mimeType.startsWith("image/") ? parseImageSize(data) : undefined;
 
-  // 1. 获取 COS 预签配置（自动带鉴权头）
+  // 1. Get COS pre-signed config (with auth headers)
   const cosConfig = await apiGetUploadInfo(account, filename, fileId);
 
-  // 2. 上传到 COS
+  // 2. Upload to COS
   const url = await uploadBufferToCos({ config: cosConfig, data, filename, mimeType, onProgress });
 
   return {
@@ -579,12 +538,7 @@ export async function uploadMediaToCos(
 }
 
 /**
- * 从 URL/本地路径/resourceId 下载并上传到 COS（一站式）
- *
- * @param mediaUrl - Media URL、本地路径或 resource:<id> 格式
- * @param account - 账号配置（用于 resource: 下载鉴权和 COS 上传）
- * @param onProgress - 进度回调
- * @returns 上传结果（含公网 URL、文件名、大小）
+ * Download from URL/local path/resourceId and upload to COS (one-stop).
  */
 export async function downloadAndUploadMedia(
   mediaUrl: string,
@@ -597,14 +551,11 @@ export async function downloadAndUploadMedia(
   return uploadMediaToCos(mediaFile, account, onProgress);
 }
 
-// ============ 腾讯 IM Media消息构建 ============
+// ============ Tencent IM media message builders ============
 
 /**
- * 构建腾讯 IM TIMImageElem Message body
- * 参考：https://cloud.tencent.com/document/product/269/2720
- *
- * @param params - Image参数（url、可选 filename 和 size）
- * @returns TIMImageElem 格式的Message body数组
+ * Build Tencent IM TIMImageElem message body.
+ * Ref: https://cloud.tencent.com/document/product/269/2720
  */
 export function buildImageMsgBody(params: {
   url: string;
@@ -634,11 +585,8 @@ export function buildImageMsgBody(params: {
 }
 
 /**
- * 构建腾讯 IM TIMFileElem Message body
- * 参考：https://cloud.tencent.com/document/product/269/2720
- *
- * @param params - 文件参数（url、filename 必填，可选 size）
- * @returns TIMFileElem 格式的Message body数组
+ * Build Tencent IM TIMFileElem message body.
+ * Ref: https://cloud.tencent.com/document/product/269/2720
  */
 export function buildFileMsgBody(params: {
   url: string;
@@ -659,19 +607,13 @@ export function buildFileMsgBody(params: {
   ];
 }
 
-// ============ 批量下载并保存 ============
+// ============ Batch download & save ============
 
 /**
- * Download media资源列表并保存到 agent 允许访问的Directory，返回本地文件路径列表。
- * - MIME 类型优先从 HTTP 响应头获取，缺失时通过 core.media.detectMime 从 Buffer 检测
- * - 文件名优先使用 mediaName（如腾讯 IM 的 file_name 字段），其次从响应头/URL 推断
- * - 下载失败的Media会被跳过并记录警告日志
- *
- * @param medias - Media资源列表
- * @param account - 账号配置（用于鉴权）
- * @param core - OpenClaw PluginRuntime（用于 detectMime 和 saveMediaBuffer）
- * @param log - 日志函数（verbose / warn）
- * @returns 本地文件路径列表
+ * Download media list and save to agent-accessible directory, returning local file paths.
+ * - MIME type from HTTP response header first, fallback to core.media.detectMime
+ * - Filename from mediaName first, then inferred from response/URL
+ * - Failed downloads are skipped with warning log
  */
 export async function downloadMediasToLocalFiles(
   medias: Array<{ url: string; mediaName?: string }>,
@@ -690,7 +632,7 @@ export async function downloadMediasToLocalFiles(
   const maxBytes = account.mediaMaxMb * 1024 * 1024;
   const cacheDir = join(resolvePreferredOpenClawTmpDir(), "yuanbao-media");
 
-  // 最多下载 20 个Media，并发执行
+  // Download up to 20 media files concurrently
   const tasks = medias.slice(0, 20).map(async ({ url, mediaName }, i) => {
     const mediaFile = await downloadMediaForYuanbao(url, account.mediaMaxMb, account);
 

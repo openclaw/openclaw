@@ -1,10 +1,10 @@
 /**
- * Sticker 发送模块
+ * Sticker send module.
  *
- * 参照 media/send.ts 的结构：
- * - buildStickerMsgBody：纯函数，构建 TIMFaceElem Message body
- * - sendSticker：从缓存查找表情 → 构建Message body → deliver 投递
- * - searchSticker：纯查询，不涉及发送
+ * Follows the structure of media/send.ts:
+ * - buildStickerMsgBody: pure function, builds TIMFaceElem message body
+ * - sendSticker: lookup sticker from cache → build message body → deliver
+ * - searchSticker: query only, no sending
  */
 
 import type { YuanbaoMsgBodyElement } from "../../../types.js";
@@ -13,18 +13,18 @@ import { deliver, type DeliverTarget } from "../deliver.js";
 import { getCachedSticker, searchStickers } from "./sticker-cache.js";
 import type { CachedSticker } from "./sticker-types.js";
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
 export type ActionResult = { ok: true; data?: unknown } | { ok: false; error: string };
 
 export interface SendStickerParams {
-  /** 表情 ID */
+  /** Sticker ID */
   stickerId: string;
-  /** 投递目标上下文 */
+  /** Delivery target context */
   dt: DeliverTarget;
 }
 
-// ============ 参数归一化 ============
+// ============ Parameter normalization ============
 
 function normalizeStickerSearchQuery(params: Record<string, unknown>): string {
   const raw = params.query ?? params.keyword ?? params.q ?? params.text ?? params.search;
@@ -49,16 +49,11 @@ function normalizeStickerSearchLimit(params: Record<string, unknown>): number {
   return 10;
 }
 
-// ============ Message body构建 ============
+// ============ Message body building ============
 
 /**
- * 构建表情Message body
- *
- * 纯函数，将缓存中的表情数据转换为 TIMFaceElem Message body数组。
- * 与 buildImageMsgBody / buildFileMsgBody 对齐。
- *
- * @param sticker - 缓存中的表情数据
- * @returns Message body数组
+ * Build sticker message body.
+ * Pure function, converts cached sticker data to TIMFaceElem message body array.
  */
 export function buildStickerMsgBody(sticker: CachedSticker): YuanbaoMsgBodyElement[] {
   return [
@@ -79,15 +74,11 @@ export function buildStickerMsgBody(sticker: CachedSticker): YuanbaoMsgBodyEleme
   ];
 }
 
-// ============ 发送（供 create-sender 使用） ============
+// ============ Send (used by create-sender) ============
 
 /**
- * Send sticker message
- *
- * 从缓存中查找表情，构建 TIMFaceElem Message body，通过 deliver 投递。
- *
- * @param params - 发送参数
- * @returns 发送结果
+ * Send sticker message.
+ * Looks up sticker from cache, builds TIMFaceElem message body, delivers via deliver().
  */
 export async function sendSticker(params: SendStickerParams): Promise<SendResult> {
   const { stickerId, dt } = params;
@@ -104,10 +95,7 @@ export async function sendSticker(params: SendStickerParams): Promise<SendResult
 // ============ sticker-search ============
 
 /**
- * Search cached stickers
- *
- * @param params - Action 参数（如 `query`/`limit`）
- * @returns 搜索结果列表
+ * Search cached stickers.
  */
 export function searchSticker(params: Record<string, unknown>): ActionResult {
   const query = normalizeStickerSearchQuery(params);

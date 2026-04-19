@@ -1,11 +1,10 @@
 /**
- * Message delivery layer
+ * Message delivery layer.
  *
- * 封装 C2C/群聊差异，根据 SendTarget 自动路由到对应的 transport 底层函数。
- * 由 create-sender 和各 actions/xxx/send.ts 使用。
+ * Wraps C2C/group chat differences, auto-routes to the corresponding transport function based on SendTarget.
+ * Used by create-sender and actions/xxx/send.ts.
  *
- * 内部直接调用 transport.sendC2CMsgBody / transport.sendGroupMsgBody，
- * 不再需要外部传入 deliverMsgBody 回调。
+ * Internally calls transport.sendC2CMsgBody / transport.sendGroupMsgBody directly.
  */
 
 import type { YuanbaoWsClient } from "../../access/ws/client.js";
@@ -14,33 +13,28 @@ import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../../types.
 import type { SendResult } from "../outbound/types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
-/** deliver 所需的最小上下文 */
+/** Minimal context required by deliver */
 export interface DeliverTarget {
   isGroup: boolean;
   groupCode?: string;
   account: ResolvedYuanbaoAccount;
-  /** C2C 为 toAccount，群聊为 groupCode */
+  /** C2C: toAccount; group chat: groupCode */
   target: string;
   fromAccount?: string;
   refMsgId?: string;
   refFromAccount?: string;
   wsClient: YuanbaoWsClient;
-  /** Trace context，用于在出站消息中注入 trace_id / msg_seq */
+  /** Trace context for injecting trace_id / msg_seq into outbound messages */
   traceContext?: YuanbaoTraceContext;
 }
 
-// ============ 核心投递函数 ============
+// ============ Core delivery function ============
 
 /**
- * Unified message delivery
- *
- * 根据 isGroup 自动路由到 C2C 或群聊的 transport 底层发送函数。
- *
- * @param dt - 投递目标上下文
- * @param msgBody - 要发送的Message body
- * @returns 发送结果
+ * Unified message delivery.
+ * Auto-routes to C2C or group chat transport based on isGroup flag.
  */
 export async function deliver(
   dt: DeliverTarget,

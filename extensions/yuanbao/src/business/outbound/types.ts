@@ -10,32 +10,32 @@ import type { YuanbaoWsClient } from "../../access/ws/client.js";
 import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../../types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 
-// ============ 出站消息项 ============
+// ============ Outbound message items ============
 
-/** 出站消息项 */
+/** Outbound message item */
 export type OutboundItem =
   | { type: "text"; text: string }
   | { type: "media"; mediaUrl: string; fallbackText?: string }
   | { type: "sticker"; stickerId: string }
   | { type: "raw"; msgBody: YuanbaoMsgBodyElement[] };
 
-// ============ 发送结果 ============
+// ============ Send result ============
 
-/** 发送结果 */
+/** Send result */
 export interface SendResult {
   ok: boolean;
   messageId?: string;
   error?: string;
 }
 
-// ============ 发送目标上下文 ============
+// ============ Send target context ============
 
-/** 发送目标上下文 —— 由 prepareSender 中间件组装 */
+/** Send target context — assembled by prepareSender middleware */
 export interface SendParams {
   isGroup: boolean;
   groupCode?: string;
   account: ResolvedYuanbaoAccount;
-  /** C2C 为 toAccount，群聊为 groupCode */
+  /** C2C: toAccount; group chat: groupCode */
   target: string;
   fromAccount?: string;
   refMsgId?: string;
@@ -43,20 +43,20 @@ export interface SendParams {
   wsClient: YuanbaoWsClient;
   config: OpenClawConfig;
   core: PluginRuntime;
-  /** Trace context，透传给 transport 层注入 trace_id / msg_seq */
+  /** Trace context, passed through to transport layer for injecting trace_id / msg_seq */
   traceContext?: YuanbaoTraceContext;
 }
 
-// ============ 消息发送器接口 ============
+// ============ Message sender interface ============
 
-/** 消息发送器接口 */
+/** Message sender interface */
 export interface MessageSender {
   sendText(text: string): Promise<SendResult>;
   sendMedia(mediaUrl: string, fallbackText?: string): Promise<SendResult>;
   sendSticker(stickerId: string): Promise<SendResult>;
   sendRaw(msgBody: YuanbaoMsgBodyElement[]): Promise<SendResult>;
-  /** 根据 OutboundItem 类型自动分发 */
+  /** Auto-dispatch based on OutboundItem type */
   send(item: OutboundItem): Promise<SendResult>;
-  /** 从 SDK OutboundReplyPayload 自动分发（配合 dispatchInboundReplyWithBase 的 deliver 回调） */
+  /** Auto-dispatch from SDK OutboundReplyPayload (used with dispatchInboundReplyWithBase deliver callback) */
   deliver(payload: OutboundReplyPayload): Promise<void>;
 }

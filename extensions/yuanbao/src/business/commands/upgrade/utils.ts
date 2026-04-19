@@ -7,17 +7,17 @@ const log = createLog("upgrade");
 
 export const PLUGIN_ID = "openclaw-plugin-yuanbao";
 
-/** 执行 shell 命令时的Default超时（3 分钟） */
+/** Default timeout for shell commands (3 minutes) */
 const EXEC_TIMEOUT_MS = 3 * 60 * 1000;
 
-/** 插件命令重试最大次数（5 次） */
+/** Max retry attempts for plugin commands (5 times) */
 const PLUGIN_CMD_RETRY_MAX_ATTEMPTS = 5;
 
-/** 插件命令重试间隔（3 秒） */
+/** Retry interval for plugin commands (3 seconds) */
 const PLUGIN_CMD_RETRY_DELAY_MS = 3000;
 
 /**
- * 返回与当前 Node.js 进程同Directory的 npm 可执行文件路径。
+ * Resolve npm executable path co-located with the current Node.js process.
  */
 async function resolveNpmBin(): Promise<string> {
   try {
@@ -31,14 +31,14 @@ async function resolveNpmBin(): Promise<string> {
       return resolved;
     }
   } catch {
-    // which 失败时降级
+    // Fallback when which fails
   }
   return "npm";
 }
 
 /**
- * 通过 `which openclaw` 获取 openclaw 可执行文件的绝对路径。
- * 若 which 失败则降级返回 'openclaw'（依赖 PATH）。
+ * Resolve openclaw executable absolute path via `which openclaw`.
+ * Falls back to 'openclaw' (relies on PATH) if which fails.
  */
 async function resolveOpenClawBin(): Promise<string> {
   try {
@@ -52,13 +52,13 @@ async function resolveOpenClawBin(): Promise<string> {
       return resolved;
     }
   } catch {
-    // which 失败时降级
+    // Fallback when which fails
   }
   return "openclaw";
 }
 
 /**
- * 构造子进程执行环境：将 Node.js 所在 bin Directory前置到 PATH。
+ * Build child process env: prepend Node.js bin directory to PATH.
  */
 function makeEnv(): NodeJS.ProcessEnv {
   const nodeBinDir = dirname(process.execPath);
@@ -70,8 +70,8 @@ function makeEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * Compare two release version numbers
- * @returns 正数：a > b；负数：a < b；0：相等
+ * Compare two release version numbers.
+ * @returns positive: a > b; negative: a < b; 0: equal
  */
 function compareStableVersions(a: string, b: string): number {
   const [aMaj, aMin, aPatch] = a.split(".").map(Number);
@@ -79,31 +79,26 @@ function compareStableVersions(a: string, b: string): number {
   return aMaj - bMaj || aMin - bMin || aPatch - bPatch;
 }
 
-/** 判断版本号是否为正式发布版本（纯 MAJOR.MINOR.PATCH，无预发布标识） */
+/** Check if version is a stable release (pure MAJOR.MINOR.PATCH, no pre-release tag) */
 function isStableVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(version);
 }
 
 /**
  * Validate version number format; accepts release and pre-release versions.
- *
- * @param version - 待校验的版本号字符串（如 `1.2.3` 或 `2.7.0-beta.4ff40c41`）
- * @returns `true` 表示格式合法，`false` 表示格式不符合预期
  */
 export function isValidVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version);
 }
 
-/** 简单 sleep，给重试退避使用 */
+/** Simple sleep for retry backoff */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * 从 npm 获取 yuanbao 的最新正式发布版本。
- * 仅考虑符合 MAJOR.MINOR.PATCH 格式的版本，排除含预发布标识的版本。
- *
- * @returns 最新正式版本号；若查询失败或没有可用正式版则返回 `null`
+ * Fetch the latest stable release version of yuanbao from npm.
+ * Only considers MAJOR.MINOR.PATCH versions, excludes pre-release tags.
  */
 export async function fetchLatestStableVersion(): Promise<string | null> {
   const npmBin = await resolveNpmBin();
@@ -159,10 +154,7 @@ export async function fetchLatestStableVersion(): Promise<string | null> {
 }
 
 /**
- * 校验指定版本是否真实存在于 npm 仓库中。
- *
- * @param version - 待校验的目标版本号（如 `1.2.3`）
- * @returns `true` 表示版本存在，`false` 表示版本不存在或无法确认
+ * Verify whether a specified version actually exists on npm.
  */
 export async function isPublishedVersionOnNpm(version: string): Promise<boolean> {
   const npmBin = await resolveNpmBin();
@@ -189,8 +181,8 @@ export async function isPublishedVersionOnNpm(version: string): Promise<boolean>
 }
 
 /**
- * 解析 `openclaw plugins list` 输出，返回指定插件的已安装版本。
- * 如果插件未安装或解析失败，返回 null。
+ * Parse `openclaw plugins list` output and return the installed version of the specified plugin.
+ * Returns null if plugin is not installed or parsing fails.
  */
 export async function readInstalledVersion(pluginId: string): Promise<string | null> {
   log.info("读取已安装版本", { pluginId });
@@ -218,10 +210,7 @@ export async function readInstalledVersion(pluginId: string): Promise<string | n
 }
 
 /**
- * 备份 `channels.yuanbao` 配置，输出可用于 `config set ... --strict-json` 的 JSON 字符串。
- *
- * @param config - OpenClaw 当前Configuration object
- * @returns `channels.yuanbao` 的 JSON 字符串；若无可恢复配置则返回 `null`
+ * Snapshot `channels.yuanbao` config, outputting a JSON string usable with `config set ... --strict-json`.
  */
 export function snapshotYuanbaoChannelConfig(config: OpenClawConfig): string | null {
   const value = config.channels?.yuanbao;
@@ -236,7 +225,7 @@ export function snapshotYuanbaoChannelConfig(config: OpenClawConfig): string | n
   }
 }
 
-/** 判断失败结果是否为可重试的限频错误（429 / Rate limit exceeded） */
+/** Check if a failed result is a retriable rate-limit error (429 / Rate limit exceeded) */
 function isRateLimitPluginCommandError(result: {
   error?: string;
   stderr?: string;
@@ -249,7 +238,7 @@ function isRateLimitPluginCommandError(result: {
   return /rate limit exceeded/i.test(combined) || /\(429\)/.test(combined);
 }
 
-/** 从 Error 或 unknown 中取第一行错误摘要 */
+/** Extract first line error summary from Error or unknown */
 function firstLine(e: unknown): string {
   if (e instanceof Error) {
     return e.message.split("\n")[0] ?? String(e);
@@ -257,7 +246,7 @@ function firstLine(e: unknown): string {
   return String(e).split("\n")[0];
 }
 
-/** 执行 openclaw 命令并返回统一结果 */
+/** Execute openclaw command and return unified result */
 export async function runOpenClawCommand(
   args: string[],
   timeoutMs = EXEC_TIMEOUT_MS,
@@ -280,11 +269,8 @@ export async function runOpenClawCommand(
 }
 
 /**
- * 执行 openclaw plugin 命令，并在命中限频错误时按递增间隔重试。
- * 非限频错误或达到最大重试次数后立即返回最后一次执行结果。
- *
- * @param params - 命令执行参数
- * @returns 命令最终执行结果
+ * Execute openclaw plugin command with incremental-interval retry on rate-limit errors.
+ * Returns immediately on non-rate-limit errors or when max retries exhausted.
  */
 export async function runOpenClawCommandWithRetry(params: {
   args: string[];
@@ -304,7 +290,7 @@ export async function runOpenClawCommandWithRetry(params: {
       return lastResult;
     }
 
-    // 判断是否为限频错误，限频错误可以重试
+    // Check if rate-limit error (retriable)
     const retriable = isRateLimitPluginCommandError(lastResult);
     if (!retriable || attempt >= PLUGIN_CMD_RETRY_MAX_ATTEMPTS) {
       if (retriable) {

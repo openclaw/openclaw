@@ -1,8 +1,6 @@
 /**
- * Middleware: command authorization guard
- *
- * 使用 SDK 官方 resolveControlCommandGate 检测消息是否含控制命令，
- * 并根据 DM allowFrom 和 useAccessGroups 策略决定是否授权。
+ * Middleware: command authorization guard using SDK resolveControlCommandGate.
+ * Checks for control commands and applies DM allowFrom + useAccessGroups policies.
  */
 
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -20,7 +18,7 @@ export const guardCommand: MiddlewareDescriptor = {
     const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config);
     ctx.hasControlCommand = hasControlCommand;
 
-    // 构建 DM 策略的 allowFrom
+    // Build DM policy allowFrom
     const dmPolicy = account.config.dm?.policy ?? "open";
     const rawAllowFrom = (account.config.dm?.allowFrom ?? []).map(String);
     const effectiveAllowFrom =
@@ -42,7 +40,7 @@ export const guardCommand: MiddlewareDescriptor = {
       ctx.log.info(
         `[guard-command] control command unauthorized, discarding <- ${ctx.isGroup ? `group:${ctx.groupCode}` : ""} from: ${fromAccount}`,
       );
-      return; // 终止管线
+      return; // Abort pipeline
     }
 
     await next();

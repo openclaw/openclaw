@@ -1,7 +1,7 @@
 /**
- * 中间件单测共享 mock 工厂
+ * Shared mock factory for middleware unit tests.
  *
- * 提供可定制的 PipelineContext mock 和 next 追踪器。
+ * Provides customizable PipelineContext mock and next tracker.
  */
 
 import type { PipelineContext } from "../types.js";
@@ -9,7 +9,7 @@ import type { PipelineContext } from "../types.js";
 type DeepPartial<T> = { [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P] };
 
 /**
- * 创建 mock PipelineContext，支持部分覆盖
+ * Create mock PipelineContext with partial overrides.
  */
 export function createMockCtx(overrides: DeepPartial<PipelineContext> = {}): PipelineContext {
   const base: Record<string, unknown> = {
@@ -83,7 +83,7 @@ export function createMockCtx(overrides: DeepPartial<PipelineContext> = {}): Pip
     action: undefined,
   };
 
-  // 浅合并 overrides（支持嵌套对象的一层覆盖）
+  // Shallow merge overrides (supports one-level nested object override)
   const merged = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
     if (
@@ -106,7 +106,7 @@ export function createMockCtx(overrides: DeepPartial<PipelineContext> = {}): Pip
   return merged as unknown as PipelineContext;
 }
 
-/** 创建一个可追踪的 next 函数 */
+/** Create a trackable next function */
 export function createMockNext() {
   let called = false;
   const next = async () => {
@@ -115,7 +115,7 @@ export function createMockNext() {
   return { next, wasCalled: () => called };
 }
 
-/** 创建一个可追踪调用参数的 spy 函数 */
+/** Create a spy function that tracks call arguments */
 export function createSpy<T extends (...args: never[]) => unknown>(impl?: T) {
   const calls: Parameters<T>[] = [];
   const spy = ((...args: unknown[]) => {

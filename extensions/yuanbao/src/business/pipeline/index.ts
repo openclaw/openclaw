@@ -1,7 +1,7 @@
 /**
- * Message processing pipeline module
+ * Message processing pipeline module.
  *
- * 导出管线引擎、类型和Default管线工厂。
+ * Exports pipeline engine, types, and default pipeline factory.
  */
 
 export { MessagePipeline } from "./engine.js";

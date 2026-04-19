@@ -16,7 +16,7 @@ export interface ReplyHeartbeatMeta {
 }
 
 /**
- * 发送回复状态心跳（best effort，不抛错，不中断主流程）。
+ * Send reply status heartbeat (best effort, no throw, no interruption to main flow).
  */
 export async function emitReplyHeartbeat(
   params: ReplyHeartbeatMeta & {

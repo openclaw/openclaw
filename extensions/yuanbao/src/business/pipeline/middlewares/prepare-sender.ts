@@ -1,10 +1,5 @@
 /**
- * 中间件：创建 MessageSender + QueueSession 并注入到 ctx
- *
- * 从 PipelineContext 中自动Extract所有需要的参数，
- * 创建 MessageSender 注入到 ctx.sender，
- * 创建 QueueSession 注入到 ctx.queueSession，
- * 消除 dispatchReply 中的手动数据组装。
+ * Middleware: create MessageSender + QueueSession and inject into ctx.
  */
 
 import { createMessageSender } from "../../outbound/create-sender.js";
@@ -18,7 +13,7 @@ export const prepareSender: MiddlewareDescriptor = {
     const outboundSessionKey =
       route?.sessionKey || (isGroup ? `group:${groupCode}` : `direct:${fromAccount}`);
 
-    // ⭐ 创建 MessageSender 并注入到 ctx.sender
+    // ⭐ Create MessageSender and inject into ctx.sender
     const target = isGroup ? groupCode! : fromAccount;
     const refMsgId = isGroup ? raw.msg_id || raw.msg_key : undefined;
 
@@ -26,7 +21,7 @@ export const prepareSender: MiddlewareDescriptor = {
       isGroup,
       account,
       target,
-      fromAccount: account.botId || fromAccount, // 出站消息是机器人发出
+      fromAccount: account.botId || fromAccount, // Outbound messages are sent by the bot
       refMsgId,
       refFromAccount: isGroup ? fromAccount : undefined,
       wsClient,
@@ -35,7 +30,7 @@ export const prepareSender: MiddlewareDescriptor = {
       traceContext: ctx.traceContext,
     });
 
-    // ⭐ 创建 QueueSession 并注入到 ctx.queueSession
+    // ⭐ Create QueueSession and inject into ctx.queueSession
     const chunkText = (text: string, maxChars: number) =>
       core.channel.text.chunkMarkdownText(text, maxChars);
 

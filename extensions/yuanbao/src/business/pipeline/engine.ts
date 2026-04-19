@@ -1,7 +1,7 @@
 /**
- * Message processing pipeline engine
+ * Message processing pipeline engine.
  *
- * 洋葱模型中间件引擎，支持条件守卫（when）和按名称插入/移除中间件。
+ * Onion-model middleware engine with conditional guards (when) and named insert/remove support.
  */
 
 import type { PipelineContext, MiddlewareDescriptor } from "./types.js";
@@ -9,13 +9,13 @@ import type { PipelineContext, MiddlewareDescriptor } from "./types.js";
 export class MessagePipeline {
   private readonly middlewares: MiddlewareDescriptor[] = [];
 
-  /** 注册中间件到管线末尾 */
+  /** Register middleware at the end of the pipeline */
   use(descriptor: MiddlewareDescriptor): this {
     this.middlewares.push(descriptor);
     return this;
   }
 
-  /** 在指定中间件之前插入 */
+  /** Insert before a named middleware */
   useBefore(targetName: string, descriptor: MiddlewareDescriptor): this {
     const idx = this.middlewares.findIndex((m) => m.name === targetName);
     if (idx === -1) {
@@ -26,7 +26,7 @@ export class MessagePipeline {
     return this;
   }
 
-  /** 在指定中间件之后插入 */
+  /** Insert after a named middleware */
   useAfter(targetName: string, descriptor: MiddlewareDescriptor): this {
     const idx = this.middlewares.findIndex((m) => m.name === targetName);
     if (idx === -1) {
@@ -37,7 +37,7 @@ export class MessagePipeline {
     return this;
   }
 
-  /** 按名称移除中间件 */
+  /** Remove middleware by name */
   remove(name: string): this {
     const idx = this.middlewares.findIndex((m) => m.name === name);
     if (idx !== -1) {
@@ -46,7 +46,7 @@ export class MessagePipeline {
     return this;
   }
 
-  /** 执行管线 */
+  /** Execute the pipeline */
   async execute(ctx: PipelineContext): Promise<void> {
     const chain = this.middlewares;
     let index = 0;
@@ -55,7 +55,7 @@ export class MessagePipeline {
       while (index < chain.length) {
         const mw = chain[index++];
 
-        // 条件守卫：when 返回 false 时跳过该中间件
+        // Conditional guard: skip middleware when `when` returns false
         if (mw.when && !mw.when(ctx)) {
           continue;
         }

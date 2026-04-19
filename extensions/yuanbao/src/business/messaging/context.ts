@@ -21,13 +21,11 @@ export type MessageHandlerContext = {
     verbose: (msg: string) => void;
   };
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  /** WebSocket 客户端引用，用于发送消息 */
+  /** WebSocket client reference for sending messages */
   wsClient: YuanbaoWsClient;
   abortSignal?: AbortSignal;
 };
 
-// ============ 常量 ============
-
-/** 防止模型用 markdown 代码块包裹整个回复的系统提示词 */
+/** System prompt to prevent model from wrapping entire reply in markdown code block */
 export const YUANBAO_MARKDOWN_HINT =
   "⚠️ 格式规范（强制）：当回复内容包含 Markdown 表格时，禁止用 ```markdown 代码块包裹，直接输出表格内容即可，不需要外层 fence。";

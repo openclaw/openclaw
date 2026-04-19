@@ -1,14 +1,12 @@
 /**
- * 中间件 record-member 单元测试
- *
- * 测试范围：群成员记录、when 条件守卫
+ * Unit tests for record-member middleware: group member recording and when guard.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let recordedArgs: unknown[] = [];
 
@@ -30,9 +28,9 @@ function setupMocks(t: any) {
   }
 }
 
-// ============ when 条件守卫 ============
+// ============ when condition guard ============
 
-void test("record-member: when 条件 - 群聊时执行", async (t) => {
+void test("record-member: when guard - executes in group chat", async (t) => {
   setupMocks(t);
   const { recordMember } = await import("./record-member.js");
 
@@ -40,7 +38,7 @@ void test("record-member: when 条件 - 群聊时执行", async (t) => {
   assert.equal(recordMember.when!(ctx), true);
 });
 
-void test("record-member: when 条件 - C2C 时跳过", async (t) => {
+void test("record-member: when guard - skips in C2C", async (t) => {
   setupMocks(t);
   const { recordMember } = await import("./record-member.js");
 
@@ -48,9 +46,9 @@ void test("record-member: when 条件 - C2C 时跳过", async (t) => {
   assert.equal(recordMember.when!(ctx), false);
 });
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("record-member: 调用 getMember().recordUser 记录群成员", async (t) => {
+void test("record-member: calls getMember().recordUser to record group member", async (t) => {
   setupMocks(t);
   const { recordMember } = await import("./record-member.js");
 
@@ -69,7 +67,7 @@ void test("record-member: 调用 getMember().recordUser 记录群成员", async 
   assert.equal(wasCalled(), true);
 });
 
-void test("record-member: senderNickname 为空时使用 fromAccount", async (t) => {
+void test("record-member: uses fromAccount when senderNickname is empty", async (t) => {
   setupMocks(t);
   const { recordMember } = await import("./record-member.js");
 

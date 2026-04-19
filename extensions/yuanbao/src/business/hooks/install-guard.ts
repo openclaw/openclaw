@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
 /**
- * before_install hook 事件类型（仅声明本模块关注的字段）
+ * before_install hook event type (only fields relevant to this module).
  */
 type BeforeInstallEvent = {
   targetType: "skill" | "plugin";
@@ -27,7 +27,7 @@ type BeforeInstallEvent = {
 };
 
 /**
- * 安装扫描发现项类型
+ * Install scan finding type.
  */
 type InstallFinding = {
   ruleId: string;
@@ -38,7 +38,7 @@ type InstallFinding = {
 };
 
 /**
- * before_install hook 返回值类型
+ * before_install hook return type.
  */
 type BeforeInstallResult = {
   findings?: InstallFinding[];
@@ -47,16 +47,14 @@ type BeforeInstallResult = {
 };
 
 /**
- * 注册 before_install hook，在 skill 安装前执行安全检查
- *
- * - 记录安装事件的关键信息到日志
- * - 内置安全扫描存在 critical 级别问题时阻止安装
+ * Register before_install hook to perform security checks before skill installation.
+ * Blocks installation when builtin scan has critical-level findings.
  */
 export function registerInstallGuard(api: OpenClawPluginApi): void {
   api.on(
     "before_install",
     async (event: BeforeInstallEvent): Promise<BeforeInstallResult | undefined> => {
-      // 仅处理 skill 类型的安装
+      // Only handle skill-type installations
       if (event.targetType !== "skill") {
         return undefined;
       }
@@ -68,7 +66,7 @@ export function registerInstallGuard(api: OpenClawPluginApi): void {
           `mode=${event.request.mode}, origin=${event.origin ?? "unknown"}`,
       );
 
-      // 内置安全扫描存在 critical 级别问题时阻止安装
+      // Block installation when builtin scan has critical-level findings
       if (event.builtinScan.critical > 0) {
         api.logger.warn(
           `[yuanbao] skill "${event.targetName}" 存在 ${event.builtinScan.critical} 个 critical 级别安全问题，已阻止安装`,

@@ -1,9 +1,6 @@
 /**
- * Middleware: parse trace context
- *
- * 从入站消息的 trace_id / seq_id 中解析或生成完整的 trace 上下文，
- * 注入到 ctx.traceContext，供后续中间件（build-context / dispatch-reply）
- * 和 transport 层统一使用。
+ * Middleware: parse or generate trace context from inbound message trace_id / seq_id.
+ * Injected into ctx.traceContext for downstream middlewares and transport layer.
  */
 
 import { resolveTraceContext } from "../../trace/context.js";
@@ -12,7 +9,7 @@ import type { MiddlewareDescriptor } from "../types.js";
 export const resolveTrace: MiddlewareDescriptor = {
   name: "resolve-trace",
   handler: async (ctx, next) => {
-    // 从入站消息中解析或生成 trace 上下文
+    // Parse or generate trace context from inbound message
     ctx.traceContext = resolveTraceContext({
       traceId: ctx.raw.trace_id,
       seqId: ctx.raw.seq_id ?? ctx.raw.msg_seq,

@@ -132,8 +132,6 @@ function generateMsgId(): string {
   return uuidv4().replace(/-/g, "");
 }
 
-// --- Business commands ---
-
 /** Outbound business commands */
 export const BIZ_CMD = {
   /** Send C2C message */
@@ -182,11 +180,11 @@ export class YuanbaoWsClient {
   private lastHeartbeatAt = 0;
   private heartbeatTimeoutCount = 0;
 
-  // ---- 重连 ----
+  // ---- Reconnect ----
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ---- 生命周期 ----
+  // ---- Lifecycle ----
   private abortController: AbortController | null = null;
   private disposed = false;
 
@@ -1083,7 +1081,6 @@ export class YuanbaoWsClient {
       this.abortController = null;
     }
 
-    // Reject all pending requests
     for (const [msgId, pending] of this.pendingRequests) {
       clearTimeout(pending.timer);
       pending.resolve({

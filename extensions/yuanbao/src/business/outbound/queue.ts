@@ -1,69 +1,67 @@
 /**
- * 出站队列（基于 MessageSender）
+ * Outbound queue (MessageSender-based).
  *
- * 接收 MessageSender 实例，通过 sender.send(item) / sender.sendText(text) 统一分发。
- * 支持三种策略：immediate、merge-text、mergeOnFlush。
+ * Receives a MessageSender instance and dispatches via sender.send(item) / sender.sendText(text).
+ * Supports three strategies: immediate, merge-text, mergeOnFlush.
  *
  * Design notes:
- * - QueueSession 是单次会话的队列实例，绑定一个 MessageSender
- * - push(item) 将消息推入队列
- * - flush() 发送所有剩余缓冲内容，完成后调用 onComplete 回调
- * - abort() 中止队列，丢弃未发送内容
- * - 直接使用 MessageSender 接口，解耦发送逻辑
+ * - QueueSession is a per-session queue instance bound to a MessageSender
+ * - push(item) enqueues a message
+ * - flush() sends all remaining buffered content, then calls onComplete
+ * - abort() cancels the queue, discarding unsent content
+ * - Uses MessageSender interface directly, decoupling send logic
  */
 
 import { createLog } from "../../logger.js";
 import { mdFence, mdBlock, mdAtomic } from "../utils/markdown.js";
 import type { MessageSender, OutboundItem } from "./types.js";
 
-// ============ 队列接口 ============
 
-/** 队列会话接口 */
+/** Queue session interface */
 export interface QueueSession {
-  /** 当前使用的策略 */
+  /** Current strategy in use */
   readonly strategy: "immediate" | "merge-text" | "mergeOnFlush";
-  /** 向队列推入一条消息 */
+  /** Push a message into the queue */
   push(item: OutboundItem): Promise<void>;
-  /** 刷新队列，发送所有剩余缓冲内容；返回是否已发送过内容 */
+  /** Flush the queue, sending all remaining buffered content; returns whether any content was sent */
   flush(): Promise<boolean>;
-  /** 中止队列，丢弃所有未发送的缓冲内容 */
+  /** Abort the queue, discarding all unsent buffered content */
   abort(): void;
   /**
-   * 强制将当前缓冲区内容立即发出，但不关闭 session。
-   * 用于 tool_call 开始前把已积累的文本及时投递给用户，
-   * 避免等待 session.flush() 才能看到 tool_call 前的内容。
+   * Force-flush current buffer immediately without closing the session.
+   * Used before tool_call to deliver accumulated text to the user promptly.
    */
   drainNow(): Promise<void>;
 }
 
-/** 创建队列会话的选项 */
+/** Queue session creation options */
 export interface QueueSessionOptions {
-  /** 消息发送器 */
+  /** Message sender */
   sender: MessageSender;
-  /** 发送策略 */
+  /** Send strategy */
   strategy: "immediate" | "merge-text";
   /**
-   * 开启后 push 仅缓冲，flush 时将所有文本合并为一条消息发送。
-   * 与 strategy 正交，优先级高于 strategy。
+   * When enabled, push only buffers; flush merges all text into a single message.
+   * Orthogonal to strategy, takes priority over it.
    */
   mergeOnFlush?: boolean;
-  /** 会话完成时的清理回调 */
+  /** Cleanup callback when session completes */
   onComplete: () => void;
-  /** 会话标识（用于日志） */
+  /** Session identifier (for logging) */
   sessionKey?: string;
-  /** merge-text 策略：触发发送的最小字符数，Default 2800 */
+  /** merge-text strategy: min char count to trigger send, default 2800 */
   minChars?: number;
-  /** merge-text 策略：单条消息的最大字符数，Default 3000 */
+  /** merge-text strategy: max char count per message, default 3000 */
   maxChars?: number;
   /**
-   * Markdown 感知的文本切割函数（fence-aware）。
-   * 由 channel.ts 注入，使用 OpenClaw 核心的 chunkMarkdownText 实现。
+   * Markdown-aware text chunking function (fence-aware).
+   * Injected by channel.ts using OpenClaw core's chunkMarkdownText.
    * Falls back to even character-count splitting when not provided.
    */
   chunkText?: (text: string, maxChars: number) => string[];
 }
 
-// ============ 简单均匀切割（降级实现） ============
+// ============ Simple even splitting (fallback) ============
 
 function defaultChunkText(text: string, max: number): string[] {
   if (text.length <= max) {
@@ -76,9 +74,9 @@ function defaultChunkText(text: string, max: number): string[] {
   return chunks;
 }
 
-// ============ 队列工厂 ============
+// ============ Queue factory ============
 
-/** 创建队列会话 */
+/** Create a queue session */
 export function createQueueSession(opts: QueueSessionOptions): QueueSession {
   if (opts.mergeOnFlush) {
     return createMergeOnFlushSession(opts);
@@ -93,10 +91,10 @@ export function createQueueSession(opts: QueueSessionOptions): QueueSession {
   }
 }
 
-// ============ immediate 策略 ============
+// ============ immediate strategy ============
 
 /**
- * immediate 策略：每条消息直接发送，不做缓冲。
+ * immediate strategy: send each message directly, no buffering.
  */
 function createImmediateSession(opts: QueueSessionOptions): QueueSession {
   const { sender, onComplete } = opts;
@@ -140,18 +138,18 @@ function createImmediateSession(opts: QueueSessionOptions): QueueSession {
     },
 
     drainNow() {
-      // immediate 策略每条消息已直接发送，无缓冲区，无需额外操作
+      // immediate strategy sends each message directly, no buffer, no extra action needed
       return sendChain;
     },
   };
 }
 
-// ============ mergeOnFlush 策略 ============
+// ============ mergeOnFlush strategy ============
 
 /**
- * mergeOnFlush 模式：push 仅缓冲，flush 时将所有文本合并为一条消息发送。
+ * mergeOnFlush mode: push only buffers, flush merges all text into a single message.
  *
- * 用于 disableBlockStreaming=true 场景，避免多段回复分段发给用户。
+ * Used for disableBlockStreaming=true scenarios to avoid sending multi-segment replies.
  */
 function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
   const { sender, onComplete } = opts;
@@ -183,7 +181,7 @@ function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
         return hasSentContent;
       }
 
-      // 合并所有文本为一条消息
+      // Merge all text into a single message
       if (textBuf.length > 0) {
         const merged = mdFence.stripOuter(textBuf.join("")).trim();
         textBuf.length = 0;
@@ -197,7 +195,7 @@ function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
         }
       }
 
-      // 逐个发送Media/贴图
+      // Send media/stickers one by one
       for (const item of mediaBuf) {
         if (aborted) {
           break;
@@ -223,29 +221,29 @@ function createMergeOnFlushSession(opts: QueueSessionOptions): QueueSession {
     },
 
     drainNow() {
-      // mergeOnFlush 策略在 flush 前不发送任何内容，drainNow 为空操作
+      // mergeOnFlush strategy sends nothing before flush, drainNow is a no-op
       return Promise.resolve();
     },
   };
 }
 
-// ============ merge-text 策略 ============
+// ============ merge-text strategy ============
 
 /**
- * merge-text 策略（Default策略）：
- * - 每次 deliver 到达时立即处理：直接拼接后用 chunkText（chunkMarkdownText）
- *   做 fence-aware 切割，超出 maxChars 的前 n-1 块立即发出，
- *   最后一块（可能处于围栏内）留在 buffer 等下一次 push 或 flush
- * - 遇到Media时先 flush 文本缓冲再发Media，保证顺序正确
- * - 积累与空闲超时由 OpenClaw streaming.blockStreamingCoalesceDefaults 统一管理，
- *   本层不再维护额外的 idleTimer
+ * merge-text strategy (default):
+ * - On each deliver arrival, immediately process: concatenate then use chunkText (chunkMarkdownText)
+ *   for fence-aware splitting; chunks exceeding maxChars send the first n-1 immediately,
+ *   the last chunk (possibly inside a fence) stays in buffer for next push or flush
+ * - On media, flush text buffer first then send media, preserving order
+ * - Accumulation and idle timeout managed by OpenClaw streaming.blockStreamingCoalesceDefaults,
+ *   this layer no longer maintains extra idleTimer
  */
 function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
   const { sender, onComplete, sessionKey = "" } = opts;
   const minChars = opts.minChars ?? 2800;
   const maxChars = opts.maxChars ?? 3000;
   const baseChunkText = opts.chunkText ?? defaultChunkText;
-  // 在 fence-aware 切割基础上叠加原子块感知：保证表格和图表围栏块不被跨消息切割
+  // Layer atomic block awareness on top of fence-aware splitting: ensures table and chart fence blocks are not split across messages
   const chunkText = (text: string, max: number) => mdAtomic.chunkAware(text, max, baseChunkText);
   const log = createLog("outbound-queue");
   let aborted = false;
@@ -256,9 +254,9 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
   /**
    * Split buffer content and send.
    *
-   * - `force=true`：以 maxChars 为上限切割并发送全部内容，清空 buffer。
-   * - `force=false`：以 maxChars 为上限做 fence-aware 切割；若产生多块，发送前 n-1 块，
-   *   将最后一块留回 buffer；若只有 1 块且围栏未关闭则暂不发送。
+   * - `force=true`: split at maxChars limit and send all content, clearing buffer.
+   * - `force=false`: fence-aware split at maxChars; if multiple chunks, send first n-1,
+   *   keep last chunk in buffer; if only 1 chunk and fence unclosed, defer sending.
    */
   async function drainBuffer(force: boolean): Promise<void> {
     if (textBuffer.length === 0) {
@@ -271,21 +269,21 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
     );
 
     if (force || chunks.length <= 1) {
-      // 非强制单块：围栏未关闭时暂不发送
+      // Non-forced single chunk: defer if fence is unclosed
       if (!force && chunks.length === 1 && mdFence.hasUnclosed(chunks[0])) {
         log.debug(
           `[${sessionKey}] drainBuffer: single chunk has unclosed fence, keeping in buffer`,
         );
         return;
       }
-      // 非强制单块：以表格行结尾时暂不发送
+      // Non-forced single chunk: defer if ends with table row
       if (!force && chunks.length === 1 && mdBlock.endsWithTableRow(chunks[0])) {
         log.debug(
           `[${sessionKey}] drainBuffer: single chunk ends with table row, keeping in buffer`,
         );
         return;
       }
-      // 非强制单块：未达到 minChars 阈值时暂不发送
+      // Non-forced single chunk: defer if below minChars threshold
       if (!force && chunks.length === 1 && textBuffer.length < minChars) {
         log.debug(
           `[${sessionKey}] drainBuffer: bufLen=${textBuffer.length} < minChars=${minChars}, waiting`,
@@ -308,7 +306,7 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
         }
       }
     } else {
-      // 发送前 n-1 块（fence-safe 边界），最后一块留回 buffer
+      // Send first n-1 chunks (fence-safe boundary), keep last chunk in buffer
       const toSend = chunks.slice(0, -1);
       textBuffer = chunks[chunks.length - 1]!;
       log.debug(
@@ -349,11 +347,11 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
             return;
           }
           if (textBuffer) {
-            // block-streaming 的 trimEnd/trimStart 会剥除每个块边界的换行符，
-            // 需要根据上下文推断补回正确的分隔符：
-            //  - 块级元素开头（heading/hr/blockquote/list/fence）→ 补 \n\n
-            //  - 连续表格行被切割 → 补 \n（表格行间不能有空行）
-            //  - 围栏内 / 已有换行 / 纯文本续接 → 不补
+            // block-streaming's trimEnd/trimStart strips newlines at each block boundary;
+            // need to infer and restore the correct separator based on context:
+            //  - block-level element start (heading/hr/blockquote/list/fence) → add \n\n
+            //  - consecutive table rows split → add \n (table rows can't have blank lines between)
+            //  - inside fence / already has newline / plain text continuation → don't add
             const separator = mdBlock.inferSeparator(textBuffer, item.text);
             textBuffer = mdFence.mergeBlockStreaming(
               separator ? `${textBuffer}${separator}` : textBuffer,
@@ -366,7 +364,7 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
           hasSentContent = true;
           await drainBuffer(false);
         } else {
-          // 遇到Media/贴图：先强制发出缓冲的文本，再发送
+          // On media/sticker: force flush buffered text first, then send
           if (textBuffer.length > 0) {
             log.debug(`[${sessionKey}] merge-text media push: flushing text buffer first`);
             await drainBuffer(true);
@@ -410,8 +408,8 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
       if (aborted || !textBuffer) {
         return Promise.resolve();
       }
-      // 强制将当前 textBuffer 内容立即发出，不关闭 session。
-      // 挂在 sendChain 上保证与正在进行中的 push() 串行执行。
+      // Force send current textBuffer content immediately without closing session.
+      // Chained on sendChain to ensure serial execution with in-progress push().
       sendChain = sendChain.then(async () => {
         if (aborted || !textBuffer) {
           return;
@@ -427,7 +425,7 @@ function createMergeTextSession(opts: QueueSessionOptions): QueueSession {
 }
 
 /**
- * merge-text 策略会话工厂，导出仅供单元测试使用。
+ * merge-text strategy session factory, exported only for unit testing.
  * @internal
  */
 export { createMergeTextSession as createMergeTextSessionForTest };

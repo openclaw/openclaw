@@ -34,11 +34,6 @@ function normalizeOptionToken(token: string): string {
  *
  * Unifying boundary convergence at the entry layer ensures that subsequent extraction, packaging, and upload branches all share the same constraints,
  * reducing the risk of duplicate validation and branch inconsistency.
- *
- * @param value - 原始数值。
- * @param min - 允许的最小值（含边界）。
- * @param max - 允许的最大值（含边界）。
- * @returns 位于 `[min, max]` 区间内的安全值。
  */
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -47,18 +42,8 @@ function clamp(value: number, min: number, max: number): number {
 /**
  * Parse and normalize log export command parameters, generating stable internal execution config.
  *
- * 该函数专门承担“边界层”职责：把文本参数转为结构化对象并补Default值，
- * 让后续业务流程仅处理已验证的数据，降低Runtime分支复杂度。
- *
- * @param rawArgs - 命令名后的原始参数字符串。
- * @returns 归一化后的参数对象，包含 `limit`、时间过滤与 `--all` 开关。
- * @example
- * ```typescript
- * const args = parseCommandArgs('--limit 1000 --d 3 --all');
- * // args.limit === 1000
- * // args.recentDays === 3
- * // args.all === true
- * ```
+ * Handles "boundary layer" responsibility: converts text params to structured object with defaults,
+ * so subsequent business flow only processes validated data, reducing runtime branch complexity.
  */
 export function parseCommandArgs(rawArgs: string | undefined): ParsedCommandArgs {
   const tokens = (rawArgs ?? "").trim().split(/\s+/).map(normalizeOptionToken).filter(Boolean);
@@ -186,20 +171,10 @@ function renderReply(params: {
 }
 
 /**
- * 执行日志导出主流程：解析参数、Extract过滤、打包压缩、上传 COS，并生成用户回复。
+ * Execute log export main flow: parse args, extract & filter, package & compress, upload to COS, and generate user reply.
  *
- * 该编排函数将清理逻辑放在 `finally`，确保无论上传/记录成功与否都回收临时Directory，
- * 避免高频导出时在本地持续堆积临时文件。
- *
- * @param ctx - OpenClaw 命令上下文，包含参数、账号与配置。
- * @returns 供命令层直接回复给用户的结果文本。
- * @throws 当Extract、打包或上传主链路失败时抛出异常，由上层统一包装错误文案。
- * @example
- * ```typescript
- * const text = await performLogExport(ctx);
- * // 结果: 上传成功
- * // 日志ID: 20260320123000-abcd1234-openclaw-plugin
- * ```
+ * Cleanup logic is in `finally` to ensure temp directory is reclaimed regardless of upload/record success,
+ * avoiding temp file accumulation during frequent exports.
  */
 export async function performLogExport(ctx: PluginCommandContext): Promise<string> {
   const log = createLog("log-upload");

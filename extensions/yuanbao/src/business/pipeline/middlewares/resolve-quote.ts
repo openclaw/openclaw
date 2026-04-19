@@ -1,7 +1,5 @@
 /**
- * Middleware: quote message parsing
- *
- * 从 cloud_custom_data 中Extract引用消息信息。
+ * Middleware: parse quote message info from cloud_custom_data.
  */
 
 import { parseQuoteFromCloudCustomData } from "../../messaging/quote.js";

@@ -1,7 +1,7 @@
 /**
- * TIMTextElem 消息处理器
+ * TIMTextElem message handler.
  *
- * 纯文本消息：输入时Extract文本内容，输出时构造文本Message body。
+ * Plain text message: on input, extracts text content; on output, constructs text message body.
  */
 
 import type { MessageHandlerContext } from "../context.js";
@@ -11,12 +11,7 @@ export const textHandler: MessageElemHandler = {
   msgType: "TIMTextElem",
 
   /**
-   * Extract文本Message content
-   *
-   * @param _ctx - Message processing context（纯文本处理中未使用）
-   * @param elem - 原始 MsgBody 文本消息元素，从 msg_content.text 中Extract文本
-   * @param _resData - Extract结果的可变引用（纯文本处理中未修改）
-   * @returns 文本内容；空文本时返回 undefined
+   * Extract text message content.
    */
   extract(
     _ctx: MessageHandlerContext,
@@ -27,10 +22,7 @@ export const textHandler: MessageElemHandler = {
   },
 
   /**
-   * 构造 TIMTextElem Message body
-   *
-   * @param data - 需包含 text 字段
-   * @returns TIMTextElem Message body数组
+   * Build TIMTextElem message body.
    */
   buildMsgBody(data: Record<string, unknown>): MsgBodyItemType[] {
     const text = data.text as string;

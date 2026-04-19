@@ -1,22 +1,22 @@
 /**
- * Action 目标解析模块
+ * Action target resolution module.
  *
- * 统一解析 action 投递目标，Compatible with two sources:
- * 1. channel.ts sendText/sendMedia 直传：顶层 to + text
- * 2. Agent tool call 传入：params.message / params.to / params.__sessionKey / params.__agentId + toolContext
+ * Unified action delivery target resolution, compatible with two sources:
+ * 1. channel.ts sendText/sendMedia direct pass: top-level to + text
+ * 2. Agent tool call: params.message / params.to / params.__sessionKey / params.__agentId + toolContext
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { parseTarget } from "../messaging/targets.js";
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
 /**
- * 框架传入的 Action 参数结构
+ * Action params structure passed by framework.
  *
  * Compatible with two sources:
- * 1. channel.ts sendText/sendMedia 直传：顶层 to + text
- * 2. Agent tool call 传入：params.message / params.to / params.__sessionKey / params.__agentId + toolContext
+ * 1. channel.ts sendText/sendMedia direct pass: top-level to + text
+ * 2. Agent tool call: params.message / params.to / params.__sessionKey / params.__agentId + toolContext
  */
 export interface ActionParams {
   cfg: OpenClawConfig;
@@ -46,7 +46,7 @@ export interface ActionParams {
   [key: string]: unknown;
 }
 
-/** resolveActionTarget 的返回值 */
+/** Return type of resolveActionTarget */
 export interface ResolvedTarget {
   isGroup: boolean;
   target: string;
@@ -55,15 +55,13 @@ export interface ResolvedTarget {
   agentId?: string;
 }
 
-// ============ 辅助函数 ============
+// ============ Helper functions ============
 
 /**
- * 从 toolContext.currentChannelId 中Extract群 groupCode
+ * Extract group groupCode from toolContext.currentChannelId.
  *
- * 格式示例：`yuanbao:group:585003747`
- * 匹配 `yuanbao:group:` 前缀后取剩余部分作为 groupCode。
- *
- * @returns groupCode 或 undefined
+ * Format example: `yuanbao:group:585003747`
+ * Matches `yuanbao:group:` prefix and takes the remainder as groupCode.
  */
 export function extractGroupFromChannelId(channelId?: string): string | undefined {
   if (!channelId) {
@@ -76,23 +74,23 @@ export function extractGroupFromChannelId(channelId?: string): string | undefine
   return undefined;
 }
 
-// ============ 核心解析 ============
+// ============ Core resolution ============
 
 /**
- * 统一解析 action 目标
+ * Unified action target resolution.
  *
  * Priority:
- * 1. params.to / params.target（Agent tool call 显式指定）
- * 2. 顶层 to（channel.ts sendText/sendMedia 直传）
- * 3. toolContext.currentChannelId 回退（从当前会话上下文推断）
+ * 1. params.to / params.target (Agent tool call explicit)
+ * 2. Top-level to (channel.ts sendText/sendMedia direct pass)
+ * 3. toolContext.currentChannelId fallback (inferred from current session context)
  */
 export function resolveActionTarget(input: ActionParams): ResolvedTarget {
   const { params, toolContext } = input;
 
-  // 从 params 或顶层取 raw target
+  // Get raw target from params or top-level
   const rawTo = params?.to ?? params?.target ?? input.to ?? "";
 
-  // 从 toolContext Extract发起上下文的群
+  // Extract originating group from toolContext
   const contextGroupCode = extractGroupFromChannelId(toolContext?.currentChannelId);
 
   if (!rawTo && contextGroupCode) {
@@ -107,17 +105,17 @@ export function resolveActionTarget(input: ActionParams): ResolvedTarget {
 
   if (!rawTo) {
     throw new Error(
-      "[resolveActionTarget] 无法确定投递目标：to / params.to / toolContext.currentChannelId 均为空",
+      "[resolveActionTarget] Unable to determine delivery target: to / params.to / toolContext.currentChannelId are all empty",
     );
   }
 
-  // 使用 parseTarget 统一解析 user:xxx / direct:xxx / group:xxx / 纯 ID
+  // Use parseTarget to uniformly parse user:xxx / direct:xxx / group:xxx / bare ID
   const { isGroup, target } = parseTarget(rawTo);
 
   return {
     isGroup,
     target,
-    // 群聊取 parsed.target，非群聊回退到 toolContext 中的群（可能为 undefined）
+    // Group chat uses parsed.target; non-group falls back to toolContext group (may be undefined)
     groupCode: contextGroupCode,
     sessionKey: params?.__sessionKey,
     agentId: params?.__agentId,

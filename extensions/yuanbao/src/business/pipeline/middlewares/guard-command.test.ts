@@ -1,14 +1,12 @@
 /**
- * 中间件 guard-command 单元测试
- *
- * 测试范围：控制命令授权守卫
+ * Unit tests for guard-command middleware: control command authorization guard.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let mockGateResult = { commandAuthorized: false, shouldBlock: true };
 let mockGateCallback: ((opts: any) => { commandAuthorized: boolean; shouldBlock: boolean }) | null =
@@ -40,7 +38,7 @@ function setupMocks(
   }
 }
 
-void test("guard-command: 未授权的控制命令 → 终止管线", async (t) => {
+void test("guard-command: unauthorized control command -> abort pipeline", async (t) => {
   setupMocks(t, {
     gateResult: { commandAuthorized: false, shouldBlock: true },
   });
@@ -64,11 +62,11 @@ void test("guard-command: 未授权的控制命令 → 终止管线", async (t) 
 
   await guardCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "未授权应终止管线");
+  assert.equal(wasCalled(), false, "unauthorized should abort pipeline");
   assert.equal(ctx.commandAuthorized, false);
 });
 
-void test("guard-command: 授权的控制命令 → 放行", async (t) => {
+void test("guard-command: authorized control command -> pass through", async (t) => {
   setupMocks(t, {
     gateResult: { commandAuthorized: true, shouldBlock: false },
   });
@@ -92,11 +90,11 @@ void test("guard-command: 授权的控制命令 → 放行", async (t) => {
 
   await guardCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), true, "授权应放行");
+  assert.equal(wasCalled(), true, "authorized should pass through");
   assert.equal(ctx.commandAuthorized, true);
 });
 
-void test("guard-command: 非控制命令 → 放行", async (t) => {
+void test("guard-command: non-control command -> pass through", async (t) => {
   setupMocks(t, {
     gateResult: { commandAuthorized: false, shouldBlock: false },
   });
@@ -124,10 +122,10 @@ void test("guard-command: 非控制命令 → 放行", async (t) => {
   assert.equal(ctx.hasControlCommand, false);
 });
 
-void test("guard-command: DM policy closed + 不在 allowFrom → shouldBlock", async (t) => {
+void test("guard-command: DM policy closed + not in allowFrom -> shouldBlock", async (t) => {
   setupMocks(t, {
     gateCallback: (opts: any) => {
-      // 验证传入的 authorizers 参数
+      // Verify authorizers parameter
       const senderAllowed = opts.authorizers[0].allowed;
       return {
         commandAuthorized: false,
@@ -156,5 +154,5 @@ void test("guard-command: DM policy closed + 不在 allowFrom → shouldBlock", 
 
   await guardCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "closed policy + 非允许用户应终止");
+  assert.equal(wasCalled(), false, "closed policy + non-allowed user should abort");
 });

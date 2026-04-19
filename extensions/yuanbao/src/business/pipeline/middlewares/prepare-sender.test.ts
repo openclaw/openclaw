@@ -1,14 +1,12 @@
 /**
- * 中间件 prepare-sender 单元测试
- *
- * 测试范围：MessageSender 和 QueueSession 创建注入
+ * Unit tests for prepare-sender middleware: MessageSender and QueueSession creation.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let _capturedSenderOpts: any = null;
 let capturedQueueOpts: any = null;
@@ -50,7 +48,7 @@ function setupMocks(t: any) {
   }
 }
 
-void test("prepare-sender: C2C 场景 - 创建 sender 和 queueSession", async (t) => {
+void test("prepare-sender: C2C - creates sender and queueSession", async (t) => {
   setupMocks(t);
   const { prepareSender } = await import("./prepare-sender.js");
 
@@ -71,14 +69,14 @@ void test("prepare-sender: C2C 场景 - 创建 sender 和 queueSession", async (
 
   await prepareSender.handler(ctx, next);
 
-  assert.ok(ctx.sender !== undefined, "sender 应被注入");
-  assert.ok((ctx.sender as any)._mockSender, "sender 应是 mock 创建的");
-  assert.equal((ctx.sender as any).target, "user-001", "C2C target 应为 fromAccount");
-  assert.ok(ctx.queueSession !== undefined, "queueSession 应被注入");
+  assert.ok(ctx.sender !== undefined, "sender should be injected");
+  assert.ok((ctx.sender as any)._mockSender, "sender should be mock-created");
+  assert.equal((ctx.sender as any).target, "user-001", "C2C target should be fromAccount");
+  assert.ok(ctx.queueSession !== undefined, "queueSession should be injected");
   assert.equal(wasCalled(), true);
 });
 
-void test("prepare-sender: 群聊场景 - target 为 groupCode", async (t) => {
+void test("prepare-sender: group - target is groupCode", async (t) => {
   setupMocks(t);
   const { prepareSender } = await import("./prepare-sender.js");
 
@@ -100,11 +98,11 @@ void test("prepare-sender: 群聊场景 - target 为 groupCode", async (t) => {
 
   await prepareSender.handler(ctx, next);
 
-  assert.equal((ctx.sender as any).target, "group-001", "群聊 target 应为 groupCode");
+  assert.equal((ctx.sender as any).target, "group-001", "group target should be groupCode");
   assert.equal((ctx.sender as any).isGroup, true);
 });
 
-void test("prepare-sender: route 为空时使用 fallback sessionKey", async (t) => {
+void test("prepare-sender: uses fallback sessionKey when route is empty", async (t) => {
   setupMocks(t);
   const { prepareSender } = await import("./prepare-sender.js");
 
@@ -125,11 +123,11 @@ void test("prepare-sender: route 为空时使用 fallback sessionKey", async (t)
 
   await prepareSender.handler(ctx, next);
 
-  assert.ok(ctx.queueSession !== undefined, "queueSession 应被注入");
+  assert.ok(ctx.queueSession !== undefined, "queueSession should be injected");
   assert.equal((ctx.queueSession as any).sessionKey, "direct:user-001");
 });
 
-void test("prepare-sender: disableBlockStreaming 影响 strategy", async (t) => {
+void test("prepare-sender: disableBlockStreaming affects strategy", async (t) => {
   setupMocks(t);
   const { prepareSender } = await import("./prepare-sender.js");
 

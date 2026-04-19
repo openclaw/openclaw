@@ -1,8 +1,5 @@
 /**
- * 中间件：Agent Route resolution
- *
- * 使用 SDK 官方 resolveAgentRoute + resolveInboundSessionEnvelopeContext
- * 解析路由、storePath、envelopeOptions、previousTimestamp。
+ * Middleware: resolve agent route using SDK resolveAgentRoute + resolveInboundSessionEnvelopeContext.
  */
 
 import { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -22,7 +19,7 @@ export const resolveRoute: MiddlewareDescriptor = {
 
     ctx.route = route;
 
-    // 使用 SDK 官方 API 解析 storePath + envelopeOptions + previousTimestamp
+    // Use SDK API to resolve storePath + envelopeOptions + previousTimestamp
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg: config,
       agentId: route.agentId,

@@ -1,7 +1,5 @@
 /**
- * 中间件：Message contentExtract
- *
- * 从原始 MsgBody 中Extract文本、Media、@信息，填充到 PipelineContext。
+ * Middleware: extract text, media, and @mentions from raw MsgBody into PipelineContext.
  */
 
 import { extractTextFromMsgBody } from "../../messaging/extract.js";
@@ -18,12 +16,12 @@ export const extractContent: MiddlewareDescriptor = {
     if (isGroup) {
       ctx.groupCode = raw.group_code?.trim() || "unknown";
     } else if (raw.private_from_group_code) {
-      // 群聊内打开的私聊面板，需要携带 group_code
+      // Direct message opened from group chat panel; carry group_code
       ctx.groupCode = raw.private_from_group_code;
     }
 
-    // 构建最小 ctx 兼容 extractTextFromMsgBody 的 MessageHandlerContext 参数
-    // Note:MessageHandlerContext.log 需要 verbose 方法，而 ModuleLog 没有，因此手动构建
+    // Build minimal ctx compatible with extractTextFromMsgBody's MessageHandlerContext
+    // Note: MessageHandlerContext.log needs verbose method, but ModuleLog doesn't have it
     const minCtx = {
       account: ctx.account,
       config: ctx.config,

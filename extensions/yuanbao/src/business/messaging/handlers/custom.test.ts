@@ -1,7 +1,7 @@
 /**
- * messaging/handlers/custom.ts 单元测试
+ * messaging/handlers/custom.ts unit tests.
  *
- * 测试范围：customHandler 的 extract/buildMsgBody、buildAtUserMsgBodyItem
+ * Test scope: customHandler extract/buildMsgBody, buildAtUserMsgBodyItem
  */
 
 import assert from "node:assert/strict";
@@ -26,7 +26,7 @@ function makeResData(): ExtractTextFromMsgBodyResult {
 
 // ============ extract ============
 
-void test("customHandler extract 识别 @Bot 消息", () => {
+void test("customHandler extract recognizes @Bot message", () => {
   const ctx = makeMockCtx("bot-001");
   const resData = makeResData();
 
@@ -39,13 +39,13 @@ void test("customHandler extract 识别 @Bot 消息", () => {
 
   const result = customHandler.extract(ctx, elem, resData);
   assert.equal(resData.isAtBot, true);
-  assert.equal(result, "@Bot"); // @Bot 文本保留（用于 botUsername 提取）
-  assert.equal(resData.botUsername, "Bot"); // 提取 bot 显示名称（去除 @ 前缀）
-  assert.equal(resData.mentions.length, 1); // @Bot 也记录到 mentions
+  assert.equal(result, "@Bot"); // @Bot text preserved (for botUsername extraction)
+  assert.equal(resData.botUsername, "Bot"); // extracted bot display name (without @ prefix)
+  assert.equal(resData.mentions.length, 1); // @Bot also recorded in mentions
   assert.equal(resData.mentions[0].userId, "bot-001");
 });
 
-void test("customHandler extract 识别 @其他用户 消息", () => {
+void test("customHandler extract recognizes @other-user message", () => {
   const ctx = makeMockCtx("bot-001");
   const resData = makeResData();
 
@@ -63,7 +63,7 @@ void test("customHandler extract 识别 @其他用户 消息", () => {
   assert.equal(resData.mentions[0].userId, "user-123");
 });
 
-void test("customHandler extract 非 @ 自定义消息返回 [当前消息暂不支持查看]", () => {
+void test("customHandler extract returns unsupported placeholder for non-@ custom message", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -79,14 +79,14 @@ void test("customHandler extract 非 @ 自定义消息返回 [当前消息暂不
 
 // ============ buildMsgBody ============
 
-void test("customHandler buildMsgBody 构造自定义消息", () => {
+void test("customHandler buildMsgBody constructs custom message", () => {
   const result = customHandler.buildMsgBody!({ data: JSON.stringify({ key: "value" }) });
   assert.equal(result.length, 1);
   assert.equal(result[0].msg_type, "TIMCustomElem");
   assert.ok(result[0].msg_content.data);
 });
 
-void test("customHandler buildMsgBody 接受对象自动序列化", () => {
+void test("customHandler buildMsgBody auto-serializes object input", () => {
   const result = customHandler.buildMsgBody!({ data: { key: "value" } });
   assert.equal(result.length, 1);
   const parsed = JSON.parse(result[0].msg_content.data!);
@@ -95,7 +95,7 @@ void test("customHandler buildMsgBody 接受对象自动序列化", () => {
 
 // ============ buildAtUserMsgBodyItem ============
 
-void test("buildAtUserMsgBodyItem 构造 @ 用户消息体", () => {
+void test("buildAtUserMsgBodyItem constructs @user message body", () => {
   const item = buildAtUserMsgBodyItem("user-123", "张三");
   assert.equal(item.msg_type, "TIMCustomElem");
   const parsed = JSON.parse(item.msg_content.data!);

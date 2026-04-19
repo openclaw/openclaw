@@ -1,14 +1,12 @@
 /**
- * 中间件 guard-group-command 单元测试
- *
- * 测试范围：群命令白名单守卫、when 条件守卫
+ * Unit tests for guard-group-command middleware: group command whitelist guard.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-/** 创建通用 mock 模块 */
+/** Create common mock modules */
 function setupMocks(t: any) {
   t.mock.module("../../messaging/context.js", {
     namedExports: {
@@ -33,9 +31,9 @@ function setupMocks(t: any) {
   });
 }
 
-// ============ when 条件守卫 ============
+// ============ when condition guard ============
 
-void test("guard-group-command: when 条件 - 群聊时执行", async (t) => {
+void test("guard-group-command: when guard - executes in group chat", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
 
@@ -43,7 +41,7 @@ void test("guard-group-command: when 条件 - 群聊时执行", async (t) => {
   assert.equal(guardGroupCommand.when!(ctx), true);
 });
 
-void test("guard-group-command: when 条件 - C2C 时跳过", async (t) => {
+void test("guard-group-command: when guard - skips in C2C", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
 
@@ -51,9 +49,9 @@ void test("guard-group-command: when 条件 - C2C 时跳过", async (t) => {
   assert.equal(guardGroupCommand.when!(ctx), false);
 });
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("guard-group-command: 非 Owner 执行已注册命令 → 终止管线", async (t) => {
+void test("guard-group-command: non-owner executes registered command -> abort pipeline", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
 
@@ -74,10 +72,10 @@ void test("guard-group-command: 非 Owner 执行已注册命令 → 终止管线
 
   await guardGroupCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "非 Owner 应终止管线");
+  assert.equal(wasCalled(), false, "non-owner should abort pipeline");
 });
 
-void test("guard-group-command: Owner 执行已注册命令 → 放行", async (t) => {
+void test("guard-group-command: owner executes registered command -> pass through", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
 
@@ -98,10 +96,10 @@ void test("guard-group-command: Owner 执行已注册命令 → 放行", async (
 
   await guardGroupCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), true, "Owner 应放行");
+  assert.equal(wasCalled(), true, "owner should pass through");
 });
 
-void test("guard-group-command: 非已注册命令 → 放行（当作普通文本）", async (t) => {
+void test("guard-group-command: unregistered command -> pass through (treated as plain text)", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
 
@@ -122,10 +120,10 @@ void test("guard-group-command: 非已注册命令 → 放行（当作普通文�
 
   await guardGroupCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), true, "非注册命令应放行");
+  assert.equal(wasCalled(), true, "unregistered command should pass through");
 });
 
-void test("guard-group-command: 普通文本消息 → 放行", async (t) => {
+void test("guard-group-command: plain text message -> pass through", async (t) => {
   setupMocks(t);
   const { guardGroupCommand } = await import("./guard-group-command.js");
 

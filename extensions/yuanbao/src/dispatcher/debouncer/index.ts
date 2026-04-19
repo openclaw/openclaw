@@ -1,8 +1,8 @@
 /**
- * Message debounce dispatcher
+ * Message debounce dispatcher.
  *
- * 将 SDK createChannelInboundDebouncer 的初始化和配置逻辑集中管理。
- * 防抖 flush 后通过 SessionQueue 保证同一会话的消息顺序执行管线。
+ * Centralizes SDK createChannelInboundDebouncer initialization and config.
+ * After debounce flush, uses SessionQueue to ensure serial execution per session.
  */
 
 import {
@@ -20,18 +20,18 @@ import type { YuanbaoInboundMessage } from "../../types.js";
 import { SessionAbortManager } from "../queue/session-abort-manager.js";
 import { SessionQueue } from "../queue/session-queue.js";
 
-// ============ 单例 ============
+// ============ Singletons ============
 
 const pipeline = createPipeline();
 const sessionQueue = new SessionQueue();
 const sessionAbortManager = new SessionAbortManager();
 
-// ============ 防抖器（延迟初始化） ============
+// ============ Debouncer (lazy init) ============
 
 let debouncer: ReturnType<typeof createChannelInboundDebouncer<DebouncerItem>>["debouncer"] | null =
   null;
 
-/** Media类型集合，用于从 msg_body 中分离文本元素和Media元素 */
+/** Media message types, used to separate text and media elements from msg_body */
 const MEDIA_MSG_TYPES = new Set([
   "TIMImageElem",
   "TIMSoundElem",
@@ -40,9 +40,9 @@ const MEDIA_MSG_TYPES = new Set([
 ]);
 
 /**
- * 构建基础 sessionKey（不含指令后缀）
+ * Build base sessionKey (without command suffix).
  *
- * 群聊: `group:{accountId}:{groupCode}`
+ * Group: `group:{accountId}:{groupCode}`
  * C2C: `direct:{accountId}:{fromAccount}`
  */
 function buildBaseSessionKey(item: DebouncerItem): string {
@@ -53,7 +53,7 @@ function buildBaseSessionKey(item: DebouncerItem): string {
 }
 
 /**
- * 从 DebouncerItem 中Extract纯文本内容（轻量版，仅拼接 TIMTextElem）
+ * Extract plain text from a DebouncerItem (lightweight, TIMTextElem only).
  */
 function extractRawText(item: DebouncerItem): string {
   if (!item.msg.msg_body) {
@@ -67,34 +67,35 @@ function extractRawText(item: DebouncerItem): string {
 }
 
 /**
- * 构建 sessionKey —— 参照 telegram getTelegramSequentialKey，
- * In direct chat scenarios, assign independent serial queues for different commands to prevent control commands from being blocked by regular messages.
+ * Build sessionKey — assigns independent serial queues for different
+ * command types in direct chat to prevent control commands from being
+ * blocked by regular messages.
  *
- * Direct chat scenario:
- * - abort 指令 → `{base}:control`      （停止指令需要立即响应，不排在普通消息后面）
- * - btw 指令   → `{base}:btw:{seqId}`  （插话指令独立执行，不阻塞也不被阻塞）
- * - 普通消息   → `{base}`              （同会话内顺序执行）
+ * Direct chat:
+ * - abort → `{base}:control`      (stop commands need immediate response)
+ * - btw   → `{base}:btw:{seqId}`  (interjections run independently)
+ * - normal→ `{base}`              (sequential within the same session)
  *
- * Group chat scenario:
- * - 统一使用 `{base}`，不区分指令类型
+ * Group chat:
+ * - Unified `{base}`, no command-type distinction.
  */
 function buildSessionKey(item: DebouncerItem): string {
   const base = buildBaseSessionKey(item);
 
-  // 群聊场景不区分指令，统一走同一队列
+  // Group chat: no command-type distinction, use a single queue
   if (item.isGroup) {
     return base;
   }
 
-  // Direct chat scenario:按指令类型分配独立队列
+  // Direct chat: assign independent queues by command type
   const rawText = extractRawText(item);
 
-  // abort（/stop 等）→ 走独立的 control 队列，确保能立即中断
+  // abort (/stop etc.) → independent control queue for immediate interruption
   if (isAbortRequestText(rawText)) {
     return `${base}:control`;
   }
 
-  // btw（/btw ...）→ 每条插话走独立队列，互不阻塞
+  // btw (/btw ...) → each interjection gets its own queue, non-blocking
   if (isBtwRequestText(rawText)) {
     const seqId = item.msg.msg_seq ?? item.msg.msg_id ?? "";
     return seqId ? `${base}:btw:${seqId}` : `${base}:btw`;
@@ -104,11 +105,10 @@ function buildSessionKey(item: DebouncerItem): string {
 }
 
 /**
- * 判断是否为私聊场景下的普通消息（非 btw、非 abort 等控制指令）。
+ * Check if this is a normal direct-chat message (not btw, not abort).
  *
- * 只有私聊普通消息才需要触发"新问题打断旧问题"逻辑。
- */
-function isDirectNormalMessage(item: DebouncerItem): boolean {
+ * Only normal direct messages trigger the "new question interrupts old" logic.
+ */function isDirectNormalMessage(item: DebouncerItem): boolean {
   if (item.isGroup) {
     return false;
   }
@@ -123,7 +123,7 @@ function isDirectNormalMessage(item: DebouncerItem): boolean {
 }
 
 /**
- * 构建最小上下文，兼容 extractTextFromMsgBody 的 MessageHandlerContext 参数
+ * Build minimal context compatible with extractTextFromMsgBody.
  */
 function buildMinCtx(item: DebouncerItem, log: ReturnType<typeof createLog>) {
   return {
@@ -136,12 +136,10 @@ function buildMinCtx(item: DebouncerItem, log: ReturnType<typeof createLog>) {
 }
 
 /**
- * 将多条防抖消息的 msg_body 合并为一条合成消息。
+ * Merge msg_body from multiple debounced messages into a single synthetic message.
  *
- * 参照 telegram onFlush 中 entries.length > 1 时的合并逻辑：
- * - 文本元素：按顺序拼接所有 items 的 TIMTextElem
- * - Media元素：按顺序收集所有 items 的Media元素
- * - 其他字段以 primary（最后一条）为准
+ * Text elements are concatenated in order; media elements are collected in order.
+ * Other fields use the primary (last item) as the base.
  */
 function buildSyntheticMessage(
   primary: DebouncerItem,
@@ -159,7 +157,7 @@ function buildSyntheticMessage(
  */
 function buildPipelineContext(primary: DebouncerItem, items: DebouncerItem[]): PipelineContext {
   return {
-    // 不可变输入
+    // Immutable input
     raw: primary.msg,
     flushedItems: items,
     isGroup: primary.isGroup,
@@ -177,7 +175,7 @@ function buildPipelineContext(primary: DebouncerItem, items: DebouncerItem[]): P
       : primary.abortSignal,
     statusSink: primary.statusSink,
 
-    // 可变中间状态（由各中间件逐步填充）
+    // Mutable intermediate state (populated by middleware stages)
     fromAccount: "",
     rawBody: "",
     medias: [],
@@ -194,9 +192,8 @@ function buildPipelineContext(primary: DebouncerItem, items: DebouncerItem[]): P
 }
 
 /**
- * 组合 gateway 级和会话级 AbortSignal。
- *
- * 任一 signal 触发 abort 时，组合后的 signal 也会 abort。
+ * Combine gateway-level and session-level AbortSignals.
+ * The combined signal aborts when either source signal fires.
  */
 function combineAbortSignals(
   gatewaySignal?: AbortSignal,
@@ -216,9 +213,7 @@ function combineAbortSignals(
 }
 
 /**
- * 清理挂载在 DebouncerItem 上的会话级 AbortSignal（避免内存泄漏）。
- *
- * 单条和多条路径都需要在 finally 中调用。
+ * Clean up session-level AbortSignal attached to a DebouncerItem (prevent memory leaks).
  */
 function cleanupSessionSignal(primary: DebouncerItem): void {
   const sessionSignal = (primary as DebouncerItem & { _sessionAbortSignal?: AbortSignal })
@@ -267,14 +262,14 @@ export function ensureDebouncer(config: OpenClawConfig) {
 
       const sessionKey = buildSessionKey(primary);
 
-      // ⭐ 私聊普通消息：打断旧推理 + 使排队中的旧任务失效
+      // ⭐ Direct normal message: abort old inference + invalidate queued old tasks
       if (isDirectNormalMessage(primary)) {
         const baseKey = buildBaseSessionKey(primary);
-        // 使 base 队列中排队的旧任务失效（跳过执行）
+        // Invalidate queued old tasks in base queue (skip execution)
         sessionQueue.invalidate(baseKey);
-        // 轮换 AbortController：abort 旧推理，获取新 signal
+        // Rotate AbortController: abort old inference, get new signal
         const sessionSignal = sessionAbortManager.rotate(baseKey);
-        // 将会话级 signal 挂载到 primary 上，供 buildPipelineContext 组合使用
+        // Attach session-level signal to primary for buildPipelineContext
         (primary as DebouncerItem & { _sessionAbortSignal?: AbortSignal })._sessionAbortSignal =
           sessionSignal;
       }
@@ -291,7 +286,7 @@ export function ensureDebouncer(config: OpenClawConfig) {
         return;
       }
 
-      // 多条消息合并文本 + Media，空内容则跳过
+      // Merge text + media from multiple messages; skip if empty
       const combinedText = items
         .map((item) => extractRawText(item))
         .filter(Boolean)
@@ -308,7 +303,7 @@ export function ensureDebouncer(config: OpenClawConfig) {
         return;
       }
 
-      // 构建合成消息：将多条 items 的 msg_body 合并到 primary 上
+      // Build synthetic message: merge msg_body from all items into primary
       const syntheticPrimary: DebouncerItem = {
         ...primary,
         msg: buildSyntheticMessage(primary, items),
@@ -324,7 +319,7 @@ export function ensureDebouncer(config: OpenClawConfig) {
       });
     },
 
-    // 参照 telegram：onError 接收 items 参数，记录更丰富的上下文信息
+    // Similar to telegram: onError receives items for richer context logging
     onError: (err, items) => {
       const primary = items.at(-1);
       const sessionKey = primary ? buildSessionKey(primary) : "unknown";

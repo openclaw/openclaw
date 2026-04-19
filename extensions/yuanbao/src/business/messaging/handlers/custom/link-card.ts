@@ -1,14 +1,14 @@
 /**
- * 链接卡片消息子处理器
+ * Link card message sub-handler.
  *
- * 处理 TIMCustomElem 中 elem_type 为 1010（分享卡片）和 1007（链接理解卡片）的消息，
- * 将结构化数据格式化为 XML 文本供模型理解，并提取链接 URL 供 LinkUnderstanding 使用。
+ * Handles TIMCustomElem messages with elem_type 1010 (share card) and 1007 (link understanding card),
+ * formatting structured data as XML text for model comprehension and extracting link URLs for LinkUnderstanding.
  */
 
-/** 内容截断最大长度 */
+/** Max content truncation length */
 const CONTENT_MAX_LENGTH = 1000;
 
-// ============ 1010 分享卡片 ============
+// ============ 1010 Share card ============
 
 interface SharedLinkData {
   elem_type: 1010;
@@ -55,7 +55,7 @@ function formatSharedLink(data: SharedLinkData): string {
   return lines.join("\n");
 }
 
-// ============ 1007 链接理解卡片 ============
+// ============ 1007 Link understanding card ============
 
 interface LinkUnderstandingData {
   elem_type: 1007;
@@ -91,13 +91,10 @@ function formatLinkUnderstanding(data: LinkUnderstandingData): string | undefine
   return lines.join("\n");
 }
 
-// ============ 公共 API ============
+// ============ Public API ============
 
 /**
- * 从自定义消息中提取链接卡片的文本表示（XML 格式）
- *
- * @param customContent - 解析后的 msg_content.data JSON 对象
- * @returns 格式化的 XML 文本；非链接卡片类型或解析失败时返回 undefined
+ * Extract link card text representation (XML format) from custom message.
  */
 export function extractLinkCard(customContent: unknown): string | undefined {
   if (isSharedLinkData(customContent)) {
@@ -110,10 +107,7 @@ export function extractLinkCard(customContent: unknown): string | undefined {
 }
 
 /**
- * 从自定义消息中提取所有链接 URL（供 LinkUnderstanding 参数使用）
- *
- * @param customContent - 解析后的 msg_content.data JSON 对象
- * @returns 链接 URL 数组；非链接卡片类型或无链接时返回空数组
+ * Extract all link URLs from custom message (for LinkUnderstanding parameter).
  */
 export function extractLinkCardUrls(customContent: unknown): string[] {
   if (isSharedLinkData(customContent) && customContent.link) {

@@ -13,23 +13,21 @@ import {
 
 const log = createLog("upgrade");
 
-// 安装和更新插件命令的Default超时（5 分钟）
+// Default timeout for install/update plugin commands (5 minutes)
 const INSTALL_SCRIPT_TIMEOUT_MS = 5 * 60 * 1000;
 
 enum MessageEnum {
-  // 指定版本场景 - 配置被卸载后无法恢复时
+  // Specified version scenario - config cannot be recovered after uninstall
   REPAIR_BOT_CONFIG_GUIDE = "❌ 升级失败，请前往 Bot 管理页面使用「修复 Bot 配置」功能修复。",
-  // 通用场景 - 自动升级失败时
+  // General scenario - auto upgrade failed
   AUTO_UPGRADE_FAILED_FALLBACK = "❌ 升级命令执行失败，元宝创建的 Bot 可前往「Bot 设置」点击「更新插件」进行升级，非元宝创建的Bot，请前往各自平台手动更新。",
-  // 限频场景 - npm 操作触发 429 限频且重试耗尽时
+  // Rate-limited scenario - npm 429 retries exhausted
   RATE_LIMITED = "❌ 升级失败，当前服务繁忙，请稍后再试。元宝创建的 Bot 可前往「Bot 设置」点击「更新插件」进行升级。",
 }
 
 /**
- * 升级/安装命令返回非零退出码时，回读实际安装版本判断是否已成功升级。
- *
- * 某些环境下命令伴随告警会导致 exit code 非零，但插件实际已安装到位，
- * Therefore the actual version should be used to determine the real state.
+ * When upgrade/install command returns non-zero exit code, re-read installed version to determine if upgrade actually succeeded.
+ * Some environments produce non-zero exit codes due to warnings, but the plugin is actually installed.
  */
 async function verifyVersionAfterFailedCommand(params: {
   currentVersion: string | null;
@@ -68,7 +66,7 @@ async function verifyVersionAfterFailedCommand(params: {
 }
 
 /**
- * 执行「指定版本」升级流程（卸载 + 重装 + 配置恢复）。
+ * Execute "specified version" upgrade flow (uninstall + reinstall + config restore).
  */
 async function runSpecifiedVersionFlow(params: {
   targetVersion?: string;
@@ -86,7 +84,7 @@ async function runSpecifiedVersionFlow(params: {
     targetVersion,
   });
 
-  // Step 1: 检查是否已是最新版本
+  // Step 1: Check if already on target version
   if (currentVersion && currentVersion === targetVersion) {
     log.info("已是最新版本，跳过升级", { version: targetVersion });
     return {
@@ -104,7 +102,7 @@ async function runSpecifiedVersionFlow(params: {
     );
   }
 
-  // Step 2: 先备份配置，后续在重装后逐项恢复
+  // Step 2: Backup config first, restore after reinstall
   const restoreSnapshotJson = snapshotYuanbaoChannelConfig(config);
   log.info("指定版本安装前已记录 yuanbao channel 配置", { hasSnapshot: !!restoreSnapshotJson });
   const restoreSnapshotConfig = async (): Promise<{ ok: true } | { ok: false; error?: string }> => {
@@ -124,7 +122,7 @@ async function runSpecifiedVersionFlow(params: {
     return { ok: true };
   };
 
-  // Step 3: 某些系统在 channels.yuanbao 存在时卸载会异常，先删除该配置
+  // Step 3: Some systems fail to uninstall when channels.yuanbao exists, clear it first
   const clearResult = await runOpenClawCommand(["config", "unset", "channels.yuanbao"]);
   if (!clearResult.ok) {
     log.error("指定版本安装失败：清理 channels.yuanbao 配置失败");
@@ -132,10 +130,10 @@ async function runSpecifiedVersionFlow(params: {
     log.info("指定版本安装前已清理 channels.yuanbao 配置");
   }
 
-  // Step 4: 卸载旧插件
+  // Step 4: Uninstall old plugin
   const uninstallResult = await runOpenClawCommand(["plugins", "uninstall", "--force", PLUGIN_ID]);
   if (!uninstallResult.ok) {
-    // 卸载失败后尝试恢复配置
+    // Try to restore config after uninstall failure
     const restoreAfterUninstallFailure = await restoreSnapshotConfig();
     if (!restoreAfterUninstallFailure.ok) {
       log.error("指定版本安装失败：卸载失败后配置恢复失败", {
@@ -161,14 +159,14 @@ async function runSpecifiedVersionFlow(params: {
     log.warn("卸载步骤返回未安装，继续安装", { error: uninstallResult.error });
   }
 
-  // Step 5: 安装新插件
+  // Step 5: Install new plugin
   const installResult = await runOpenClawCommandWithRetry({
     args: ["plugins", "install", `${PLUGIN_ID}@${targetVersion}`],
     timeoutMs: INSTALL_SCRIPT_TIMEOUT_MS,
     commandName: "plugins install",
   });
 
-  // Step 6: 无论安装是否成功都尝试恢复配置，避免失败路径下配置丢失
+  // Step 6: Always try to restore config regardless of install result, to avoid config loss on failure path
   const restoreAfterInstall = await restoreSnapshotConfig();
   if (!restoreAfterInstall.ok) {
     log.error("指定版本安装失败：配置恢复失败", { error: restoreAfterInstall.error });
@@ -179,7 +177,7 @@ async function runSpecifiedVersionFlow(params: {
     };
   }
 
-  // Step 7: 检查安装结果；命令 exit code 非零时可能仅为告警，需回读版本确认真实状态
+  // Step 7: Check install result; non-zero exit code may be just a warning, re-read version to confirm
   if (!installResult.ok) {
     const verify = await verifyVersionAfterFailedCommand({
       currentVersion,
@@ -199,7 +197,7 @@ async function runSpecifiedVersionFlow(params: {
   }
   log.info("指定版本安装流程完成", { targetVersion, hasSnapshot: !!restoreSnapshotJson });
 
-  // Step 8: 通知升级成功
+  // Step 8: Notify upgrade success
   await onProgress?.(
     currentVersion
       ? `✅ 更新成功！**元宝 Bot 插件**已从 v${currentVersion} 升级至 v${targetVersion}`
@@ -210,7 +208,7 @@ async function runSpecifiedVersionFlow(params: {
 }
 
 /**
- * 执行常规升级流程（升级到 npm 最新正式版）。
+ * Execute regular upgrade flow (upgrade to latest stable npm version).
  */
 async function runRegularUpgradeFlow(params: {
   currentVersion: string | null;
@@ -224,7 +222,7 @@ async function runRegularUpgradeFlow(params: {
 }> {
   const { currentVersion, onProgress } = params;
 
-  // Step 1: 检查是否已是最新正式版本
+  // Step 1: Check if already on latest stable version
   const latestStableVersion = await fetchLatestStableVersion();
   if (latestStableVersion && currentVersion && currentVersion === latestStableVersion) {
     log.info("已是最新正式版本，跳过升级", { version: latestStableVersion });
@@ -244,13 +242,13 @@ async function runRegularUpgradeFlow(params: {
       : "⏳ 正在将**元宝 Bot 插件**升级至最新版本，请稍等片刻。",
   );
 
-  // Step 2: 执行 update 命令
+  // Step 2: Execute update command
   const updateResult = await runOpenClawCommandWithRetry({
     args: ["plugins", "update", `${PLUGIN_ID}@latest`],
     commandName: "plugins update",
   });
 
-  // Step 3.1: 检查更新结果；命令 exit code 非零时可能仅为告警，需回读版本确认真实状态
+  // Step 3.1: Check update result; non-zero exit code may be just a warning, re-read version to confirm
   if (!updateResult.ok) {
     const verify = await verifyVersionAfterFailedCommand({
       currentVersion,
@@ -273,7 +271,7 @@ async function runRegularUpgradeFlow(params: {
     };
   }
   if (updateResult.stdout?.includes("No install record")) {
-    // CDN 安装的版本首次执行 update 命令会提示 No install record，此处重新走指定版本安装流程
+    // CDN installed version first time executing update command will prompt No install record, here we re-run the specified version install flow
     return {
       ok: false,
       error: updateResult.error ?? "常规升级失败，需要重新安装",
@@ -282,7 +280,7 @@ async function runRegularUpgradeFlow(params: {
   }
   log.info("更新命令执行完毕");
 
-  // Step 3.2: 通知升级成功
+  // Step 3.2: Notify upgrade success
   await onProgress?.(
     latestStableVersion
       ? `✅ 更新成功！**元宝 Bot 插件**已从 v${currentVersion} 升级至 v${latestStableVersion}`
@@ -294,12 +292,6 @@ async function runRegularUpgradeFlow(params: {
 
 /**
  * Execute the complete plugin upgrade flow, returning the final plain-text status message sent to the user.
- *
- * @param config - OpenClaw Runtime配置
- * @param accountId - 账号标识（当前仅预留）
- * @param onProgress - 可选的进度通知回调
- * @param targetVersion - 可选目标版本；为空时执行常规升级到最新正式版
- * @returns 返回最终应发送给用户的文本；空字符串表示已通过 `onProgress` 完成提示
  */
 export async function performUpgrade(
   config: OpenClawConfig,
@@ -309,12 +301,10 @@ export async function performUpgrade(
 ): Promise<string> {
   log.info("开始升级流程", { targetVersion: targetVersion ?? "(最新正式版)" });
 
-  // accountId 预留
+  // accountId reserved for future use
   void accountId;
 
-  const isTargetVersionSpecified = !!targetVersion;
-
-  // 仅在指定版本场景做格式校验
+  // Only validate version format for specified-version scenario
   if (isTargetVersionSpecified) {
     const requestedVersion = targetVersion;
     if (!isValidVersion(requestedVersion)) {
@@ -334,7 +324,7 @@ export async function performUpgrade(
     targetVersion: targetVersion ?? "(未指定)",
   });
 
-  // 升级命令会改写 openclaw.json，先关闭自动重载
+  // Upgrade command rewrites openclaw.json, disable auto-reload first
   const disableReloadResult = await runOpenClawCommand([
     "config",
     "set",
@@ -348,7 +338,7 @@ export async function performUpgrade(
 
   try {
     if (isTargetVersionSpecified) {
-      // 执行指定版本安装流程
+      // Execute specified-version install flow
       const result = await runSpecifiedVersionFlow({
         targetVersion,
         currentVersion,
@@ -362,11 +352,11 @@ export async function performUpgrade(
         return result.message ?? "✅ 当前已是指定版本，无需更新。";
       }
     } else {
-      // 执行常规升级流程
+      // Execute regular upgrade flow
       const result = await runRegularUpgradeFlow({ currentVersion, onProgress });
       if (!result.ok) {
         if (result.needToInstall) {
-          // 需要通过指定版本安装流程重新安装
+          // Need to reinstall via specified-version install flow
           log.info("常规升级失败，需要通过指定版本安装流程重新安装");
           const result = await runSpecifiedVersionFlow({ currentVersion, config, onProgress });
           if (!result.ok) {
@@ -384,7 +374,7 @@ export async function performUpgrade(
       }
     }
   } finally {
-    // 无论成功失败都恢复自动重载配置
+    // Always restore auto-reload config regardless of success/failure
     const restoreReloadResult = await runOpenClawCommand([
       "config",
       "set",
@@ -398,7 +388,7 @@ export async function performUpgrade(
     }
   }
 
-  // 升级提示先发送，再执行重启
+  // Send upgrade notice first, then restart
   await onProgress?.("⏳ OpenClaw Gateway 准备重启，预计需要花费 10 秒左右，重启后升级生效。");
 
   const restartResult = await runOpenClawCommand(["gateway", "restart"]);

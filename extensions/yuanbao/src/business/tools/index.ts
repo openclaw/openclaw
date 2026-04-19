@@ -1,8 +1,8 @@
 /**
- * Tools 注册工厂
+ * Tools registration factory.
  *
- * 集中管理所有工具的注册逻辑，按功能类别分组。
- * 插件入口只需调用 registerTools(api) 即可完成全部工具注册。
+ * Centralized tool registration logic, grouped by category.
+ * Plugin entry only needs to call registerTools(api) to register all tools.
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
@@ -15,18 +15,18 @@ import { registerRemindTools } from "./remind.js";
  *
  * Call each registration function by category in order; to add a new category, simply append here.
  *
- * @param api - OpenClaw 插件 API
+ * @param api - OpenClaw plugin API
  */
 export function registerTools(api: OpenClawPluginApi): void {
-  // —— 成员相关 ——
+  // -- Member --
   registerMemberTools(api);
 
-  // —— 群信息相关 ——
+  // -- Group info --
   registerGroupTools(api);
 
-  // —— 定时提醒相关 ——
+  // -- Scheduled reminder --
   registerRemindTools(api);
 
-  // —— 未来新增类别在此追加 ——
+  // -- Append new categories here --
   // registerXxxTools(api);
 }

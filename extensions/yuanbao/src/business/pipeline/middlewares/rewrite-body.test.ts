@@ -1,16 +1,14 @@
 /**
- * 中间件 rewrite-body 单元测试
- *
- * 测试范围：斜杠命令改写、引用拼接、mentions 拼接
+ * Unit tests for rewrite-body middleware: slash command rewrite, quote concat, mentions concat.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 公共 mock 设置 ============
+// ============ Shared mock setup ============
 
-/** 注册 rewrite-body 所需的模块 mock */
+/** Register module mocks required by rewrite-body */
 function setupMocks(t: any, formatQuoteImpl?: (q: any) => string) {
   t.mock.module("../../messaging/quote.js", {
     namedExports: {
@@ -21,9 +19,9 @@ function setupMocks(t: any, formatQuoteImpl?: (q: any) => string) {
   });
 }
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("rewrite-body: 普通文本不改写", async (t) => {
+void test("rewrite-body: plain text is not rewritten", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -35,7 +33,7 @@ void test("rewrite-body: 普通文本不改写", async (t) => {
   assert.equal(ctx.rewrittenBody, "你好");
 });
 
-void test("rewrite-body: /yuanbao-health-check 带时间参数改写", async (t) => {
+void test("rewrite-body: /yuanbao-health-check with time params is rewritten", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -44,12 +42,12 @@ void test("rewrite-body: /yuanbao-health-check 带时间参数改写", async (t)
 
   await rewriteBody.handler(ctx, next);
 
-  assert.ok(ctx.rewrittenBody.includes("从09:00到10:00"), "应包含时间段");
-  assert.ok(ctx.rewrittenBody.includes("warn"), "应包含 warn 关键词");
-  assert.ok(ctx.rewrittenBody.includes("error"), "应包含 error 关键词");
+  assert.ok(ctx.rewrittenBody.includes("from 09:00 to 10:00"), "should contain time range");
+  assert.ok(ctx.rewrittenBody.includes("warn"), "should contain warn keyword");
+  assert.ok(ctx.rewrittenBody.includes("error"), "should contain error keyword");
 });
 
-void test("rewrite-body: /yuanbao-health-check 无时间参数 → 默认过去10分钟", async (t) => {
+void test("rewrite-body: /yuanbao-health-check without time params -> default last 10 minutes", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -58,10 +56,10 @@ void test("rewrite-body: /yuanbao-health-check 无时间参数 → 默认过去1
 
   await rewriteBody.handler(ctx, next);
 
-  assert.ok(ctx.rewrittenBody.includes("过去10分钟"), "应包含默认时间段");
+  assert.ok(ctx.rewrittenBody.includes("last 10 minutes"), "should contain default time range");
 });
 
-void test("rewrite-body: 引用消息拼接", async (t) => {
+void test("rewrite-body: quote message concat", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -74,12 +72,12 @@ void test("rewrite-body: 引用消息拼接", async (t) => {
 
   await rewriteBody.handler(ctx, next);
 
-  assert.ok(ctx.rewrittenBody.includes("被引用的内容"), "应包含引用内容");
-  assert.ok(ctx.rewrittenBody.includes("张三"), "应包含引用发送者");
-  assert.ok(ctx.rewrittenBody.includes("这是什么意思"), "应包含原始消息");
+  assert.ok(ctx.rewrittenBody.includes("被引用的内容"), "should contain quoted content");
+  assert.ok(ctx.rewrittenBody.includes("张三"), "should contain quote sender");
+  assert.ok(ctx.rewrittenBody.includes("这是什么意思"), "should contain original message");
 });
 
-void test("rewrite-body: 群聊 mentions 拼接", async (t) => {
+void test("rewrite-body: group chat mentions concat", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -95,12 +93,12 @@ void test("rewrite-body: 群聊 mentions 拼接", async (t) => {
 
   await rewriteBody.handler(ctx, next);
 
-  assert.ok(ctx.rewrittenBody.includes("@张三"), "应包含 @张三");
-  assert.ok(ctx.rewrittenBody.includes("@李四"), "应包含 @李四");
-  assert.ok(ctx.rewrittenBody.includes("user-002"), "应包含 userId");
+  assert.ok(ctx.rewrittenBody.includes("@张三"), "should contain @张三");
+  assert.ok(ctx.rewrittenBody.includes("@李四"), "should contain @李四");
+  assert.ok(ctx.rewrittenBody.includes("user-002"), "should contain userId");
 });
 
-void test("rewrite-body: C2C 场景不拼接 mentions", async (t) => {
+void test("rewrite-body: C2C does not concat mentions", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -113,10 +111,10 @@ void test("rewrite-body: C2C 场景不拼接 mentions", async (t) => {
 
   await rewriteBody.handler(ctx, next);
 
-  assert.ok(!ctx.rewrittenBody.includes("@张三"), "C2C 不应拼接 mentions");
+  assert.ok(!ctx.rewrittenBody.includes("@张三"), "C2C should not concat mentions");
 });
 
-void test("rewrite-body: 引用 + mentions 同时存在", async (t) => {
+void test("rewrite-body: quote + mentions both present", async (t) => {
   setupMocks(t);
   const { rewriteBody } = await import("./rewrite-body.js");
 
@@ -130,12 +128,12 @@ void test("rewrite-body: 引用 + mentions 同时存在", async (t) => {
 
   await rewriteBody.handler(ctx, next);
 
-  assert.ok(ctx.rewrittenBody.includes("引用内容"), "应包含引用");
-  assert.ok(ctx.rewrittenBody.includes("@赵六"), "应包含 mentions");
-  assert.ok(ctx.rewrittenBody.includes("这个怎么理解"), "应包含原始消息");
+  assert.ok(ctx.rewrittenBody.includes("引用内容"), "should contain quote");
+  assert.ok(ctx.rewrittenBody.includes("@赵六"), "should contain mentions");
+  assert.ok(ctx.rewrittenBody.includes("这个怎么理解"), "should contain original message");
 });
 
-void test("rewrite-body: 调用 next 继续管线", async (t) => {
+void test("rewrite-body: calls next to continue pipeline", async (t) => {
   setupMocks(t, () => "");
   const { rewriteBody } = await import("./rewrite-body.js");
 

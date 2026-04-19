@@ -1,7 +1,7 @@
 /**
- * messaging/handlers/face.ts 单元测试
+ * messaging/handlers/face.ts unit tests.
  *
- * 测试范围：faceHandler 的 extract 和 buildMsgBody
+ * Test scope: faceHandler extract and buildMsgBody
  */
 
 import assert from "node:assert/strict";
@@ -26,7 +26,7 @@ function makeResData(): ExtractTextFromMsgBodyResult {
 
 // ============ extract ============
 
-void test("faceHandler extract 解析表情名称", () => {
+void test("faceHandler extract parses sticker name", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -42,7 +42,7 @@ void test("faceHandler extract 解析表情名称", () => {
   assert.equal(result, "[EMOJI: 喜悦情绪]");
 });
 
-void test("faceHandler extract 无 data 返回通用占位符", () => {
+void test("faceHandler extract returns generic placeholder without data", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -50,7 +50,7 @@ void test("faceHandler extract 无 data 返回通用占位符", () => {
   assert.equal(faceHandler.extract(ctx, elem, resData), "[EMOJI]");
 });
 
-void test("faceHandler extract 无效 JSON 返回通用占位符", () => {
+void test("faceHandler extract returns generic placeholder for invalid JSON", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -60,7 +60,7 @@ void test("faceHandler extract 无效 JSON 返回通用占位符", () => {
 
 // ============ buildMsgBody ============
 
-void test("faceHandler buildMsgBody 构造表情消息", () => {
+void test("faceHandler buildMsgBody constructs sticker message", () => {
   const result = faceHandler.buildMsgBody!({
     package_id: "1004",
     sticker_id: "51675",

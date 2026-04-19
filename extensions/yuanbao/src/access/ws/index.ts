@@ -1,7 +1,3 @@
-/**
- * WebSocket module barrel export
- */
-
 export {
   encodePB,
   decodePB,

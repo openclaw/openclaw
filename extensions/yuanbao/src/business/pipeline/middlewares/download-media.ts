@@ -1,7 +1,5 @@
 /**
- * Middleware: media download
- *
- * 下载Image和文件到 agent 允许访问的Directory。
+ * Middleware: download images and files to agent-accessible directory.
  * In group chat scenarios, historical media resources are also collected.
  */
 
@@ -16,7 +14,7 @@ import { downloadMediasToLocalFiles } from "../../utils/media.js";
 import type { MiddlewareDescriptor } from "../types.js";
 
 /**
- * 从群聊历史记录中收集与当前 @bot 消息相关的Media资源
+ * Collect media resources from group chat history related to the current @bot message.
  */
 function getHistoryMedias(
   groupCode: string,
@@ -71,11 +69,11 @@ export const downloadMedia: MiddlewareDescriptor = {
 
     let allMedias = [...medias];
 
-    // Group chat scenario:收集历史Media
+    // Group chat: collect historical media
     if (isGroup && groupCode) {
       const historyMedias = getHistoryMedias(groupCode, fromAccount, quoteInfo);
 
-      // 记录当前消息的Media到独立 LRU
+      // Record current message media to dedicated LRU
       if (medias.length > 0) {
         recordMediaHistory(groupCode, {
           sender: fromAccount,
@@ -88,7 +86,7 @@ export const downloadMedia: MiddlewareDescriptor = {
       allMedias = [...historyMedias.filter((m) => m.url), ...medias];
     }
 
-    // Download media到本地
+    // Download media to local
     const { mediaPaths, mediaTypes } = await downloadMediasToLocalFiles(allMedias, account, core, {
       verbose: (msg) => ctx.log.debug(msg),
       warn: (msg) => ctx.log.warn(msg),

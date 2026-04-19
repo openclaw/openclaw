@@ -1,8 +1,6 @@
 /**
- * 中间件：构建 FinalizedMsgContext
- *
- * 使用 SDK 官方 finalizeInboundContext 构建完整的入站上下文。
- * In group chat scenarios, historical context is also built.
+ * Middleware: build FinalizedMsgContext using SDK finalizeInboundContext.
+ * Also builds history context for group chat scenarios.
  */
 
 import {
@@ -40,7 +38,7 @@ export const buildContext: MiddlewareDescriptor = {
     }
     const label = isGroup ? `group:${groupCode}` : `direct:${fromAccount}`;
 
-    // 格式化信封
+    // Format envelope
     const body = core.channel.reply.formatAgentEnvelope({
       channel: "YUANBAO",
       from: label,
@@ -50,7 +48,7 @@ export const buildContext: MiddlewareDescriptor = {
       body: rewrittenBody,
     });
 
-    // 群聊：构建历史上下文
+    // Group chat: build history context
     let combinedBody = body;
     let inboundHistory:
       | Array<{ sender: string | undefined; body: string; timestamp: number | undefined }>
@@ -84,7 +82,7 @@ export const buildContext: MiddlewareDescriptor = {
           : undefined;
     }
 
-    // 使用 SDK 官方 finalizeInboundContext
+    // Use SDK finalizeInboundContext
     ctx.ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: rewrittenBody,
@@ -117,7 +115,7 @@ export const buildContext: MiddlewareDescriptor = {
 
     await next();
 
-    // 群聊：AI 回复完成后清空已消费的群聊历史
+    // Group chat: clear consumed history after AI reply completes
     if (isGroup && groupCode) {
       clearHistoryEntriesIfEnabled({
         historyMap: chatHistories,

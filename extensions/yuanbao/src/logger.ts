@@ -1,42 +1,39 @@
 /**
- * Yuanbao 插件公共日志模块
+ * Yuanbao plugin shared logging module.
  *
- * 使用方式：
- * 1. 插件注册阶段调用 initLogger(api) 初始化（仅一次）
- * 2. 之后在任意模块中使用导出的便捷方法：
- *    - logger.info("消息")          // 关键事件
- *    - logger.warn("消息")          // 可忽略但需注意
- *    - logger.error("消息")         // 真正的错误
- *    - logger.debug("消息")         // 调试信息（需 --verbose 或 level=debug）
- *    - logger.info("消息", { k: v })  // 附带结构化 meta
- * 3. Runtime未初始化前会自动降级到 console 输出
+ * Usage:
+ * 1. Call initLogger(api) once during plugin registration.
+ * 2. Use the exported convenience methods anywhere:
+ *    - logger.info("msg")             // key events
+ *    - logger.warn("msg")             // ignorable but noteworthy
+ *    - logger.error("msg")            // real errors
+ *    - logger.debug("msg")            // debug info (requires --verbose or level=debug)
+ *    - logger.info("msg", { k: v })   // with structured meta
+ * 3. Falls back to console output before runtime is initialized.
  *
  * Log levels:
- * - info: 关键事件（启动、收发消息成功）
- * - warn: 可忽略但需注意（配置缺失、跳过处理）
- * - error: 真正的错误（发送失败、签名错误）
- * - debug: 详细调试信息（仅 verbose 模式可见）
+ * - info:  key events (startup, message send/receive success)
+ * - warn:  ignorable but noteworthy (missing config, skipped processing)
+ * - error: real errors (send failure, signature error)
+ * - debug: verbose debug info (only visible in verbose mode)
  *
  * View logs:
  * - openclaw logs --follow
- * - openclaw gateway --verbose（显示 debug 级别）
+ * - openclaw gateway --verbose (shows debug level)
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getPluginVersion } from "./infra/env.js";
 
-/** 缓存的日志前缀，initLogger 时刷新 */
+/** Cached log prefix, refreshed on initLogger */
 let LOG_PREFIX = "[yuanbao]";
 
-/** 根据当前版本号刷新日志前缀 */
 function refreshLogPrefix(): void {
   const ver = getPluginVersion();
   LOG_PREFIX = ver ? `[yuanbao:${ver}]` : "[yuanbao]";
 }
 
-// ============ 类型定义 ============
-
-/** 插件 logger 实例类型（兼容 OpenClaw childLogger） */
+/** Plugin logger interface (compatible with OpenClaw childLogger) */
 export interface PluginLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -44,18 +41,9 @@ export interface PluginLogger {
   debug(message: string, meta?: Record<string, unknown>): void;
 }
 
-// ============ 内部状态 ============
-
-/** OpenClaw childLogger 实例（initLogger 后可用） */
 let childLogger: PluginLogger | null = null;
-
-/** 是否已初始化 */
 let initialized = false;
-
-/** 是否开启了 verbose 模式 */
 let verboseEnabled = false;
-
-// ============ 降级 logger（Runtime未初始化前使用） ============
 
 const fallbackLogger: PluginLogger = {
   info(message: string, meta?: Record<string, unknown>): void {
@@ -72,15 +60,12 @@ const fallbackLogger: PluginLogger = {
   },
 };
 
-// ============ 初始化 ============
-
 /**
- * 初始化插件 logger
+ * Initialize the plugin logger.
  *
- * 在插件 register 阶段调用，基于 OpenClaw API 创建带 plugin 标识的子 logger。
- * 初始化后所有导出的日志方法会自动切换到 OpenClaw logger 输出。
- *
- * @param api - OpenClaw 插件 API 实例
+ * Called during plugin registration. Creates a child logger tagged with the
+ * plugin identifier via the OpenClaw API. After initialization, all exported
+ * log methods automatically route to the OpenClaw logger.
  */
 export function initLogger(api: OpenClawPluginApi): void {
   try {
@@ -93,12 +78,9 @@ export function initLogger(api: OpenClawPluginApi): void {
   }
 }
 
-// ============ 公共日志方法 ============
-
 /**
- * 获取当前活跃的 logger 实例
- *
- * Runtime已初始化则返回 OpenClaw childLogger，否则返回 console 降级 logger。
+ * Return the currently active logger.
+ * Uses the OpenClaw childLogger when initialized; otherwise falls back to console.
  */
 function getActiveLogger(): PluginLogger {
   if (initialized && childLogger) {
@@ -118,16 +100,16 @@ function getActiveLogger(): PluginLogger {
 }
 
 /**
- * 插件公共 logger 实例
+ * Shared plugin logger instance.
  *
- * Usage:
+ * @example
  * ```ts
  * import { logger } from "../logger.js";
  *
- * logger.info("插件已加载");
- * logger.warn("配置缺失", { key: "appSecret" });
- * logger.error("发送失败", { error: err.message });
- * logger.debug("调试信息");
+ * logger.info("plugin loaded");
+ * logger.warn("missing config", { key: "appSecret" });
+ * logger.error("send failed", { error: err.message });
+ * logger.debug("debug info");
  * ```
  */
 export const logger: PluginLogger = {
@@ -146,21 +128,17 @@ export const logger: PluginLogger = {
 };
 
 /**
- * 检查是否开启了 verbose 模式
+ * Check whether verbose mode is enabled.
  *
- * Can be used in critical paths to decide whether to output extra debug info, avoiding unnecessary string concatenation overhead.
- *
- * @returns 是否开启了 verbose 模式
+ * Useful in hot paths to avoid unnecessary string concatenation overhead.
  */
 export function isVerbose(): boolean {
   return verboseEnabled;
 }
 
-// ============ 调试白名单（跳过脱敏） ============
-
 /**
- * 从Environment variables YUANBAO_DEBUG_BOT_IDS 解析白名单 botId。
- * 支持逗号分隔，例如 YUANBAO_DEBUG_BOT_IDS=bot_aaa,bot_bbb
+ * Parse debug bot IDs from the YUANBAO_DEBUG_BOT_IDS environment variable.
+ * Supports comma-separated values, e.g. YUANBAO_DEBUG_BOT_IDS=bot_aaa,bot_bbb
  */
 function parseEnvDebugBotIds(): string[] {
   const raw = process.env.YUANBAO_DEBUG_BOT_IDS;
@@ -173,19 +151,19 @@ function parseEnvDebugBotIds(): string[] {
     .filter(Boolean);
 }
 
-/** 白名单 botId 集合，命中时日志不做脱敏 */
+/** Bot IDs in the debug whitelist — log sanitization is skipped for these */
 const debugBotIds = new Set<string>(parseEnvDebugBotIds());
 
 /**
- * 设置调试白名单 botId 列表
+ * Set the debug whitelist bot IDs.
  *
- * 将 YAML 配置中的 `channels.yuanbao.debugBotIds` 与Environment variables
- * `YUANBAO_DEBUG_BOT_IDS` 合并写入白名单。白名单内的 botId 产生的日志
- * Sanitization will be skipped to facilitate debugging during development.
+ * Merges `channels.yuanbao.debugBotIds` from the YAML config with
+ * the `YUANBAO_DEBUG_BOT_IDS` environment variable. Logs from
+ * whitelisted bot IDs skip sanitization to ease debugging.
  *
- * 通常在 gateway.startAccount 中从配置读取后调用。
+ * Typically called from gateway.startAccount after reading the config.
  *
- * @param ids - YAML 配置中的 botId 数组，会与Environment variables中的白名单合并
+ * @param ids - Bot ID array from the YAML config (merged with env var whitelist)
  */
 export function setDebugBotIds(ids: string[]): void {
   debugBotIds.clear();
@@ -201,10 +179,9 @@ export function setDebugBotIds(ids: string[]): void {
 }
 
 /**
- * 判断指定 botId 是否在调试白名单中
+ * Check whether a bot ID is in the debug whitelist.
  *
- * @param botId - 待检查的 botId，为空时直接返回 false
- * @returns 该 botId 是否命中调试白名单
+ * @param botId - Bot ID to check; returns false when empty
  */
 export function isDebugBotId(botId?: string): boolean {
   if (!botId) {
@@ -213,9 +190,7 @@ export function isDebugBotId(botId?: string): boolean {
   return debugBotIds.has(botId);
 }
 
-// ============ 统一日志工厂 ============
-
-/** 通用日志 sink 接口 — 兼容 logger 单例、ctx.log、透传 GatewayLog 等所有来源 */
+/** Generic log sink interface — compatible with the logger singleton, ctx.log, and pass-through GatewayLog */
 export interface LogSink {
   info?: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -224,7 +199,7 @@ export interface LogSink {
   verbose?: (msg: string) => void;
 }
 
-/** createLog 返回的统一日志接口 */
+/** Unified log interface returned by createLog */
 export interface ModuleLog {
   info(msg: string, data?: Record<string, unknown>): void;
   warn(msg: string, data?: Record<string, unknown>): void;
@@ -233,21 +208,13 @@ export interface ModuleLog {
 }
 
 /**
- * 格式化日志消息：拼接 LOG_PREFIX + module 前缀，并对 data 自动脱敏。
+ * Format a log message: prefix with LOG_PREFIX + module, auto-sanitize data.
  *
- * @param module - 模块标识（如 'ws', 'inbound', accountId 等）
- * @param msg - 日志正文
- * @param data - 可选的结构化数据，自动经过 sanitize 脱敏
- * @returns 格式化后的完整日志字符串
- */
-/**
- * 格式化日志消息：拼接 LOG_PREFIX + module 前缀，并对 data 自动脱敏。
- *
- * @param module - 模块标识（如 'ws', 'inbound', accountId 等）
- * @param msg - 日志正文
- * @param data - 可选的结构化数据，自动经过 sanitize 脱敏
- * @param skipSanitize - 若为 true 则跳过脱敏，直接 JSON.stringify 输出
- * @returns 格式化后的完整日志字符串
+ * @param module - Module identifier (e.g. 'ws', 'inbound', accountId)
+ * @param msg - Log message body
+ * @param data - Optional structured data (auto-sanitized unless skipSanitize is set)
+ * @param skipSanitize - When true, skip sanitization and use raw JSON.stringify
+ * @returns Formatted log string
  */
 export function formatLog(
   module: string,
@@ -264,16 +231,14 @@ export function formatLog(
 }
 
 /**
- * 创建模块级Logger instance
+ * Create a module-scoped log helper.
  *
- * Auto-complete:
- * 1. 拼接 LOG_PREFIX[module] 前缀
- * 2. sanitize(data) 脱敏
- * 3. 适配任意 logger sink
+ * Automatically prefixes messages with LOG_PREFIX[module], sanitizes data,
+ * and adapts to any log sink.
  *
- * @param module - 模块标识（如 'ws', 'inbound', 'outbound', accountId 等）
- * @param sink - 日志输出目标（logger 单例、ctx.log、透传 log 对象），不传则使用 logger 单例
- * @returns 带有 info/warn/error/debug 方法的模块Logger instance，调用时自动拼接前缀并脱敏
+ * @param module - Module identifier (e.g. 'ws', 'inbound', 'outbound', accountId)
+ * @param sink - Log output target; defaults to the shared logger singleton
+ * @returns Module log with info/warn/error/debug methods
  *
  * @example
  * ```ts
@@ -298,16 +263,10 @@ export function createLog(module: string, sink?: LogSink, options?: { botId?: st
   };
 }
 
-// ============ 兼容旧 API ============
-
-/**
- * 需要在日志输出中完全删除的字段名集合
- */
+/** Field names to omit entirely from log output */
 const OMIT_KEYS = new Set(["msg_body"]);
 
-/**
- * 需要在日志中脱敏的敏感字段名集合
- */
+/** Sensitive field names to mask in log output */
 const SENSITIVE_KEYS = new Set([
   "token",
   "signature",
@@ -324,8 +283,8 @@ const SENSITIVE_KEYS = new Set([
 ]);
 
 /**
- * 遮蔽字符串值，保留首尾各 3 个字符。
- * 长度小于 8 的字符串将被完全遮蔽。
+ * Mask a string value, keeping the first and last 3 characters.
+ * Strings shorter than 8 characters are fully masked.
  *
  * @example maskValue("abcdefghij") => "abc****hij"
  */
@@ -338,14 +297,14 @@ function maskValue(value: string): string {
 
 /**
  * Sanitize sensitive fields before writing to logs.
- * 接受对象、JSON 字符串或基本类型。
+ * Accepts objects, JSON strings, or primitive types.
  *
- * - 对象/数组：递归遮蔽敏感字段的值
- * - JSON 字符串：解析 → 脱敏 → 重新序列化
- * - 其他类型：原样返回
+ * - Objects/arrays: recursively mask sensitive field values
+ * - JSON strings: parse → sanitize → re-serialize
+ * - Other types: return as-is
  *
- * @param value - 需要脱敏的值，可以是对象、JSON 字符串或基本类型
- * @returns 脱敏后的字符串表示
+ * @param value - Value to sanitize (object, JSON string, or primitive)
+ * @returns Sanitized string representation
  */
 export function sanitize(value: unknown): string {
   if (value === null || value === undefined) {
@@ -353,14 +312,14 @@ export function sanitize(value: unknown): string {
   }
 
   if (typeof value === "string") {
-    // 尝试将 JSON 字符串解析为对象，以便对内部字段进行脱敏
+    // Try parsing JSON strings to sanitize inner fields
     try {
       const parsed: unknown = JSON.parse(value);
       if (typeof parsed === "object" && parsed !== null) {
         return JSON.stringify(sanitizeObj(parsed as Record<string, unknown>));
       }
     } catch {
-      // 非 JSON 字符串，原样返回
+      // Not a JSON string — return as-is
     }
     return value;
   }
@@ -369,7 +328,7 @@ export function sanitize(value: unknown): string {
     return JSON.stringify(sanitizeObj(value as Record<string, unknown>));
   }
 
-  // 基本类型（number / boolean / bigint / symbol / function）
+  // Primitives (number / boolean / bigint / symbol / function)
   return typeof value === "symbol"
     ? value.toString()
     : String(value as string | number | boolean | bigint);

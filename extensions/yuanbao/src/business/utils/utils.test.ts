@@ -1,7 +1,7 @@
 /**
- * utils.ts 单元测试
+ * Unit tests for utils.ts.
  *
- * 测试范围：textDesensitization、msgBodyDesensitization
+ * Coverage: textDesensitization, msgBodyDesensitization
  */
 
 import assert from "node:assert/strict";
@@ -17,7 +17,7 @@ void test("textDesensitization 短文本不脱敏", () => {
 });
 
 void test("textDesensitization 长文本脱敏", () => {
-  // 长度 > 5 时，保留首尾各 2 字符
+  // Length > 5: keep first and last 2 chars
   const result = textDesensitization("这是一段测试文本");
   assert.equal(result, "这是***(4)***文本");
 

@@ -1,7 +1,6 @@
 /**
- * Message processing pipeline type definitions
- *
- * 定义中间件管线的核心类型，包括管线上下文、中间件函数签名和Description符。
+ * Message processing pipeline type definitions:
+ * pipeline context, middleware function signatures, and descriptors.
  */
 
 import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
@@ -16,9 +15,9 @@ import type { MessageSender } from "../outbound/types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 // import type { OutboundReplyPayload } from 'openclaw/plugin-sdk/reply-payload';
 
-// ============ 防抖器项 ============
+// ============ Debouncer item ============
 
-/** 防抖器 enqueue 的消息项 */
+/** Message item enqueued by the debouncer */
 export interface DebouncerItem {
   msg: YuanbaoInboundMessage;
   isGroup: boolean;
@@ -38,11 +37,11 @@ export interface DebouncerItem {
   abortSignal?: AbortSignal;
 }
 
-// ============ 管线上下文 ============
+// ============ Pipeline context ============
 
-/** Message processing context —— 在管线中流转，每个中间件可读写 */
+/** Message processing context — flows through the pipeline, readable/writable by each middleware */
 export interface PipelineContext {
-  // ---- 不可变输入 ----
+  // ---- Immutable inputs ----
   readonly raw: YuanbaoInboundMessage;
   readonly flushedItems: DebouncerItem[];
   readonly isGroup: boolean;
@@ -54,9 +53,9 @@ export interface PipelineContext {
   readonly abortSignal?: AbortSignal;
   readonly statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 
-  // ---- 可变中间状态（由各中间件逐步填充） ----
+  // ---- Mutable intermediate state (populated by each middleware) ----
 
-  /** extractContent 填充 */
+  /** Populated by extractContent */
   fromAccount: string;
   senderNickname?: string;
   groupCode?: string;
@@ -64,25 +63,25 @@ export interface PipelineContext {
   medias: MediaItem[];
   isAtBot: boolean;
   mentions: MentionItem[];
-  /** 链接卡片中提取的 URL 列表（供 LinkUnderstanding 使用） */
+  /** URL list extracted from link cards (for LinkUnderstanding) */
   linkUrls: string[];
 
-  /** resolveQuote 填充 */
+  /** Populated by resolveQuote */
   quoteInfo?: QuoteInfo;
 
-  /** guardCommand 填充 */
+  /** Populated by guardCommand */
   commandAuthorized: boolean;
   rewrittenBody: string;
   hasControlCommand: boolean;
 
-  /** resolveMention 填充 */
+  /** Populated by resolveMention */
   effectiveWasMentioned: boolean;
 
-  /** downloadMedia 填充 */
+  /** Populated by downloadMedia */
   mediaPaths: string[];
   mediaTypes: string[];
 
-  /** resolveRoute 填充 */
+  /** Populated by resolveRoute */
   route?: {
     agentId: string;
     sessionKey: string;
@@ -92,35 +91,35 @@ export interface PipelineContext {
   envelopeOptions?: EnvelopeFormatOptions;
   previousTimestamp?: number;
 
-  /** resolveTrace 填充 —— Trace context */
+  /** Populated by resolveTrace — trace context */
   traceContext?: YuanbaoTraceContext;
 
-  /** buildContext 填充 */
+  /** Populated by buildContext */
   ctxPayload?: FinalizedMsgContext;
 
-  /** prepareSender 填充 —— 消息发送器 */
+  /** Populated by prepareSender — message sender */
   sender?: MessageSender;
 
-  /** prepareSender 填充 —— 出站队列会话 */
+  /** Populated by prepareSender — outbound queue session */
   queueSession?: QueueSession;
 
-  // ---- Action 请求（由 actions 适配层注入） ----
+  // ---- Action request (injected by actions adapter layer) ----
 
-  /** action 名称（如 'sticker'、'sticker-search'、'react'），非 action 请求时为 undefined */
+  /** Action name (e.g. 'sticker', 'sticker-search', 'react'), undefined for non-action requests */
   action?: string;
 }
 
-// ============ 中间件 ============
+// ============ Middleware ============
 
-/** 中间件函数签名（洋葱模型） */
+/** Middleware function signature (onion model) */
 export type Middleware = (ctx: PipelineContext, next: () => Promise<void>) => Promise<void>;
 
-/** 中间件Description符 */
+/** Middleware descriptor */
 export interface MiddlewareDescriptor {
-  /** 中间件名称（用于日志和调试） */
+  /** Middleware name (for logging and debugging) */
   name: string;
-  /** 中间件处理函数 */
+  /** Middleware handler function */
   handler: Middleware;
-  /** 条件守卫：返回 false 时跳过该中间件 */
+  /** Conditional guard: skip this middleware when returning false */
   when?: (ctx: PipelineContext) => boolean;
 }

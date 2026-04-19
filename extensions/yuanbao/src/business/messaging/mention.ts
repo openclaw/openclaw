@@ -1,42 +1,34 @@
 /**
- * 入站处理 — 平台特定的 mention Extract
+ * Inbound processing — platform-specific mention extraction.
  *
- * 从消息实体中Extract @mentioned 用户（非机器人）。
- * 机器人 mention 检测由框架的 matchesMentionPatterns() API 处理；
- * 本模块仅负责Extract目标用户的 mention（如 @张三）。
+ * Extracts @mentioned users (non-bot) from message entities.
+ * Bot mention detection is handled by the framework's matchesMentionPatterns() API;
+ * this module only extracts target user mentions (e.g. @SomeUser).
  */
 
 import type { YuanbaoMsgBodyElement } from "../../types.js";
 
-// ============ 类型定义 ============
-
-/** 消息中被提及的用户信息（非机器人） */
+/** Mentioned user info in a message (non-bot) */
 export interface MentionedUser {
-  /** 原始文本形式（如 "@张三"） */
+  /** Raw text form (e.g. "@SomeUser") */
   raw: string;
-  /** 平台User ID（如果可从消息实体中Extract） */
+  /** Platform user ID (if extractable from message entity) */
   platformId?: string;
-  /** 展示名称 */
+  /** Display name */
   displayName?: string;
 }
 
-/** 用于过滤机器人 mention 的机器人标识 */
+/** Bot identifiers for filtering bot mentions */
 export interface BotIdentifiers {
   botId?: string;
   botUsername?: string;
 }
 
-// ============ Extract逻辑 ============
-
 /**
- * 从元宝Message body中Extract目标用户的 mention（非机器人）。
+ * Extract target user mentions (non-bot) from yuanbao message body.
  *
- * 元宝使用 TIMCustomElem + elem_type=1002 表示 @ mention。
- * 本函数解析这些元素并返回被提及的用户，排除机器人自身的 mention。
- *
- * @param msgBody - Message body元素数组
- * @param botIdentifiers - 机器人自身的标识（用于排除）
- * @returns 被提及的用户数组（排除机器人）
+ * Yuanbao uses TIMCustomElem + elem_type=1002 for @ mentions.
+ * Parses these elements and returns mentioned users, excluding the bot itself.
  */
 export function extractTargetMentions(
   msgBody: YuanbaoMsgBodyElement[] | undefined,
@@ -67,7 +59,7 @@ export function extractTargetMentions(
       const userId: string | undefined = customContent.user_id;
       const { text } = customContent;
 
-      // 跳过机器人自身的 mention
+      // Skip bot's own mention
       if (userId && botIdentifiers.botId && userId === botIdentifiers.botId) {
         continue;
       }
@@ -80,7 +72,7 @@ export function extractTargetMentions(
         });
       }
     } catch {
-      // 忽略格式错误的 JSON
+      // Ignore malformed JSON
     }
   }
 
@@ -88,13 +80,9 @@ export function extractTargetMentions(
 }
 
 /**
- * 使用正则兜底从原始文本中Extract目标用户的 mention。
+ * Regex fallback: extract target user mentions from raw text.
  *
  * Used when the message entity is unavailable or incomplete.
- *
- * @param messageText - 原始消息文本
- * @param botIdentifiers - 机器人自身的标识（用于排除）
- * @returns 被提及的用户数组（排除机器人）
  */
 export function extractTargetMentionsFromText(
   messageText: string,
@@ -107,7 +95,7 @@ export function extractTargetMentionsFromText(
   while ((match = mentionRegex.exec(messageText)) !== null) {
     const handle = match[1];
 
-    // 跳过机器人 mention
+    // Skip bot mention
     if (
       botIdentifiers.botUsername &&
       handle.toLowerCase() === botIdentifiers.botUsername.toLowerCase()
@@ -128,15 +116,10 @@ export function extractTargetMentionsFromText(
 }
 
 /**
- * 检测隐式 mention（在群聊中回复机器人消息）。
+ * Detect implicit mention (replying to bot's message in group chat).
  *
- * In Yuanbao, if a user replies to the bot's message in a group chat,
- * 应被视为对机器人的隐式 mention。
- *
- * @param replyToAuthorId - 被引用/回复消息的作者 ID
- * @param botId - 机器人的User ID
- * @param isDirectMessage - 是否为私信（1 对 1 消息）
- * @returns 如果是对机器人的隐式 mention 则返回 true
+ * In Yuanbao, replying to the bot's message in a group chat
+ * is treated as an implicit mention of the bot.
  */
 export function detectImplicitMention(
   replyToAuthorId: string | undefined,

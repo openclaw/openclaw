@@ -1,8 +1,8 @@
 /**
- * Sticker cache read/write and search
+ * Sticker cache read/write and search.
  *
- * 存储路径：~/.openclaw/state/yuanbao/sticker-cache.json
- * 使用 node:fs + node:os，不依赖 SDK 工具。
+ * Storage path: ~/.openclaw/state/yuanbao/sticker-cache.json
+ * Uses node:fs + node:os, no SDK dependencies.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CachedSticker, StickerCache } from "./sticker-types.js";
 
-// ============ 路径计算 ============
+// ============ Path computation ============
 
 function getCacheFilePath(): string {
   return join(homedir(), ".openclaw", "state", "yuanbao", "sticker-cache.json");
@@ -30,14 +30,12 @@ function asStickersRecord(value: unknown): StickerCache["stickers"] {
   return {};
 }
 
-// ============ 读写 ============
+// ============ Read/Write ============
 
 const CURRENT_VERSION = 1;
 
 /**
- * 从磁盘加载表情缓存；文件不存在或 JSON 损坏时返回空结构，避免阻塞调用方。
- *
- * @returns 当前缓存对象（含 `version` 与 `stickers` 映射）
+ * Load sticker cache from disk; returns empty structure if file missing or JSON corrupted.
  */
 export function loadCache(): StickerCache {
   const filePath = getCacheFilePath();
@@ -59,8 +57,6 @@ export function loadCache(): StickerCache {
 
 /**
  * Write the complete sticker cache back to disk (creates parent directory).
- *
- * @param cache - 内存中的缓存快照
  */
 export function saveCache(cache: StickerCache): void {
   const filePath = getCacheFilePath();
@@ -68,12 +64,10 @@ export function saveCache(cache: StickerCache): void {
   writeFileSync(filePath, JSON.stringify(cache, null, 2), "utf-8");
 }
 
-// ============ 单条操作 ============
+// ============ Single-entry operations ============
 
 /**
- * 缓存单条表情；同 `sticker_id` 已存在则覆盖（与批量接口的 builtin 跳过策略不同）。
- *
- * @param sticker - 待写入的表情元数据
+ * Cache a single sticker; overwrites if same sticker_id exists (unlike batch builtin-skip strategy).
  */
 export function cacheSticker(sticker: CachedSticker): void {
   const cache = loadCache();
@@ -82,9 +76,7 @@ export function cacheSticker(sticker: CachedSticker): void {
 }
 
 /**
- * 批量缓存表情。`source: builtin` 不会覆盖 `received`；会覆盖同 id 的旧 builtin（便于内置清单/词条更新）。
- *
- * @param stickers - 待合并写入的表情列表
+ * Batch cache stickers. `source: builtin` won't overwrite `received`; will overwrite old builtin of same id (for list/term updates).
  */
 export function cacheStickers(stickers: CachedSticker[]): void {
   if (stickers.length === 0) {
@@ -93,7 +85,7 @@ export function cacheStickers(stickers: CachedSticker[]): void {
   const cache = loadCache();
   for (const sticker of stickers) {
     const existing = cache.stickers[sticker.sticker_id];
-    // builtin：不覆盖入站 received；其余情况写入（含用新 builtin 覆盖旧 builtin，便于扩展词条更新）
+    // builtin: don't overwrite inbound received; otherwise write (including new builtin over old builtin for term updates)
     if (sticker.source === "builtin" && existing?.source === "received") {
       continue;
     }
@@ -104,23 +96,20 @@ export function cacheStickers(stickers: CachedSticker[]): void {
 
 /**
  * Read a single cached sticker by primary key.
- *
- * @param stickerId - 表情唯一标识
- * @returns 命中则返回缓存条目，否则 `undefined`
  */
 export function getCachedSticker(stickerId: string): CachedSticker | undefined {
   const cache = loadCache();
   return cache.stickers[stickerId];
 }
 
-// ============ 搜索 ============
+// ============ Search ============
 
-/** 统一大小写/兼容字符，便于中英文混合名匹配 */
+/** Normalize case/compat chars for mixed CJK+ASCII name matching */
 function normalizeStickerMatchText(raw: string): string {
   return (raw ?? "").normalize("NFKC").trim().toLowerCase();
 }
 
-/** 去掉空白与常见标点，缓解「打 call」vs「打call」、全角空格等不一致 */
+/** Strip whitespace and common punctuation to handle "打 call" vs "打call", fullwidth spaces, etc. */
 function compactStickerMatchText(s: string): string {
   return normalizeStickerMatchText(s).replace(/[\s\u3000\-_·.,，。!！?？"“”'‘’、/\\]+/g, "");
 }
@@ -133,7 +122,7 @@ function bigramSet(s: string): Set<string> {
   return set;
 }
 
-/** 双字片段 Jaccard，对中文词边界弱、子串未连续命中时有帮助 */
+/** Bigram Jaccard — helps when CJK word boundaries are weak or substring not contiguous */
 function stickerBigramJaccard(a: string, b: string): number {
   if (a.length < 2 || b.length < 2) {
     return 0;
@@ -150,7 +139,7 @@ function stickerBigramJaccard(a: string, b: string): number {
   return union === 0 ? 0 : inter / union;
 }
 
-/** query 字符在 name 中的多重集命中率（重复字需多次命中） */
+/** Query char multiset hit ratio in name (repeated chars need multiple hits) */
 function multisetCharHitRatio(needleCompact: string, hayCompact: string): number {
   if (!needleCompact.length) {
     return 0;
@@ -170,7 +159,7 @@ function multisetCharHitRatio(needleCompact: string, hayCompact: string): number
   return hits / needleCompact.length;
 }
 
-/** needle 作为子序列落在 haystack 中的最长比例 */
+/** Longest subsequence ratio of needle in haystack */
 function longestSubsequenceRatio(needle: string, haystack: string): number {
   if (!needle.length) {
     return 0;
@@ -210,9 +199,9 @@ function levenshtein(a: string, b: string): number {
   return row[n];
 }
 
-/** 短纯 ASCII 片段（如 call、ok）与名称中英部分的模糊匹配 */
+/** Short pure-ASCII fragment (e.g. call, ok) fuzzy match against name's ASCII portion */
 function asciiFuzzyStickerScore(needleNorm: string, hayNorm: string): number {
-  // 仅处理 ASCII 范围内的字符串（排除中文等非 ASCII 字符）
+  // Only process ASCII-range strings (exclude CJK and other non-ASCII chars)
   if (needleNorm.length < 2 || needleNorm.length > 14) {
     return 0;
   }
@@ -230,7 +219,7 @@ function asciiFuzzyStickerScore(needleNorm: string, hayNorm: string): number {
 }
 
 /**
- * 单字段与整段 query 的相似度分数（0～100+），兼顾中文子串、字覆盖、双字重合与轻量模糊。
+ * Similarity score (0~100+) of a single field against the full query, combining CJK substring, char coverage, bigram overlap, and lightweight fuzzy.
  */
 function scoreStickerFieldAgainstQuery(haystack: string, rawQuery: string): number {
   const hay = normalizeStickerMatchText(haystack);
@@ -291,7 +280,7 @@ function tokenizeStickerQuery(raw: string): string[] {
 }
 
 /**
- * 合并「整句」与「分词」得分：多词 query 如「暗中 观察」更易命中「暗中观察」类名称。
+ * Merge "full phrase" and "tokenized" scores: multi-word queries like "暗中 观察" match "暗中观察"-style names better.
  */
 function scoreStickerTextAgainstQuery(haystack: string, rawQuery: string): number {
   const full = scoreStickerFieldAgainstQuery(haystack, rawQuery);
@@ -306,12 +295,9 @@ function scoreStickerTextAgainstQuery(haystack: string, rawQuery: string): numbe
 /**
  * Search stickers in cache.
  *
- * 评分要点：规范化（NFKC）与去标点后的子串匹配、中文字符多重集覆盖率、双字 Jaccard、
- * 子序列比例、短 ASCII 的编辑距离；name 权重高于 description，id 用于精确 id 搜索。
- *
- * @param query - 搜索词
- * @param limit - 最多返回条数（Default 10，最大 500）
- * @returns 按分数降序排列的表情列表
+ * Scoring: NFKC normalization + punctuation-stripped substring match, CJK char multiset coverage,
+ * bigram Jaccard, subsequence ratio, short ASCII edit distance; name weighted higher than description,
+ * id used for exact id search.
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
   const cache = loadCache();

@@ -32,19 +32,14 @@ function generateFileId(): string {
 }
 
 /**
- * 将 Buffer 数据上传到腾讯云 COS
+ * Upload Buffer data to Tencent Cloud COS.
  *
- * 与 media.ts 中 uploadBufferToCos 完全一致的 COS 上传实现。
- * 通过 genUploadInfo 获取的临时凭证初始化 COS SDK，再调用 putObject 上传文件。
- * 使用动态 import 加载 cos-nodejs-sdk-v5，兼容 CommonJS 和 ESM 两种模块系统。
- *
- * @param config - COS 上传配置，包含临时密钥、Bucket、Region、文件路径等信息
- * @param data - 待上传的文件内容（Buffer 格式）
- * @returns 上传成功后的资源访问 URL（config.resourceUrl）
- * @throws 当 cos-nodejs-sdk-v5 依赖缺失或上传失败时抛出错误
+ * Same COS upload implementation as uploadBufferToCos in media.ts.
+ * Initializes COS SDK with temp credentials from genUploadInfo, then calls putObject.
+ * Uses dynamic import for cos-nodejs-sdk-v5, compatible with both CJS and ESM.
  */
 async function uploadBufferToCos(config: CosUploadConfig, data: Buffer): Promise<string> {
-  // 动态 import，与 media.ts 保持完全一致的加载策略
+  // Dynamic import, same loading strategy as media.ts
   let COS: unknown;
   try {
     COS = require("cos-nodejs-sdk-v5");
@@ -88,18 +83,10 @@ async function uploadBufferToCos(config: CosUploadConfig, data: Buffer): Promise
 }
 
 /**
- * 将 COS 文件信息发送到后端 API 进行鉴权和日志登记
+ * Send COS file info to backend API for auth and log registration.
  *
- * 调用 clawLogUpload API 接口，携带 appKey/appSecret 进行 sign-token 鉴权，
- * 并将已上传的 COS 文件路径、时间范围、Description等元信息登记到后端日志系统。
- * API 地址优先从账号配置读取，其次从Environment variables读取，最后降级到Default地址。
- *
- * @param cosKey - COS 文件存储路径（如 `logs/2024/xxx.gz`）
- * @param cosUrl - COS 文件的完整访问 URL
- * @param args - 命令行解析参数，包含 appKey、appSecret、apiDomain、时间范围等
- * @param account - 已解析的元宝账号信息，用于获取 logUploadApiUrl 配置
- * @returns 后端 API 的响应结果，包含 logId、recordOk 等字段
- * @throws 当 appKey/appSecret 缺失或 API 请求失败时抛出错误
+ * Calls clawLogUpload API with appKey/appSecret for sign-token auth,
+ * and registers uploaded COS file path, time range, description, etc. to backend log system.
  */
 async function recordViaApi(
   cosKey: string,
@@ -143,21 +130,15 @@ async function recordViaApi(
 }
 
 /**
- * 将 gzip 压缩的日志文件上传到 COS 并登记到后端
+ * Upload gzip-compressed log file to COS and register with backend.
  *
  * Complete log upload flow:
- * 1. 读取本地 gzip 文件内容
- * 2. 通过 genUploadInfo 接口获取 COS 临时凭证和预签配置
- * 3. 使用 cos-nodejs-sdk-v5 将文件上传到 COS
- * 4. 调用后端 API 进行鉴权并登记日志元信息
+ * 1. Read local gzip file content
+ * 2. Get COS temp credentials and pre-signed config via genUploadInfo
+ * 3. Upload file to COS using cos-nodejs-sdk-v5
+ * 4. Call backend API for auth and log metadata registration
  *
- * 当 args.uploadCos 为 false 时直接返回 `{ enabled: false }` 跳过上传。
- *
- * @param gzipPath - 本地 gzip 文件的绝对路径
- * @param args - 命令行解析参数，包含 uploadCos 开关、appKey、appSecret 等
- * @param account - 已解析的元宝账号信息，用于获取上传凭证和 API 配置
- * @returns 上传结果，enabled 为 true 时包含 cosPath、logId 等信息
- * @throws 当 COS 上传失败或后端日志登记失败时抛出错误
+ * When args.uploadCos is false, returns `{ enabled: false }` to skip upload.
  */
 export async function uploadToCos(
   gzipPath: string,
@@ -173,16 +154,16 @@ export async function uploadToCos(
   const fileName = basename(gzipPath);
   const fileId = generateFileId();
 
-  // 1. 获取 COS 预签配置（与 media.ts 同一接口: genUploadInfo）
+  // 1. Get COS pre-signed config (same API as media.ts: genUploadInfo)
   mlog.info("fetching COS pre-signed config via genUploadInfo", { fileName, fileId });
   const cosConfig = await apiGetUploadInfo(account, fileName, fileId);
 
-  // 2. 上传到 COS（与 media.ts uploadBufferToCos 完全一致）
+  // 2. Upload to COS (same as media.ts uploadBufferToCos)
   mlog.info("starting COS upload", { bucket: cosConfig.bucketName, key: cosConfig.location });
   await uploadBufferToCos(cosConfig, fileBuffer);
   mlog.info("COS upload complete", { cosKey: cosConfig.location, cosUrl: cosConfig.resourceUrl });
 
-  // 3. 把 cosKey 发到后端做日志登记
+  // 3. Send cosKey to backend for log registration
   const result = await recordViaApi(cosConfig.location, cosConfig.resourceUrl, args, account);
 
   if (!result.ok) {

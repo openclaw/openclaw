@@ -13,11 +13,8 @@ export const UPGRADE_COMMAND_NAMES = ["/yuanbao-upgrade", "/yuanbaobot-upgrade"]
 /**
  * Parse upgrade command: supports both bare command name and command with version parameter.
  *
- * Decouple "command matching" from "upgrade execution":
- * The upper layer only needs to check whether a match occurred and whether a target version is provided; subsequent flows can reuse the same upgrade entry.
- *
- * @param rawBody - 用户输入的完整Message body
- * @returns 命令解析结果；`matched=true` 表示命中升级命令，`version` 表示解析出的目标版本（可选）
+ * Decouples "command matching" from "upgrade execution":
+ * The upper layer only needs to check whether a match occurred and whether a target version is provided.
  */
 export function parseUpgradeCommand(rawBody: string): { matched: boolean; version?: string } {
   const body = rawBody.trim();
@@ -33,7 +30,7 @@ export function parseUpgradeCommand(rawBody: string): { matched: boolean; versio
   return { matched: false };
 }
 
-/** 创建升级命令 */
+/** Create upgrade command definition */
 function makeUpgradeCommand(name: string, description: string): OpenClawPluginCommandDefinition {
   return {
     name,

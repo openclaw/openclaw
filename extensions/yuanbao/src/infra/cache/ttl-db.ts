@@ -4,10 +4,9 @@ type TtlDbEntry<V> = {
 };
 
 /**
- * 轻量内存 TTL KV（类似 Redis 的过期键行为）。
- * 设计约束：
- * - 每次读写都会尝试触发过期清理（受限频控制）
- * - key 过期后视为不存在
+ * Lightweight in-memory TTL key-value store (Redis-like expiry semantics).
+ * - Each read/write triggers a rate-limited expired-key cleanup.
+ * - Expired keys are treated as non-existent.
  */
 export class InMemoryTtlDb<K, V> {
   private readonly ttlMs: number;
@@ -19,7 +18,7 @@ export class InMemoryTtlDb<K, V> {
   constructor(options: { ttlMs: number; maxKeys?: number; cleanupMinIntervalMs?: number }) {
     this.ttlMs = options.ttlMs;
     this.maxKeys = options.maxKeys ?? Number.POSITIVE_INFINITY;
-    this.cleanupMinIntervalMs = Math.max(0, options.cleanupMinIntervalMs ?? 5_000); // 默认 5s 清理一次
+    this.cleanupMinIntervalMs = Math.max(0, options.cleanupMinIntervalMs ?? 5_000); // Default: cleanup every 5s
   }
 
   has(key: K): boolean {

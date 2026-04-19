@@ -1,5 +1,5 @@
 /**
- * Default消息处理管线工厂
+ * Default message processing pipeline factory.
  *
  * Register middleware by stage, building the complete message processing pipeline.
  */
@@ -28,27 +28,27 @@ import {
 export function createPipeline(): MessagePipeline {
   return (
     new MessagePipeline()
-      // 阶段 1：消息解析
-      .use(extractContent) // 提取文本/媒体/@信息
-      .use(skipSelf) // 跳过机器人自身消息
-      .use(skipPlaceholder) // 跳过占位符/空消息
-      .use(resolveQuote) // 引用消息解析
-      .use(recordMember) // 记录群成员信息（群聊）
-      // 阶段 2：守卫
-      .use(guardSpecialCommand) // 升级命令/issue-log Owner 守卫
+      // Phase 1: Message parsing
+      .use(extractContent) // Extract text/media/@info
+      .use(skipSelf) // Skip bot's own messages
+      .use(skipPlaceholder) // Skip placeholder/empty messages
+      .use(resolveQuote) // Parse quoted messages
+      .use(recordMember) // Record group member info (group chat)
+      // Phase 2: Guards
+      .use(guardSpecialCommand) // Upgrade command / issue-log owner guard
       .use(guardCommand) // SDK resolveControlCommandGate
-      .use(resolveMention) // SDK resolveMentionGatingWithBypass（群聊）
-      .use(guardGroupCommand) // 群命令白名单（群聊）
-      .use(guardSendAccess) // 发送访问控制守卫（C2C）
-      // 阶段 3：消息预处理
-      .use(rewriteBody) // 命令改写 + 引用拼接 + mentions 拼接
-      .use(downloadMedia) // 媒体下载
-      // 阶段 4：路由 & 上下文构建
+      .use(resolveMention) // SDK resolveMentionGatingWithBypass (group chat)
+      .use(guardGroupCommand) // Group command whitelist (group chat)
+      .use(guardSendAccess) // Send access control guard (C2C)
+      // Phase 3: Message preprocessing
+      .use(rewriteBody) // Command rewrite + quote concat + mentions concat
+      .use(downloadMedia) // Media download
+      // Phase 4: Routing & context building
       .use(resolveRoute) // SDK resolveAgentRoute + resolveInboundSessionEnvelopeContext
-      .use(resolveTrace) // 解析链路追踪上下文（trace_id / seq_id → ctx.traceContext）
-      .use(buildContext) // SDK finalizeInboundContext + 群历史上下文
-      // 阶段 5：发送器准备 & AI 调度
-      .use(prepareSender) // ⭐ 创建 MessageSender + QueueSession（中间件化）
+      .use(resolveTrace) // Parse trace context (trace_id / seq_id -> ctx.traceContext)
+      .use(buildContext) // SDK finalizeInboundContext + group history context
+      // Phase 5: Sender preparation & AI dispatch
+      .use(prepareSender) // Create MessageSender + QueueSession
       .use(dispatchReply)
   ); // ⭐ SDK dispatchInboundReplyWithBase
 }

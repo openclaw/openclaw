@@ -157,7 +157,6 @@ export function decodeConnMsg(raw: Uint8Array | ArrayBuffer): PBConnMsg | null {
   return decodePB(PB_MSG_TYPES.ConnMsg, raw) as PBConnMsg | null;
 }
 
-// Instance ID used by openclaw
 const OPENCLAW_ID = 16;
 
 interface AuthBindParams {

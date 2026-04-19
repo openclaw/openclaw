@@ -9,7 +9,7 @@ export const skipSelf: MiddlewareDescriptor = {
   handler: async (ctx, next) => {
     if (ctx.fromAccount === ctx.account.botId) {
       ctx.log.info(`[skip-self] skipping bot self message <- ${ctx.fromAccount}`);
-      return; // 终止管线
+      return; // Abort pipeline
     }
     await next();
   },

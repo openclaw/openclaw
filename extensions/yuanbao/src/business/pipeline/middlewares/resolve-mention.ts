@@ -1,8 +1,8 @@
 /**
- * 中间件：@检测守卫（群聊）
+ * Middleware: @mention detection guard (group chat).
  *
- * 使用 SDK 官方 resolveMentionGatingWithBypass，
- * 支持命令绕过 @检测。非 @bot 消息记录到群历史后终止管线。
+ * Uses SDK resolveMentionGatingWithBypass with command bypass support.
+ * Non-@bot messages are recorded to group history then pipeline is aborted.
  */
 
 import {
@@ -40,7 +40,7 @@ export const resolveMention: MiddlewareDescriptor = {
     if (result.shouldSkip) {
       const { historyLimit } = account;
 
-      // 记录非 @bot 消息到群历史上下文
+      // Record non-@bot message to group history context
       if (historyLimit > 0) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
@@ -56,7 +56,7 @@ export const resolveMention: MiddlewareDescriptor = {
         });
       }
 
-      // Media写入独立 LRU
+      // Write media to dedicated LRU
       if (ctx.medias.length > 0) {
         recordMediaHistory(ctx.groupCode!, {
           sender: ctx.fromAccount,
@@ -72,7 +72,7 @@ export const resolveMention: MiddlewareDescriptor = {
         reason: "mention-gating",
         target: ctx.groupCode,
       });
-      return; // 终止管线
+      return; // Abort pipeline
     }
 
     await next();

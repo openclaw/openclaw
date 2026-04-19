@@ -1,14 +1,12 @@
 /**
- * 中间件 resolve-mention 单元测试
- *
- * 测试范围：@检测守卫（群聊）、when 条件守卫
+ * Unit tests for resolve-mention middleware: @detection guard and when condition.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let mockGatingResult = { effectiveWasMentioned: false, shouldSkip: false };
 
@@ -41,9 +39,9 @@ function setupMocks(
   }
 }
 
-// ============ when 条件守卫 ============
+// ============ when condition guard ============
 
-void test("resolve-mention: when 条件 - 群聊时执行", async (t) => {
+void test("resolve-mention: when guard - executes in group chat", async (t) => {
   setupMocks(t);
   const { resolveMention } = await import("./resolve-mention.js");
 
@@ -51,7 +49,7 @@ void test("resolve-mention: when 条件 - 群聊时执行", async (t) => {
   assert.equal(resolveMention.when!(ctx), true);
 });
 
-void test("resolve-mention: when 条件 - C2C 时跳过", async (t) => {
+void test("resolve-mention: when guard - skips in C2C", async (t) => {
   setupMocks(t);
   const { resolveMention } = await import("./resolve-mention.js");
 
@@ -59,9 +57,9 @@ void test("resolve-mention: when 条件 - C2C 时跳过", async (t) => {
   assert.equal(resolveMention.when!(ctx), false);
 });
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("resolve-mention: @bot 消息 → 放行", async (t) => {
+void test("resolve-mention: @bot message -> pass through", async (t) => {
   setupMocks(t, {
     gatingResult: { effectiveWasMentioned: true, shouldSkip: false },
   });
@@ -91,7 +89,7 @@ void test("resolve-mention: @bot 消息 → 放行", async (t) => {
   assert.equal(wasCalled(), true);
 });
 
-void test("resolve-mention: 非 @bot 消息 → 终止管线", async (t) => {
+void test("resolve-mention: non-@bot message -> abort pipeline", async (t) => {
   setupMocks(t, {
     gatingResult: { effectiveWasMentioned: false, shouldSkip: true },
   });
@@ -101,7 +99,7 @@ void test("resolve-mention: 非 @bot 消息 → 终止管线", async (t) => {
     isGroup: true,
     isAtBot: false,
     groupCode: "group-001" as any,
-    rawBody: "普通群消息",
+    rawBody: "normal group message",
     fromAccount: "user-001",
     medias: [],
     account: {
@@ -122,10 +120,10 @@ void test("resolve-mention: 非 @bot 消息 → 终止管线", async (t) => {
 
   await resolveMention.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "非 @bot 应终止管线");
+  assert.equal(wasCalled(), false, "non-@bot should abort pipeline");
 });
 
-void test("resolve-mention: 命令绕过 @检测 → 放行", async (t) => {
+void test("resolve-mention: command bypasses @detection -> pass through", async (t) => {
   setupMocks(t, {
     gatingResult: { effectiveWasMentioned: false, shouldSkip: false },
   });
@@ -153,5 +151,5 @@ void test("resolve-mention: 命令绕过 @检测 → 放行", async (t) => {
 
   await resolveMention.handler(ctx, next);
 
-  assert.equal(wasCalled(), true, "命令应绕过 @检测");
+  assert.equal(wasCalled(), true, "command should bypass @detection");
 });

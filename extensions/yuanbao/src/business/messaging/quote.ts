@@ -1,12 +1,12 @@
 /**
- * Quote message parsing module
+ * Quote message parsing module.
  *
- * 从 cloud_custom_data 中Extract引用消息（quote），并格式化为可拼入上下文的文本。
+ * Extracts quoted messages from cloud_custom_data and formats them as context text.
  */
 
 import type { QuoteInfo, CloudCustomData } from "../../types.js";
 
-// IM 客户端消息 message_type 枚举【客户端定义】
+// IM client message_type enum (client-defined)
 enum ImClientMessageTypeEnum {
   MT_UNKNOW = 0,
   MT_TEXT = 1,
@@ -17,10 +17,8 @@ enum ImClientMessageTypeEnum {
 }
 
 /**
- * 从 cloud_custom_data JSON 字符串中解析引用消息信息
- *
- * @param cloudCustomData - 原始 cloud_custom_data 字符串（JSON 格式）
- * @returns 解析出的 QuoteInfo 对象；不存在引用或解析失败时返回 undefined
+ * Parse quote info from cloud_custom_data JSON string.
+ * Returns undefined if no quote exists or parsing fails.
  */
 export function parseQuoteFromCloudCustomData(cloudCustomData?: string): QuoteInfo | undefined {
   if (!cloudCustomData) {
@@ -35,12 +33,12 @@ export function parseQuoteFromCloudCustomData(cloudCustomData?: string): QuoteIn
 
     const { quote } = parsed;
 
-    // 支持Image引用
+    // Support image quotes
     if (Number(quote.type) === (ImClientMessageTypeEnum.MT_PIC as number)) {
       quote.desc = quote.desc?.trim() || "[image]";
     }
 
-    // 至少需要有引用消息的Description内容才有意义
+    // At least need quote description content to be meaningful
     if (!quote.desc?.trim()) {
       return undefined;
     }
@@ -51,21 +49,18 @@ export function parseQuoteFromCloudCustomData(cloudCustomData?: string): QuoteIn
   }
 }
 
-/** 引用摘要的最大字符长度 */
+/** Max character length for quote summary */
 const QUOTE_DESC_MAX_LENGTH = 500;
 
 /**
- * Format quoted message into context text that can be appended to user messages
+ * Format quoted message into context text that can be appended to user messages.
  *
  * Generated format:
  * ```
  * [Quoted message from <sender_nickname>]:
- * <desc（截断至 QUOTE_DESC_MAX_LENGTH）>
+ * <desc (truncated to QUOTE_DESC_MAX_LENGTH)>
  * ---
  * ```
- *
- * @param quote - 引用消息信息
- * @returns 格式化后的引用上下文文本
  */
 export function formatQuoteContext(quote: QuoteInfo): string {
   let senderPart = "";
@@ -77,7 +72,7 @@ export function formatQuoteContext(quote: QuoteInfo): string {
 
   let desc = quote.desc?.trim() || "";
 
-  // 超长引用进行截断，避免占用过多上下文
+  // Truncate long quotes to avoid excessive context usage
   if (desc.length > QUOTE_DESC_MAX_LENGTH) {
     desc = `${desc.slice(0, QUOTE_DESC_MAX_LENGTH)}...(truncated)`;
   }

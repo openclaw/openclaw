@@ -1,12 +1,7 @@
 /**
- * Transport 层
+ * Transport layer — low-level WebSocket message sending with logging.
  *
- * 所有通过 WebSocket 发送消息的基础逻辑统一收归于此。
- * - sendC2CMsgBody：调用 wsClient 发送 C2C 消息，自带日志
- * - sendGroupMsgBody：调用 wsClient 发送群消息，自带日志
- *
- * 高层文本发送逻辑（包含 prepareOutboundContent + buildOutboundMsgBody）
- * 已统一收归到 business/actions/text/send.ts 的 sendText action。
+ * Higher-level text sending logic lives in business/actions/text/send.ts.
  */
 
 import type { YuanbaoWsClient } from "../access/ws/client.js";
@@ -17,7 +12,7 @@ import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../types.js"
 import { getMember } from "./cache/member.js";
 import { InMemoryTtlDb } from "./cache/ttl-db.js";
 
-// ============ 引用回复去重 ============
+// ============ Quote-reply deduplication ============
 
 const firstReplyRefDb = new InMemoryTtlDb<string, true>({
   ttlMs: 60 * 1000,
@@ -43,7 +38,7 @@ async function shouldAttachReplyRef(params: {
     return false;
   }
 
-  // 避免自引用：比较被回复消息的发送者账号
+  // Avoid self-quoting: compare the sender of the replied message
   if (refFromAccount) {
     const yuanbaoUserId = await getMember(account.accountId).queryYuanbaoUserId(groupCode);
     if (yuanbaoUserId && refFromAccount === yuanbaoUserId) {
@@ -55,7 +50,7 @@ async function shouldAttachReplyRef(params: {
     return true;
   }
 
-  // first 模式：同一入站消息仅首次引用
+  // "first" mode: only attach quote for the first reply to the same inbound message
   const dedupeKey = `${account.accountId}:${refMsgId}`;
   if (firstReplyRefDb.has(dedupeKey)) {
     return false;
@@ -64,9 +59,9 @@ async function shouldAttachReplyRef(params: {
   return true;
 }
 
-// ============ 基础发送（自带日志） ============
+// ============ Core send helpers (with logging) ============
 
-/** 通过 WebSocket 发送 C2C Message body */
+/** Send a C2C message body via WebSocket. */
 export async function sendC2CMsgBody(params: {
   account: ResolvedYuanbaoAccount;
   toAccount: string;
@@ -111,7 +106,7 @@ export async function sendC2CMsgBody(params: {
   }
 }
 
-/** 通过 WebSocket 发送群Message body */
+/** Send a group message body via WebSocket. */
 export async function sendGroupMsgBody(params: {
   account: ResolvedYuanbaoAccount;
   groupCode: string;

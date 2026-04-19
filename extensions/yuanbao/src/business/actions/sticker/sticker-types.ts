@@ -1,13 +1,13 @@
 /**
- * 表情包（Sticker）相关类型定义
+ * Sticker-related type definitions.
  */
 
-/** `builtin-stickers.json` 单条（不含 CDN URL、md5、本地路径、状态等易变字段） */
+/** Single entry from `builtin-stickers.json` (excludes volatile fields like CDN URL, md5, local path, status) */
 export interface BuiltinStickerJsonEntry {
   emoji_id: string;
   emoji_pack_id: string;
   name: string;
-  /** 扩展搜索词条：同义词、口语、英文等，空格分隔；写入缓存的 description */
+  /** Extended search terms: synonyms, colloquial, English, etc., space-separated; written to cache description */
   description?: string;
   width: number;
   height: number;
@@ -15,29 +15,29 @@ export interface BuiltinStickerJsonEntry {
 }
 
 export interface CachedSticker {
-  /** 表情唯一标识 */
+  /** Sticker unique ID */
   sticker_id: string;
-  /** 表情包 ID */
+  /** Sticker pack ID */
   package_id: string;
-  /** 表情名称 */
+  /** Sticker name */
   name: string;
-  /** 表情Description / 扩展词条（内置来自 JSON；入站可能仅 name） */
+  /** Sticker description / extended terms (builtin from JSON; inbound may only have name) */
   description: string;
-  /** 缓存时间（ISO 8601） */
+  /** Cache time (ISO 8601) */
   cachedAt: string;
-  /** 来源：内置 or 入站消息中收到 */
+  /** Source: builtin or received from inbound message */
   source?: "builtin" | "received";
-  /** 像素宽（builtin 或完整入站数据） */
+  /** Pixel width (builtin or full inbound data) */
   width?: number;
-  /** 像素高 */
+  /** Pixel height */
   height?: number;
-  /** 资源格式，如 png */
+  /** Resource format, e.g. png */
   formats?: string;
 }
 
 export interface StickerCache {
-  /** 缓存格式版本 */
+  /** Cache format version */
   version: number;
-  /** sticker_id → CachedSticker 映射 */
+  /** sticker_id → CachedSticker mapping */
   stickers: Record<string, CachedSticker>;
 }

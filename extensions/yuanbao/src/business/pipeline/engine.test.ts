@@ -1,7 +1,5 @@
 /**
- * pipeline/engine.ts 单元测试
- *
- * 测试范围：MessagePipeline 的 use/useBefore/useAfter/remove/execute
+ * Unit tests for pipeline/engine.ts: MessagePipeline use/useBefore/useAfter/remove/execute.
  */
 
 import assert from "node:assert/strict";
@@ -9,7 +7,7 @@ import test from "node:test";
 import { MessagePipeline } from "./engine.js";
 import type { PipelineContext } from "./types.js";
 
-// 构造最小的 mock PipelineContext
+// Build minimal mock PipelineContext
 function makeMockPipelineCtx(): PipelineContext {
   return {
     raw: {} as any,
@@ -38,7 +36,7 @@ function makeMockPipelineCtx(): PipelineContext {
   } as unknown as PipelineContext;
 }
 
-void test("MessagePipeline use 注册中间件并按顺序执行", async () => {
+void test("MessagePipeline use: registers middleware and executes in order", async () => {
   const order: string[] = [];
 
   const pipeline = new MessagePipeline()
@@ -65,7 +63,7 @@ void test("MessagePipeline use 注册中间件并按顺序执行", async () => {
   assert.deepEqual(order, ["first-before", "second-before", "second-after", "first-after"]);
 });
 
-void test("MessagePipeline useBefore 在指定中间件之前插入", async () => {
+void test("MessagePipeline useBefore: inserts before specified middleware", async () => {
   const order: string[] = [];
 
   const pipeline = new MessagePipeline()
@@ -95,7 +93,7 @@ void test("MessagePipeline useBefore 在指定中间件之前插入", async () =
   assert.deepEqual(order, ["a", "b", "c"]);
 });
 
-void test("MessagePipeline useAfter 在指定中间件之后插入", async () => {
+void test("MessagePipeline useAfter: inserts after specified middleware", async () => {
   const order: string[] = [];
 
   const pipeline = new MessagePipeline()
@@ -125,7 +123,7 @@ void test("MessagePipeline useAfter 在指定中间件之后插入", async () =>
   assert.deepEqual(order, ["a", "b", "c"]);
 });
 
-void test("MessagePipeline remove 按名称移除中间件", async () => {
+void test("MessagePipeline remove: removes middleware by name", async () => {
   const order: string[] = [];
 
   const pipeline = new MessagePipeline()
@@ -156,7 +154,7 @@ void test("MessagePipeline remove 按名称移除中间件", async () => {
   assert.deepEqual(order, ["a", "c"]);
 });
 
-void test("MessagePipeline when 条件守卫跳过中间件", async () => {
+void test("MessagePipeline when: condition guard skips middleware", async () => {
   const order: string[] = [];
 
   const pipeline = new MessagePipeline()
@@ -183,13 +181,13 @@ void test("MessagePipeline when 条件守卫跳过中间件", async () => {
       },
     });
 
-  // C2C 消息应跳过 group-only
+  // C2C message should skip group-only
   const c2cCtx = makeMockPipelineCtx();
   await pipeline.execute(c2cCtx);
   assert.deepEqual(order, ["always", "final"]);
 });
 
-void test("MessagePipeline 中间件不调用 next 则终止管线", async () => {
+void test("MessagePipeline: middleware not calling next aborts pipeline", async () => {
   const order: string[] = [];
 
   const pipeline = new MessagePipeline()
@@ -197,7 +195,7 @@ void test("MessagePipeline 中间件不调用 next 则终止管线", async () =>
       name: "first",
       handler: async (_ctx, _next) => {
         order.push("first");
-        // 不调用 next()，终止管线
+        // Do not call next(), abort pipeline
       },
     })
     .use({
@@ -212,8 +210,8 @@ void test("MessagePipeline 中间件不调用 next 则终止管线", async () =>
   assert.deepEqual(order, ["first"]);
 });
 
-void test("MessagePipeline 空管线执行不报错", async () => {
+void test("MessagePipeline: empty pipeline executes without error", async () => {
   const pipeline = new MessagePipeline();
   await pipeline.execute(makeMockPipelineCtx());
-  // 不抛异常即通过
+  // No exception means pass
 });

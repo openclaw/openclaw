@@ -1,7 +1,7 @@
 /**
- * messaging/handlers/text.ts 单元测试
+ * messaging/handlers/text.ts unit tests.
  *
- * 测试范围：textHandler 的 extract 和 buildMsgBody
+ * Test scope: textHandler extract and buildMsgBody
  */
 
 import assert from "node:assert/strict";
@@ -10,7 +10,7 @@ import type { MessageHandlerContext } from "../context.js";
 import { textHandler } from "./text.js";
 import type { ExtractTextFromMsgBodyResult } from "./types.js";
 
-// 构造最小的 mock 上下文
+// Construct minimal mock context
 function makeMockCtx(botId = "bot-001"): MessageHandlerContext {
   return {
     account: { botId },
@@ -27,7 +27,7 @@ function makeResData(): ExtractTextFromMsgBodyResult {
 
 // ============ extract ============
 
-void test("textHandler extract 提取文本", () => {
+void test("textHandler extract extracts text", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -39,7 +39,7 @@ void test("textHandler extract 提取文本", () => {
   assert.equal(result, "hello world");
 });
 
-void test("textHandler extract 空文本返回 undefined", () => {
+void test("textHandler extract returns undefined for empty text", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -55,7 +55,7 @@ void test("textHandler extract 空文本返回 undefined", () => {
 
 // ============ buildMsgBody ============
 
-void test("textHandler buildMsgBody 构造文本消息", () => {
+void test("textHandler buildMsgBody constructs text message", () => {
   const result = textHandler.buildMsgBody!({ text: "test message" });
   assert.equal(result.length, 1);
   assert.equal(result[0].msg_type, "TIMTextElem");

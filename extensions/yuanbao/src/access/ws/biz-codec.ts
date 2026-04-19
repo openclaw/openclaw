@@ -1,9 +1,9 @@
 /**
- * 业务层 Protobuf 编解码
+ * Business-layer Protobuf codec.
  *
- * 基于 protobufjs 加载 biz.json Description文件，
- * 提供入站/出站业务消息的 protobuf 编解码能力。
- * 处理 PascalCase (TS) <-> camelCase (protobufjs) 字段名映射。
+ * Loads biz.json descriptor via protobufjs and provides
+ * encode/decode for inbound/outbound business messages.
+ * Handles PascalCase (TS) <-> camelCase (protobufjs) field mapping.
  */
 
 import protobuf from "protobufjs";
@@ -31,11 +31,11 @@ import type {
   WsSyncInformationResponse,
 } from "./types.js";
 
-// 模块级Logger instance
+// Module-level logger instance
 
-// ============ Protobuf 解码结果内部类型 ============
+// ============ Protobuf decode result internal types ============
 
-/** InboundMessagePush 解码结果（camelCase 字段） */
+/** InboundMessagePush decode result (camelCase fields) */
 type PBInboundMessage = {
   callbackCommand?: string;
   fromAccount?: string;
@@ -59,19 +59,19 @@ type PBInboundMessage = {
   logExt?: { traceId?: string };
 };
 
-/** 通用响应解码结果（code + message） */
+/** Generic response decode result (code + message) */
 type PBCodeMessageRsp = {
   code?: number;
   message?: string;
 };
 
-/** 通用响应解码结果（code + msg） */
+/** Generic response decode result (code + msg) */
 type PBCodeMsgRsp = {
   code?: number;
   msg?: string;
 };
 
-/** QueryGroupInfoRsp 解码结果 */
+/** QueryGroupInfoRsp decode result */
 type PBQueryGroupInfoRsp = PBCodeMsgRsp & {
   groupInfo?: {
     groupName?: string;
@@ -81,15 +81,15 @@ type PBQueryGroupInfoRsp = PBCodeMsgRsp & {
   };
 };
 
-/** GetGroupMemberListRsp 解码结果 */
+/** GetGroupMemberListRsp decode result */
 type PBGetGroupMemberListRsp = PBCodeMessageRsp & {
   memberList?: Array<{ userId?: string; nickName?: string; userType?: number }>;
 };
 
-/** SyncInformationRsp 解码结果 */
+/** SyncInformationRsp decode result */
 type PBSyncInformationRsp = PBCodeMsgRsp;
 
-// ============ Root 缓存 ============
+// ============ Root cache ============
 
 let root: protobuf.Root | null = null;
 
@@ -99,8 +99,6 @@ function getRoot(): protobuf.Root {
   }
   return root;
 }
-
-// ============ 通用编解码 ============
 
 const PKG = "trpc.yuanbao.yuanbao_conn.yuanbao_openclaw_proxy";
 
@@ -125,10 +123,7 @@ export const BIZ_MSG_TYPES = {
 } as const;
 
 /**
- * 编码业务层 protobuf 消息
- * @param key - protobuf Message type全路径
- * @param value - 待编码的数据对象
- * @returns 编码后的 Uint8Array，失败返回 null
+ * Encode a business-layer protobuf message.
  */
 export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8Array | null {
   try {
@@ -143,10 +138,7 @@ export function encodeBizPB(key: string, value: Record<string, unknown>): Uint8A
 }
 
 /**
- * 解码业务层 protobuf 消息
- * @param key - protobuf Message type全路径
- * @param data - 二进制数据
- * @returns 解码后的对象，失败返回 null
+ * Decode a business-layer protobuf message.
  */
 export function decodeBizPB<T>(key: string, data: Uint8Array | ArrayBuffer): T | null {
   try {
@@ -159,13 +151,10 @@ export function decodeBizPB<T>(key: string, data: Uint8Array | ArrayBuffer): T |
   }
 }
 
-// ============ MsgBodyElement 转换 ============
+// ============ MsgBodyElement conversion ============
 
 /**
- * 将 TS MsgBodyElement[] 转换为 protobuf 格式
- * 新协议：MsgContent 包含 text, uuid, imageFormat, data, desc, ext, sound, imageInfoArray, index, url, fileSize, fileName
- * @param elements - TS 格式的Message body元素数组
- * @returns protobuf 格式的Message body数组
+ * Convert TS MsgBodyElement[] to protobuf format.
  */
 export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): Record<string, unknown>[] {
   return elements.map((el) => {
@@ -191,10 +180,7 @@ export function toProtoMsgBody(elements: YuanbaoMsgBodyElement[]): Record<string
 }
 
 /**
- * 将 protobuf 格式Message body转换回 TS MsgBodyElement[]
- * 新协议：将 protobuf camelCase 字段映射回 snake_case TS 字段
- * @param elements - protobuf 格式的Message body数组
- * @returns TS 格式的Message body元素数组
+ * Convert protobuf format message body back to TS MsgBodyElement[].
  */
 export function fromProtoMsgBody(elements: Array<Record<string, unknown>>): YuanbaoMsgBodyElement[] {
   if (!elements || !Array.isArray(elements)) {
@@ -256,12 +242,8 @@ function toProtoLogExt(
   return resolvedTraceId ? { traceId: resolvedTraceId } : undefined;
 }
 
-// ============ 出站编码 ============
-
 /**
- * 编码 C2C 发送消息请求
- * @param data - C2C 消息发送数据
- * @returns 编码后的二进制数据
+ * Encode a C2C send message request.
  */
 export function encodeSendC2CMessageReq(data: WsSendC2CMessageData): Uint8Array | null {
   const logExt = toProtoLogExt(undefined, data.trace_id);
@@ -284,9 +266,7 @@ export function encodeSendC2CMessageReq(data: WsSendC2CMessageData): Uint8Array 
 }
 
 /**
- * Encode group message send request
- * @param data - 群消息发送数据
- * @returns 编码后的二进制数据
+ * Encode group message send request.
  */
 export function encodeSendGroupMessageReq(data: WsSendGroupMessageData): Uint8Array | null {
   const logExt = toProtoLogExt(undefined, data.trace_id);
@@ -310,13 +290,11 @@ export function encodeSendGroupMessageReq(data: WsSendGroupMessageData): Uint8Ar
 }
 
 /**
- * Encode direct chat reply status heartbeat request
- * @param data - 私聊心跳请求数据
- * @returns 编码后的二进制数据
+ * Encode direct chat reply status heartbeat request.
  */
 export function encodeSendPrivateHeartbeatReq(data: WsSendPrivateHeartbeatData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.SendPrivateHeartbeatReq, {
-    // 双写 fromAccount/fromtAccount，兼容旧 descriptor 字段拼写
+    // Dual-write fromAccount/fromtAccount for backward compatibility with old descriptor typo
     fromAccount: data.from_account,
     fromtAccount: data.from_account,
     toAccount: data.to_account,
@@ -325,9 +303,7 @@ export function encodeSendPrivateHeartbeatReq(data: WsSendPrivateHeartbeatData):
 }
 
 /**
- * Encode group chat reply status heartbeat request
- * @param data - 群聊心跳请求数据
- * @returns 编码后的二进制数据
+ * Encode group chat reply status heartbeat request.
  */
 export function encodeSendGroupHeartbeatReq(data: WsSendGroupHeartbeatData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.SendGroupHeartbeatReq, {
@@ -339,12 +315,8 @@ export function encodeSendGroupHeartbeatReq(data: WsSendGroupHeartbeatData): Uin
   });
 }
 
-// ============ 入站解码 ============
-
 /**
- * 解码入站消息 proto bytes -> YuanbaoInboundMessage
- * @param data - 二进制入站消息数据
- * @returns 解码后的入站消息对象，失败返回 null
+ * Decode inbound message proto bytes into YuanbaoInboundMessage.
  */
 export function decodeInboundMessage(data: Uint8Array | ArrayBuffer): YuanbaoInboundMessage | null {
   const decoded = decodeBizPB<PBInboundMessage>(BIZ_MSG_TYPES.InboundMessagePush, data);
@@ -391,10 +363,7 @@ export function decodeInboundMessage(data: Uint8Array | ArrayBuffer): YuanbaoInb
 }
 
 /**
- * 解码 C2C 出站响应 proto bytes -> WsSendMessageResponse
- * @param data - 二进制响应数据
- * @param msgId - 请求消息 ID，用于关联响应
- * @returns 解码后的响应对象，失败返回 null
+ * Decode C2C outbound response proto bytes into WsSendMessageResponse.
  */
 export function decodeSendC2CMessageRsp(
   data: Uint8Array | ArrayBuffer,
@@ -413,10 +382,7 @@ export function decodeSendC2CMessageRsp(
 }
 
 /**
- * 解码群消息出站响应 proto bytes -> WsSendMessageResponse
- * @param data - 二进制响应数据
- * @param msgId - 请求消息 ID，用于关联响应
- * @returns 解码后的响应对象，失败返回 null
+ * Decode group message outbound response proto bytes into WsSendMessageResponse.
  */
 export function decodeSendGroupMessageRsp(
   data: Uint8Array | ArrayBuffer,
@@ -435,25 +401,20 @@ export function decodeSendGroupMessageRsp(
 }
 
 /**
- * 解码出站响应（兼容 C2C 和群消息，两者响应结构一致）
- * @param data - 二进制响应数据
- * @param msgId - 请求消息 ID，用于关联响应
- * @returns 解码后的响应对象，失败返回 null
+ * Decode outbound response (compatible with both C2C and group, same structure).
  */
 export function decodeSendMessageRsp(
   data: Uint8Array | ArrayBuffer,
   msgId: string,
 ): WsSendMessageResponse | null {
-  // C2C 和群消息的 Rsp 结构一致（code + message），优先尝试 C2C
+  // C2C and group Rsp share the same structure (code + message); try C2C first
   return decodeSendC2CMessageRsp(data, msgId) ?? decodeSendGroupMessageRsp(data, msgId);
 }
 
-// ============ QueryGroupInfo 编解码 ============
+// ============ QueryGroupInfo codec ============
 
 /**
- * Encode query group info request
- * @param data - Query group info请求数据
- * @returns 编码后的二进制数据
+ * Encode query group info request.
  */
 export function encodeQueryGroupInfoReq(data: WsQueryGroupInfoData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.QueryGroupInfoReq, {
@@ -462,10 +423,7 @@ export function encodeQueryGroupInfoReq(data: WsQueryGroupInfoData): Uint8Array 
 }
 
 /**
- * 解码Query group info响应 proto bytes -> WsQueryGroupInfoResponse
- * @param data - 二进制响应数据
- * @param msgId - 请求消息 ID，用于关联响应
- * @returns 解码后的响应对象，失败返回 null
+ * Decode query group info response proto bytes into WsQueryGroupInfoResponse.
  */
 export function decodeQueryGroupInfoRsp(
   data: Uint8Array | ArrayBuffer,
@@ -493,12 +451,8 @@ export function decodeQueryGroupInfoRsp(
   };
 }
 
-// ============ GetGroupMemberList 编解码 ============
-
 /**
- * Encode get group member list request
- * @param data - Get group member list请求数据
- * @returns 编码后的二进制数据
+ * Encode get group member list request.
  */
 export function encodeGetGroupMemberListReq(data: WsGetGroupMemberListData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.GetGroupMemberListReq, {
@@ -507,10 +461,7 @@ export function encodeGetGroupMemberListReq(data: WsGetGroupMemberListData): Uin
 }
 
 /**
- * 解码Get group member list响应 proto bytes -> WsGetGroupMemberListResponse
- * @param data - 二进制响应数据
- * @param msgId - 请求消息 ID，用于关联响应
- * @returns 解码后的响应对象，失败返回 null
+ * Decode get group member list response proto bytes into WsGetGroupMemberListResponse.
  */
 export function decodeGetGroupMemberListRsp(
   data: Uint8Array | ArrayBuffer,
@@ -540,21 +491,8 @@ export function decodeGetGroupMemberListRsp(
 /**
  * Decode direct chat reply status heartbeat response.
  *
- * 该解码函数在心跳回包阶段将二进制 protobuf 数据转换为统一的
- * `WsHeartbeatResponse` 结构，并保留请求侧传入的 `msgId`，用于上层
- * Stably correlate requests and responses in concurrent scenarios, avoiding heartbeat result mismatches.
- *
- * @param data - 私聊心跳回包的原始二进制数据（`Uint8Array` 或 `ArrayBuffer`）。
- * @param msgId - 请求消息 ID，会透传到返回结果中用于请求-响应关联。
- * @returns 解码成功时返回 `WsHeartbeatResponse`；当数据无法按目标协议解码时返回 `null`。
- *
- * @example
- * ```typescript
- * const rsp = decodeSendPrivateHeartbeatRsp(binaryData, 'msg-123');
- * if (rsp) {
- *   console.log(rsp.msgId, rsp.code);
- * }
- * ```
+ * Converts binary protobuf data into a unified `WsHeartbeatResponse`,
+ * preserving the request-side `msgId` for stable request-response correlation.
  */
 export function decodeSendPrivateHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
@@ -575,21 +513,8 @@ export function decodeSendPrivateHeartbeatRsp(
 /**
  * Decode group chat reply status heartbeat response.
  *
- * 该函数用于把群聊心跳回包从 protobuf 二进制格式映射到统一响应对象，
- * 并携带原始 `msgId` 返回给调用方，确保 WebSocket 请求等待队列能按
- * 消息 ID 正确完成匹配与收敛。
- *
- * @param data - 群聊心跳回包的原始二进制数据（`Uint8Array` 或 `ArrayBuffer`）。
- * @param msgId - 请求消息 ID，会透传到返回结果中用于请求-响应关联。
- * @returns 解码成功时返回 `WsHeartbeatResponse`；当解码失败时返回 `null`。
- *
- * @example
- * ```typescript
- * const rsp = decodeSendGroupHeartbeatRsp(binaryData, 'msg-456');
- * if (rsp && rsp.code === 0) {
- *   console.log('group heartbeat ok');
- * }
- * ```
+ * Maps group heartbeat binary protobuf data to a unified response object,
+ * carrying the original `msgId` for correct request-response matching.
  */
 export function decodeSendGroupHeartbeatRsp(
   data: Uint8Array | ArrayBuffer,
@@ -607,13 +532,8 @@ export function decodeSendGroupHeartbeatRsp(
   };
 }
 
-// ============ SyncInformation 编解码 ============
-
 /**
- * 编码 SyncInformationReq（同步命令列表等信息到后台）
- *
- * @param data - 同步信息请求数据
- * @returns 编码后的二进制数据
+ * Encode SyncInformationReq (sync command list to backend).
  */
 export function encodeSyncInformationReq(data: WsSyncInformationData): Uint8Array | null {
   return encodeBizPB(BIZ_MSG_TYPES.SyncInformationReq, {
@@ -625,11 +545,7 @@ export function encodeSyncInformationReq(data: WsSyncInformationData): Uint8Arra
 }
 
 /**
- * 解码 SyncInformationRsp
- *
- * @param data - 二进制响应数据
- * @param msgId - 请求消息 ID
- * @returns 解码后的响应对象，失败返回 null
+ * Decode SyncInformationRsp.
  */
 export function decodeSyncInformationRsp(
   data: Uint8Array | ArrayBuffer,

@@ -1,7 +1,5 @@
 /**
- * messaging/extract.ts 单元测试
- *
- * 测试范围：extractTextFromMsgBody 集成测试
+ * Unit tests for extract.ts: extractTextFromMsgBody integration tests.
  */
 
 import assert from "node:assert/strict";

@@ -1,22 +1,22 @@
 /**
- * Markdown 处理工具集
+ * Markdown processing utilities.
  *
- * 提供围栏（fence）检测与修复、块级结构分析、原子块感知切割等能力。
- * Divided into three namespaces by responsibility:
- *  - mdFence  — 围栏相关检测与修复
- *  - mdBlock  — 块级结构检测与分隔符推断
- *  - mdAtomic — 原子块（表格 & 图表围栏块）Extract与感知切割
+ * Provides fence detection/repair, block-level structure analysis, and atomic-block-aware chunking.
+ * Divided into three namespaces:
+ *  - mdFence  — fence detection & repair
+ *  - mdBlock  — block-level structure detection & separator inference
+ *  - mdAtomic — atomic block (table & diagram fence) extraction & aware chunking
  */
 
 // ============================================================================
-// 围栏（fence）相关
+// Fence-related
 // ============================================================================
 
 /**
- * 剥除 AI 回复中包裹整段内容的 Markdown 围栏（```markdown ... ```）。
+ * Strip outer ```markdown fences wrapping AI replies.
  *
- * 部分模型会将含表格的回复用 ```markdown 围栏包裹，导致客户端将表格当作代码块渲染。
- * This function detects and strips such outer fences, only stripping when the interior contains a table, to avoid damaging real code blocks.
+ * Some models wrap table-containing replies in ```markdown fences, causing clients to render tables as code blocks.
+ * Only strips when the interior contains a table to avoid damaging real code blocks.
  */
 function stripOuterMarkdownFence(text: string): string {
   const HAS_TABLE = /^\s*\|[-:| ]+\|/m;
@@ -26,9 +26,9 @@ function stripOuterMarkdownFence(text: string): string {
 }
 
 /**
- * 检测文本是否处于未关闭的代码围栏（``` 块）内。
+ * Check if text is inside an unclosed code fence (``` block).
  *
- * 逐行扫描，遇到以 ``` 开头的行时切换 in/out 状态。奇数次切换说明存在未闭合的围栏。
+ * Scans line by line, toggling state on lines starting with ```. Odd toggles indicate an unclosed fence.
  */
 function hasUnclosedFence(text: string): boolean {
   let inFence = false;
@@ -41,9 +41,9 @@ function hasUnclosedFence(text: string): boolean {
 }
 
 /**
- * 检测文本是否处于未关闭的数学公式块（`$$...$$`）内。
+ * Check if text is inside an unclosed math block (`$$...$$`).
  *
- * 逐行扫描，跳过代码围栏内的内容，统计 `$$` 出现次数。
+ * Scans line by line, skipping content inside code fences, counting `$$` occurrences.
  * An odd count indicates an unclosed math block.
  */
 function hasUnclosedMathBlock(text: string): boolean {
@@ -71,13 +71,10 @@ function hasUnclosedMathBlock(text: string): boolean {
 }
 
 /**
- * 修复数学公式块内被 block-streaming 误插入的段落分隔符。
+ * Fix paragraph separators erroneously inserted by block-streaming inside math blocks.
  *
- * OpenClaw 的 block-streaming 可能在 `$$...$$` 数学块内部插入 `\n\n`，
- * 导致 Markdown 解析器将其视为段落边界，破坏公式渲染。
- * 此函数将 `$$...$$` 内部的连续空行（`\n\n+`）替换为单个 `\n`。
- *
- * Note:仅处理代码围栏外的 `$$` 块，围栏内的内容保持不变。
+ * Replaces consecutive blank lines (`\n\n+`) inside `$$...$$` with a single `\n`.
+ * Only processes `$$` blocks outside code fences.
  */
 function normalizeMathBlocks(text: string): string {
   if (!text.includes("$$")) {
@@ -124,30 +121,26 @@ function normalizeMathBlocks(text: string): string {
 }
 
 /**
- * 将 incoming 追加到 buffer，同时剥除 block-streaming 引入的多余围栏修复标记。
+ * Append incoming to buffer, stripping redundant fence repair markers from block-streaming.
  *
- * OpenClaw block-streaming 在每个切割点自动补全围栏（末尾加 `\n\`\`\``，下一块开头加
- * `\`\`\`lang\n`）。直接拼接会产生三种错误构造，本函数逐一消除：
- *
- * 1. **内部伪行**：coalescer 以空字符串拼接多个小块时，close+open 紧贴成
- *    `\n\`\`\`\`\`\`lang\n`（六反引号伪行）→ 替换为 `\n`。
- * 2. **边界情形 A**：buffer 末尾为 `\n\`\`\``（OpenClaw 关闭标记）且 incoming 以
- *    `\`\`\`lang\n` 开头 → 两侧标记均剥除，代码内容直接续接。
- * 3. **边界情形 B**：buffer 处于未闭合围栏内，incoming 又带来重开标记 → 仅剥除 incoming 的重开标记。
+ * Handles three error patterns:
+ * 1. Internal pseudo-lines: close+open markers fused into a 6-backtick line -> replaced with `\n`.
+ * 2. Boundary A: buffer ends with close marker, incoming starts with open marker -> both stripped.
+ * 3. Boundary B: buffer has unclosed fence, incoming brings re-open marker -> strip re-open only.
  */
 function mergeBlockStreamingFences(buffer: string, incoming: string): string {
   const CLOSE_RE = /\n```\s*$/;
   const OPEN_RE = /^```[^\n]*\n/;
 
-  // 情形 1：消除 incoming 内部的伪行（\n``````lang\n）
+  // Case 1: eliminate internal pseudo-lines (\n``````lang\n)
   const normalized = incoming.replace(/\n```\s*```[^\n]*\n/g, "\n");
 
-  // 情形 2：buffer 以关闭标记结尾，incoming 以重开标记开头
+  // Case 2: buffer ends with close marker, incoming starts with re-open marker
   if (CLOSE_RE.test(buffer) && OPEN_RE.test(normalized)) {
     return `${buffer.replace(CLOSE_RE, "")}\n${normalized.replace(OPEN_RE, "")}`;
   }
 
-  // 情形 3：buffer 有未闭合围栏，incoming 带来重开标记 → 剥除重开标记
+  // Case 3: buffer has unclosed fence, incoming brings re-open marker -> strip it
   if (hasUnclosedFence(buffer) && OPEN_RE.test(normalized)) {
     return `${buffer}\n${normalized.replace(OPEN_RE, "")}`;
   }
@@ -156,14 +149,14 @@ function mergeBlockStreamingFences(buffer: string, incoming: string): string {
 }
 
 // ============================================================================
-// 块级结构（block）相关
+// Block-level structure
 // ============================================================================
 
 /**
- * 检测文本最后一个非空行是否是 Markdown 表格行（以 | 开头且以 | 结尾）。
+ * Check if the last non-empty line is a Markdown table row (starts and ends with |).
  *
- * 用于判断当前缓冲区是否以表格行收尾——若是，则等待下一个 deliver 块继续拼接，
- * 避免在表格中间切割导致后续消息缺少表头而展示异常。
+ * Used to determine if the buffer ends with a table row — if so, wait for the next deliver block
+ * to avoid splitting in the middle of a table.
  */
 function endsWithTableRow(text: string): boolean {
   const trimmed = text.trimEnd();
@@ -176,15 +169,9 @@ function endsWithTableRow(text: string): boolean {
 }
 
 /**
- * 判断文本是否以 Markdown 块级元素开头。
+ * Check if text starts with a Markdown block-level element.
  *
- * 用于 block-streaming 合并时推断是否需要在两个块之间插入段落分隔符（`\n\n`）。
- * 当 incoming 文本以块级标记起始时，说明它是一个新的 Markdown 段落/结构，
- * 需要与前文之间保留段落分隔以确保渲染正确。
- *
- * 支持的块级元素：heading (`## `)、thematic break (`---`/`***`/`___`)、
- * blockquote (`> `)、fenced code block (`` ``` ``)、unordered list (`- `/`* `/`+ `)、
- * ordered list (`1. `/`1) `)、table (`|`)。
+ * Used during block-streaming merge to infer whether a paragraph separator (`\n\n`) is needed.
  */
 function startsWithBlockElement(text: string): boolean {
   const firstLine = (text.trimStart().split("\n")[0] ?? "").trimStart();
@@ -203,19 +190,17 @@ function startsWithBlockElement(text: string): boolean {
 }
 
 /**
- * 推断 buffer 与 incoming 块之间应补充的分隔符。
+ * Infer the separator to insert between buffer and incoming blocks.
  *
- * OpenClaw 的 block-streaming 会对每个块执行 `trimEnd()` / `trimStart()`，
- * 导致原始文本中段落边界处的 `\n\n` 被丢弃。此函数根据上下文启发式地
- * 推断两块之间需要的分隔符，以还原 Markdown 语义。
+ * Block-streaming trims each block, discarding `\n\n` at paragraph boundaries.
+ * This function heuristically restores the correct separator.
  *
  * Priority (high to low):
- *  1. 围栏内 / 已有 `\n\n` → 不补（返回 `''`）
- *  2. 表格行中行切割（buffer 末行以 `|` 开头，incoming 首行以 `|` 结尾
- *     但不以 `|` 开头）→ `' '`（用空格拼回同一行）
- *  3. 连续表格行（buffer 末行 & incoming 首行均以 `|` 开头）→ `'\n'`
- *  4. incoming 以块级元素开头 → `'\n\n'`（段落分隔）
- *  5. 其他（纯文本续接）→ 不补
+ *  1. Inside fence / already has `\n\n` -> no separator
+ *  2. Mid-row table split -> `' '` (rejoin same line)
+ *  3. Consecutive table rows -> `'\n'`
+ *  4. Incoming starts with block element -> `'\n\n'`
+ *  5. Otherwise -> no separator
  */
 function inferBlockSeparator(buffer: string, incoming: string): string {
   if (hasUnclosedFence(buffer)) {
@@ -231,10 +216,10 @@ function inferBlockSeparator(buffer: string, incoming: string): string {
   const lastLine = (buffer.trimEnd().split("\n").at(-1) ?? "").trim();
   const firstLine = (incoming.trimStart().split("\n")[0] ?? "").trimStart();
 
-  // OpenClaw 可能在 maxChars 处切断表格行，导致一行被分成两块：
-  //   buffer 末行: "| GPT-4o | 88.7% | 90.2% | - |"
-  //   incoming:    "- |\n| Claude 3.5 ..."
-  // 检测：buffer 末行是表格行，incoming 首行以 | 结尾（同行的剩余部分）但不以 | 开头
+  // OpenClaw may split a table row at maxChars, producing two blocks:
+  //   buffer last line: "| GPT-4o | 88.7% | 90.2% | - |"
+  //   incoming:         "- |\n| Claude 3.5 ..."
+  // Detect: buffer last line is a table row, incoming first line ends with | but doesn't start with |
   if (lastLine.startsWith("|") && !firstLine.startsWith("|") && firstLine.endsWith("|")) {
     return " ";
   }
@@ -251,33 +236,33 @@ function inferBlockSeparator(buffer: string, incoming: string): string {
 }
 
 // ============================================================================
-// 管道表格修复（pipe-table sanitize）
+// Pipe-table sanitize
 // ============================================================================
 
 /**
- * Markdown 管道表格修复器。
+ * Markdown pipe-table sanitizer.
  *
- * OpenClaw block-streaming 可能在管道表格的任意位置（表头、分隔行、数据行、单元格中间）
- * 插入 `\n\n`（或 `\n`），导致 GFM 渲染失败。
+ * Block-streaming may insert `\n\n` (or `\n`) at arbitrary positions within pipe tables,
+ * breaking GFM rendering.
  *
- * Strategy (region-based):
- *   阶段 0  快速路径退出：文本明显不包含表格时直接返回。
- *   阶段 1  扫描原始文本的行，找到包含 `|` 的连续行组，每组为一个候选表格区域。
- *   阶段 2  对于包含空行且含有 GFM 分隔行的区域，移除空行并根据结构信号
- *          （行是否以 `|` 开头/结尾）合并片段行，无需管道计数。
- *   阶段 3  将修复后的区域拼接回原始文本。
+ * Strategy:
+ *   Phase 0: Fast-path exit when text clearly contains no tables.
+ *   Phase 1: Scan lines, group consecutive pipe-containing lines as candidate table regions.
+ *   Phase 2: For regions with blank lines and a GFM separator row, remove blanks and merge
+ *            fragment lines based on structural signals (whether lines start/end with `|`).
+ *   Phase 3: Reassemble repaired regions back into the original text.
  */
 
 interface PipeTableRegion {
-  /** 起始行索引（含） */
+  /** Start line index (inclusive) */
   startLine: number;
-  /** 结束行索引（含） */
+  /** End line index (inclusive) */
   endLine: number;
 }
 
 /**
  * Scan raw lines, grouping consecutive pipe-containing lines as candidate table regions.
- * 管道行之间的空行保留在同一组中（它们是需要修复的 `\n\n` 产物）。
+ * Blank lines between pipe lines are kept in the same group (they are `\n\n` artifacts to fix).
  * Non-empty lines without pipe characters end the current group.
  */
 function findPipeTableRegions(lines: string[]): PipeTableRegion[] {
@@ -296,9 +281,9 @@ function findPipeTableRegions(lines: string[]): PipeTableRegion[] {
       }
       lastPipeLine = i;
     } else if (isBlank) {
-      // 空行 — 如果当前有分组则保留在组内
+      // Blank line — keep in current group if one exists
     } else {
-      // 非空且无管道符 → 关闭当前分组
+      // Non-empty without pipe -> close current group
       if (groupStart >= 0) {
         regions.push({ startLine: groupStart, endLine: lastPipeLine });
         groupStart = -1;
@@ -314,7 +299,7 @@ function findPipeTableRegions(lines: string[]): PipeTableRegion[] {
   return regions;
 }
 
-/** GFM 分隔行正则：可选冒号 + 2个以上短横线 + 可选冒号，出现在两个 `|` 之间 */
+/** GFM separator row regex: optional colon + 2+ dashes + optional colon, between two `|` */
 const PIPE_TABLE_SEPARATOR_RE = /\|[\s]*:?-{2,}:?[\s]*(?:\|[\s]*:?-{2,}:?[\s]*)+\|/;
 
 function findSeparatorInFlat(flat: string): boolean {
@@ -322,10 +307,10 @@ function findSeparatorInFlat(flat: string): boolean {
 }
 
 /**
- * Fix a table region: remove blank lines and merge fragment lines based on structural signals.
+ * Fix a table region: remove blank lines and merge fragment lines.
  *
- * 规则：如果累积行以 `|` 结尾且下一行以 `|` 开头，则两者是独立行（输出累积行，开始新行）；
- * Otherwise the next line is a continuation fragment (appended to the accumulated line).
+ * Rule: if accumulated line ends with `|` and next line starts with `|`, they are separate rows;
+ * otherwise the next line is a continuation fragment.
  */
 function healPipeTableRegion(regionLines: string[]): string | null {
   if (!regionLines.some((l) => l.trim() === "")) {
@@ -360,15 +345,14 @@ function healPipeTableRegion(regionLines: string[]): string | null {
 }
 
 /**
- * 修复被 OpenClaw block-streaming 插入的多余 `\n\n` 破坏的 Markdown 管道表格。
+ * Fix Markdown pipe tables broken by block-streaming `\n\n` insertion.
  *
- * 识别表格区域，验证其包含 GFM 分隔行，然后移除空行并使用结构信号（行首/行尾的 `|`）
- * 重新合并片段行，确保短分隔行不会被破坏。
- *
- * 对任意文本调用均安全 — 非表格内容和格式正确的表格原样通过。
+ * Identifies table regions, verifies GFM separator presence, removes blank lines,
+ * and re-merges fragment lines using structural signals (`|` at line start/end).
+ * Safe to call on any text — non-table content passes through unchanged.
  */
 function sanitizePipeTables(text: string): string {
-  // 阶段 0 — 快速路径退出
+  // Phase 0 — fast-path exit
   if (!text) {
     return text;
   }
@@ -384,7 +368,7 @@ function sanitizePipeTables(text: string): string {
     return text;
   }
 
-  // 阶段 1 — 查找表格区域
+  // Phase 1 — find table regions
   const lines = text.split("\n");
   const regions = findPipeTableRegions(lines);
 
@@ -392,7 +376,7 @@ function sanitizePipeTables(text: string): string {
     return text;
   }
 
-  // 阶段 2+3 — 修复区域并重建（倒序处理以保持索引稳定）
+  // Phase 2+3 — heal regions and rebuild (reverse order to keep indices stable)
   for (let ri = regions.length - 1; ri >= 0; ri--) {
     const region = regions[ri];
     const regionLines = lines.slice(region.startLine, region.endLine + 1);
@@ -407,13 +391,13 @@ function sanitizePipeTables(text: string): string {
 }
 
 // ============================================================================
-// 原子块（atomic）— 表格 & 图表围栏块
+// Atomic blocks — tables & diagram fence blocks
 // ============================================================================
 
-/** 切割后无法独立渲染、必须整体保留在同一条消息中的 Markdown 结构 */
+/** Markdown structures that cannot render independently after splitting */
 export type AtomicBlock = { start: number; end: number; kind: "table" | "diagram-fence" };
 
-/** 图表类围栏语言标识集合，这类围栏块切割后客户端无法渲染 */
+/** Diagram fence language identifiers — these fence blocks cannot render after splitting */
 const DIAGRAM_LANGUAGES = new Set([
   "mermaid",
   "plantuml",
@@ -430,33 +414,33 @@ const DIAGRAM_LANGUAGES = new Set([
 ]);
 
 /**
- * Extract文本中所有原子块（表格块和图表围栏块）的字符偏移范围。
+ * Extract all atomic blocks (tables and diagram fence blocks) with character offset ranges.
  *
- * 逐行扫描：
- * - 普通代码围栏（非图表语言）内的内容跳过，防止将围栏内的 `|` 误识别为表格行。
- * - 语言标识属于 DIAGRAM_LANGUAGES 的完整围栏块标记为 `diagram-fence` 原子块。
- * - 连续以 `|` 开头的行（第二行为分隔行）标记为 `table` 原子块。
+ * Line-by-line scan:
+ * - Skips content inside plain code fences to avoid misidentifying `|` as table rows.
+ * - Marks complete fence blocks with diagram languages as `diagram-fence` atomic blocks.
+ * - Marks consecutive `|`-prefixed lines (with separator on 2nd line) as `table` atomic blocks.
  */
 function extractAtomicBlocks(text: string): AtomicBlock[] {
   const blocks: AtomicBlock[] = [];
   const lines = text.split("\n");
   let offset = 0;
 
-  let inPlainFence = false; // 当前是否处于普通代码围栏内
-  let inDiagram = false; // 当前是否处于图表围栏内
-  let diagramStart = 0; // 当前图表围栏的起始偏移
+  let inPlainFence = false; // Currently inside a plain code fence
+  let inDiagram = false; // Currently inside a diagram fence
+  let diagramStart = 0; // Start offset of current diagram fence
 
-  let tableStart = -1; // 当前表格块起始偏移，-1 表示未在表格中
-  let tableEnd = -1; // 当前表格最后一行的结束偏移
-  let tableHasSep = false; // 是否已见到分隔行（第二行）
-  let tableLineCount = 0; // 当前连续表格行数
+  let tableStart = -1; // Start offset of current table block, -1 = not in table
+  let tableEnd = -1; // End offset of last table line
+  let tableHasSep = false; // Whether separator row has been seen
+  let tableLineCount = 0; // Consecutive table line count
 
   const isTableLine = (line: string) => line.trim().startsWith("|");
   const isTableSeparator = (line: string) => /^\|[\s|:-]+\|$/.test(line.trim());
 
   const flushTable = () => {
-    // 完整表格（有分隔行）或连续 ≥2 行以 | 开头的残缺表格片段均视为原子块，
-    // 防止 chunkMarkdownText 在残缺表格行间切割，破坏后续完整表格的渲染。
+    // A complete table (with separator) or >= 2 consecutive |-prefixed lines are treated as atomic,
+    // preventing chunkMarkdownText from splitting between incomplete table rows.
     if (tableStart !== -1 && tableEnd !== -1 && (tableHasSep || tableLineCount >= 2)) {
       blocks.push({ start: tableStart, end: tableEnd, kind: "table" });
     }
@@ -468,7 +452,7 @@ function extractAtomicBlocks(text: string): AtomicBlock[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // 最后一行若无结尾 \n，偏移按实际长度计算
+    // Last line: if no trailing \n, calculate offset by actual length
     const lineEnd = offset + line.length + (i < lines.length - 1 ? 1 : 0);
 
     if (inPlainFence || inDiagram) {
@@ -521,12 +505,13 @@ function extractAtomicBlocks(text: string): AtomicBlock[] {
 }
 
 /**
- * 原子块感知的 Markdown 文本切割函数。
+ * Atomic-block-aware Markdown text chunking.
  *
- * 先调用 `chunkFn` 做 fence-aware 粗切割，再检测各切割边界是否落在原子块（表格 / 图表围栏块）内：
- * - 若落在原子块内，优先将切割点前移到 `block.start`（整块推入下一条消息）；
- * - 若无法前移（块在当前 chunk 起始处），则后移到 `block.end`（整块纳入当前 chunk，允许超出 maxChars）。
- * - 若整段文本就是单个超大原子块，直接返回 `[text]`（单条超大消息，优雅降级）。
+ * Runs `chunkFn` for fence-aware rough chunking, then checks if split boundaries fall inside
+ * atomic blocks (tables / diagram fences):
+ * - If inside, shift boundary before `block.start` (push entire block to next message).
+ * - If cannot shift back (block at chunk start), shift after `block.end` (include in current chunk).
+ * - If entire text is a single oversized atomic block, return `[text]` (graceful degradation).
  */
 function chunkMarkdownTextAtomicAware(
   text: string,
@@ -543,7 +528,7 @@ function chunkMarkdownTextAtomicAware(
     return rawChunks;
   }
 
-  // 从 rawChunks 重建切割边界（累计偏移，不含末尾）
+  // Rebuild split boundaries from rawChunks (cumulative offset, excluding last)
   const splitIndices: number[] = [];
   let cumLen = 0;
   for (let i = 0; i < rawChunks.length - 1; i++) {
@@ -551,7 +536,7 @@ function chunkMarkdownTextAtomicAware(
     splitIndices.push(cumLen);
   }
 
-  // 调整每个切割点，确保不落在原子块内部
+  // Adjust each split point to avoid landing inside an atomic block
   const adjustedIndices: number[] = [];
   let chunkWindowStart = 0;
 
@@ -564,17 +549,17 @@ function chunkMarkdownTextAtomicAware(
     }
 
     if (hit.start > chunkWindowStart) {
-      // 前移：整块推入下一条消息
+      // Shift back: push entire block to next message
       adjustedIndices.push(hit.start);
       chunkWindowStart = hit.start;
     } else {
-      // 无法前移：整块纳入当前消息（允许超出 maxChars，优雅降级）
+      // Cannot shift back: include entire block in current message (allow exceeding maxChars)
       adjustedIndices.push(hit.end);
       chunkWindowStart = hit.end;
     }
   }
 
-  // 按调整后的边界重切文本
+  // Re-slice text at adjusted boundaries
   const result: string[] = [];
   let prev = 0;
   for (const idx of adjustedIndices) {
@@ -591,51 +576,51 @@ function chunkMarkdownTextAtomicAware(
 }
 
 // ============================================================================
-// 结构化命名空间导出
+// Structured namespace exports
 // ============================================================================
 
-/** 围栏（fence）相关检测与修复 */
+/** Fence detection & repair */
 export const mdFence = {
-  /** 剥除外层 ```markdown 围栏 */
+  /** Strip outer ```markdown fence */
   stripOuter: stripOuterMarkdownFence,
-  /** 检测是否存在未闭合的围栏 */
+  /** Check for unclosed code fence */
   hasUnclosed: hasUnclosedFence,
-  /** 检测是否存在未闭合的数学公式块 */
+  /** Check for unclosed math block */
   hasUnclosedMath: hasUnclosedMathBlock,
-  /** 合并 block-streaming 引入的多余围栏标记 */
+  /** Merge redundant block-streaming fence markers */
   mergeBlockStreaming: mergeBlockStreamingFences,
 } as const;
 
-/** 块级结构检测与分隔符推断 */
+/** Block-level structure detection & separator inference */
 export const mdBlock = {
-  /** 判断文本是否以块级元素开头 */
+  /** Check if text starts with a block-level element */
   startsWithBlockElement,
-  /** 检测文本是否以表格行结尾 */
+  /** Check if text ends with a table row */
   endsWithTableRow,
-  /** 推断两个 block-streaming 块之间的分隔符 */
+  /** Infer separator between two block-streaming blocks */
   inferSeparator: inferBlockSeparator,
 } as const;
 
-/** 原子块（表格 & 图表围栏块）感知切割 */
+/** Atomic block (table & diagram fence) aware chunking */
 export const mdAtomic = {
-  /** Extract文本中所有原子块的偏移范围 */
+  /** Extract all atomic block offset ranges from text */
   extract: extractAtomicBlocks,
-  /** 原子块感知的文本切割 */
+  /** Atomic-block-aware text chunking */
   chunkAware: chunkMarkdownTextAtomicAware,
-  /** 图表类围栏语言标识集合 */
+  /** Diagram fence language identifiers */
   DIAGRAM_LANGUAGES,
 } as const;
 
-/** 管道表格修复 */
+/** Pipe-table repair */
 export const mdTable = {
-  /** 修复被 block-streaming 破坏的管道表格 */
+  /** Fix pipe tables broken by block-streaming */
   sanitize: sanitizePipeTables,
 } as const;
 
-/** 数学公式块修复 */
+/** Math block repair */
 export const mdMath = {
-  /** 检测是否存在未闭合的数学公式块 */
+  /** Check for unclosed math block */
   hasUnclosed: hasUnclosedMathBlock,
-  /** 修复数学公式块内被 block-streaming 误插入的段落分隔符 */
+  /** Fix paragraph separators erroneously inserted inside math blocks */
   normalize: normalizeMathBlocks,
 } as const;

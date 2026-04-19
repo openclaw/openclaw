@@ -1,7 +1,7 @@
 /**
- * TIMVideoFileElem 消息处理器
+ * TIMVideoFileElem message handler.
  *
- * 视频消息：输入时返回 [video] 占位符，输出时构造视频Message body。
+ * Video message: on input, returns [video] placeholder; on output, constructs video message body.
  */
 
 import type { MessageHandlerContext } from "../context.js";
@@ -11,14 +11,8 @@ export const videoHandler: MessageElemHandler = {
   msgType: "TIMVideoFileElem",
 
   /**
-   * 视频消息Extract：返回 [video] 占位符
-   *
+   * Extract video message: returns [video] placeholder.
    * Currently only returns placeholder text; no further parsing of video content.
-   *
-   * @param _ctx - Message processing context（视频处理中未使用）
-   * @param _elem - 原始 MsgBody 视频消息元素（当前未解析具体字段）
-   * @param _resData - Extract结果的可变引用（视频处理中未修改）
-   * @returns "[video]" 占位符文本
    */
   extract(
     _ctx: MessageHandlerContext,
@@ -29,11 +23,7 @@ export const videoHandler: MessageElemHandler = {
   },
 
   /**
-   * 构造 TIMVideoFileElem Message body
-   *
-   * @param data - 需包含 videoUrl 字段，可选 videoUuid、videoSize、videoSecond、
-   *              videoFormat、thumbUrl、thumbUuid、thumbSize、thumbWidth、thumbHeight、thumbFormat
-   * @returns TIMVideoFileElem Message body数组
+   * Build TIMVideoFileElem message body.
    */
   buildMsgBody(data: Record<string, unknown>): MsgBodyItemType[] {
     return [

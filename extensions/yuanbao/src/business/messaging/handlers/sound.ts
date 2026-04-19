@@ -1,8 +1,8 @@
 /**
- * TIMSoundElem 消息处理器
+ * TIMSoundElem message handler.
  *
- * Voice/Audio消息：输入时返回 [voice] 占位符。
- * 当前不支持主动构造Voice/Audio消息。
+ * Voice/audio message: on input, returns [voice] placeholder.
+ * Active construction of voice messages is not currently supported.
  */
 
 import type { MessageHandlerContext } from "../context.js";
@@ -12,14 +12,8 @@ export const soundHandler: MessageElemHandler = {
   msgType: "TIMSoundElem",
 
   /**
-   * Voice/Audio消息Extract：返回 [voice] 占位符
-   *
-   * 当前仅返回占位符文本，不对Voice/Audio内容做进一步解析。
-   *
-   * @param _ctx - Message processing context（Voice/Audio处理中未使用）
-   * @param _elem - 原始 MsgBody Voice/Audio消息元素（当前未解析具体字段）
-   * @param _resData - Extract结果的可变引用（Voice/Audio处理中未修改）
-   * @returns "[voice]" 占位符文本
+   * Extract voice message: returns [voice] placeholder.
+   * Currently only returns placeholder text; no further parsing of voice content.
    */
   extract(
     _ctx: MessageHandlerContext,

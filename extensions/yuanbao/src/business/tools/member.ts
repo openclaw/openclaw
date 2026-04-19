@@ -1,11 +1,11 @@
 /**
- * 成员相关 Tools
+ * Member-related tools.
  *
  * Contains:
- * - query_session_members：查询会话成员（按昵称查找、@mention、列举全部等）
+ * - query_session_members: Query session members (find by nickname, @mention, list all, etc.)
  *
- * 查询策略：优先通过 GroupMember（WS 接口层）获取 → 降级到 SessionMember（会话缓存层）。
- * 群主信息请使用 query_group_info 工具查询。
+ * Query strategy: prefer GroupMember (WS API layer) -> fallback to SessionMember (session cache layer).
+ * For group owner info, use the query_group_info tool.
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
@@ -16,11 +16,11 @@ import { extractGroupCode, type OpenClawPluginToolContext, json } from "../utils
 // Constants
 // ---------------------------------------------------------------------------
 
-/** @mention 提示文案（作为 JSON 字段值） */
+/** @mention hint text (used as JSON field value) */
 const MENTION_HINT_TEXT =
   'To @mention a user, you MUST use the format: space + @ + nickname + space (e.g. " @Alice ").';
 
-/** 用户角色类型映射（0=未定义，1=用户，2=元宝，3=bot） */
+/** User role type mapping (0=undefined, 1=user, 2=yuanbao, 3=bot) */
 const USER_TYPE_LABEL: Record<number, string> = {
   0: "undefined",
   1: "user",
@@ -29,13 +29,13 @@ const USER_TYPE_LABEL: Record<number, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// 成员记录类型 & 映射工具
+// Member record types & mapping utilities
 // ---------------------------------------------------------------------------
 
-/** queryMembers 返回的单条成员记录 */
+/** Single member record returned by queryMembers */
 type MemberRecord = { nickName: string; userId: string; userType?: number };
 
-/** 将用户记录映射为精简格式 */
+/** Map user records to a compact format */
 function toMembers(records: MemberRecord[]) {
   return records.map((u) => ({
     nickname: u.nickName,
@@ -47,10 +47,10 @@ function toMembers(records: MemberRecord[]) {
 }
 
 // ---------------------------------------------------------------------------
-// action 处理函数
+// Action handlers
 // ---------------------------------------------------------------------------
 
-/** 列举群内 bot（包含元宝 AI 助手和其他 bot） */
+/** List bots in the group (including Yuanbao AI assistants and other bots) */
 function handleListBots(allMembers: MemberRecord[], mention: boolean) {
   const bots = allMembers.filter((u) => u.userType === 2 || u.userType === 3);
   if (bots.length === 0) {
@@ -67,15 +67,10 @@ function handleListBots(allMembers: MemberRecord[], mention: boolean) {
 /**
  * Fuzzy search group members by nickname.
  *
- * Lookup strategy (by priority):
- * 1. 有 nameFilter → 大小写不敏感模糊匹配，命中则返回匹配结果
- * 2. 有 nameFilter 但无匹配 → 返回全部成员列表，让模型自行分析最接近的用户
- * 3. 无 nameFilter → 降级为 list_all 行为，返回全部成员
- *
- * @param allMembers - 当前群的完整成员列表
- * @param nameFilter - 用户输入的昵称关键词（支持部分匹配），为空时返回全部成员
- * @param mention - 是否需要 @mention 目标用户；为 true 时响应中附带 mentionHint 提示格式
- * @returns JSON 格式的查询结果，包含 success 状态、提示信息、匹配的成员列表及可选的 mention 提示
+ * Lookup strategy:
+ * 1. nameFilter provided + match found -> return matched results
+ * 2. nameFilter provided + no match -> return all members for model analysis
+ * 3. No nameFilter -> fallback to list_all behavior
  */
 function handleFind(allMembers: MemberRecord[], nameFilter: string, mention: boolean) {
   const hint = mention ? { mentionHint: MENTION_HINT_TEXT } : {};
@@ -93,7 +88,7 @@ function handleFind(allMembers: MemberRecord[], nameFilter: string, mention: boo
       });
     }
 
-    // 按昵称未查到，返回全部成员供模型分析
+    // No exact match by nickname, return all members for model analysis
     return json({
       success: false,
       msg: `No exact match for "${nameFilter}". Please find the target user from the members list below.`,
@@ -102,7 +97,7 @@ function handleFind(allMembers: MemberRecord[], nameFilter: string, mention: boo
     });
   }
 
-  // find 但未提供 nameFilter，降级返回全部成员
+    // No nameFilter for find, fallback to listing all members
   return json({
     success: true,
     msg: `Found ${allMembers.length} member(s) in this group.`,
@@ -111,7 +106,7 @@ function handleFind(allMembers: MemberRecord[], nameFilter: string, mention: boo
   });
 }
 
-/** 列举全部成员 */
+/** List all members */
 function handleListAll(allMembers: MemberRecord[], mention: boolean) {
   return json({
     success: true,
@@ -126,15 +121,11 @@ function handleListAll(allMembers: MemberRecord[], mention: boolean) {
 // ---------------------------------------------------------------------------
 
 /**
- * 创建 query_session_members 工具定义。
+ * Create the query_session_members tool definition.
  *
- * 合并了原 lookup_session_members 与 query_group_members，统一为一个工具。
- * 优先通过接口拉取完整群成员列表，session 缓存作为兜底。
- *
- * @param ctx - 工具上下文
- * @returns 工具定义对象，含 name / description / parameters / execute
- */
-function createQuerySessionMembersTool(ctx: OpenClawPluginToolContext) {
+ * Merges the original lookup_session_members and query_group_members into one tool.
+ * Prefers API-fetched full member list; session cache as fallback.
+ */function createQuerySessionMembersTool(ctx: OpenClawPluginToolContext) {
   const sessionKey: string = ctx.sessionKey ?? "";
   const accountId: string = ctx.agentAccountId ?? "";
 
@@ -172,21 +163,16 @@ function createQuerySessionMembersTool(ctx: OpenClawPluginToolContext) {
     /**
      * Execute session member query.
      *
-     * Query logic:
-     * 1. 无 groupCode → 告知模型无群上下文
-     * 2. 通过 Member 门面查询：优先 GroupMember（WS 接口）→ 降级 SessionMember（会话缓存）
-     * 3. 按 action 分发到各处理函数
-     *
-     * @param _toolCallId - 工具调用 ID（框架传入，当前未使用）
-     * @param params - 工具参数，包含 action、可选的 name 和 mention
-     * @returns 包含查询结果的 JSON 响应
+     * 1. No groupCode -> inform model no group context
+     * 2. Query via Member facade: prefer GroupMember (WS API) -> fallback SessionMember (cache)
+     * 3. Dispatch to action handlers
      */
     async execute(_toolCallId: string, params: Record<string, unknown>) {
       const action = typeof params.action === "string" ? params.action : "list_all";
       const nameFilter = typeof params.name === "string" ? params.name.trim() : "";
       const mention = params.mention === true || params.mention === "true";
 
-      // 从 sessionKey 中Extract groupCode（即元宝后台的 groupCode）
+      // Extract groupCode from sessionKey
       const groupCode = extractGroupCode(sessionKey);
 
       if (!groupCode) {
@@ -220,16 +206,14 @@ function createQuerySessionMembersTool(ctx: OpenClawPluginToolContext) {
 }
 
 // ---------------------------------------------------------------------------
-// 注册入口
+// Registration entry
 // ---------------------------------------------------------------------------
 
 /**
  * Register all tools under the "member" category.
  *
- * 当前Contains:
- * - query_session_members：查询会话成员（始终可用）
- *
- * @param api - OpenClaw 插件 API
+ * Currently contains:
+ * - query_session_members: Query session members (always available)
  */
 export function registerMemberTools(api: OpenClawPluginApi): void {
   api.registerTool(createQuerySessionMembersTool, { optional: false });

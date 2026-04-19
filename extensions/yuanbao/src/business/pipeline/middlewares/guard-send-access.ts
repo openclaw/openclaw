@@ -1,35 +1,34 @@
 /**
- * Middleware: send access control guard
+ * Middleware: send access control guard.
  *
- * Enforce authorization and rate-limiting policies for sending direct messages through the bot.
- * 通过控制谁可以触发发送以及发送频率来防止滥用。
- * 仅对 C2C（私信）场景生效，群聊场景跳过。
+ * Prevents abuse by controlling who can trigger sends and enforcing rate limits.
+ * Only applies to C2C (direct message) scenarios; group chat is skipped.
  */
 
 import type { MiddlewareDescriptor } from "../types.js";
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
 interface SendAccessPolicy {
-  /** 谁可以触发通过机器人发送的消息 */
+  /** Who can trigger messages sent through the bot */
   allowedSenders: "all" | "admin" | "allowlist";
-  /** 允许的发送者 ID 列表（当 allowedSenders = "allowlist" 时生效） */
+  /** Allowed sender ID list (effective when allowedSenders = "allowlist") */
   senderAllowlist?: string[];
-  /** 每个用户每小时最大发送次数 */
+  /** Max sends per user per hour */
   rateLimitPerHour: number;
-  /** 最大消息长度（字符数） */
+  /** Max message length (characters) */
   maxMessageLength: number;
 }
 
-// ============ 频率限制器 ============
+// ============ Rate limiter ============
 
-/** 频率限制追踪：senderId → 近期发送时间戳数组 */
+/** Rate limit tracking: senderId -> recent send timestamps */
 const rateLimitMap = new Map<string, number[]>();
 
-/** 频率窗口：1 小时 */
+/** Rate window: 1 hour */
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 
-/** 清理计数器，每 100 次检查时清理过期条目 */
+/** Cleanup counter: clean expired entries every 100 checks */
 let cleanupCounter = 0;
 const CLEANUP_INTERVAL = 100;
 
@@ -62,7 +61,7 @@ function isRateLimited(senderId: string, maxPerHour: number): boolean {
   const now = Date.now();
   const timestamps = rateLimitMap.get(senderId) ?? [];
 
-  // 移除超出频率窗口的旧条目
+  // Remove entries outside the rate window
   const recent = timestamps.filter((t) => now - t < RATE_WINDOW_MS);
   rateLimitMap.set(senderId, recent);
 
@@ -87,7 +86,7 @@ export function clearRateLimits(): void {
   cleanupCounter = 0;
 }
 
-// ============ Default策略 ============
+// ============ Default policy ============
 
 const DEFAULT_SEND_ACCESS_POLICY: SendAccessPolicy = {
   allowedSenders: "all",
@@ -96,18 +95,13 @@ const DEFAULT_SEND_ACCESS_POLICY: SendAccessPolicy = {
   maxMessageLength: 4000,
 };
 
-// ============ 中间件 ============
+// ============ Middleware ============
 
 /**
- * Send access control guard middleware
+ * Send access control guard middleware.
  *
- * Check items:
- * 1. 自发防护（不能通过机器人给自己发私信）
- * 2. 发送者授权（all / admin / allowlist）
- * 3. 消息长度
- * 4. 频率限制
- *
- * 仅对 C2C（私信）场景生效。
+ * Checks: self-send protection, sender authorization, message length, rate limit.
+ * Only applies to C2C (direct message) scenarios.
  */
 export const guardSendAccess: MiddlewareDescriptor = {
   name: "guard-send-access",
@@ -118,13 +112,13 @@ export const guardSendAccess: MiddlewareDescriptor = {
     const targetId = ctx.account.botId ?? ctx.account.accountId;
     const messageLength = ctx.rawBody.length;
 
-    // 1. 自发防护
+    // 1. Self-send protection
     if (senderId === targetId) {
       ctx.log.info("[guard-send-access] send access denied: cannot send direct message to self");
       return;
     }
 
-    // 2. 发送者授权
+    // 2. Sender authorization
     if (policy.allowedSenders === "allowlist") {
       if (!policy.senderAllowlist?.includes(senderId)) {
         ctx.log.info(
@@ -134,7 +128,7 @@ export const guardSendAccess: MiddlewareDescriptor = {
       }
     }
 
-    // 3. 消息长度检查
+    // 3. Message length check
     if (messageLength > policy.maxMessageLength) {
       ctx.log.info(
         `[guard-send-access] send access denied: message too long (${messageLength} chars), max ${policy.maxMessageLength}`,
@@ -142,7 +136,7 @@ export const guardSendAccess: MiddlewareDescriptor = {
       return;
     }
 
-    // 4. 频率限制
+    // 4. Rate limit
     if (isRateLimited(senderId, policy.rateLimitPerHour)) {
       ctx.log.error("[guard-send-access] send access denied: rate limit triggered", {
         senderId,
@@ -151,7 +145,7 @@ export const guardSendAccess: MiddlewareDescriptor = {
       return;
     }
 
-    // 通过所有检查，记录发送并继续管线
+    // All checks passed; record send and continue pipeline
     recordSend(senderId);
     await next();
   },

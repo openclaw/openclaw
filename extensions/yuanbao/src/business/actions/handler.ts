@@ -1,14 +1,14 @@
 /**
- * Action 处理器
+ * Action handler.
  *
- * 直接调用 createMessageSender 发送消息，跳过 pipeline 中间件。
- * params 已经给出了明确的发送信息（action、message、to、mediaUrl、stickerId 等），
- * 不需要经过 pipeline 的层层转换。
+ * Calls createMessageSender directly to send messages, bypassing pipeline middlewares.
+ * params already provide explicit send info (action, message, to, mediaUrl, stickerId, etc.),
+ * no need for pipeline's layered transformations.
  *
  * Core design:
- * - resolveOutboundItems()：适配器，将 ActionParams 转换为 OutboundItem[]
- * - sender.send(item)：已有的类型分发策略，统一处理所有Message type
- * - handler 本身只做编排，不做分发
+ * - resolveOutboundItems(): adapter, converts ActionParams to OutboundItem[]
+ * - sender.send(item): existing type-dispatch strategy, handles all message types uniformly
+ * - handler itself only orchestrates, does not dispatch
  */
 
 import { getActiveWsClient } from "../../access/ws/runtime.js";
@@ -21,9 +21,9 @@ import type { ActionParams } from "./resolve-target.js";
 import { resolveActionTarget } from "./resolve-target.js";
 import { searchSticker } from "./sticker/send.js";
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
-/** handleAction 的返回值 */
+/** handleAction return type */
 export interface ActionHandlerResult {
   channel: "yuanbao";
   ok: boolean;
@@ -32,16 +32,13 @@ export interface ActionHandlerResult {
   data?: unknown;
 }
 
-// ============ 适配器：ActionParams → OutboundItem[] ============
+// ============ Adapter: ActionParams → OutboundItem[] ============
 
 /**
- * 将 ActionParams 转换为 OutboundItem 列表
+ * Convert ActionParams to OutboundItem list.
  *
- * 这是唯一需要理解 params 结构的地方，
- * 转换完成后，后续流程完全由 sender.send() 的类型分发接管。
- *
- * @param input - 框架传入的原始参数
- * @returns 待发送的 OutboundItem 列表
+ * This is the only place that needs to understand params structure;
+ * after conversion, subsequent flow is entirely handled by sender.send() type dispatch.
  */
 function resolveOutboundItems(input: ActionParams): OutboundItem[] {
   const { params } = input;
@@ -50,13 +47,13 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
 
   switch (action) {
     case "send": {
-      // Extract文本：params.message 优先，回退到顶层 text
+      // Extract text: params.message first, fallback to top-level text
       const text = params?.message ?? input.text ?? "";
       if (typeof text === "string" && text.trim()) {
         items.push({ type: "text", text });
       }
 
-      // 收集所有Media URL
+      // Collect all media URLs
       const mediaUrl = params?.media ?? params?.mediaUrl ?? undefined;
       const mediaUrls = Array.isArray(params?.mediaUrls) ? params.mediaUrls : undefined;
       for (const url of mediaUrls ?? (mediaUrl ? [mediaUrl] : [])) {
@@ -69,7 +66,7 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
 
     case "sticker":
     case "react": {
-      // Extract sticker ID（兼容 string | string[]）
+      // Extract sticker ID (compat string | string[])
       const rawStickerId = params?.sticker_id ?? params?.stickerId;
       const stickerId = Array.isArray(rawStickerId)
         ? String(rawStickerId[0] ?? "")
@@ -82,7 +79,7 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
       break;
     }
 
-    // sticker-search 不产生 OutboundItem，由 handler 短路处理
+    // sticker-search does not produce OutboundItem, handled by handler short-circuit
     default:
       break;
   }
@@ -90,18 +87,15 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
   return items;
 }
 
-// ============ 核心处理器 ============
+// ============ Core handler ============
 
 /**
- * 处理 Action 请求
+ * Handle Action request.
  *
  * Execution flow:
- * 1. sticker-search 短路 → 纯查询，直接返回
- * 2. resolveOutboundItems() → 将 params 转换为 OutboundItem[]
- * 3. 创建 sender → sender.send(item) 逐个发送
- *
- * @param rawParams - 框架传入的原始参数
- * @returns 发送结果
+ * 1. sticker-search short-circuit → pure query, return directly
+ * 2. resolveOutboundItems() → convert params to OutboundItem[]
+ * 3. Create sender → sender.send(item) for each item
  */
 export async function handleAction(input: ActionParams): Promise<ActionHandlerResult> {
   const log = createLog("actions");
@@ -114,7 +108,7 @@ export async function handleAction(input: ActionParams): Promise<ActionHandlerRe
 
     log.info("send info", { action, to: params?.to || params?.target });
 
-    // ⭐ sticker-search 是纯查询，不需要创建 sender
+    // sticker-search is a pure query, no need to create sender
     if (action === "sticker-search") {
       const result = searchSticker((params ?? {}) as Record<string, unknown>);
       return {
@@ -139,11 +133,11 @@ export async function handleAction(input: ActionParams): Promise<ActionHandlerRe
     const account = resolveYuanbaoAccount({ cfg, accountId });
     const core = getYuanbaoRuntime();
     if (!core) {
-      throw new Error("[handleAction] Yuanbao runtime 未初始化");
+      throw new Error("[handleAction] Yuanbao runtime not initialized");
     }
     const wsClient = getActiveWsClient(account.accountId);
     if (!wsClient) {
-      throw new Error(`[handleAction] 账号 ${account.accountId} 的 WsClient 未就绪`);
+      throw new Error(`[handleAction] Account ${account.accountId} WsClient not ready`);
     }
 
     const resolved = resolveActionTarget(input);
@@ -159,14 +153,14 @@ export async function handleAction(input: ActionParams): Promise<ActionHandlerRe
       core,
     });
 
-    // 逐个发送，收集最后一个成功的 messageId
+    // Send items sequentially, collect last successful messageId
     let lastMessageId = "";
     for (const item of items) {
       log.info("send for", { type: item.type });
 
       const result = await sender.send(item);
       if (!result.ok) {
-        // 文本发送失败直接返回，Media失败继续发送后续项
+        // Text send failure returns directly, media failure continues to send subsequent items
         if (item.type === "text") {
           return {
             channel: "yuanbao",

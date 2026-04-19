@@ -1,14 +1,12 @@
 /**
- * utils/ttl-db.ts 单元测试
- *
- * 测试范围：InMemoryTtlDb 的 set/get/has/delete、过期清除、maxKeys 溢出淘汰
+ * Unit tests for InMemoryTtlDb: set/get/has/delete, TTL expiry, and maxKeys eviction.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InMemoryTtlDb } from "./ttl-db.js";
 
-void test("InMemoryTtlDb 基本 set/get/has/delete", () => {
+void test("InMemoryTtlDb basic set/get/has/delete", () => {
   const db = new InMemoryTtlDb<string, string>({ ttlMs: 60_000, cleanupMinIntervalMs: 0 });
 
   db.set("key1", "value1");
@@ -22,20 +20,20 @@ void test("InMemoryTtlDb 基本 set/get/has/delete", () => {
   assert.equal(db.size(), 0);
 });
 
-void test("InMemoryTtlDb 过期自动清除", async () => {
+void test("InMemoryTtlDb auto-expiry cleanup", async () => {
   const db = new InMemoryTtlDb<string, string>({ ttlMs: 30, cleanupMinIntervalMs: 0 });
 
   db.set("key1", "value1");
   assert.equal(db.get("key1"), "value1");
 
-  // 等待过期
+  // Wait for expiry
   await new Promise((r) => setTimeout(r, 60));
 
   assert.equal(db.get("key1"), null);
   assert.equal(db.has("key1"), false);
 });
 
-void test("InMemoryTtlDb maxKeys 溢出淘汰", () => {
+void test("InMemoryTtlDb maxKeys overflow eviction", () => {
   const db = new InMemoryTtlDb<string, number>({
     ttlMs: 60_000,
     maxKeys: 3,
@@ -47,13 +45,13 @@ void test("InMemoryTtlDb maxKeys 溢出淘汰", () => {
   db.set("c", 3);
   assert.equal(db.size(), 3);
 
-  // 插入第 4 个，应淘汰最早过期的
+  // Inserting the 4th entry should evict the earliest-expiring one
   db.set("d", 4);
   assert.equal(db.size(), 3);
   assert.equal(db.has("d"), true);
 });
 
-void test("InMemoryTtlDb 不存在的 key 返回 null", () => {
+void test("InMemoryTtlDb returns null for non-existent key", () => {
   const db = new InMemoryTtlDb<string, string>({ ttlMs: 60_000, cleanupMinIntervalMs: 0 });
 
   assert.equal(db.get("nonexistent"), null);
@@ -61,7 +59,7 @@ void test("InMemoryTtlDb 不存在的 key 返回 null", () => {
   assert.equal(db.delete("nonexistent"), false);
 });
 
-void test("InMemoryTtlDb set 覆盖已有 key", () => {
+void test("InMemoryTtlDb set overwrites existing key", () => {
   const db = new InMemoryTtlDb<string, string>({ ttlMs: 60_000, cleanupMinIntervalMs: 0 });
 
   db.set("key", "old");

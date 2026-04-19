@@ -1,14 +1,12 @@
 /**
- * 中间件 resolve-quote 单元测试
- *
- * 测试范围：引用消息解析
+ * Unit tests for resolve-quote middleware: quote message parsing.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let mockQuoteResult: any = undefined;
 
@@ -27,7 +25,7 @@ function setupMocks(t: any, quoteResult?: any) {
   }
 }
 
-void test("resolve-quote: 有引用消息时填充 ctx.quoteInfo", async (t) => {
+void test("resolve-quote: populates ctx.quoteInfo when quote exists", async (t) => {
   const mockQuote = { id: "msg-ref-1", desc: "被引用的内容", sender_nickname: "张三" };
   setupMocks(t, mockQuote);
   const { resolveQuote } = await import("./resolve-quote.js");
@@ -43,7 +41,7 @@ void test("resolve-quote: 有引用消息时填充 ctx.quoteInfo", async (t) => 
   assert.equal(wasCalled(), true);
 });
 
-void test("resolve-quote: 无引用消息时 quoteInfo 保持 undefined", async (t) => {
+void test("resolve-quote: quoteInfo stays undefined when no quote", async (t) => {
   setupMocks(t, undefined);
   const { resolveQuote } = await import("./resolve-quote.js");
 
@@ -56,7 +54,7 @@ void test("resolve-quote: 无引用消息时 quoteInfo 保持 undefined", async 
   assert.equal(wasCalled(), true);
 });
 
-void test("resolve-quote: cloud_custom_data 为空时正常放行", async (t) => {
+void test("resolve-quote: empty cloud_custom_data passes through", async (t) => {
   setupMocks(t, undefined);
   const { resolveQuote } = await import("./resolve-quote.js");
 

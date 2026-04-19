@@ -1,15 +1,13 @@
 /**
- * messaging/chat-history.ts 单元测试
- *
- * 测试范围：recordMediaHistory、chatMediaHistories LRU 淘汰
+ * Unit tests for chat-history.ts: recordMediaHistory and chatMediaHistories LRU eviction.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { recordMediaHistory, chatMediaHistories } from "./chat-history.js";
 
-void test("recordMediaHistory 写入媒体历史", () => {
-  // 清理
+void test("recordMediaHistory writes media history", () => {
+  // Clear
   chatMediaHistories.clear();
 
   recordMediaHistory("group-001", {
@@ -23,11 +21,11 @@ void test("recordMediaHistory 写入媒体历史", () => {
   assert.equal(list.length, 1);
   assert.equal(list[0].sender, "user-1");
 
-  // 清理
+  // Clear
   chatMediaHistories.clear();
 });
 
-void test("recordMediaHistory 空 medias 不写入", () => {
+void test("recordMediaHistory skips empty medias", () => {
   chatMediaHistories.clear();
 
   recordMediaHistory("group-002", {
@@ -41,10 +39,10 @@ void test("recordMediaHistory 空 medias 不写入", () => {
   chatMediaHistories.clear();
 });
 
-void test("recordMediaHistory LRU 淘汰超过上限的条目", () => {
+void test("recordMediaHistory LRU evicts entries exceeding limit", () => {
   chatMediaHistories.clear();
 
-  // 写入 55 条（上限 50）
+  // Write 55 entries (limit is 50)
   for (let i = 0; i < 55; i++) {
     recordMediaHistory("group-lru", {
       sender: `user-${i}`,
@@ -55,8 +53,8 @@ void test("recordMediaHistory LRU 淘汰超过上限的条目", () => {
 
   const list = chatMediaHistories.get("group-lru");
   assert.ok(list);
-  assert.equal(list.length, 50, "应淘汰最旧的 5 条，保留 50 条");
-  // 最旧的应该是 user-5（前 5 条被淘汰）
+  assert.equal(list.length, 50, "should evict oldest 5 entries, keeping 50");
+  // Oldest should be user-5 (first 5 evicted)
   assert.equal(list[0].sender, "user-5");
 
   chatMediaHistories.clear();

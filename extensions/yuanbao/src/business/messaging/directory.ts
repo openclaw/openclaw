@@ -1,27 +1,19 @@
 /**
- * Directory adapter
- *
- * 为元宝频道实现标准的 ChannelDirectoryAdapter 接口。
- * 使用 member 模块和Directory缓存将用户名/展示名称解析为平台 ID。
+ * Directory adapter: implements ChannelDirectoryAdapter for the yuanbao channel.
+ * Resolves usernames/display names to platform IDs using member module and directory cache.
  */
 
 import { getMember } from "../../infra/cache/member.js";
 import { createLog } from "../../logger.js";
-
-// ============ 缓存类型 ============
 
 export interface CachedUserEntry {
   userId: string;
   nickName?: string;
 }
 
-// ============ LRU 缓存实现 ============
-
 /**
- * 简单的 LRU 缓存，用于Directory查找。
- *
- * 存储 handle/name → CachedUserEntry 映射，
- * 支持 TTL 过期和最大容量限制。
+ * Simple LRU cache for directory lookups.
+ * Stores handle/name -> CachedUserEntry mappings with TTL expiration and max capacity.
  */
 class DirectoryLRUCache {
   private readonly maxSize: number;
@@ -43,7 +35,7 @@ class DirectoryLRUCache {
       this.cache.delete(normalizedKey);
       return undefined;
     }
-    // 移到末尾（最近使用）
+    // Move to end (most recently used)
     this.cache.delete(normalizedKey);
     this.cache.set(normalizedKey, item);
     return item.entry;
@@ -51,9 +43,9 @@ class DirectoryLRUCache {
 
   set(key: string, entry: CachedUserEntry): void {
     const normalizedKey = key.toLowerCase();
-    // 删除已有条目以更新位置
+    // Delete existing entry to update position
     this.cache.delete(normalizedKey);
-    // 超过容量时淘汰最旧条目
+    // Evict oldest entry when over capacity
     if (this.cache.size >= this.maxSize) {
       const oldestKey = this.cache.keys().next().value;
       if (oldestKey !== undefined) {
@@ -71,34 +63,23 @@ class DirectoryLRUCache {
   }
 }
 
-// ============ 单例缓存 ============
-
-/** 全局Directory缓存实例 */
+/** Global directory cache instance */
 const directoryCache = new DirectoryLRUCache(2000, 30 * 60 * 1000);
 
-// ============ 类型定义 ============
+// ============ Type definitions ============
 
-/** 表示已解析的用户或群组的Directory条目 */
+/** Represents a resolved user or group directory entry */
 export interface DirectoryEntry {
   kind: "user" | "group";
   userId: string;
   nickName: string;
 }
 
-// ============ 解析逻辑 ============
-
 /**
- * 将用户名/展示名称解析为平台User ID。
+ * Resolve a username/display name to a platform user ID.
  *
- * Parsing strategy:
- * 1. 优先检查Directory缓存（快速路径）
- * 2. 遍历当前账号所在群聊的成员列表进行搜索（精确匹配优先）
- * 3. 未匹配到则返回 null
- *
- * @param nameOrHandle - 待解析的用户名或展示名称
- * @param accountId - Account ID，用于定位 Member 实例
- * @param groupCode - 群号，用于定位群成员列表
- * @returns 已解析的用户条目，未找到时返回 null
+ * Strategy: check directory cache first, then search group member lists (exact match preferred).
+ * Returns null if not found.
  */
 export function resolveUsername(
   nameOrHandle: string,
@@ -112,20 +93,20 @@ export function resolveUsername(
   const log = createLog("dm:directory");
   const query = nameOrHandle.trim();
 
-  // 1. 检查缓存
+  // 1. Check cache
   const cached = directoryCache.get(query);
   if (cached) {
     return cached;
   }
 
-  // 2. 当前账号所在群聊的成员列表
+  // 2. Member list of groups the current account belongs to
   const member = getMember(accountId);
   const groupCodes = groupCode ? [groupCode] : member.listGroupCodes();
 
   for (const code of groupCodes) {
     const results = member.lookupUsers(code, query);
     if (results.length > 0) {
-      // 选取精确匹配或首个结果
+      // Pick exact match or first result
       const exactMatch = results.find(
         (u) =>
           u.nickName.toLowerCase() === query.toLowerCase() ||
@@ -136,7 +117,7 @@ export function resolveUsername(
         userId: best.userId,
         nickName: best.nickName,
       };
-      // 缓存以备后续查找
+      // Cache for subsequent lookups
       directoryCache.set(query, entry);
       directoryCache.set(best.nickName, entry);
       directoryCache.set(best.userId, entry);
@@ -150,11 +131,7 @@ export function resolveUsername(
 
 /**
  * List all known peer users across all group chats under the current account.
- *
- * 遍历所有群聊的成员列表并按 userId 去重。
- *
- * @param accountId - Account ID，用于定位 Member 实例
- * @returns 表示已知用户的Directory条目数组
+ * Deduplicates by userId.
  */
 export function listKnownPeers(accountId: string): DirectoryEntry[] {
   const member = getMember(accountId);

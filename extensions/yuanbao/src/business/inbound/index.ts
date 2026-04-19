@@ -1,9 +1,9 @@
 /**
- * Message inbound processing module
+ * Message inbound processing module.
  *
  * Unified entry point, single responsibility:
- * - 系统回调（Recall等）同步分发，不进入防抖
- * - 普通消息委托给 dispatcher/debouncer 进行防抖 + 会话级串行化
+ * - System callbacks (Recall, etc.) dispatched synchronously, not debounced
+ * - Normal messages delegated to dispatcher/debouncer for debounce + session-level serialization
  */
 
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -15,7 +15,7 @@ import type { ModuleLog } from "../../logger.js";
 import type { YuanbaoInboundMessage, ResolvedYuanbaoAccount } from "../../types.js";
 import { dispatchSystemCallback } from "../messaging/system-callbacks.js";
 
-// ============ 统一入口 ============
+// ============ Unified entry ============
 
 export type InboundMessageParams = {
   msg: YuanbaoInboundMessage;
@@ -37,15 +37,15 @@ export type InboundMessageParams = {
 };
 
 /**
- * Unified message processing entry
+ * Unified message processing entry.
  *
  * System callbacks (recall, etc.) are dispatched synchronously, not debounced;
- * 普通消息委托给 dispatcher 层的 debouncer 进行防抖 + 会话级串行化。
+ * normal messages are delegated to the dispatcher debouncer for debounce + session-level serialization.
  */
 export async function handleInboundMessage(params: InboundMessageParams): Promise<void> {
   const { msg, isGroup, account, config, core, wsClient, log, statusSink, abortSignal } = params;
 
-  // 系统回调（Recall等）：同步分发，不进入防抖队列
+  // System callbacks (Recall, etc.): dispatched synchronously, not entering debounce queue
   const callbackLog = createLog("system-callback", log as ModuleLog | undefined);
   const callbackCtx = {
     account,
@@ -63,7 +63,7 @@ export async function handleInboundMessage(params: InboundMessageParams): Promis
     return;
   }
 
-  // 委托给 dispatcher 层的防抖器
+  // Delegate to dispatcher debouncer
   const d = ensureDebouncer(config);
   await d.enqueue({ msg, isGroup, account, config, core, wsClient, log, statusSink, abortSignal });
 }

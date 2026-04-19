@@ -1,8 +1,8 @@
 /**
- * TIMFileElem 消息处理器
+ * TIMFileElem message handler.
  *
- * 文件消息：输入时Extract文件 URL 和文件名到Media列表并返回文件标识，
- * 输出时构造文件Message body。
+ * File message: on input, extracts file URL and filename to media list and returns file identifier;
+ * on output, constructs file message body.
  */
 
 import type { MessageHandlerContext } from "../context.js";
@@ -12,15 +12,8 @@ export const fileHandler: MessageElemHandler = {
   msgType: "TIMFileElem",
 
   /**
-   * Extract文件 URL 和文件名，记录到Media列表
-   *
-   * 优先使用文件名作为标识（如 [report.pdf]），
-   * 无文件名时使用 [fileN] 格式的占位符。
-   *
-   * @param _ctx - Message processing context（文件处理中未使用）
-   * @param elem - 原始 MsgBody 文件消息元素，需包含 msg_content.url 和可选的 msg_content.file_name
-   * @param resData - Extract结果的可变引用，文件信息将追加到 resData.medias 列表
-   * @returns 文件标识文本
+   * Extract file URL and filename, record to media list.
+   * Prefers filename as identifier (e.g. [report.pdf]); falls back to [fileN] placeholder.
    */
   extract(
     _ctx: MessageHandlerContext,
@@ -39,10 +32,7 @@ export const fileHandler: MessageElemHandler = {
   },
 
   /**
-   * 构造 TIMFileElem Message body
-   *
-   * @param data - 需包含 url 字段，可选 fileName、fileSize、uuid
-   * @returns TIMFileElem Message body数组
+   * Build TIMFileElem message body.
    */
   buildMsgBody(data: Record<string, unknown>): MsgBodyItemType[] {
     return [

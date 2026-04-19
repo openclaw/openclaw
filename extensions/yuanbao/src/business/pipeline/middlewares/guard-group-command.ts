@@ -1,8 +1,8 @@
 /**
- * Middleware: group command whitelist guard
+ * Middleware: group command whitelist guard.
  *
- * 仅对已注册的 openclaw 命令生效，非公开命令仅 bot owner 可执行。
- * 未注册的 /xxx 消息（如 /asdasdasd）不受此限制，当作普通文本传给 AI。
+ * Only applies to registered openclaw commands; non-public commands are owner-only.
+ * Unregistered /xxx messages (e.g. /asdasdasd) are treated as plain text for AI.
  */
 
 import { getMember } from "../../../infra/cache/member.js";
@@ -11,7 +11,7 @@ import type { YuanbaoMsgBodyElement } from "../../../types.js";
 import { prepareOutboundContent, buildOutboundMsgBody } from "../../messaging/handlers/index.js";
 import type { MiddlewareDescriptor } from "../types.js";
 
-/** 群聊中所有人都能用的命令白名单 */
+/** Public commands available to all group members */
 const GROUP_PUBLIC_COMMANDS = new Set<string>([]);
 
 export const guardGroupCommand: MiddlewareDescriptor = {
@@ -36,7 +36,7 @@ export const guardGroupCommand: MiddlewareDescriptor = {
             groupCode: groupCode!,
             msgBody: buildOutboundMsgBody(
               prepareOutboundContent(
-                `⚠️ /${cmdName} 仅限创建者${!raw?.bot_owner_id ? "并且在私聊模式下" : ""}使用哦~`,
+              `⚠️ /${cmdName} is restricted to the bot creator${!raw?.bot_owner_id ? " in direct message mode" : ""}.`,
                 groupCode,
                 getMember(account.accountId),
               ),
@@ -46,7 +46,7 @@ export const guardGroupCommand: MiddlewareDescriptor = {
             refFromAccount: fromAccount,
             wsClient: ctx.wsClient,
           });
-          return; // 终止管线
+          return; // Abort pipeline
         }
       }
     }

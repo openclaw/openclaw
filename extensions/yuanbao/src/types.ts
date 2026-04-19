@@ -19,19 +19,19 @@ export type YuanbaoAccountConfig = {
   appKey?: string;
   /** Bot AppSecret (used for signing) */
   appSecret?: string;
-  apiDomain?: string; // 接口域名
-  logUploadApiUrl?: string; // issue-log 日志登记接口地址
-  wsUrl?: string; // WebSocket 地址
+  apiDomain?: string; // API domain
+  logUploadApiUrl?: string; // issue-log upload API URL
+  wsUrl?: string; // WebSocket URL
   /** Pre-signed token (skips automatic ticket signing if provided) */
   token?: string;
 
   dm?: YuanbaoDmConfig;
   overflowPolicy?: YuanbaoOverflowPolicy;
-  /** Group chat reply-to strategy：off=不引用，first=同一入站消息仅首次引用，all=每条都引用 */
+  /** Group chat reply-to strategy: off=no quote, first=quote only first reply per inbound message, all=quote every reply */
   replyToMode?: YuanbaoReplyToMode;
-  routeEnv?: string; // 内部路由环境标识
+  /** Internal routing environment identifier */
+  routeEnv?: string;
 
-  /** Media upload configuration */
   /** Max file size in MB (default 20) */
   mediaMaxMb?: number;
 
@@ -65,8 +65,8 @@ export type ResolvedYuanbaoAccount = {
   appKey?: string;
   appSecret?: string;
   botId?: string;
-  apiDomain?: string; // 接口域名
-  wsUrl?: string; // WebSocket 地址
+  apiDomain?: string; // API domain
+  wsUrl?: string; // WebSocket URL
   token?: string;
   wsGatewayUrl: string;
   wsHeartbeatInterval?: number;
@@ -92,7 +92,7 @@ export type ResolvedYuanbaoAccount = {
 
 // Image info array element
 export type ImImageInfoArrayItem = {
-  type?: number; // 原图
+  type?: number; // original image
   size?: number;
   width?: number;
   height?: number;
@@ -103,18 +103,18 @@ export type ImImageInfoArrayItem = {
 export type YuanbaoMsgBodyElement = {
   msg_type: string;
   msg_content: {
-    text?: string; // 文字聊天内容
-    uuid?: string; // 图片
-    image_format?: number; // 图片格式
-    data?: string; // 扩展数据
-    desc?: string; // 描述
-    ext?: string; // 扩展字段
-    sound?: string; // 语音
-    image_info_array?: ImImageInfoArrayItem[]; // 图片内容
-    index?: number; // 表情索引
-    url?: string; // 文件下载地址
-    file_size?: number; // 文件大小（字节）
-    file_name?: string; // 文件名称
+    text?: string; // text chat content
+    uuid?: string; // image
+    image_format?: number; // image format
+    data?: string; // extension data
+    desc?: string; // description
+    ext?: string; // extension field
+    sound?: string; // voice
+    image_info_array?: ImImageInfoArrayItem[]; // image content
+    index?: number; // emoji index
+    url?: string; // file download URL
+    file_size?: number; // file size (bytes)
+    file_name?: string; // file name
     // Extensible fields for other message types
     [key: string]: unknown;
   };
@@ -156,7 +156,7 @@ export type YuanbaoInboundMessage = {
   cloud_custom_data?: string;
   event_time?: number;
   bot_owner_id?: string;
-  /** Recall消息时携带的Message sequence number列表（Group/C2C.CallbackAfterMsgWithDraw） */
+  /** Message sequence number list carried during recall (Group/C2C.CallbackAfterMsgWithDraw) */
   recall_msg_seq_list?: ImMsgSeq[];
   /** Message type (group/direct) */
   claw_msg_type?: EnumCLawMsgType;
@@ -226,7 +226,6 @@ export type YuanbaoSendMsgResponse = {
   stream_msg_id?: string;
 };
 
-// Tencent IM group message send request
 export type YuanbaoSendGroupMsgRequest = {
   group_code: string;
   random: number;

@@ -1,16 +1,14 @@
 /**
- * 元宝 HTTP request基础层
+ * Yuanbao HTTP request base layer.
  *
- * Contains:类型定义、Token 缓存、签名计算、鉴权头获取、通用 HTTP Utility functions。
- * 业务 API（uploadInfo / downloadUrl）见 main.ts。
+ * Type definitions, token cache, signature computation, auth headers, and HTTP utilities.
+ * Business APIs (uploadInfo / downloadUrl) are in main.ts.
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getOpenclawVersion, getOperationSystem, getPluginVersion } from "../../infra/env.js";
 import { createLog } from "../../logger.js";
 import type { ResolvedYuanbaoAccount } from "../../types.js";
-
-// ============ 类型 ============
 
 export type SignTokenData = {
   bot_id: string;
@@ -31,7 +29,7 @@ export type AuthHeaders = {
   "X-Bot-Version": string;
 };
 
-/** COS 上传预签配置 */
+/** COS upload pre-sign config */
 export type CosUploadConfig = {
   bucketName: string;
   region: string;
@@ -56,8 +54,6 @@ type CacheEntry = {
   expiresAt: number;
 };
 
-// ============ 常量 ============
-
 export const SIGN_TOKEN_PATH = "/api/v5/robotLogic/sign-token";
 export const UPLOAD_INFO_PATH = "/api/resource/genUploadInfo";
 export const DOWNLOAD_INFO_PATH = "/api/resource/v1/download";
@@ -66,38 +62,34 @@ const RETRYABLE_SIGN_CODE = 10099;
 const SIGN_MAX_RETRIES = 3;
 const SIGN_RETRY_DELAY_MS = 1000;
 
-/** 提前刷新 token 的安全裕量：过期前 5 分钟 */
+/** Token refresh safety margin: refresh 5 minutes before expiry */
 const CACHE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 /**
- * setTimeout 最大安全延迟（ms）。
- * Node.js 使用 32 位有符号整数存储 setTimeout delay，
- * 超过 2^31 - 1 (≈24.8 天) 会溢出并被截断为 1ms，导致定时器立即触发。
- * 安全上限设为 24 天。
+ * Max safe setTimeout delay (ms).
+ * Node.js uses a 32-bit signed integer for setTimeout delay;
+ * values exceeding 2^31 - 1 (~24.8 days) overflow to 1ms.
+ * Safe limit set to 24 days.
  */
-const MAX_SAFE_TIMEOUT_MS = 24 * 24 * 3600 * 1000; // ~24 天
+const MAX_SAFE_TIMEOUT_MS = 24 * 24 * 3600 * 1000; // ~24 days
 
-/** HTTP 401 自动重试最大次数 */
+/** Max HTTP 401 auto-retry count */
 const HTTP_AUTH_RETRY_MAX = 1;
 
-// ============ Token 缓存（按 accountId 隔离） ============
-
-/** key: accountId */
 const tokenCacheMap = new Map<string, CacheEntry>();
 
 /**
- * 进行中的签票 Promise（singleflight）
- * 多个并发请求发现缓存过期时，只有第一个真正调用接口，其余复用同一 Promise。
+ * In-flight sign-token Promise (singleflight).
+ * When multiple concurrent requests find the cache expired, only the first
+ * actually calls the API; the rest reuse the same Promise.
  */
 const tokenFetchPromises = new Map<string, Promise<SignTokenData>>();
 
-/** 定时刷新 token 的 timer（按 accountId 隔离） */
+/** Token auto-refresh timers (isolated by accountId) */
 const tokenRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
- * 清除指定账号的 token 缓存（强制下次重新签票）
- *
- * @param accountId - 要清除缓存的Account ID
+ * Clear the token cache for a given account (forces re-signing on next request).
  */
 export function clearSignTokenCache(accountId: string): void {
   tokenCacheMap.delete(accountId);
@@ -109,7 +101,7 @@ export function clearSignTokenCache(accountId: string): void {
 }
 
 /**
- * 清除所有账号的 token 缓存
+ * Clear all accounts' token caches.
  */
 export function clearAllSignTokenCache(): void {
   tokenCacheMap.clear();
@@ -120,10 +112,7 @@ export function clearAllSignTokenCache(): void {
 }
 
 /**
- * 查看 token 缓存状态（用于监控/调试）
- *
- * @param accountId - Account ID
- * @returns 缓存状态对象：status 为当前状态，expiresAt 为过期时间戳（无缓存时为 null）
+ * Inspect token cache status (for monitoring/debugging).
  */
 export function getTokenStatus(accountId: string): {
   status: "valid" | "expired" | "refreshing" | "none";
@@ -143,10 +132,7 @@ export function getTokenStatus(accountId: string): {
 }
 
 /**
- * 从签票缓存中获取 bot_id（同步，仅在已签过票且缓存有效时返回）
- *
- * @param accountId - Account ID
- * @returns 缓存中的 bot_id，若无缓存或已过期则返回 undefined
+ * Get bot_id from sign-token cache (sync, only returns when cache is valid).
  */
 export function getCachedBotId(accountId: string): string | undefined {
   const cached = tokenCacheMap.get(accountId);
@@ -155,8 +141,6 @@ export function getCachedBotId(accountId: string): string | undefined {
   }
   return cached.data.bot_id || undefined;
 }
-
-// ============ 签票（内部） ============
 
 function computeSignature(params: {
   nonce: string;
@@ -169,12 +153,7 @@ function computeSignature(params: {
 }
 
 /**
- * 使用恒定时间比较验证 HMAC 签名，防止时序攻击。
- * 使用 === 比较签名字符串时，JavaScript 引擎会在发现第一个不匹配的字符时立即返回 false，攻击者可以通过测量响应时间逐字节推断出正确的签名值。
- *
- * @param expected - 预期签名（hex 字符串）
- * @param actual - 待验证的实际签名（hex 字符串）
- * @returns 签名匹配时返回 true
+ * Verify HMAC signature using constant-time comparison to prevent timing attacks.
  */
 export function verifySignature(expected: string, actual: string): boolean {
   const expectedBuf = Buffer.from(expected, "hex");
@@ -186,11 +165,7 @@ export function verifySignature(expected: string, actual: string): boolean {
 }
 
 /**
- * 内部实现：发起签票 HTTP request，支持自动重试（最多 SIGN_MAX_RETRIES 次）。
- *
- * @param account - 账号配置，需包含 appKey、appSecret、apiDomain
- * @param log - 可选日志对象
- * @returns 签票数据（含 token、bot_id 等字段）
+ * Internal: issue a sign-token HTTP request with auto-retry (up to SIGN_MAX_RETRIES).
  */
 async function doFetchSignToken(
   account: ResolvedYuanbaoAccount,
@@ -260,20 +235,14 @@ async function doFetchSignToken(
   throw new Error("sign-token failed: max retries exceeded");
 }
 
-// ============ 公开：获取 token ============
-
 /**
- * 安排 token 定时刷新。
+ * Schedule token auto-refresh based on server-returned duration.
  *
- * 根据服务端返回的 token 有效期（duration），在到期前 {@link CACHE_REFRESH_MARGIN_MS} 自动重新签票，
- * 保证后续请求始终持有有效 token。刷新失败时会在 30s 后做一次重试，避免 timer 丢失。
+ * Refreshes the token `CACHE_REFRESH_MARGIN_MS` before expiry.
+ * On failure, retries once after 30s to avoid losing the refresh timer.
  *
- * > Note:`setTimeout` 使用 32 位有符号整数存储延迟，超过 ~24.8 天会溢出为 1ms。
- * > 因此 delay 会被 clamp 到 {@link MAX_SAFE_TIMEOUT_MS}。
- *
- * @param account     - 已解析的元宝账号配置，用于标识缓存 key 和签票参数
- * @param durationSec - 服务端返回的 token 有效期（秒），用于计算下次刷新时间
- * @param log         - 可选的Logger instance，用于记录刷新流程和异常信息
+ * Note: `setTimeout` delay is clamped to `MAX_SAFE_TIMEOUT_MS` to prevent
+ * 32-bit integer overflow.
  */
 function scheduleTokenRefresh(
   account: ResolvedYuanbaoAccount,
@@ -286,13 +255,13 @@ function scheduleTokenRefresh(
     clearTimeout(existing);
   }
 
-  // clamp: 最小 60s，最大 MAX_SAFE_TIMEOUT_MS（防止 setTimeout 32 位整数溢出）
+  // Clamp: min 60s, max MAX_SAFE_TIMEOUT_MS (prevent setTimeout 32-bit integer overflow)
   const rawMs = durationSec * 1000 - CACHE_REFRESH_MARGIN_MS;
   const refreshAfterMs = Math.min(Math.max(rawMs, 60_000), MAX_SAFE_TIMEOUT_MS);
   const clampedHint = rawMs > MAX_SAFE_TIMEOUT_MS ? ", clamped to max safe timeout" : "";
   mlog.info(
     `[${account.accountId}][token-timer] scheduled refresh: ` +
-      `${Math.round(refreshAfterMs / 1000)}s 后 (duration=${durationSec}s, ` +
+      `${Math.round(refreshAfterMs / 1000)}s later (duration=${durationSec}s, ` +
       `margin=${CACHE_REFRESH_MARGIN_MS / 1000}s${clampedHint})`,
   );
 
@@ -308,7 +277,7 @@ function scheduleTokenRefresh(
       mlog.error(
         `[${account.accountId}][token-timer] scheduled refresh failed: ${String(err)}, retrying in 30s`,
       );
-      // 定时刷新失败后安排一次短延迟重试，避免 timer 丢失导致再无自动刷新
+      // Retry after short delay on scheduled refresh failure to avoid losing the timer
       const retryTimer = setTimeout(async () => {
         tokenRefreshTimers.delete(account.accountId);
         try {
@@ -328,21 +297,17 @@ function scheduleTokenRefresh(
 }
 
 /**
- * 获取签票数据（基于 duration 缓存 + singleflight 并发安全）
+ * Get sign-token data (duration-based cache + singleflight concurrency safety).
  *
- * - 静态 token：直接返回，不走缓存也不调用接口
- * - 缓存命中：直接返回
- * - 缓存未命中/过期：调用接口，并发请求复用同一 Promise
- *
- * @param account - 账号配置（含 appKey/appSecret 或 token）
- * @param log - 可选日志对象
- * @returns 签票数据
+ * - Static token: returned directly without cache or API call.
+ * - Cache hit: returned directly.
+ * - Cache miss/expired: calls API; concurrent requests reuse the same Promise.
  */
 export async function getSignToken(
   account: ResolvedYuanbaoAccount,
   log?: Log,
 ): Promise<SignTokenData> {
-  // 静态 token 优先
+  // Static token takes priority
   if (account.token) {
     return {
       bot_id: account.botId || "",
@@ -362,7 +327,7 @@ export async function getSignToken(
     return cached.data;
   }
 
-  // Singleflight：已有进行中的请求则复用
+  // Singleflight: reuse in-flight request if one exists
   let fetchPromise = tokenFetchPromises.get(account.accountId);
   if (fetchPromise) {
     tlog.info(`[${account.accountId}] sign-token in progress, waiting for existing request`);
@@ -388,11 +353,7 @@ export async function getSignToken(
 }
 
 /**
- * 强制刷新 token（清缓存后重新签票），用于鉴权失败场景。
- *
- * @param account - 账号配置
- * @param log - 可选日志对象
- * @returns 签票数据
+ * Force-refresh token (clear cache then re-sign), used on auth failure.
  */
 export async function forceRefreshSignToken(
   account: ResolvedYuanbaoAccount,
@@ -401,13 +362,13 @@ export async function forceRefreshSignToken(
   const flog = createLog("http", log);
   flog.warn(`[${account.accountId}][force-refresh] clearing cache and re-signing token`);
   clearSignTokenCache(account.accountId);
-  // 同时清除进行中的 singleflight promise，确保真正发起新请求而非复用可能已过期的旧结果
+  // Also clear in-flight singleflight promise to ensure a fresh request
   tokenFetchPromises.delete(account.accountId);
   return getSignToken(account, log);
 }
 
 /**
- * 获取鉴权请求头（X-ID / X-Token / X-Source），同时回填 account.botId
+ * Get auth headers (X-ID / X-Token / X-Source) and back-fill account.botId.
  */
 export async function getAuthHeaders(
   account: ResolvedYuanbaoAccount,
@@ -436,16 +397,8 @@ export async function getAuthHeaders(
   return authHeaders;
 }
 
-// ============ 内部 HTTP 工具 ============
-
 /**
- * 以 POST 方式调用元宝 API，自动附加鉴权头，统一处理 HTTP 和业务错误。
- *
- * @param account - 账号配置（用于拼接域名和获取鉴权头）
- * @param path - API 路径（如 /api/v5/robotLogic/sign-token）
- * @param body - 请求体（将被 JSON 序列化）
- * @param log - 可选日志对象
- * @returns 响应 data 字段（若无 data 则返回整个响应体）
+ * POST request to Yuanbao API with auth headers and unified error handling.
  */
 export async function yuanbaoPost<T>(
   account: ResolvedYuanbaoAccount,
@@ -468,7 +421,7 @@ export async function yuanbaoPost<T>(
       body: JSON.stringify(body),
     });
 
-    // HTTP 401: token 过期，强制刷新后重试一次
+    // HTTP 401: token expired, force-refresh and retry once
     if (response.status === 401 && attempt < HTTP_AUTH_RETRY_MAX) {
       plog.warn(
         `[post][${account.accountId}] ${path} received 401, refreshing token and retrying (attempt=${attempt + 1})`,
@@ -497,13 +450,7 @@ export async function yuanbaoPost<T>(
 }
 
 /**
- * 以 GET 方式调用元宝 API，自动附加鉴权头，统一处理 HTTP 和业务错误。
- *
- * @param account - 账号配置（用于拼接域名和获取鉴权头）
- * @param path - API 路径（如 /api/v5/robotLogic/query）
- * @param params - 可选查询参数，将序列化为 URL query string
- * @param log - 可选日志对象
- * @returns 响应 data 字段（若无 data 则返回整个响应体）
+ * GET request to Yuanbao API with auth headers and unified error handling.
  */
 export async function yuanbaoGet<T>(
   account: ResolvedYuanbaoAccount,
@@ -525,7 +472,7 @@ export async function yuanbaoGet<T>(
       },
     });
 
-    // HTTP 401: token 过期，强制刷新后重试一次
+    // HTTP 401: token expired, force-refresh and retry once
     if (response.status === 401 && attempt < HTTP_AUTH_RETRY_MAX) {
       glog.warn(
         `[get][${account.accountId}] ${path} received 401, refreshing token and retrying (attempt=${attempt + 1})`,

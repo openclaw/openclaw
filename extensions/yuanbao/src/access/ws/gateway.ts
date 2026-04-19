@@ -140,7 +140,6 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
     },
   });
 
-  // Start the connection
   client.connect();
 
   // Store client reference for multi-account use (used by outbound.sendText)

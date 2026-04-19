@@ -1,9 +1,9 @@
 /**
- * 中间件：AI 回复调度
+ * Middleware: AI reply dispatch.
  *
- * 手动分步调用 recordInboundSession + dispatchReplyWithBufferedBlockDispatcher，
- * 使 deliver 回调能拿到 info.kind（block/tool/final）参数，
- * 正确区分回复块类型，避免 tool-call 结果被当作普通文本发送。
+ * Manually calls recordInboundSession + dispatchReplyWithBufferedBlockDispatcher step by step,
+ * so the deliver callback receives info.kind (block/tool/final) to correctly distinguish
+ * reply block types and avoid sending tool-call results as plain text.
  */
 
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
@@ -49,14 +49,14 @@ export const dispatchReply: MiddlewareDescriptor = {
       return;
     }
 
-    // yuanbao 客户端原生渲染 Markdown 表格，固定使用 'off'
+    // Yuanbao client natively renders Markdown tables, always use 'off'
     const tableMode = "off" as const;
 
     ctx.log.debug("[dispatch-reply] generating reply", {
       target: isGroup ? `group:${groupCode}` : fromAccount,
     });
 
-    // ⭐ 创建心跳控制器（使用真实Logger instance替代空函数）
+    // ⭐ Create heartbeat controller (using real Logger instance instead of noop)
     const heartbeatLog = createLog("heartbeat");
     const heartbeatMeta = {
       ctx: {
@@ -78,12 +78,12 @@ export const dispatchReply: MiddlewareDescriptor = {
     };
     const heartbeat = createReplyHeartbeatController({ meta: heartbeatMeta });
 
-    // 追踪 deliver kind 转换，检测 tool-call 边界
+    // Track deliver kind transitions, detect tool-call boundaries
     let prevDeliverKind: string | null = null;
     let hasSentContent = false;
 
     try {
-      // ⭐ 第一步：记录入站会话
+      // ⭐ Step 1: Record inbound session
       await core.channel.session.recordInboundSession({
         storePath,
         sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
@@ -93,7 +93,7 @@ export const dispatchReply: MiddlewareDescriptor = {
         },
       });
 
-      // ⭐ 第二步：创建回复管线
+      // ⭐ Step 2: Create reply pipeline
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg: config,
         agentId: route.agentId,
@@ -101,8 +101,8 @@ export const dispatchReply: MiddlewareDescriptor = {
         accountId: account.accountId,
       });
 
-      // ⭐ 第三步：调度回复（deliver 回调带 info.kind）
-      // 使用 runWithTraceContext 包裹，确保 AI 请求的 fetch interceptor 能自动注入 X-Traceparent 头
+      // ⭐ Step 3: Dispatch reply (deliver callback with info.kind)
+      // Wrap with runWithTraceContext to ensure AI request fetch interceptor auto-injects X-Traceparent header
       const doDispatchReply = () =>
         core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
           ctx: ctxPayload,
@@ -122,27 +122,27 @@ export const dispatchReply: MiddlewareDescriptor = {
                 return;
               }
 
-              // 收到上下文压缩通知，不进行消息发送
+              // Received context compaction notice, skip message sending
               if (payload.isCompactionNotice) {
                 ctx.log.info("[dispatch-reply] CompactionNotice", { text: payload.text });
                 return;
               }
 
-              // 规范化 payload
+              // Normalize payload
               const normalized = normalizeOutboundReplyPayload(payload);
               ctx.log.info("[dispatch-reply] received reply data", {
                 kind: info.kind,
                 model_output: normalized.text,
               });
 
-              // ⭐ tool 类型的 deliver 是 tool 执行结果，不发送给用户
-              // 仅更新 prevDeliverKind 以追踪 block→tool→block 转换
+              // ⭐ Tool-kind deliver is tool execution result, not sent to user
+              // Only update prevDeliverKind to track block→tool→block transitions
               if (info.kind === "tool") {
                 prevDeliverKind = info.kind;
                 return;
               }
 
-              // 转换 Markdown 表格
+              // Convert Markdown tables
               const text = core.channel.text.convertMarkdownTables(
                 normalized.text ?? "",
                 tableMode,
@@ -151,11 +151,11 @@ export const dispatchReply: MiddlewareDescriptor = {
 
               const trimmedText = text.trim();
 
-              // 利用真实的 info.kind 追踪 block→tool→block 转换
+              // Use real info.kind to track block→tool→block transitions
               const prevKind = prevDeliverKind;
               prevDeliverKind = info.kind;
 
-              // 推入文本
+              // Push text
               if (trimmedText) {
                 const isAfterToolCall =
                   info.kind === "block" && prevKind !== null && prevKind !== "block";
@@ -166,7 +166,7 @@ export const dispatchReply: MiddlewareDescriptor = {
                 hasSentContent = true;
               }
 
-              // 推入Media
+              // Push media
               for (const mediaUrl of mediaUrls) {
                 if (mediaUrl) {
                   await queueSession.push({ type: "media", mediaUrl });
@@ -174,7 +174,7 @@ export const dispatchReply: MiddlewareDescriptor = {
                 }
               }
 
-              // 发送心跳
+              // Send heartbeat
               heartbeat.emit(WS_HEARTBEAT.RUNNING);
             },
             onError: (err: unknown, info: { kind: string }) => {
@@ -198,8 +198,8 @@ export const dispatchReply: MiddlewareDescriptor = {
             onAssistantMessageStart: () => {
               heartbeat.emit(WS_HEARTBEAT.RUNNING);
             },
-            // ⭐ tool_call 开始前强制把缓冲区里已积累的文本立即发出，
-            // 避免用户等到 session.flush() 才能看到工具调用前的 AI 输出
+            // ⭐ Force-flush buffered text before tool_call starts,
+            // so user doesn't have to wait until session.flush() to see pre-tool AI output
             onToolStart: async () => {
               try {
                 await queueSession.drainNow();
@@ -212,14 +212,14 @@ export const dispatchReply: MiddlewareDescriptor = {
           },
         });
 
-      // 使用管线统一的 traceContext（由 resolve-trace 中间件创建）
+      // Use pipeline's unified traceContext (created by resolve-trace middleware)
       if (ctx.traceContext) {
         await runWithTraceContext(ctx.traceContext, doDispatchReply);
       } else {
         await doDispatchReply();
       }
 
-      // ⭐ flush 前追加 /status 版本信息
+      // ⭐ Append /status version info before flush
       if (ctx.rawBody.trim().startsWith("/status")) {
         await queueSession.push({
           type: "text",
@@ -227,7 +227,7 @@ export const dispatchReply: MiddlewareDescriptor = {
         });
       }
 
-      // ⭐ flush 出站队列
+      // ⭐ Flush outbound queue
       const flushed = await queueSession.flush();
       if (!flushed && !hasSentContent && !ctx.abortSignal?.aborted) {
         const { fallbackReply } = account;
@@ -242,7 +242,7 @@ export const dispatchReply: MiddlewareDescriptor = {
         heartbeat.emit(WS_HEARTBEAT.FINISH);
       }
     } catch (err) {
-      // 异常路径：中止队列，释放资源
+      // Error path: abort queue, release resources
       queueSession.abort();
       heartbeat.stop();
       throw err;

@@ -1,7 +1,5 @@
 /**
- * messaging/quote.ts 单元测试
- *
- * 测试范围：parseQuoteFromCloudCustomData、formatQuoteContext
+ * Unit tests for quote.ts: parseQuoteFromCloudCustomData and formatQuoteContext.
  */
 
 import assert from "node:assert/strict";
@@ -86,6 +84,6 @@ void test("formatQuoteContext 超长引用截断", () => {
   const longDesc = "A".repeat(600);
   const result = formatQuoteContext({ desc: longDesc });
   assert.ok(result.includes("...(truncated)"));
-  // 截断后不应包含完整的 600 字符
+  // Truncated result should not contain the full 600 characters
   assert.ok(result.length < 600);
 });

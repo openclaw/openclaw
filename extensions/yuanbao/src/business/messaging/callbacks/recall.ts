@@ -1,10 +1,9 @@
 /**
- * Message recall system callback
+ * Message recall system callback.
  *
- * 注册 Group/C2C.CallbackAfterMsgWithDraw 的处理逻辑：
- *   - 群聊：消息仍在 chatHistories → 直接删除（未被 AI 消费，无需通知）
- *          消息已不在 history   → enqueueSystemEvent 通知 AI
- *   - C2C：无 history，直接 enqueueSystemEvent 通知 AI
+ * Group: if message is still in chatHistories, delete directly (not consumed by AI);
+ *        otherwise enqueueSystemEvent to notify AI.
+ * C2C: no history, directly enqueueSystemEvent.
  */
 
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -12,8 +11,6 @@ import { createLog } from "../../../logger.js";
 import type { YuanbaoInboundMessage } from "../../../types.js";
 import { chatHistories } from "../chat-history.js";
 import type { MessageHandlerContext } from "../context.js";
-
-// ============ 事件注入 ============
 
 function enqueueRecallSystemEvent(params: {
   core: PluginRuntime;
@@ -33,17 +30,11 @@ function enqueueRecallSystemEvent(params: {
   });
 }
 
-// ============ 处理器 ============
-
 /**
- * 处理群聊Message recall system callback（Group.CallbackAfterRecallMsg）。
+ * Handle group message recall callback (Group.CallbackAfterRecallMsg).
  *
- * 若被Recall消息仍在 `chatHistories` 中，说明尚未进入 AI 上下文，直接从本地历史删除即可；
- * 否则通过 `enqueueSystemEvent` 告知 AI 勿再引用该条内容。
- *
- * @param ctx - Message processing context（含 core、账号、Route resolution等）
- * @param msg - 入站Message body，需含 `group_code`、`recall_msg_seq_list` 等Recall字段
- * @returns 无
+ * If the recalled message is still in chatHistories, it hasn't entered AI context yet —
+ * delete it locally. Otherwise inject a system event to inform AI.
  */
 export function handleGroupRecall(ctx: MessageHandlerContext, msg: YuanbaoInboundMessage): void {
   const { core, account } = ctx;
@@ -75,7 +66,7 @@ export function handleGroupRecall(ctx: MessageHandlerContext, msg: YuanbaoInboun
 
     if (history && idx !== -1) {
       history.splice(idx, 1);
-      log.info(`[recall] 群消息 ${messageId} 已从 history 删除（未被 AI 消费）`, { groupCode });
+      log.info(`[recall] group message ${messageId} removed from history (not consumed by AI)`, { groupCode });
     } else {
       log.info(`[recall] group message ${messageId} not in history, injecting system event`, {
         groupCode,
@@ -92,20 +83,16 @@ export function handleGroupRecall(ctx: MessageHandlerContext, msg: YuanbaoInboun
 }
 
 /**
- * 处理单聊（C2C）Message recall system callback（C2C.CallbackAfterRecallMsg）。
+ * Handle C2C message recall callback (C2C.CallbackAfterRecallMsg).
  *
- * 私聊侧无与群聊同构的 `chatHistories`，统一注入系统事件，让会话层放弃对已Recall消息的依赖。
- *
- * @param ctx - Message processing context（含 core、账号、Route resolution等）
- * @param msg - 入站Message body，Recall目标 ID 来自 `msg_id` / `msg_seq` 等字段
- * @returns 无
+ * C2C has no chatHistories like group chat; always inject a system event.
  */
 export function handleC2CRecall(ctx: MessageHandlerContext, msg: YuanbaoInboundMessage): void {
   const { core, account } = ctx;
   const log = createLog("recall", ctx.log);
   const fromAccount = msg.from_account?.trim() || "unknown";
 
-  // 私聊的在msgId里
+  // C2C recall target is in msgId
   const seqList = msg.msg_id ? [{ msg_id: msg.msg_id, msg_seq: msg.msg_seq }] : [];
   if (!seqList || seqList.length === 0) {
     log.warn("[recall] c2c msg_seq_list empty, skipping");

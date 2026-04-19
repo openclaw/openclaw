@@ -1,12 +1,12 @@
 /**
- * Actions 适配层 — 统一入口
+ * Actions adapter layer — unified entry.
  *
- * 将 OpenClaw Agent 发出的 Action 请求路由到对应的处理器。
- * 本文件只负责组装并导出 yuanbaoMessageActions 适配对象。
+ * Routes Action requests from OpenClaw Agent to corresponding handlers.
+ * This file only assembles and exports the yuanbaoMessageActions adapter object.
  *
  * Actual processing logic is in:
- * - handler.ts：action 分发与执行（直接调用 createMessageSender，不走 pipeline）
- * - resolve-target.ts：目标解析与类型定义
+ * - handler.ts: action dispatch & execution (calls createMessageSender directly, bypasses pipeline)
+ * - resolve-target.ts: target resolution & type definitions
  */
 
 import { handleAction } from "./handler.js";
@@ -16,34 +16,33 @@ export { handleAction };
 const SUPPORTED_ACTIONS = ["sticker-search", "sticker", "react", "send"];
 
 /**
- * Description所有支持的 Action（供 Agent 选择工具时参考）。
+ * Describe all supported Actions (for Agent tool selection reference).
  */
 function describeMessageTool() {
   return { actions: SUPPORTED_ACTIONS };
 }
 
 /**
- * 兼容旧版 API
- * @returns 支持的 Action 列表
+ * Legacy API compat.
  */
 function listActions() {
   return SUPPORTED_ACTIONS;
 }
 
-// ============ 导出适配对象 ============
+// ============ Export adapter object ============
 
 /**
- * yuanbaoMessageActions — 注册到 yuanbaoPlugin.actions 的适配对象。
+ * yuanbaoMessageActions — adapter object registered to yuanbaoPlugin.actions.
  *
- * 由于 openclaw-plugin-sdk.d.ts 将 ChannelPlugin 和 ChannelMessageActionAdapter 声明为 any，
- * 此处使用 Record 兼容类型，实际Runtime OpenClaw 框架会按约定调用各方法。
+ * Since openclaw-plugin-sdk.d.ts declares ChannelPlugin and ChannelMessageActionAdapter as any,
+ * Record compat type is used here; at runtime OpenClaw framework calls methods by convention.
  */
 export const yuanbaoMessageActions: Record<string, unknown> = {
   describeMessageTool,
   handleAction,
   listActions,
   supportsAction: ({ action }: { action: string }) => SUPPORTED_ACTIONS.includes(action),
-  // 元宝频道的 send/sticker 等 action 不需要 trusted sender 身份校验，
-  // 显式返回 false 避免框架 dispatchChannelMessageAction 拦截。
+  // Yuanbao channel send/sticker actions don't require trusted sender identity verification;
+  // explicitly return false to prevent framework dispatchChannelMessageAction from blocking.
   requiresTrustedRequesterSender: () => false,
 };

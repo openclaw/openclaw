@@ -45,20 +45,10 @@ async function readConfigValue(openclawBin: string, key: string): Promise<string
 }
 
 /**
- * 在 `/tmp/openclaw` 中选择最近写入的日志文件，作为配置项缺失时的兜底输入。
+ * Select the most recently written log file in `/tmp/openclaw` as fallback input when config is missing.
  *
- * 该策略优先保证“可用性”：即使 `openclaw config get logging.file` 不存在，也能尽量命中
- * The log file currently being written to by the current session, to avoid direct export flow failure.
- *
- * @returns 最新候选日志文件绝对路径；若Directory不存在或没有匹配文件则返回 `undefined`。
- * @throws 仅在文件系统访问出现不可恢复异常时抛出。
- * @example
- * ```typescript
- * const fallbackLogFile = await resolveLatestTmpOpenclawLog();
- * if (!fallbackLogFile) {
- *   // 继续走当天Default路径兜底
- * }
- * ```
+ * Prioritizes availability: even if `openclaw config get logging.file` doesn't exist,
+ * tries to hit the log file currently being written to by the current session.
  */
 async function resolveLatestTmpOpenclawLog(): Promise<string | undefined> {
   const logDir = "/tmp/openclaw";
@@ -135,22 +125,10 @@ async function tailLinesFromFile(
 }
 
 /**
- * 通过 OpenClaw Runtime 的 `logs.tail` 能力Extract日志，优先于文件直读路径。
+ * Extract logs via OpenClaw Runtime's `logs.tail` capability, preferred over direct file reading.
  *
- * 选择该路径是为了减少对宿主日志文件布局的耦合：当Runtime暴露标准 RPC 时，
- * The host can uniformly handle rolling files, cursors, and truncation semantics; falls back to tail-read if capability is missing.
- *
- * @param params - 已归一化的Extract参数。
- * @param params.limit - 需要返回的最大日志行数。
- * @returns 成功时返回结构化Extract结果；Runtime不支持时返回 `null`。
- * @throws 当Runtime存在 `logs.tail` 能力但调用失败时抛出最后一次错误。
- * @example
- * ```typescript
- * const result = await extractViaLogsTail({ limit: 500, uploadCos: true, all: false });
- * if (!result) {
- *   // Runtime未提供 logs.tail，外层会自动降级
- * }
- * ```
+ * This path reduces coupling to host log file layout: when Runtime exposes standard RPC,
+ * the host can uniformly handle rolling files, cursors, and truncation semantics; falls back to tail-read if capability is missing.
  */
 async function extractViaLogsTail(params: ParsedCommandArgs): Promise<ExtractResult | null> {
   const runtime = getYuanbaoRuntime() as {

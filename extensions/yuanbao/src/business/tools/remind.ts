@@ -1,10 +1,10 @@
 /**
- * 定时提醒引导工具（yuanbao_remind）
+ * Scheduled reminder guidance tool (yuanbao_remind).
  *
  * Goal:
- * - 用简单参数（action/content/time）收敛 LLM 调用入口
- * - 统一产出规范的 cron 工具参数（cronParams）
- * - 引导模型先调用本工具，再立即调用 cron
+ * - Converge LLM call entry with simple params (action/content/time)
+ * - Produce standardized cron tool params (cronParams)
+ * - Guide model to call this tool first, then immediately call cron
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
@@ -12,29 +12,29 @@ import { type OpenClawPluginToolContext, json } from "../utils/utils.js";
 
 interface RemindParams {
   action: "add" | "list" | "remove";
-  /** 语义类型：remind=提醒，task=任务；Default remind */
+  /** Semantic type: remind=reminder, task=task; default remind */
   intent?: "remind" | "task";
-  /** 提醒内容（action=add 时必填） */
+  /** Reminder content (required when action=add) */
   content?: string;
   /**
-   * 时间Description（action=add 时必填）
-   * - 一次性：5m / 1h30m / 2d
-   * - 周期性：cron，如 0 8 * * *
+   * Time description (required when action=add)
+   * - One-time: 5m / 1h30m / 2d
+   * - Recurring: cron, e.g. 0 8 * * *
    */
   time?: string;
-  /** 周期提醒时区，Default Asia/Shanghai */
+  /** Timezone for recurring reminders, default Asia/Shanghai */
   timezone?: string;
-  /** 任务名（可选） */
+  /** Job name (optional) */
   name?: string;
-  /** action=remove 时必填 */
+  /** Required when action=remove */
   jobId?: string;
 }
 
 // ============================================================================
-// 提示词常量
+// Prompt constants
 // ============================================================================
 
-// 参数Extract提示词
+// Parameter extraction prompt
 const RemindSchema = {
   type: "object",
   properties: {
@@ -82,34 +82,34 @@ const RemindSchema = {
   required: ["action"],
 } as const;
 
-/** task 场景：定时执行任务，不限制回复长度 */
+/** Task scenario: execute scheduled task, no reply length limit */
 const TASK_AGENT_PROMPT_TEMPLATE = (content: string) =>
   `你是一个任务执行助手。请在当前时刻完成以下任务：${content}。` +
   "要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 " +
   "(3) 直接执行任务并输出可直接给用户的结果 (4) 此时是在执行任务，不要再新建定时任务";
 
-/** remind 场景：暖心提醒，限制简短回复 */
+/** Remind scenario: warm reminder, limited to short reply */
 const REMIND_AGENT_PROMPT_TEMPLATE = (content: string) =>
   `你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：${content}。` +
   "要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 " +
   "(3) 直接输出一条暖心的提醒消息，不要携带其他和该提醒无关的内容 (4) 可以加一句简短的关怀话语 " +
   "(5) 控制在2-3句话以内 (6) 此时是在执行任务，不要再新建定时任务";
 
-/** 工具级Description：指导模型优先使用本工具并以 cron 结果为准 */
+/** Tool-level description: guide model to prioritize this tool and use cron result as source of truth */
 const YUANBAO_REMIND_TOOL_DESCRIPTION = [
   "用于规范化创建/查询/删除元宝定时任务，并生成可直接提交给 cron 工具的参数。",
   "当用户提出提醒、闹钟、定时、X分钟/小时后、每天/每周/每月/每年X点等需求时，或需要查询/删除定时任务/提醒/闹钟时，必须优先调用本工具，",
   "并在 cron 执行后核对返回结果，只能在确认成功后再告知用户已设置。",
 ].join("\n");
 
-/** cron 调用通用执行约束 */
+/** Common execution constraint for cron calls */
 const CRON_COMMON_REQUIREMENT = [
   "请立即调用 cron 工具执行以下参数，并严格以 cron 返回结果为准。",
   "未执行或执行失败时，不得回复“已设置成功”。",
   "若执行失败，请明确告知用户执行失败并说明失败原因。",
 ].join("\n");
 
-/** add/create 场景指令 */
+/** add/create scenario instruction */
 const CRON_ADD_REQUIREMENT = [
   CRON_COMMON_REQUIREMENT,
   "仅在确认成功后，才向用户确认定时任务已创建。",
@@ -126,7 +126,7 @@ const CRON_ADD_REQUIREMENT = [
   ' --tz <iana>: Timezone for cron expressions (IANA) (default: "")',
 ].join("\n");
 
-/** list 场景指令 */
+/** list scenario instruction */
 const CRON_LIST_REQUIREMENT = [
   CRON_COMMON_REQUIREMENT,
   "这是查询定时任务列表场景: 调用 openclaw cron list --json",
@@ -135,7 +135,7 @@ const CRON_LIST_REQUIREMENT = [
   "如过滤后结果为空，请明确告知“当前会话没有定时任务”。",
 ].join("\n");
 
-/** remove 场景指令 */
+/** remove scenario instruction */
 const CRON_REMOVE_REQUIREMENT = [
   CRON_COMMON_REQUIREMENT,
   "这是删除任务场景: 调用 cron remove 后仅在确认成功时回复已删除；失败时必须返回失败原因。",
@@ -143,7 +143,7 @@ const CRON_REMOVE_REQUIREMENT = [
   "用法: openclaw cron rm|remove <jobId>",
 ].join("\n");
 
-// 解析相对时间
+// Parse relative time
 function parseRelativeTime(raw: string): number | null {
   const s = raw.trim().toLowerCase();
   if (!s) {
@@ -184,13 +184,13 @@ function parseRelativeTime(raw: string): number | null {
   return matched ? Math.round(totalMs) : null;
 }
 
-// 判断是否为 cron 表达式
+// Check if string is a cron expression
 function isCronExpression(timeText: string): boolean {
   const parts = timeText.trim().split(/\s+/);
   return parts.length >= 3 && parts.length <= 6;
 }
 
-// 格式化延迟时间
+// Format delay duration
 function formatDelay(ms: number): string {
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) {
@@ -210,9 +210,9 @@ function formatDelay(ms: number): string {
   return `${hours}小时${remains}分钟`;
 }
 
-// 从会话中解析投递目标
-// 如果会话中包含 group:groupCode 或 direct:userId，则返回对应的投递目标
-// 否则返回 null
+// Resolve delivery target from session
+// If session contains group:groupCode or direct:userId, return the corresponding target
+// Otherwise return null
 function resolveToFromSession(ctx: OpenClawPluginToolContext): string | null {
   const sessionKey = ctx.sessionKey ?? "";
   const groupPrefix = "yuanbao:group:";
@@ -228,7 +228,7 @@ function resolveToFromSession(ctx: OpenClawPluginToolContext): string | null {
 
   const directIdx = sessionKey.indexOf(directPrefix);
   if (directIdx !== -1) {
-    // 这里 userID 不能从 sessionKey 中解析，因为 sessionKey 中会把 userID 转为全小写，而 userID 是大小写混合的
+    // Cannot parse userID from sessionKey because sessionKey lowercases it, while userID is mixed-case
     const userId = ctx.requesterSenderId;
     if (userId) {
       return `direct:${userId}`;
@@ -238,7 +238,7 @@ function resolveToFromSession(ctx: OpenClawPluginToolContext): string | null {
   return null;
 }
 
-// 构建 SubAgent 执行提示词
+// Build SubAgent execution prompt
 function buildReminderPrompt(content: string, intent: "remind" | "task"): string {
   if (intent === "task") {
     return TASK_AGENT_PROMPT_TEMPLATE(content);
@@ -246,7 +246,7 @@ function buildReminderPrompt(content: string, intent: "remind" | "task"): string
   return REMIND_AGENT_PROMPT_TEMPLATE(content);
 }
 
-// 生成任务名称
+// Generate job name
 function generateJobName(content: string, intent: "remind" | "task"): string {
   const text = content.trim();
   const short = text.length > 20 ? `${text.slice(0, 20)}...` : text;
@@ -254,16 +254,10 @@ function generateJobName(content: string, intent: "remind" | "task"): string {
 }
 
 /**
- * 构建一次性（相对时间）提醒任务的 cron 参数。
+ * Build cron params for a one-time (relative time) reminder task.
  *
- * 该函数统一封装一次性任务的调度策略（`kind=at`、执行后删除），
- * 避免调用方遗漏关键字段导致任务无法触达目标用户。
- *
- * @param params - 经过上层校验后的提醒参数，至少包含 `content`
- * @param delayMs - 相对当前时间的延迟毫秒数
- * @param to - 投递目标，形如 `direct:<userId>` 或 `group:<groupCode>`
- * @param intent - 语义类型，决定提示词与Default任务名（提醒/任务）
- * @returns 可直接传递给 cron 工具的 `action=add` 参数对象
+ * Encapsulates one-time task scheduling strategy (kind=at, delete after run)
+ * to prevent callers from missing critical fields.
  */
 function buildOnceCronParams(
   params: RemindParams,
@@ -286,15 +280,10 @@ function buildOnceCronParams(
 }
 
 /**
- * 构建周期性（cron 表达式）提醒任务的 cron 参数。
+ * Build cron params for a recurring (cron expression) reminder task.
  *
- * Building separately from one-time tasks ensures that key recurring task fields like timezone and expression are always complete,
- * 降低 LLM 组装参数时出现歧义或漏参的概率。
- *
- * @param params - 经过上层校验后的提醒参数，至少包含 `content` 与 `time`
- * @param to - 投递目标，形如 `direct:<userId>` 或 `group:<groupCode>`
- * @param intent - 语义类型，决定提示词与Default任务名（提醒/任务）
- * @returns 可直接传递给 cron 工具的 `action=add` 参数对象
+ * Separated from one-time tasks to ensure recurring-specific fields (timezone, expression)
+ * are always complete, reducing LLM parameter assembly ambiguity.
  */
 function buildCronParams(params: RemindParams, to: string, intent: "remind" | "task") {
   const content = params.content!;
@@ -312,22 +301,12 @@ function buildCronParams(params: RemindParams, to: string, intent: "remind" | "t
 }
 
 /**
- * 创建 `yuanbao_remind` 工具定义。
+ * Create the `yuanbao_remind` tool definition.
  *
- * 该工具的职责是把自然语言中的“提醒/任务”需求标准化为 cron 可执行参数，
- * 让模型先完成结构化调度再回复用户，从而减少“口头答应但未真正创建任务”的失败路径。
- * 内部 execute 回调会统一处理 add/list/remove 三类分支，把输入校验、目标解析、
- * 参数构建与错误提示集中在一处，确保输出始终是可直接执行的 cron 参数。
- *
- * @param ctx - OpenClaw 工具上下文，用于读取会话键与消息通道
- * @returns 在元宝通道下返回工具定义；非元宝通道返回 `null`
- * @example
- * ```ts
- * const tool = createYuanbaoRemindTool(ctx);
- * if (tool) {
- *   // 交给 OpenClaw 注册并在对话中调度
- * }
- * ```
+ * Standardizes natural language "reminder/task" requests into cron-executable params,
+ * guiding the model to complete structured scheduling before replying to the user.
+ * The execute callback handles add/list/remove branches with centralized validation,
+ * target resolution, param building, and error messaging.
  */
 function createYuanbaoRemindTool(ctx: OpenClawPluginToolContext) {
   const isYuanbaoChannel = ctx.messageChannel === "yuanbao";
@@ -336,7 +315,7 @@ function createYuanbaoRemindTool(ctx: OpenClawPluginToolContext) {
     return null;
   }
 
-  // 仅在元宝通道下启用
+  // Only enable in yuanbao channel
   return {
     name: "yuanbao_remind",
     label: "元宝定时任务",
@@ -430,17 +409,9 @@ function createYuanbaoRemindTool(ctx: OpenClawPluginToolContext) {
 }
 
 /**
- * 注册提醒相关工具到 OpenClaw 插件 API。
+ * Register reminder-related tools to the OpenClaw plugin API.
  *
- * 通过集中注册入口保证工具在插件生命周期内稳定启用，
- * 并避免调用方遗漏 `yuanbao_remind` 导致提醒链路不可用。
- *
- * @param api - OpenClaw 插件 API 实例
- * @returns 无返回值
- * @example
- * ```ts
- * registerRemindTools(api);
- * ```
+ * Centralized registration ensures the tool is reliably enabled during the plugin lifecycle.
  */
 export function registerRemindTools(api: OpenClawPluginApi): void {
   api.registerTool(createYuanbaoRemindTool, { optional: false });

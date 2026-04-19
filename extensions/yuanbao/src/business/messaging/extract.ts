@@ -1,28 +1,22 @@
 /**
- * Message format conversion
- *
- * 从腾讯 IM MsgBody 中Extract文本、Media等结构化信息。
- * 具体的Message type处理逻辑已拆分到 handlers/ Directory下的各个 Handler 中。
+ * Message format conversion: extract text, media and structured info from Tencent IM MsgBody.
+ * Specific message type handling is split into handlers/ directory.
  */
 
 import type { MessageHandlerContext } from "./context.js";
 import { getHandler } from "./handlers/index.js";
 import type { MsgBodyItemType, ExtractTextFromMsgBodyResult } from "./handlers/types.js";
 
-// 重新导出类型，保持向后兼容
+// Re-export types for backward compatibility
 export type { ExtractTextFromMsgBodyResult } from "./handlers/types.js";
 
-// ============ 从 MsgBody Extract文本内容 ============
+// ============ Extract text content from MsgBody ============
 
 /**
- * 从Message body中Extract文本内容
+ * Extract text content from message body.
  *
- * 将 MsgBody 中的各类元素通过对应的 Handler 转换为可读文本：
- * TIMTextElem Extract原文，其他类型用占位符表示（如 [image]、[voice]）
- *
- * @param ctx - Message processing context
- * @param msgBody - Message body元素数组
- * @returns Extract并拼接后的文本内容
+ * Converts various MsgBody elements to readable text via corresponding handlers:
+ * TIMTextElem extracts raw text, other types use placeholders (e.g. [image], [voice]).
  */
 export function extractTextFromMsgBody(
   ctx: MessageHandlerContext,
@@ -50,7 +44,7 @@ export function extractTextFromMsgBody(
         texts.push(text);
       }
     }
-    // 未注册的Message type静默忽略
+    // Silently ignore unregistered message types
   }
 
   resData.rawBody = texts.join("\n");

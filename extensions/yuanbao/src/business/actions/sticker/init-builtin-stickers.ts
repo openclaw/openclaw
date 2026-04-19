@@ -1,8 +1,8 @@
 /**
- * Write built-in stickers to cache on startup
+ * Write built-in stickers to cache on startup.
  *
- * 在 index.ts register() 中调用一次即可。
- * builtin 来源的条目仅在尚未缓存时写入，不会覆盖用户 received 数据。
+ * Called once in index.ts register().
+ * Builtin entries are only written when not yet cached; they won't overwrite user received data.
  */
 
 import builtinStickers from "./builtin-stickers.json" with { type: "json" };
@@ -11,10 +11,7 @@ import type { BuiltinStickerJsonEntry } from "./sticker-types.js";
 
 /**
  * Write the built-in sticker list to local cache on process startup.
- *
- * 通过 `cacheStickers` 批量写入：`source` 为 builtin 的条目不会覆盖已存在的 received 数据。
- *
- * @returns 无；副作用为更新磁盘上的 `sticker-cache.json`
+ * Uses `cacheStickers` for batch write; builtin-sourced entries won't overwrite existing received data.
  */
 export function initBuiltinStickers(): void {
   const now = new Date().toISOString();

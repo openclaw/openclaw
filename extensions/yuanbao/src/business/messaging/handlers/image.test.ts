@@ -1,7 +1,7 @@
 /**
- * messaging/handlers/image.ts 单元测试
+ * messaging/handlers/image.ts unit tests.
  *
- * 测试范围：imageHandler 的 extract 和 buildMsgBody
+ * Test scope: imageHandler extract and buildMsgBody
  */
 
 import assert from "node:assert/strict";
@@ -26,7 +26,7 @@ function makeResData(): ExtractTextFromMsgBodyResult {
 
 // ============ extract ============
 
-void test("imageHandler extract 提取图片 URL 到媒体列表", () => {
+void test("imageHandler extract extracts image URL to media list", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -43,12 +43,12 @@ void test("imageHandler extract 提取图片 URL 到媒体列表", () => {
   const result = imageHandler.extract(ctx, elem, resData);
   assert.equal(result, "[image1]");
   assert.equal(resData.medias.length, 1);
-  // 优先取中间图（index 1）
+  // Prefers medium image (index 1)
   assert.equal(resData.medias[0].url, "https://example.com/medium.png");
   assert.equal(resData.medias[0].mediaType, "image");
 });
 
-void test("imageHandler extract 无 URL 返回 undefined", () => {
+void test("imageHandler extract returns undefined when no URL", () => {
   const ctx = makeMockCtx();
   const resData = makeResData();
 
@@ -63,7 +63,7 @@ void test("imageHandler extract 无 URL 返回 undefined", () => {
 
 // ============ buildMsgBody ============
 
-void test("imageHandler buildMsgBody 构造图片消息", () => {
+void test("imageHandler buildMsgBody constructs image message", () => {
   const result = imageHandler.buildMsgBody!({ url: "https://example.com/img.png" });
   assert.equal(result.length, 1);
   assert.equal(result[0].msg_type, "TIMImageElem");

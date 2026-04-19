@@ -5,103 +5,9 @@ import type { YuanbaoConfig } from "./types.js";
 
 const channel = "yuanbao" as const;
 
-// function setYuanbaoDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-//   const allowFrom =
-//     dmPolicy === "open"
-//       ? addWildcardAllowFrom(cfg.channels?.yuanbao?.dm?.allowFrom)?.map((entry: any) => String(entry))
-//       : undefined;
-//   return {
-//     ...cfg,
-//     channels: {
-//       ...cfg.channels,
-//       yuanbao: {
-//         ...cfg.channels?.yuanbao,
-//         dm: {
-//           ...cfg.channels?.yuanbao?.dm,
-//           policy: dmPolicy,
-//           ...(allowFrom ? { allowFrom } : {}),
-//         },
-//       },
-//     },
-//   };
-// }
-
-// function setYuanbaoAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
-//   return {
-//     ...cfg,
-//     channels: {
-//       ...cfg.channels,
-//       yuanbao: {
-//         ...cfg.channels?.yuanbao,
-//         dm: {
-//           ...cfg.channels?.yuanbao?.dm,
-//           allowFrom,
-//         },
-//       },
-//     },
-//   };
-// }
-
-// function parseAllowFromInput(raw: string): string[] {
-//   return raw
-//     .split(/[\n,;]+/g)
-//     .map((entry) => entry.trim())
-//     .filter(Boolean);
-// }
-
-/**
- * 交互式引导用户输入 allowFrom 白名单
- *
- * 展示提示信息后循环等待用户输入，支持多 ID 逗号分隔，
- * Automatically merges and deduplicates existing allowlist entries.
- *
- * @param params - 包含当前配置和交互式提示器
- * @param params.cfg - OpenClaw 全局配置
- * @param params.prompter - 交互式提示器
- * @returns 更新 allowFrom 后的Configuration object
- */
-// async function promptYuanbaoAllowFrom(params: {
-//   cfg: OpenClawConfig;
-//   prompter: WizardPrompter;
-// }): Promise<OpenClawConfig> {
-//   const existing = (params.cfg.channels?.yuanbao as YuanbaoConfig | undefined)?.dm?.allowFrom ?? [];
-//   await params.prompter.note(
-//     [
-//       "Allowlist YuanBao Bot DMs by user account ID.",
-//       "You can find user account in the YuanBao Bot console.",
-//       "Examples:",
-//       "- user_001",
-//       "- admin_test",
-//     ].join("\n"),
-//     "YuanBao Bot allowlist",
-//   );
-
-//   while (true) {
-//     const entry = await params.prompter.text({
-//       message: "YuanBao Bot allowFrom (user account IDs)",
-//       placeholder: "user_001, user_002",
-//       initialValue: existing[0] ? String(existing[0]) : undefined,
-//       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-//     });
-//     const parts = parseAllowFromInput(String(entry));
-//     if (parts.length === 0) {
-//       await params.prompter.note("Enter at least one user.", "YuanBao Bot allowlist");
-//       continue;
-//     }
-
-//     const unique = [
-//       ...new Set([
-//         ...existing.map((v: string | number) => String(v).trim()).filter(Boolean),
-//         ...parts,
-//       ]),
-//     ];
-//     return setYuanbaoAllowFrom(params.cfg, unique);
-//   }
-// }
-
 /**
  * Display Yuanbao credential acquisition guide help info
- * @param prompter - 交互式提示器
+ * @param prompter - Interactive prompter
  */
 async function noteYuanbaoCredentialHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
@@ -114,22 +20,11 @@ async function noteYuanbaoCredentialHelp(prompter: WizardPrompter): Promise<void
   );
 }
 
-// const dmPolicy: ChannelOnboardingDmPolicy = {
-//   label: "YuanBao Bot",
-//   channel,
-//   policyKey: "channels.yuanbao.dm.policy",
-//   allowFromKey: "channels.yuanbao.dm.allowFrom",
-//   getCurrent: (cfg) =>
-//     (cfg.channels?.yuanbao as YuanbaoConfig | undefined)?.dm?.policy ?? "open",
-//   setPolicy: (cfg, policy) => setYuanbaoDmPolicy(cfg, policy),
-//   promptAllowFrom: promptYuanbaoAllowFrom,
-// };
-
 /**
- * 元宝渠道的 Onboarding 适配器
+ * Yuanbao channel onboarding adapter.
  *
- * Provides channel status check, credential configuration guidance, disable operations, etc.
- * 用于 OpenClaw CLI 的交互式初始化流程。
+ * Provides channel status check, credential configuration guidance, and disable operations
+ * for the OpenClaw CLI interactive setup flow.
  */
 export const yuanbaoOnboardingAdapter = {
   channel,
@@ -209,19 +104,17 @@ export const yuanbaoOnboardingAdapter = {
             enabled: true,
             appKey,
             appSecret,
-            // dm: { policy: 'open' as const, allowFrom: ['*'] },
           },
         },
       };
     }
 
-    // 保留已有配置时，确保 enabled 为 true 且Default值存在
+    // Ensure enabled=true when keeping existing config
     next = {
       ...next,
       channels: {
         ...next.channels,
         yuanbao: {
-          // dm: { policy: 'open' as const, allowFrom: ['*'] },
           ...next.channels?.yuanbao,
           enabled: true,
         },

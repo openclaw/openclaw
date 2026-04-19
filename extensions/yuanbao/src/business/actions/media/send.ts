@@ -1,10 +1,10 @@
 /**
- * Media消息发送
+ * Media message sending.
  *
- * 从 create-sender 中拆出的Media发送逻辑：
- * - 下载并上传Media到 COS
- * - 根据 MIME 类型构建Image或文件Message body
- * - 发送失败时降级为文本链接
+ * Extracted from create-sender:
+ * - Downloads and uploads media to COS
+ * - Builds image or file message body based on MIME type
+ * - Falls back to text link on send failure
  */
 
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -20,26 +20,22 @@ import {
 import { deliver, type DeliverTarget } from "../deliver.js";
 
 export interface SendMediaParams {
-  /** Media资源 URL */
+  /** Media resource URL */
   mediaUrl: string;
-  /** 发送失败时的降级文本 */
+  /** Fallback text when send fails */
   fallbackText?: string;
-  /** OpenClaw PluginRuntime 实例 */
+  /** OpenClaw PluginRuntime instance */
   core: PluginRuntime;
-  /** 投递目标上下文（account 等均从此获取） */
+  /** Delivery target context (account, etc.) */
   dt: DeliverTarget;
-  /** 文本降级发送回调（Media发送失败时使用） */
+  /** Text fallback send callback (used when media send fails) */
   sendTextFallback: (text: string) => Promise<SendResult>;
 }
 
 /**
- * Send media message
- *
- * 下载并上传Media到 COS，根据 MIME 类型构建Image或文件Message body。
- * Falls back to text link on send failure.
- *
- * @param params - 发送参数
- * @returns 发送结果
+ * Send media message.
+ * Downloads and uploads media to COS, builds image or file message body based on MIME type.
+ * Falls back to text link on failure.
  */
 export async function sendMedia(params: SendMediaParams): Promise<SendResult> {
   const { mediaUrl, fallbackText, core, dt, sendTextFallback } = params;
@@ -64,7 +60,7 @@ export async function sendMedia(params: SendMediaParams): Promise<SendResult> {
         });
     return deliver(dt, msgBody as YuanbaoMsgBodyElement[]);
   } catch (err) {
-    // Media发送失败，降级为文本链接
+    // Media send failed, falling back to text link
     log.error(
       `media send failed, falling back to text: ${err instanceof Error ? err.message : String(err)}`,
     );

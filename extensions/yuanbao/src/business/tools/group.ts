@@ -1,10 +1,10 @@
 /**
- * 群信息相关 Tools
+ * Group info tools.
  *
  * Contains:
- * - query_group_info：查询当前群的基本信息（Group name、群主、Group member count）
+ * - query_group_info: Query basic info of the current group (name, owner, member count)
  *
- * 通过 queryGroupInfo 接口（WS 协议）获取群信息。
+ * Fetches group info via the queryGroupInfo interface (WS protocol).
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
@@ -16,15 +16,9 @@ import { extractGroupCode, type OpenClawPluginToolContext, json } from "../utils
 // ---------------------------------------------------------------------------
 
 /**
- * 创建 query_group_info 工具定义。
+ * Create the query_group_info tool definition.
  *
- * 调用 queryGroupInfo 接口获取群的基本信息，包括：
- * - Group name
- * - 群主（userId + 昵称）
- * - Group member count
- *
- * @param ctx - 工具上下文
- * @returns 工具定义对象，含 name / description / parameters / execute
+ * Queries basic group info including name, owner (userId + nickname), and member count.
  */
 function createQueryGroupInfoTool(ctx: OpenClawPluginToolContext) {
   const sessionKey: string = ctx.sessionKey ?? "";
@@ -44,19 +38,14 @@ function createQueryGroupInfoTool(ctx: OpenClawPluginToolContext) {
     /**
      * Execute group info query.
      *
-     * Query logic:
-     * 1. 无 groupCode → 告知模型无群上下文
-     * 2. 调用 queryGroupInfo 接口获取群基本信息
-     *
-     * @param _toolCallId - 工具调用 ID（框架传入，当前未使用）
-     * @param _params - 工具参数（当前无参数）
-     * @returns 包含查询结果的 JSON 响应
+     * 1. No groupCode -> inform model no group context
+     * 2. Call queryGroupInfo to get basic group info
      */
     async execute(_toolCallId: string, _params: Record<string, unknown>) {
-      // 从 sessionKey 中Extract groupCode
+      // Extract groupCode from sessionKey
       const groupCode = extractGroupCode(sessionKey);
 
-      // 1. 无 groupCode → 无法定位群
+      // 1. No groupCode -> cannot locate group
       if (!groupCode) {
         return json({
           success: false,
@@ -64,10 +53,10 @@ function createQueryGroupInfoTool(ctx: OpenClawPluginToolContext) {
         });
       }
 
-      // 获取当前账号的 Member 实例
+      // Get Member instance for current account
       const memberInst = getMember(accountId);
 
-      // 2. 调用 queryGroupInfo 接口获取群信息
+      // 2. Call queryGroupInfo to get group info
       const groupInfo = await memberInst.queryGroupInfo(groupCode);
       if (!groupInfo) {
         return json({
@@ -94,16 +83,14 @@ function createQueryGroupInfoTool(ctx: OpenClawPluginToolContext) {
 }
 
 // ---------------------------------------------------------------------------
-// 注册入口
+// Registration entry
 // ---------------------------------------------------------------------------
 
 /**
  * Register all tools under the "group info" category.
  *
- * 当前Contains:
- * - query_group_info：查询群基本信息（始终可用）
- *
- * @param api - OpenClaw 插件 API
+ * Currently contains:
+ * - query_group_info: Query basic group info (always available)
  */
 export function registerGroupTools(api: OpenClawPluginApi): void {
   api.registerTool(createQueryGroupInfoTool, { optional: false });

@@ -1,16 +1,14 @@
 /**
- * 中间件 extract-content 单元测试
- *
- * 测试范围：消息内容提取
+ * Unit tests for extract-content middleware: message content extraction.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
-/** 可变的 extractTextFromMsgBody 返回值，每个测试可重新配置 */
+/** Mutable extractTextFromMsgBody return value, reconfigurable per test */
 let mockExtractResult = {
   rawBody: "",
   isAtBot: false,
@@ -19,7 +17,7 @@ let mockExtractResult = {
   linkUrls: [] as string[],
 };
 
-// 仅在第一个测试中注册 mock（后续测试复用同一 mock 实例）
+// Register mock only in the first test (subsequent tests reuse the same mock instance)
 let mockRegistered = false;
 
 function setupMocks(
@@ -49,9 +47,9 @@ function setupMocks(
   }
 }
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("extract-content: 提取 fromAccount 和 senderNickname", async (t) => {
+void test("extract-content: extracts fromAccount and senderNickname", async (t) => {
   setupMocks(t, { rawBody: "你好" });
   const { extractContent } = await import("./extract-content.js");
 
@@ -66,7 +64,7 @@ void test("extract-content: 提取 fromAccount 和 senderNickname", async (t) =>
   assert.equal(ctx.senderNickname, "张三");
 });
 
-void test("extract-content: 群聊场景提取 groupCode", async (t) => {
+void test("extract-content: group chat extracts groupCode", async (t) => {
   setupMocks(t, {
     rawBody: "群消息",
     isAtBot: true,
@@ -87,7 +85,7 @@ void test("extract-content: 群聊场景提取 groupCode", async (t) => {
   assert.equal(ctx.isAtBot, true);
 });
 
-void test("extract-content: C2C 场景 private_from_group_code 填充 groupCode", async (t) => {
+void test("extract-content: C2C private_from_group_code populates groupCode", async (t) => {
   setupMocks(t, { rawBody: "私聊消息" });
   const { extractContent } = await import("./extract-content.js");
 
@@ -102,7 +100,7 @@ void test("extract-content: C2C 场景 private_from_group_code 填充 groupCode"
   assert.equal(ctx.groupCode, "group-002");
 });
 
-void test("extract-content: fromAccount 为空时默认 unknown", async (t) => {
+void test("extract-content: fromAccount defaults to unknown when empty", async (t) => {
   setupMocks(t);
   const { extractContent } = await import("./extract-content.js");
 
@@ -116,7 +114,7 @@ void test("extract-content: fromAccount 为空时默认 unknown", async (t) => {
   assert.equal(ctx.fromAccount, "unknown");
 });
 
-void test("extract-content: 调用 next 继续管线", async (t) => {
+void test("extract-content: calls next to continue pipeline", async (t) => {
   setupMocks(t, { rawBody: "test" });
   const { extractContent } = await import("./extract-content.js");
 

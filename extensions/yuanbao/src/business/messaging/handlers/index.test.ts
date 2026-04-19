@@ -1,7 +1,7 @@
 /**
- * messaging/handlers/index.ts 单元测试
+ * messaging/handlers/index.ts unit tests.
  *
- * 测试范围：getHandler、getAllHandlers、buildMsgBody、prepareOutboundContent、buildOutboundMsgBody
+ * Test scope: getHandler, getAllHandlers, buildMsgBody, prepareOutboundContent, buildOutboundMsgBody
  */
 
 import assert from "node:assert/strict";
@@ -16,7 +16,7 @@ import {
 
 // ============ getHandler ============
 
-void test("getHandler 返回已注册的 handler", () => {
+void test("getHandler returns registered handler", () => {
   assert.ok(getHandler("TIMTextElem"));
   assert.ok(getHandler("TIMCustomElem"));
   assert.ok(getHandler("TIMImageElem"));
@@ -26,16 +26,16 @@ void test("getHandler 返回已注册的 handler", () => {
   assert.ok(getHandler("TIMFaceElem"));
 });
 
-void test("getHandler 未注册类型返回 undefined", () => {
+void test("getHandler returns undefined for unregistered type", () => {
   assert.equal(getHandler("TIMUnknownElem"), undefined);
   assert.equal(getHandler(""), undefined);
 });
 
 // ============ getAllHandlers ============
 
-void test("getAllHandlers 返回所有已注册 handler", () => {
+void test("getAllHandlers returns all registered handlers", () => {
   const handlers = getAllHandlers();
-  assert.ok(handlers.length >= 7, "至少应有 7 种消息类型 handler");
+  assert.ok(handlers.length >= 7, "should have at least 7 message type handlers");
 
   const types = new Set(handlers.map((h) => h.msgType));
   assert.ok(types.has("TIMTextElem"));
@@ -46,7 +46,7 @@ void test("getAllHandlers 返回所有已注册 handler", () => {
 
 // ============ buildMsgBody ============
 
-void test("buildMsgBody 通过 msgType 构造消息体", () => {
+void test("buildMsgBody constructs message body by msgType", () => {
   const result = buildMsgBody("TIMTextElem", { text: "hello" });
   assert.ok(result);
   assert.equal(result.length, 1);
@@ -54,20 +54,20 @@ void test("buildMsgBody 通过 msgType 构造消息体", () => {
   assert.equal(result[0].msg_content.text, "hello");
 });
 
-void test("buildMsgBody 未注册类型返回 undefined", () => {
+void test("buildMsgBody returns undefined for unregistered type", () => {
   assert.equal(buildMsgBody("TIMUnknownElem", {}), undefined);
 });
 
 // ============ prepareOutboundContent ============
 
-void test("prepareOutboundContent 纯文本", () => {
+void test("prepareOutboundContent plain text", () => {
   const items = prepareOutboundContent("hello world");
   assert.equal(items.length, 1);
   assert.equal(items[0].type, "text");
   assert.equal((items[0] as { type: "text"; text: string }).text, "hello world");
 });
 
-void test("prepareOutboundContent 空文本返回空数组", () => {
+void test("prepareOutboundContent empty text returns empty array", () => {
   assert.deepEqual(prepareOutboundContent(""), []);
   assert.deepEqual(prepareOutboundContent(null as unknown as string), []);
   assert.deepEqual(prepareOutboundContent(undefined as unknown as string), []);
@@ -75,7 +75,7 @@ void test("prepareOutboundContent 空文本返回空数组", () => {
 
 // ============ buildOutboundMsgBody ============
 
-void test("buildOutboundMsgBody 将内容项转换为 MsgBody", () => {
+void test("buildOutboundMsgBody converts content items to MsgBody", () => {
   const items = [
     { type: "text" as const, text: "hello" },
     { type: "text" as const, text: "world" },
@@ -88,7 +88,7 @@ void test("buildOutboundMsgBody 将内容项转换为 MsgBody", () => {
   assert.equal(msgBody[1].msg_content.text, "world");
 });
 
-void test("buildOutboundMsgBody 跳过未知类型", () => {
+void test("buildOutboundMsgBody skips unknown types", () => {
   const items = [
     { type: "text" as const, text: "hello" },
     { type: "unknown" as const, data: "skip me" } as any,

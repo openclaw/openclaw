@@ -1,14 +1,12 @@
 /**
- * 中间件 build-context 单元测试
- *
- * 测试范围：FinalizedMsgContext 构建、when 条件守卫、群聊历史上下文
+ * Unit tests for build-context middleware: FinalizedMsgContext construction and group history.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let mockRegistered = false;
 
@@ -29,7 +27,7 @@ function setupMocks(t: any) {
   }
 }
 
-/** 创建 build-context 专用的 mock ctx，预设所有必需字段 */
+/** Create build-context specific mock ctx with all required fields */
 function createBuildCtx(overrides: Record<string, any> = {}) {
   let _finalizedPayload: any = null;
   const ctx = createMockCtx({
@@ -63,9 +61,9 @@ function createBuildCtx(overrides: Record<string, any> = {}) {
   return { ctx, getFinalizedPayload: () => _finalizedPayload };
 }
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("build-context: 前置中间件未就绪 → 终止管线", async (t) => {
+void test("build-context: prerequisite middleware not ready -> abort pipeline", async (t) => {
   setupMocks(t);
   const { buildContext } = await import("./build-context.js");
 
@@ -78,11 +76,11 @@ void test("build-context: 前置中间件未就绪 → 终止管线", async (t) 
 
   await buildContext.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "前置中间件未就绪应终止管线");
+  assert.equal(wasCalled(), false, "should abort when prerequisites not ready");
   assert.equal(ctx.ctxPayload, undefined);
 });
 
-void test("build-context: C2C 场景 - 构建 ctxPayload", async (t) => {
+void test("build-context: C2C - constructs ctxPayload", async (t) => {
   setupMocks(t);
   const { buildContext } = await import("./build-context.js");
 
@@ -98,14 +96,14 @@ void test("build-context: C2C 场景 - 构建 ctxPayload", async (t) => {
 
   const payload = getFinalizedPayload();
   assert.equal(wasCalled(), true);
-  assert.ok(ctx.ctxPayload !== undefined, "ctxPayload 应被填充");
+  assert.ok(ctx.ctxPayload !== undefined, "ctxPayload should be populated");
   assert.equal(payload.SenderName, "张三");
   assert.equal(payload.SenderId, "user-001");
   assert.equal(payload.ChatType, "direct");
   assert.equal(payload.Provider, "yuanbao");
 });
 
-void test("build-context: 群聊场景 - ChatType 为 group", async (t) => {
+void test("build-context: group chat - ChatType is group", async (t) => {
   setupMocks(t);
   const { buildContext } = await import("./build-context.js");
 
@@ -126,7 +124,7 @@ void test("build-context: 群聊场景 - ChatType 为 group", async (t) => {
   assert.equal(payload.GroupSubject, "测试群");
 });
 
-void test("build-context: 有媒体时填充 MediaPaths", async (t) => {
+void test("build-context: populates MediaPaths when media present", async (t) => {
   setupMocks(t);
   const { buildContext } = await import("./build-context.js");
 
@@ -145,7 +143,7 @@ void test("build-context: 有媒体时填充 MediaPaths", async (t) => {
   assert.equal(payload.MediaPath, "/tmp/img1.jpg");
 });
 
-void test("build-context: senderNickname 为空时使用 fromAccount", async (t) => {
+void test("build-context: uses fromAccount when senderNickname is empty", async (t) => {
   setupMocks(t);
   const { buildContext } = await import("./build-context.js");
 

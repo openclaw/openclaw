@@ -1,13 +1,13 @@
 /**
- * 快捷命令注册表
+ * Slash command registry.
  *
- * 维护 Bot 单聊场景下可用的 /命令 列表。
- * 按协议拆分为 bot_commands（OpenClaw 内置）和 plugin_commands（插件提供）。
+ * Maintains the list of /commands available in Bot direct-message scenarios.
+ * Split by protocol into bot_commands (OpenClaw built-in) and plugin_commands (plugin-provided).
  *
- * - plugin_commands：从插件注册阶段动态收集（registerPluginCommand）
- * - bot_commands：通过 openclaw/plugin-sdk/command-auth 的 listChatCommands 动态获取
+ * - plugin_commands: dynamically collected during plugin registration (registerPluginCommand)
+ * - bot_commands: dynamically fetched via openclaw/plugin-sdk/command-auth's listChatCommands
  *
- * 使用方式：
+ * Usage:
  *   import { buildSyncCommandsPayload } from './commands/slash-commands/index.js';
  *   const payload = buildSyncCommandsPayload(config);
  *   await client.syncInformation(payload);
@@ -17,14 +17,14 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getPluginVersion, getOpenclawVersion } from "../../../infra/env.js";
 import { createLog } from "../../../logger.js";
 
-// ============ 动态加载 command-auth（兼容旧版 OpenClaw） ============
+// ============ Dynamic loading of command-auth (compat with older OpenClaw) ============
 
 /**
- * openclaw/plugin-sdk/command-auth 在较新版本（>= 2026.4）才可用。
- * 旧版 OpenClaw（如 2026.3.x）没有这个模块，静态 import 会导致插件加载失败。
- * 因此改为运行时 import() 动态加载，失败时降级返回兜底列表。
+ * openclaw/plugin-sdk/command-auth is only available in newer versions (>= 2026.4).
+ * Older OpenClaw (e.g. 2026.3.x) lacks this module; static import would cause plugin load failure.
+ * Therefore use runtime import() for dynamic loading, falling back to default list on failure.
  *
- * 注意：项目是 ESM（"type": "module"），必须用 import() 而非 require()。
+ * Note: project is ESM ("type": "module"), must use import() not require().
  */
 let _listChatCommands: ((options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
 let _listChatCommandsForConfig: ((cfg: Record<string, unknown>, options?: Record<string, unknown>) => ChatCommandDef[]) | null = null;
@@ -48,16 +48,16 @@ function loadCommandAuth(): Promise<void> {
   return _commandAuthLoadPromise;
 }
 
-// ============ 类型 ============
+// ============ Types ============
 
 export type CommandItem = {
-  /** 命令名（含 /），如 "/help" */
+  /** Command name (with /), e.g. "/help" */
   name: string;
-  /** 命令说明 */
+  /** Command description */
   description: string;
 };
 
-/** openclaw/plugin-sdk/command-auth 返回的命令定义 */
+/** Command definition returned by openclaw/plugin-sdk/command-auth */
 type ChatCommandDef = {
   name?: string;
   description?: string;
@@ -65,18 +65,18 @@ type ChatCommandDef = {
   [key: string]: unknown;
 };
 
-// ============ SyncInformation 协议常量 ============
+// ============ SyncInformation protocol constants ============
 
 export const SYNC_INFORMATION_TYPE = {
   UNSPECIFIED: 0,
   COMMANDS: 1,
 } as const;
 
-// ============ bot_commands：从 OpenClaw SDK 动态获取 ============
+// ============ bot_commands: dynamically fetched from OpenClaw SDK ============
 
 /**
- * 兜底命令列表：当 command-auth 模块不可用（旧版 OpenClaw）时使用。
- * 包含已知的常用 OpenClaw 框架内置命令。
+ * Fallback command list: used when command-auth module is unavailable (older OpenClaw).
+ * Contains known common OpenClaw framework built-in commands.
  */
 const FALLBACK_BOT_COMMANDS: CommandItem[] = [
   { name: "/help", description: "Show available commands." },
@@ -88,13 +88,10 @@ const FALLBACK_BOT_COMMANDS: CommandItem[] = [
 ];
 
 /**
- * 获取全量 OpenClaw 框架命令列表。
+ * Fetch full OpenClaw framework command list.
  *
- * 优先通过 command-auth 模块动态获取（新版 OpenClaw >= 2026.4），
- * 旧版 OpenClaw 不支持时降级为兜底列表。
- *
- * @param config - OpenClaw 配置（可选）
- * @returns 命令列表
+ * Prefers dynamic fetch via command-auth module (new OpenClaw >= 2026.4),
+ * falls back to default list when older OpenClaw doesn't support it.
  */
 async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef[] | null> {
   const log = createLog("slash-commands");
@@ -141,19 +138,19 @@ async function fetchBotCommands(config?: OpenClawConfig): Promise<ChatCommandDef
 }
 
 /**
- * 将 ChatCommandDefinition[] 转换为 CommandItem[]
+ * Convert ChatCommandDefinition[] to CommandItem[].
  *
- * listChatCommandsForConfig 返回的命令对象可能有多种字段名：
- * - name: 命令名（可能不含 /）
- * - textAliases: 文本别名数组（如 ["/help", "/commands"]）
- * - description: 命令描述
+ * Commands returned by listChatCommandsForConfig may have various field names:
+ * - name: command name (may not include /)
+ * - textAliases: text alias array (e.g. ["/help", "/commands"])
+ * - description: command description
  */
 function toBotCommandItems(commands: ChatCommandDef[]): CommandItem[] {
   const log = createLog("slash-commands");
   const result: CommandItem[] = [];
 
   for (const cmd of commands) {
-    // 优先取 textAliases 中的第一个（通常是主命令名，含 /）
+    // Prefer first entry in textAliases (usually the primary command name, with /)
     const aliases = cmd.textAliases;
     let name = "";
     if (aliases && aliases.length > 0) {
@@ -182,39 +179,36 @@ function toBotCommandItems(commands: ChatCommandDef[]): CommandItem[] {
   return result;
 }
 
-// ============ plugin_commands：动态收集 ============
+// ============ plugin_commands: dynamically collected ============
 
 /**
- * 插件注册的命令列表（运行时动态收集）。
+ * Plugin-registered command list (collected at runtime).
  *
- * 在 channel.ts 的 register() 中每次调用 api.registerCommand 后，
- * 同步调用 registerPluginCommand 将命令信息记录到此列表。
+ * After each api.registerCommand call in channel.ts register(),
+ * registerPluginCommand is called synchronously to record command info here.
  */
 const pluginCommands: CommandItem[] = [];
 
 /**
- * 注册一个插件命令到同步列表。
- * 在 channel.ts 的 plugin.register() 中调用，与 api.registerCommand 配对使用。
- *
- * @param name - 命令名（不含 /），如 "yuanbaobot-upgrade"
- * @param description - 命令描述
+ * Register a plugin command to the sync list.
+ * Called in channel.ts plugin.register(), paired with api.registerCommand.
  */
 export function registerPluginCommand(name: string, description: string): void {
   const fullName = name.startsWith("/") ? name : `/${name}`;
-  // 去重
+  // Deduplicate
   if (!pluginCommands.some((c) => c.name === fullName)) {
     pluginCommands.push({ name: fullName, description });
   }
 }
 
 /**
- * 获取已注册的插件命令列表（只读副本）
+ * Get registered plugin command list (read-only copy).
  */
 export function getPluginCommands(): ReadonlyArray<CommandItem> {
   return pluginCommands;
 }
 
-// ============ 协议构建 ============
+// ============ Protocol building ============
 
 export type SyncInformationPayload = {
   syncType: number;
@@ -227,12 +221,10 @@ export type SyncInformationPayload = {
 };
 
 /**
- * 构建 SyncInformationReq 的 payload（sync_type=COMMANDS）
+ * Build SyncInformationReq payload (sync_type=COMMANDS).
  *
- * - bot_commands: 通过 listChatCommandsForConfig / listChatCommands 从 OpenClaw 框架动态获取
- * - plugin_commands: 从插件注册阶段动态收集的命令列表
- *
- * @param config - OpenClaw 配置（可选，用于获取配置感知的命令列表）
+ * - bot_commands: dynamically fetched from OpenClaw framework via listChatCommandsForConfig / listChatCommands
+ * - plugin_commands: dynamically collected from plugin registration phase
  */
 export async function buildSyncCommandsPayload(
   config?: OpenClawConfig,

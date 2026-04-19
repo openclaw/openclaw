@@ -1,8 +1,8 @@
 /**
- * Runtime单例存储模块
- * 使用 SDK 官方 createPluginRuntimeStore 管理 PluginRuntime 单例，
- * 在插件注册阶段由 index.ts 调用 setYuanbaoRuntime 保存 OpenClaw Runtime引用，
- * 其他模块（ws-gateway 等）通过 getYuanbaoRuntime 获取，用于调用核心 API（如发送消息给 AI agent）
+ * Runtime singleton storage module.
+ * Uses SDK's createPluginRuntimeStore to manage PluginRuntime singleton.
+ * During plugin registration, index.ts calls setYuanbaoRuntime to store the OpenClaw Runtime reference;
+ * other modules (ws-gateway, etc.) retrieve it via getYuanbaoRuntime for core API calls (e.g. sending messages to AI agent).
  */
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";

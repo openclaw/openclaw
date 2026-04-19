@@ -1,14 +1,14 @@
 /**
- * MessageSender 工厂
+ * MessageSender factory.
  *
- * 封装 C2C/群聊差异，对外暴露统一的 sendText/sendMedia/sendSticker/sendRaw/send/deliver 接口。
- * 由 prepareSender 中间件调用，将创建好的 sender 注入到 PipelineContext。
+ * Wraps C2C/group differences behind a unified sendText/sendMedia/sendSticker/sendRaw/send/deliver interface.
+ * Called by prepareSender middleware to inject the sender into PipelineContext.
  *
- * 各 send 方法的具体实现分别位于 actions Directory下：
+ * Each send method is implemented in the actions directory:
  * - sendText    → actions/text/send.ts
  * - sendMedia   → actions/media/send.ts
  * - sendSticker → actions/sticker/send.ts
- * - deliver     → actions/deliver.ts（底层投递，直接调用 transport）
+ * - deliver     → actions/deliver.ts (low-level transport)
  */
 
 // import type { OutboundReplyPayload } from 'openclaw/plugin-sdk/reply-payload';
@@ -20,10 +20,10 @@ import { sendText } from "../actions/text/send.js";
 import type { MessageSender, SendParams } from "./types.js";
 
 /**
- * Create message sender
+ * Create message sender.
  *
- * 封装 C2C/群聊差异，对外暴露统一的 sendText/sendMedia/sendSticker/sendRaw/send/deliver 接口。
- * 各 send 方法委托给 actions Directory下的对应模块实现。
+ * Wraps C2C/group differences behind a unified send interface.
+ * Each send method delegates to the corresponding module in the actions directory.
  */
 export function createMessageSender(params: SendParams): MessageSender {
   const {
@@ -39,7 +39,7 @@ export function createMessageSender(params: SendParams): MessageSender {
     traceContext,
   } = params;
 
-  // 构建投递目标上下文
+    // Build delivery target context
   const dt: DeliverTarget = {
     isGroup,
     groupCode,
@@ -91,18 +91,18 @@ export function createMessageSender(params: SendParams): MessageSender {
     },
 
     /**
-     * 从 SDK OutboundReplyPayload 自动分发到对应的发送方法
-     * 配合 dispatchInboundReplyWithBase 的 deliver 回调使用
+     * Auto-dispatch from SDK OutboundReplyPayload to the corresponding send method.
+     * Used with dispatchInboundReplyWithBase's deliver callback.
      */
     async deliver(payload) {
       const text = payload.text?.trim() ?? "";
       const mediaUrls = resolveOutboundMediaUrls(payload);
 
-      // 先发文本
+      // Send text first
       if (text) {
         await sender.sendText(text);
       }
-      // 再逐个发Media
+      // Then send media one by one
       for (const mediaUrl of mediaUrls) {
         if (mediaUrl) {
           await sender.sendMedia(mediaUrl);

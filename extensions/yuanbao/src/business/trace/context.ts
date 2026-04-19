@@ -6,7 +6,7 @@ export type YuanbaoTraceContext = {
   traceId: string;
   traceparent: string;
   seqId?: string;
-  /** 基于入站 seqId 返回自增的 msg_seq */
+  /** Return auto-incremented msg_seq based on inbound seqId */
   nextMsgSeq: () => number | undefined;
 };
 
@@ -18,10 +18,9 @@ function generateHex(bytes: number): string {
 }
 
 /**
- * 生成随机 trace ID（32 位十六进制字符串）。
- * 当入站消息未携带 trace_id 时用作兜底生成。
- */
-export function generateTraceId(): string {
+ * Generate a random trace ID (32-char hex string).
+ * Used as fallback when inbound message has no trace_id.
+ */export function generateTraceId(): string {
   return generateHex(16);
 }
 
@@ -58,9 +57,9 @@ function normalizeSeqId(seqId?: string | number): string | undefined {
 }
 
 /**
- * 解析或生成完整的 trace 上下文。
- * 优先使用入站消息携带的 traceId，缺失时随机生成；
- * 同时解析当前消息关联的 seq_id。
+ * Resolve or generate a complete trace context.
+ * Prefers inbound traceId; generates one if missing.
+ * Also parses the associated seq_id.
  */
 export function resolveTraceContext(params: {
   traceId?: string;
@@ -96,16 +95,16 @@ export function resolveTraceContext(params: {
 }
 
 /**
- * 获取当前异步上下文中的 trace 上下文（通过 AsyncLocalStorage）。
+ * Get the trace context from the current async context (via AsyncLocalStorage).
  */
 export function getActiveTraceContext(): YuanbaoTraceContext | undefined {
   return traceStorage.getStore();
 }
 
 /**
- * 在指定的 trace 上下文中执行异步回调。
- * 回调内部（及其触发的所有异步操作）可通过 {@link getActiveTraceContext} 获取该上下文，
- * fetch interceptor 也会自动为 LLM 请求注入对应的 X-Traceparent 头。
+ * Run an async callback within the given trace context.
+ * Inside the callback (and all spawned async ops), the context is available
+ * via {@link getActiveTraceContext}, and the fetch interceptor auto-injects X-Traceparent.
  */
 export function runWithTraceContext<T>(
   traceContext: YuanbaoTraceContext,

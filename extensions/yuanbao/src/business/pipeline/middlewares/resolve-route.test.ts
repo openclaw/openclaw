@@ -1,14 +1,12 @@
 /**
- * 中间件 resolve-route 单元测试
- *
- * 测试范围：Agent 路由解析、when 条件守卫
+ * Unit tests for resolve-route middleware: agent route resolution.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let mockEnvelopeResult = {
   storePath: "/tmp/store",
@@ -41,9 +39,9 @@ function setupMocks(
   }
 }
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("resolve-route: C2C 场景 - 解析路由并填充 ctx", async (t) => {
+void test("resolve-route: C2C - resolves route and populates ctx", async (t) => {
   setupMocks(t, {
     storePath: "/tmp/store",
     envelopeOptions: { format: "markdown" },
@@ -81,7 +79,7 @@ void test("resolve-route: C2C 场景 - 解析路由并填充 ctx", async (t) => 
   assert.equal(wasCalled(), true);
 });
 
-void test("resolve-route: 群聊场景 - peer.kind 为 group", async (t) => {
+void test("resolve-route: group chat - peer.kind is group", async (t) => {
   let capturedArgs: any = null;
   setupMocks(t, { storePath: "/tmp/store/group-session" });
   const { resolveRoute } = await import("./resolve-route.js");

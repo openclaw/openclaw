@@ -1,14 +1,12 @@
 /**
- * 中间件 guard-special-command 单元测试
- *
- * 测试范围：升级命令和 /issue-log 的 Owner 守卫
+ * Unit tests for guard-special-command middleware: upgrade and /issue-log owner guard.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-/** 创建通用 mock 模块 */
+/** Create shared mock modules */
 function setupMocks(t: any) {
   const UPGRADE_COMMAND_NAMES = ["/yuanbao-upgrade", "/yuanbaobot-upgrade"] as const;
   t.mock.module("../../commands/upgrade/index.js", {
@@ -41,7 +39,7 @@ function setupMocks(t: any) {
   });
 }
 
-void test("guard-special-command: 非 Owner 执行升级命令(C2C) → 终止管线", async (t) => {
+void test("guard-special-command: non-owner upgrade command (C2C) -> abort pipeline", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -55,10 +53,10 @@ void test("guard-special-command: 非 Owner 执行升级命令(C2C) → 终止�
 
   await guardSpecialCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "非 Owner 应终止管线");
+  assert.equal(wasCalled(), false, "non-owner should abort pipeline");
 });
 
-void test("guard-special-command: Owner 执行升级命令(C2C) → 放行", async (t) => {
+void test("guard-special-command: owner upgrade command (C2C) -> pass through", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -72,10 +70,10 @@ void test("guard-special-command: Owner 执行升级命令(C2C) → 放行", asy
 
   await guardSpecialCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), true, "Owner 应放行");
+  assert.equal(wasCalled(), true, "owner should pass through");
 });
 
-void test("guard-special-command: 非 Owner 执行升级命令(群聊) → 终止管线", async (t) => {
+void test("guard-special-command: non-owner upgrade command (group) -> abort pipeline", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -93,7 +91,7 @@ void test("guard-special-command: 非 Owner 执行升级命令(群聊) → 终�
   assert.equal(wasCalled(), false);
 });
 
-void test("guard-special-command: 非 Owner 执行 /issue-log(C2C) → 终止管线", async (t) => {
+void test("guard-special-command: non-owner /issue-log (C2C) -> abort pipeline", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -110,7 +108,7 @@ void test("guard-special-command: 非 Owner 执行 /issue-log(C2C) → 终止管
   assert.equal(wasCalled(), false);
 });
 
-void test("guard-special-command: Owner 执行 /issue-log(C2C) → 放行", async (t) => {
+void test("guard-special-command: owner /issue-log (C2C) -> pass through", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -127,7 +125,7 @@ void test("guard-special-command: Owner 执行 /issue-log(C2C) → 放行", asyn
   assert.equal(wasCalled(), true);
 });
 
-void test("guard-special-command: Owner 在群聊执行 /issue-log → 终止管线（引导私聊）", async (t) => {
+void test("guard-special-command: owner /issue-log in group -> abort pipeline (redirect to DM)", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -142,10 +140,10 @@ void test("guard-special-command: Owner 在群聊执行 /issue-log → 终止管
 
   await guardSpecialCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "群聊 /issue-log 应引导私聊并终止");
+  assert.equal(wasCalled(), false, "group /issue-log should redirect to DM and abort");
 });
 
-void test("guard-special-command: 普通消息 → 放行", async (t) => {
+void test("guard-special-command: normal message -> pass through", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -162,7 +160,7 @@ void test("guard-special-command: 普通消息 → 放行", async (t) => {
   assert.equal(wasCalled(), true);
 });
 
-void test("guard-special-command: /yuanbaobot-upgrade 也是升级命令", async (t) => {
+void test("guard-special-command: /yuanbaobot-upgrade is also an upgrade command", async (t) => {
   setupMocks(t);
   const { guardSpecialCommand } = await import("./guard-special-command.js");
 
@@ -176,5 +174,5 @@ void test("guard-special-command: /yuanbaobot-upgrade 也是升级命令", async
 
   await guardSpecialCommand.handler(ctx, next);
 
-  assert.equal(wasCalled(), false, "第二个升级命令也应被守卫");
+  assert.equal(wasCalled(), false, "second upgrade command should also be guarded");
 });

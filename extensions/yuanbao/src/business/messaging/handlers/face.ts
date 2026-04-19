@@ -1,8 +1,8 @@
 /**
- * TIMFaceElem 消息处理器
+ * TIMFaceElem message handler.
  *
- * 表情消息：输入时解析 Data 字段中的表情信息，返回 [表情: 名称] 文本表示供模型处理；
- * 输出时构造表情Message body。
+ * Sticker message: on input, parses sticker info from Data field and returns [EMOJI: name] text for model processing;
+ * on output, constructs sticker message body.
  *
  * Data format example:
  * {
@@ -17,7 +17,7 @@
 import type { MessageHandlerContext } from "../context.js";
 import type { MessageElemHandler, MsgBodyItemType, ExtractTextFromMsgBodyResult } from "./types.js";
 
-/** TIMFaceElem Data 字段的 JSON 结构 */
+/** JSON structure of TIMFaceElem Data field */
 interface FaceData {
   package_id?: string;
   sticker_id?: string;
@@ -31,16 +31,12 @@ export const faceHandler: MessageElemHandler = {
   msgType: "TIMFaceElem",
 
   /**
-   * Extract sticker message as text representation
+   * Extract sticker message as text representation.
    *
-   * 解析 msg_content.data（JSON 字符串）获取表情名称，
-   * 返回 [表情: 名称] 格式供模型处理。
-   * 若 data 缺失或解析失败，返回通用占位符 [表情]。
+   * Parses msg_content.data (JSON string) to get sticker name,
+   * returns [EMOJI: name] format for model processing.
+   * Falls back to generic [EMOJI] placeholder if data is missing or parsing fails.
    *
-   * @param _ctx - Message processing context（表情处理中未使用）
-   * @param elem - 原始 MsgBody 表情消息元素
-   * @param _resData - Extract结果的可变引用（表情处理中未修改）
-   * @returns [表情: 名称] 或 [表情] 文本占位符
    */
   extract(
     _ctx: MessageHandlerContext,
@@ -52,7 +48,7 @@ export const faceHandler: MessageElemHandler = {
       try {
         const faceData = JSON.parse(rawData) as FaceData;
         const name = faceData.name?.trim();
-        // 入站缓存：将收到的表情写入本地缓存
+        // Inbound cache: write received sticker to local cache
         // if (faceData.sticker_id) {
         //   cacheSticker({
         //     sticker_id: faceData.sticker_id,
@@ -67,19 +63,16 @@ export const faceHandler: MessageElemHandler = {
           return `[EMOJI: ${name}]`;
         }
       } catch {
-        // JSON 解析失败，降级为通用占位符
+        // JSON parse failed, fall back to generic placeholder
       }
     }
     return "[EMOJI]";
   },
 
   /**
-   * 构造 TIMFaceElem Message body
+   * Build TIMFaceElem message body.
    *
-   * @param data - 需包含 index 和 faceData（表情元数据）字段
-   *   - index: Sticker/emoji index（Default 0）
-   *   - faceData: FaceData 对象，包含 package_id、sticker_id、name 等字段
-   * @returns TIMFaceElem Message body数组
+
    */
   buildMsgBody(data: {
     package_id: string;

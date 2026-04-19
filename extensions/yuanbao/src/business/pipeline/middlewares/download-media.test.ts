@@ -1,14 +1,12 @@
 /**
- * 中间件 download-media 单元测试
- *
- * 测试范围：媒体下载、群聊历史媒体收集、when 条件守卫
+ * Unit tests for download-media middleware: media download, group media history, when guard.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createMockCtx, createMockNext } from "../test-helpers/mock-ctx.js";
 
-// ============ 共享可变 mock 状态 ============
+// ============ Shared mutable mock state ============
 
 let mockDownloadResult = {
   mediaPaths: ["/tmp/img1.jpg"] as string[],
@@ -39,9 +37,9 @@ function setupMocks(t: any, downloadResult?: { mediaPaths: string[]; mediaTypes:
   }
 }
 
-// ============ when 条件守卫 ============
+// ============ when condition guard ============
 
-void test("download-media: when 条件 - 有媒体时执行", async (t) => {
+void test("download-media: when guard - executes when media present", async (t) => {
   setupMocks(t);
   const { downloadMedia } = await import("./download-media.js");
 
@@ -51,7 +49,7 @@ void test("download-media: when 条件 - 有媒体时执行", async (t) => {
   assert.equal(downloadMedia.when!(ctx), true);
 });
 
-void test("download-media: when 条件 - 空数组仍 truthy", async (t) => {
+void test("download-media: when guard - empty array is still truthy", async (t) => {
   setupMocks(t);
   const { downloadMedia } = await import("./download-media.js");
 
@@ -59,9 +57,9 @@ void test("download-media: when 条件 - 空数组仍 truthy", async (t) => {
   assert.equal(downloadMedia.when!(ctx), true);
 });
 
-// ============ handler 逻辑 ============
+// ============ Handler logic ============
 
-void test("download-media: C2C 场景 - 下载媒体并填充 mediaPaths", async (t) => {
+void test("download-media: C2C - downloads media and populates mediaPaths", async (t) => {
   setupMocks(t, {
     mediaPaths: ["/tmp/img1.jpg"],
     mediaTypes: ["image"],
@@ -81,7 +79,7 @@ void test("download-media: C2C 场景 - 下载媒体并填充 mediaPaths", async
   assert.equal(wasCalled(), true);
 });
 
-void test("download-media: 群聊场景 - 下载媒体并填充 mediaPaths", async (t) => {
+void test("download-media: group - downloads media and populates mediaPaths", async (t) => {
   setupMocks(t, {
     mediaPaths: ["/tmp/group-img.jpg"],
     mediaTypes: ["image"],
@@ -104,7 +102,7 @@ void test("download-media: 群聊场景 - 下载媒体并填充 mediaPaths", asy
   assert.equal(wasCalled(), true);
 });
 
-void test("download-media: 无媒体时 mediaPaths 为空", async (t) => {
+void test("download-media: no media - mediaPaths is empty", async (t) => {
   setupMocks(t, {
     mediaPaths: [],
     mediaTypes: [],
@@ -124,7 +122,7 @@ void test("download-media: 无媒体时 mediaPaths 为空", async (t) => {
   assert.equal(wasCalled(), true);
 });
 
-void test("download-media: 多个媒体文件下载", async (t) => {
+void test("download-media: multiple media files download", async (t) => {
   setupMocks(t, {
     mediaPaths: ["/tmp/img1.jpg", "/tmp/doc.pdf"],
     mediaTypes: ["image", "file"],

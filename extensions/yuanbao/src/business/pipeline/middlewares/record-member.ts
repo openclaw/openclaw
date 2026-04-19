@@ -1,7 +1,5 @@
 /**
- * Middleware: record group member info
- *
- * 记录群消息中出现的用户信息，供 AI tool 查询。
+ * Middleware: record group member info for AI tool queries.
  * Only effective in group chat scenarios.
  */
 
