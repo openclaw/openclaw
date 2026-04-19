@@ -38,45 +38,5 @@
   {
     "source": "iMessage",
     "target": "iMessage"
-  },
-  {
-    "source": "WSL2",
-    "target": "WSL2"
-  },
-  {
-    "source": "CLI",
-    "target": "命令行界面"
-  },
-  {
-    "source": "API key",
-    "target": "API 密钥"
-  },
-  {
-    "source": "model provider",
-    "target": "模型提供商"
-  },
-  {
-    "source": "session",
-    "target": "会话"
-  },
-  {
-    "source": "daemon",
-    "target": "守护进程"
-  },
-  {
-    "source": "scheduled task",
-    "target": "计划任务"
-  },
-  {
-    "source": "startup folder",
-    "target": "启动文件夹"
-  },
-  {
-    "source": "onboarding",
-    "target": "引导流程"
-  },
-  {
-    "source": "plugin",
-    "target": "插件"
   }
 ]
