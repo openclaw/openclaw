@@ -1,21 +1,21 @@
 # Multi-instance OpenClaw deployment (Discord-first).
 #
-# Each instance is keyed by Discord user ID. Config/data lives under
-# ~/.openclaw-instances/{discordUserId}/.
+# Service definitions are generated dynamically by scripts/instance-compose.sh
+# based on the instance directories in ~/.openclaw-instances/.
 #
 # Usage:
-#   pnpm gateway:docker:deploy                          # build + start all instances
-#   pnpm gateway:docker:deploy -- 263176934089949194    # deploy single instance
+#   scripts/instance-compose.sh                     # generate docker-compose.generated.yml
+#   docker compose -f docker-compose.generated.yml up -d   # start all instances
+#
+# Instance lifecycle:
+#   scripts/instance-create.sh <discord-user-id>    # create a new instance
+#   scripts/instance-compose.sh                     # regenerate compose file
+#   docker compose -f docker-compose.generated.yml up -d   # start/restart
 #
 # Instance config:
-#   ~/.openclaw-instances/263176934089949194/openclaw.json   — gateway config, Discord token, etc.
-#   ~/.openclaw-instances/263176934089949194/agents/         — agent memory, sessions, auth profiles
-#   ~/.openclaw-instances/263176934089949194/workspace/      — working directory
-#
-# First-time setup per instance:
-#   1. Create the instance directory
-#   2. Run onboarding: docker compose ... run --rm openclaw-{discordUserId} onboard
-#   3. Start: docker compose ... up -d openclaw-{discordUserId}
+#   ~/.openclaw-instances/{discordUserId}/openclaw.json   — gateway config
+#   ~/.openclaw-instances/{discordUserId}/agents/         — agent memory, sessions
+#   ~/.openclaw-instances/{discordUserId}/workspace/      — working directory
 
 x-openclaw-base: &openclaw-base
   image: ${OPENCLAW_IMAGE:-openclaw:local}
@@ -45,81 +45,5 @@ x-openclaw-base: &openclaw-base
     # Gateway process skips channel monitors (discord-router handles Discord).
     OPENCLAW_SKIP_CHANNELS: "1"
 
-services:
-  openclaw-263176934089949194:
-    <<: *openclaw-base
-    container_name: openclaw-263176934089949194
-    environment:
-      <<: *openclaw-env
-      TZ: America/Los_Angeles
-      OPENCLAW_GATEWAY_PORT: "18789"
-      GOG_KEYRING_PASSWORD: ${OPENCLAW_263176934089949194_GOG_PASSWORD:-openclaw}
-    volumes:
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194:/home/node/.openclaw
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194/workspace:/home/node/.openclaw/workspace
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/263176934089949194/gogcli:/home/node/.config/gogcli
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
-    ports:
-      - "${OPENCLAW_263176934089949194_PORT:-18789}:18789"
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
-
-  openclaw-310798523454980098:
-    <<: *openclaw-base
-    container_name: openclaw-310798523454980098
-    environment:
-      <<: *openclaw-env
-      OPENCLAW_GATEWAY_PORT: "18789"
-      GOG_KEYRING_PASSWORD: ${OPENCLAW_310798523454980098_GOG_PASSWORD:-openclaw}
-    volumes:
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098:/home/node/.openclaw
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098/workspace:/home/node/.openclaw/workspace
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/310798523454980098/gogcli:/home/node/.config/gogcli
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
-    ports:
-      - "${OPENCLAW_310798523454980098_PORT:-18791}:18789"
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
-
-  openclaw-483870022134136842:
-    <<: *openclaw-base
-    container_name: openclaw-483870022134136842
-    environment:
-      <<: *openclaw-env
-      OPENCLAW_GATEWAY_PORT: "18789"
-      GOG_KEYRING_PASSWORD: ${OPENCLAW_483870022134136842_GOG_PASSWORD:-openclaw}
-    volumes:
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/483870022134136842:/home/node/.openclaw
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/483870022134136842/workspace:/home/node/.openclaw/workspace
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/483870022134136842/gogcli:/home/node/.config/gogcli
-      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
-    ports:
-      - "${OPENCLAW_483870022134136842_PORT:-18793}:18789"
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
-
-  # To add a new instance, run: scripts/instance-create.sh <discord-user-id>
+# Services are generated by scripts/instance-compose.sh — do not add them here.
+services: {}
