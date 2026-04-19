@@ -97,4 +97,29 @@ services:
         "18789",
       ]
 
+  openclaw-483870022134136842:
+    <<: *openclaw-base
+    container_name: openclaw-483870022134136842
+    environment:
+      <<: *openclaw-env
+      OPENCLAW_GATEWAY_PORT: "18789"
+      GOG_KEYRING_PASSWORD: ${OPENCLAW_483870022134136842_GOG_PASSWORD:-openclaw}
+    volumes:
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/483870022134136842:/home/node/.openclaw
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/483870022134136842/workspace:/home/node/.openclaw/workspace
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/483870022134136842/gogcli:/home/node/.config/gogcli
+      - ${OPENCLAW_INSTANCES_DIR:-~/.openclaw-instances}/shared/auth/auth-profiles.json:/home/node/.openclaw/agents/main/agent/auth-profiles.json
+    ports:
+      - "${OPENCLAW_483870022134136842_PORT:-18793}:18789"
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+      ]
+
   # To add a new instance, run: scripts/instance-create.sh <discord-user-id>
