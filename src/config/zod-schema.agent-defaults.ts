@@ -259,6 +259,16 @@ export const AgentDefaultsSchema = z
         autoEnableFor: z.array(z.string()).optional(),
         /** Seconds an unanswered approval stays pending. Default: 600 (10 min). */
         approvalTimeoutSeconds: z.number().int().min(10).max(86_400).optional(),
+        /**
+         * Live-test iter-2 Bug D: opt-in plan-mode debug log toggle.
+         * When true, enables `[plan-mode/<kind>]` lifecycle lines in
+         * gateway.err.log at every state transition / gate decision /
+         * tool call / synthetic injection / approval event. Off by
+         * default. Equivalent to `OPENCLAW_DEBUG_PLAN_MODE=1` env var
+         * but persistent in config so it survives gateway restarts
+         * and works around macOS launchd env-propagation quirks.
+         */
+        debug: z.boolean().optional(),
       })
       .strict()
       .optional(),
