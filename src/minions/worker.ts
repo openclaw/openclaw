@@ -62,13 +62,16 @@ export class MinionWorker {
       );
     }
 
+    if (this.running) {
+      return;
+    }
     this.running = true;
 
     const shutdown = () => {
       this.running = false;
     };
-    process.on("SIGTERM", shutdown);
-    process.on("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    process.once("SIGINT", shutdown);
 
     const stalledTimer = setInterval(() => {
       try {

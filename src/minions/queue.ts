@@ -416,12 +416,12 @@ export class MinionQueue {
   }
 
   removeJob(id: number): boolean {
-    const terminalList = MINION_TERMINAL_STATUSES.join("','");
+    const placeholders = MINION_TERMINAL_STATUSES.map(() => "?").join(",");
     const rows = this.store.db
       .prepare(
-        `DELETE FROM minion_jobs WHERE id = ? AND status IN ('${terminalList}') RETURNING id`,
+        `DELETE FROM minion_jobs WHERE id = ? AND status IN (${placeholders}) RETURNING id`,
       )
-      .all(id);
+      .all(id, ...MINION_TERMINAL_STATUSES);
     return rows.length > 0;
   }
 
@@ -721,7 +721,7 @@ export class MinionQueue {
            AND NOT EXISTS (
              SELECT 1 FROM minion_jobs
              WHERE parent_job_id = ?
-               AND status NOT IN ('completed', 'dead', 'cancelled')
+               AND status NOT IN ('completed', 'failed', 'dead', 'cancelled')
            )
          RETURNING *`,
       )
@@ -810,7 +810,7 @@ function resolveParentIfDone(db: DatabaseSync, parentId: number, now: number): v
        AND NOT EXISTS (
          SELECT 1 FROM minion_jobs
          WHERE parent_job_id = ?
-           AND status NOT IN ('completed', 'dead', 'cancelled')
+           AND status NOT IN ('completed', 'failed', 'dead', 'cancelled')
        )`,
   ).run(now, parentId, parentId);
 }
