@@ -78,13 +78,11 @@ Model "provider/model" is not allowed. Use /model to list available models.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      model: { primary: "anthropic/claude-sonnet-4-6" },
-      models: {
-        "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-        "anthropic/claude-opus-4-6": { alias: "Opus" },
-      },
+  agent: {
+    model: { primary: "anthropic/claude-sonnet-4-6" },
+    models: {
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
     },
   },
 }
