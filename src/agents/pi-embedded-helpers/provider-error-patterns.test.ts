@@ -20,6 +20,8 @@ import {
   classifyFailoverReason,
   classifyProviderRuntimeFailureKind,
   isContextOverflowError,
+  isLikelyContextOverflowError,
+  isPromptTemplateRenderError,
 } from "./errors.js";
 import {
   classifyProviderSpecificError,
@@ -134,6 +136,31 @@ describe("isContextOverflowError with provider patterns", () => {
   it("still detects standard context overflow patterns", () => {
     expect(isContextOverflowError("context length exceeded")).toBe(true);
     expect(isContextOverflowError("prompt is too long: 150000 tokens > 128000 maximum")).toBe(true);
+  });
+});
+
+describe("prompt template render errors (#68868)", () => {
+  const jinjaNoUserQuery =
+    "Failed to deserialize the JSON body into the target type: messages[0]: " +
+    "Template error: error rendering prompt with jinja template: " +
+    "Failed rendering Jinja template: No user query found in input";
+  const chatTemplateVariant =
+    "400 Bad Request: error rendering prompt with chat template: missing required variable";
+
+  it("detects jinja template render errors", () => {
+    expect(isPromptTemplateRenderError(jinjaNoUserQuery)).toBe(true);
+    expect(isPromptTemplateRenderError(chatTemplateVariant)).toBe(true);
+  });
+
+  it("does not treat template render errors as context overflow", () => {
+    expect(isContextOverflowError(jinjaNoUserQuery)).toBe(false);
+    expect(isLikelyContextOverflowError(jinjaNoUserQuery)).toBe(false);
+  });
+
+  it("ignores unrelated errors", () => {
+    expect(isPromptTemplateRenderError("rate limit exceeded")).toBe(false);
+    expect(isPromptTemplateRenderError("context length exceeded")).toBe(false);
+    expect(isPromptTemplateRenderError(undefined)).toBe(false);
   });
 });
 

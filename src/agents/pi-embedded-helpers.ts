@@ -31,6 +31,7 @@ export {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isPromptTemplateRenderError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,

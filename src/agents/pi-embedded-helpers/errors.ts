@@ -88,6 +88,16 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+// Provider template-render failures (e.g. HuggingFace/TGI jinja "No user query found")
+// are emitted as chat-template errors, not context-overflow errors. They must classify
+// separately so users are not nudged to /reset or to a larger-context model (#68868).
+export function isPromptTemplateRenderError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  return /error rendering prompt with (?:jinja|chat) template/i.test(errorMessage);
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -100,6 +110,12 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  // Provider template-render errors are a distinct failure class. Don't misclassify
+  // them as context overflow even if their text mentions "prompt" (#68868).
+  if (isPromptTemplateRenderError(errorMessage)) {
     return false;
   }
 
@@ -157,6 +173,11 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  // Provider template-render errors are a distinct failure class (#68868).
+  if (isPromptTemplateRenderError(errorMessage)) {
     return false;
   }
 
@@ -1016,6 +1037,14 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "proxy") {
     return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
+  }
+
+  if (isPromptTemplateRenderError(raw)) {
+    return (
+      "The provider failed to render the model's chat template. " +
+      "This is a model/provider template issue, not a context-overflow problem. " +
+      "Try a different model or switch providers."
+    );
   }
 
   if (isContextOverflowError(raw)) {

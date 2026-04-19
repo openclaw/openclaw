@@ -43,6 +43,16 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+  it("classifies jinja template render errors as template issues, not context overflow (#68868)", () => {
+    const msg = makeAssistantError(
+      "Failed to deserialize the JSON body into the target type: messages[0]: " +
+        "Template error: error rendering prompt with jinja template: " +
+        "Failed rendering Jinja template: No user query found in input",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("chat template");
+    expect(result).not.toContain("Context overflow");
+  });
   it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
     const msg = makeAssistantError(
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
