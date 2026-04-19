@@ -183,7 +183,22 @@ export async function sessionsCommand(
           const model = resolveSessionDisplayModel(cfg, r);
           return {
             ...r,
-            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+            // CI repair (round-2 follow-up): the JSON output preserves
+            // STALE totals alongside the `totalTokensFresh: false` flag
+            // so consumers can render "stored: 2000 (stale)" UX. Using
+            // `resolveFreshSessionTotalTokens` here drops stale values
+            // to null — that's the right behavior for cost calculation
+            // but breaks the documented JSON contract (see
+            // `sessions.test.ts:128 "shows preserved stale totals"`).
+            // Use the raw `r.totalTokens` directly + filter to a
+            // valid finite non-negative number so the stale-but-stored
+            // contract is preserved.
+            totalTokens:
+              typeof r.totalTokens === "number" &&
+              Number.isFinite(r.totalTokens) &&
+              r.totalTokens >= 0
+                ? r.totalTokens
+                : null,
             totalTokensFresh:
               typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
             contextTokens:
