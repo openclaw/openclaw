@@ -29,6 +29,10 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
+    // `cdpPort` is always truthy: either the explicit cdp.port (truthy
+    // string), or the "443"/"80" default from the ternary. The guard is
+    // defensive against future parser edge cases.
+    /* c8 ignore next 3 */
     if (cdpPort) {
       ws.port = cdpPort;
     }
@@ -323,11 +327,17 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
   while (stack.length && out.length < limit) {
     const popped = stack.pop();
+    // `stack.pop()` only returns undefined on an empty stack, but the
+    // while guard already asserts `stack.length > 0`. Dead defensive guard.
+    /* c8 ignore next 3 */
     if (!popped) {
       break;
     }
     const { id, depth } = popped;
     const n = byId.get(id);
+    // Every id pushed onto the stack came from `children.filter(c => byId.has(c))`,
+    // so byId.get(id) is always defined here. Dead defensive guard.
+    /* c8 ignore next 3 */
     if (!n) {
       continue;
     }
@@ -349,6 +359,9 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const children = (n.childIds ?? []).filter((c) => byId.has(c));
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
+      // `children` is a string[] from an array filter over RawAXNode.childIds,
+      // so `child` is always a defined string here. Dead defensive guard.
+      /* c8 ignore next 3 */
       if (child) {
         stack.push({ id: child, depth: depth + 1 });
       }
