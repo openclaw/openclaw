@@ -245,13 +245,27 @@ export async function startRouter(config: RouterConfig, runtime: RouterRuntime):
             // Send "Back online." to all onboarded users
             void sendLifecycleToAll(discordToken, instances, "*Back online.*", runtime);
 
-            // Proactively onboard users who haven't been onboarded yet.
+            // Startup recovery: check for unanswered DMs and respond
             // Delay to let containers finish starting before connecting.
-            setTimeout(
-              () =>
-                onboardNewUsers(discordToken, instances, config, runtime, agentTimeoutMs, inflight),
-              10_000,
-            );
+            setTimeout(async () => {
+              // Onboard new users first
+              await onboardNewUsers(
+                discordToken,
+                instances,
+                config,
+                runtime,
+                agentTimeoutMs,
+                inflight,
+              );
+              // Then recover unanswered messages
+              await recoverUnansweredDMs(
+                discordToken,
+                instances,
+                runtime,
+                agentTimeoutMs,
+                inflight,
+              );
+            }, 10_000);
           }
 
           if (t === "MESSAGE_CREATE") {
@@ -626,6 +640,68 @@ async function discordSendEmbed(
  * Proactively message all non-onboarded users on startup.
  * Sends a welcome DM and triggers the agent to greet them.
  */
+/**
+ * Check each onboarded user's DM for unanswered messages.
+ * If the most recent message is from the user (not the bot), route it to the agent.
+ */
+async function recoverUnansweredDMs(
+  discordToken: string,
+  instances: Map<string, InstanceConfig>,
+  runtime: RouterRuntime,
+  agentTimeoutMs: number,
+  inflight: Set<string>,
+): Promise<void> {
+  const botId = (
+    (await fetch(`${DISCORD_API}/applications/@me`, {
+      headers: { Authorization: `Bot ${discordToken}` },
+    }).then((r) => r.json())) as { id?: string }
+  )?.id;
+
+  for (const [userId, instance] of instances) {
+    if (instance.onboardingState !== "complete") continue;
+
+    try {
+      const channelId = await openDMChannel(discordToken, userId);
+      if (!channelId) continue;
+
+      // Fetch last 3 messages
+      const resp = await fetch(`${DISCORD_API}/channels/${channelId}/messages?limit=3`, {
+        headers: { Authorization: `Bot ${discordToken}` },
+      });
+      if (!resp.ok) continue;
+      const messages = (await resp.json()) as Array<{
+        id: string;
+        author: { id: string; bot?: boolean };
+        content: string;
+      }>;
+      if (messages.length === 0) continue;
+
+      // Most recent message first
+      const latest = messages[0];
+      if (!latest || latest.author.bot || latest.author.id === botId) continue;
+
+      // Skip if it's a lifecycle message reply or empty
+      const content = latest.content?.trim();
+      if (!content) continue;
+
+      runtime.log(`[router] recovering unanswered DM from ${userId}: ${content.slice(0, 60)}`);
+
+      void routeDM({
+        discordUserId: userId,
+        channelId,
+        messageContent: content,
+        instance,
+        discordToken,
+        runtime,
+        agentTimeoutMs,
+        inflight,
+      });
+    } catch (err) {
+      runtime.log(`[router] recovery failed for ${userId}: ${formatErrorMessage(err)}`);
+    }
+  }
+}
+
 async function onboardNewUsers(
   discordToken: string,
   instances: Map<string, InstanceConfig>,
