@@ -5,12 +5,19 @@ const INTERNAL_PREAMBLE_HINT_RE =
   /\b(?:the user|instruction|output content|reply with|reply to|final response|general instruction|i will|i must|internal planning|plan:)\b/i;
 const SINGLE_ANSWER_INTENT_RE =
   /\b(?:exactly|nothing else|one word(?: only)?|one short sentence(?: only)?|single answer)\b/i;
+const EXACT_TARGET_HINT_RE =
+  /\b(?:specific string|reply with|output the text directly|output content)\b/i;
+const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
 
 type RepeatedPatternMatch = {
   unit: string;
   fullRepeats: number;
   tail: string;
 };
+
+function buildRawVisibleSuffix(match: RepeatedPatternMatch): string {
+  return match.unit.repeat(match.fullRepeats) + match.tail;
+}
 
 function looksStructuredRepeatedUnit(unit: string): boolean {
   return unit.length >= MIN_STRUCTURED_REPEAT_UNIT_LENGTH || STRUCTURED_REPEAT_HINT_RE.test(unit);
@@ -84,16 +91,81 @@ function shouldCollapseRepeatedSuffix(params: {
   return looksLikeInternalPreamble(prefix) && SINGLE_ANSWER_INTENT_RE.test(prefix);
 }
 
+function findExplicitVisibleSuffixTarget(
+  prefix: string,
+  match: RepeatedPatternMatch,
+): string | null {
+  if (!prefix) {
+    return null;
+  }
+
+  const rawVisibleSuffix = buildRawVisibleSuffix(match);
+  if (rawVisibleSuffix && prefix.includes(rawVisibleSuffix)) {
+    return rawVisibleSuffix;
+  }
+
+  for (let repeats = match.fullRepeats; repeats >= 2; repeats -= 1) {
+    const candidate = match.unit.repeat(repeats);
+    if (candidate.length <= match.unit.length || !rawVisibleSuffix.startsWith(candidate)) {
+      continue;
+    }
+    if (prefix.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function selectVisibleSuffixReplacement(params: {
+  prefix: string;
+  match: RepeatedPatternMatch;
+  context: "delimiter" | "no-delimiter";
+}): string | null {
+  const { prefix, match, context } = params;
+
+  const explicitTarget = findExplicitVisibleSuffixTarget(prefix, match);
+  if (explicitTarget) {
+    return explicitTarget;
+  }
+  if (!shouldCollapseRepeatedSuffix({ prefix, match, context })) {
+    return null;
+  }
+
+  return match.unit;
+}
+
 export function collapseRepeatedVisibleSuffixAfterDelimiter(
   prefix: string,
   suffix: string,
 ): string {
   const match = matchStructuredRepeatedPrefixPattern(suffix);
-  if (!match || !shouldCollapseRepeatedSuffix({ prefix, match, context: "delimiter" })) {
+  if (!match) {
     return suffix;
   }
 
-  return match.unit;
+  return selectVisibleSuffixReplacement({ prefix, match, context: "delimiter" }) ?? suffix;
+}
+
+export function extractExplicitSingleTargetLiteral(text: string): string | null {
+  if (
+    !text ||
+    !looksLikeInternalPreamble(text) ||
+    !SINGLE_ANSWER_INTENT_RE.test(text) ||
+    !EXACT_TARGET_HINT_RE.test(text)
+  ) {
+    return null;
+  }
+
+  const literals = [...text.matchAll(INLINE_CODE_LITERAL_RE)]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((literal) => literal.length > 0);
+  const uniqueLiterals = [...new Set(literals)];
+  if (uniqueLiterals.length !== 1) {
+    return null;
+  }
+
+  return uniqueLiterals[0] ?? null;
 }
 
 export function extractStructuredRepeatedVisibleSuffix(text: string): string {
@@ -127,19 +199,20 @@ export function extractStructuredRepeatedVisibleSuffix(text: string): string {
         fullRepeats += 1;
       }
       const prefix = text.slice(0, start);
-      if (
-        fullRepeats < 2 ||
-        !endsAtVisibleSuffixBoundary(prefix) ||
-        !shouldCollapseRepeatedSuffix({
-          prefix,
-          match: { unit, fullRepeats, tail },
-          context: "no-delimiter",
-        })
-      ) {
+      if (fullRepeats < 2 || !endsAtVisibleSuffixBoundary(prefix)) {
         continue;
       }
 
-      return unit;
+      const replacement = selectVisibleSuffixReplacement({
+        prefix,
+        match: { unit, fullRepeats, tail },
+        context: "no-delimiter",
+      });
+      if (!replacement) {
+        continue;
+      }
+
+      return replacement;
     }
   }
 

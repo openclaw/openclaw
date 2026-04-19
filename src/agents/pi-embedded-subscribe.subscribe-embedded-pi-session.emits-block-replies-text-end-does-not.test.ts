@@ -351,6 +351,53 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["visiblefix5-1776638721"]);
   });
 
+  it("preserves a repeated structured suffix when the preamble names the full repeated output literally", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: [
+        "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+        "This is a direct instruction for the output content.",
+        "I must adhere to the instruction precisely.",
+        "I will output the text directly as the final response.",
+        "<channel|>abc-123abc-123",
+      ].join("\n"),
+      id: "item_literal_repeated_output",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("abc-123abc-123");
+    expect(subscription.assistantTexts).toEqual(["abc-123abc-123"]);
+  });
+
+  it("extracts the explicitly named final string when no delimiter was emitted and runaway junk followed", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: [
+        "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+        "This is a direct instruction for the output content.",
+        "I must adhere to the instruction precisely.",
+        "I will output the text directly as the final response, as per the general instruction to reply in the current session.abc-123abc-123abc-123abc-123abc-123abc-123noise-999noise-999noise-9",
+      ].join("\n"),
+      id: "item_literal_repeated_output_no_delimiter",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("abc-123abc-123");
+    expect(subscription.assistantTexts).toEqual(["abc-123abc-123"]);
+  });
+
   it("emits the final answer at message_end when commentary was streamed first", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

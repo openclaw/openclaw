@@ -6,7 +6,10 @@ import {
   type ReasoningTagMode,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
-import { extractStructuredRepeatedVisibleSuffix } from "./repeated-visible-suffix.js";
+import {
+  extractExplicitSingleTargetLiteral,
+  extractStructuredRepeatedVisibleSuffix,
+} from "./repeated-visible-suffix.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -600,7 +603,8 @@ function applyAssistantVisibleTextStagePipeline(
     }
     return cleaned;
   };
-  const normalizeVisibleOutput = (value: string) => extractStructuredRepeatedVisibleSuffix(value);
+  const normalizeVisibleOutput = (value: string) =>
+    extractExplicitSingleTargetLiteral(value) ?? extractStructuredRepeatedVisibleSuffix(value);
 
   if (options.stageOrder === "reasoning-first") {
     return applyFinalTrim(normalizeVisibleOutput(stripNonReasoningStages(stripReasoning(text))));

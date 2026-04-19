@@ -576,6 +576,29 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("preserves a repeated structured suffix when the preamble names the full repeated output literally", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|>abc-123abc-123",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc-123abc-123");
+  });
+
+  it("extracts the explicitly named final string when no delimiter was emitted and runaway junk followed", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response, as per the general instruction to reply in the current session.abc-123abc-123abc-123abc-123abc-123abc-123noise-999noise-999noise-9",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc-123abc-123");
+  });
+
   it("does not collapse short unstructured repeated prose after a control delimiter", () => {
     const input = "Internal planning<channel|>hahaha";
 
