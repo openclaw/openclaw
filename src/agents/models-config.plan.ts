@@ -45,6 +45,13 @@ export async function resolveProvidersForModelsJsonWithDeps(
 ): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
+
+  // When models.mode is "replace", skip loading implicit providers from bundled plugins
+  // and use only explicitly configured providers
+  if (cfg.models?.mode === "replace") {
+    return explicitProviders;
+  }
+
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
