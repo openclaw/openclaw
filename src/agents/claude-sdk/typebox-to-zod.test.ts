@@ -8,9 +8,9 @@ import {
 
 // Helper: round-trip a TypeBox object schema through the converter,
 // build a z.object() from the resulting shape, and parse a sample.
-function roundTripObject<T>(
+function roundTripObject(
   schema: Parameters<typeof convertTypeBoxObjectToZodShape>[0],
-  sample: T,
+  sample: unknown,
 ) {
   const { shape, unsupportedKinds } = convertTypeBoxObjectToZodShape(schema);
   const parsed = z.object(shape).parse(sample);

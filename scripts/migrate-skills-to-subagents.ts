@@ -193,7 +193,7 @@ function serializeSubAgentFrontmatter(params: {
 
 function sanitizeFilename(name: string): string {
   // Remove or replace path separators and other unsafe characters.
-  return name.replace(/[\/\\:*?"<>|]/g, "-").trim();
+  return name.replace(/[/\\:*?"<>|]/g, "-").trim();
 }
 
 function convertSkill(params: { skillDir: string; outputDir: string }): SubAgentWrite | null {

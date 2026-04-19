@@ -91,7 +91,7 @@ export function buildSdkHooks(
     // Without this check, `enabled: false` in a HOOK.md frontmatter was
     // silently ignored on the claude-sdk runtime while pi-embedded would
     // have treated it as disabled — a correctness regression.
-    if (entry.invocation && entry.invocation.enabled === false) {
+    if (entry.invocation && !entry.invocation.enabled) {
       disabledCount += 1;
       continue;
     }
