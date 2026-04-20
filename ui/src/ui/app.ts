@@ -380,6 +380,17 @@ export class OpenClawApp extends LitElement {
   @state() planApprovalRequest: import("./app-tool-stream.ts").PlanApprovalRequest | null = null;
   @state() planApprovalBusy = false;
   @state() planApprovalError: string | null = null;
+  // PR #68939 follow-up (stale-state re-render fix): once the user
+  // clicks Approve/Revise/Reject and the server returns a stale-state
+  // rejection (`requires a pending approval`, `current state: none`,
+  // etc.), we dismiss the dialog locally — but the next sessionsResult
+  // refresh tick re-runs `hydratePlanApprovalFromSession` which can
+  // re-create the popup from the stale local cache snapshot. User
+  // perceives "I clicked Approve and nothing happened" because the
+  // popup blinks closed → re-creates → blinks open. Track the
+  // approvalIds we've already given up on so hydration ignores them.
+  // Cleared on session change (resetPlanApprovalLocalState).
+  @state() planApprovalDismissedApprovalIds = new Set<string>();
   // Inline-revise textarea state (no popup). Open + draft live on the
   // host so the textarea survives chat re-renders.
   @state() planApprovalReviseOpen = false;
@@ -1204,6 +1215,20 @@ export class OpenClawApp extends LitElement {
         this.planApprovalRequest = null;
         this.planApprovalReviseDraft = "";
         this.planApprovalReviseOpen = false;
+        // PR #68939 follow-up (stale-state re-render fix): mark the
+        // approvalId as dismissed so `hydratePlanApprovalFromSession`
+        // doesn't immediately re-create the popup from a stale
+        // sessionsResult snapshot. Without this, the popup blinks
+        // closed then back open and the user perceives "nothing
+        // happened" when they clicked Approve. Set membership is
+        // checked in hydratePlanApprovalFromSession; cleared on
+        // session change via resetPlanApprovalLocalState.
+        if (snapshotRequest?.approvalId) {
+          this.planApprovalDismissedApprovalIds = new Set([
+            ...this.planApprovalDismissedApprovalIds,
+            snapshotRequest.approvalId,
+          ]);
+        }
         this.planApprovalError =
           "This plan was already resolved (another surface acted, or the " +
           "plan auto-closed). Dialog dismissed; the agent's current state " +
@@ -1475,6 +1500,15 @@ export class OpenClawApp extends LitElement {
     this.planApprovalQuestionOtherOpen = false;
     this.planApprovalQuestionOtherDraft = "";
     this.planApprovalError = null;
+    // PR #68939 follow-up (stale-state re-render fix): clear the
+    // dismissed-set when the interaction changes (new approvalId,
+    // different session, etc.) so a genuinely-new approval card on the
+    // same session can still appear. Without this clear, dismissing
+    // approval A would also block the eventual approval B in the same
+    // session.
+    if (this.planApprovalDismissedApprovalIds.size > 0) {
+      this.planApprovalDismissedApprovalIds = new Set<string>();
+    }
   }
 
   private buildHydratedPlanApprovalRequest(
@@ -1536,6 +1570,25 @@ export class OpenClawApp extends LitElement {
       if (previous) {
         this.planApprovalRequest = null;
         this.resetPlanApprovalLocalState();
+      }
+      return;
+    }
+    // PR #68939 follow-up (stale-state re-render fix): if the user
+    // already got a stale-state rejection on this approvalId, do NOT
+    // re-create the popup. The local sessionsResult cache may still
+    // show approval=pending for an approvalId the server has since
+    // cleared; without this guard, the popup re-creates on every
+    // hydrate tick and the user sees their click do nothing visible.
+    // The dismissed set is cleared when the session changes (via
+    // resetPlanApprovalLocalState below + the !nextRequest branch
+    // above), so a genuinely-new approvalId on the same session still
+    // creates a fresh popup.
+    if (
+      nextRequest.approvalId &&
+      this.planApprovalDismissedApprovalIds.has(nextRequest.approvalId)
+    ) {
+      if (previous) {
+        this.planApprovalRequest = null;
       }
       return;
     }
