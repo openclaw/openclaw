@@ -157,6 +157,16 @@ function resolveMainSessionTranscriptFiles(
   if (!context?.sessionsDir || !context.key) {
     return null;
   }
+  // Hot-path guard: skip config + alias resolution when the entry has no checkpoint
+  // chain to walk. `readSessionMessages` runs on every transcript read, and the vast
+  // majority of sessions (isolated, subagent, heartbeat, explicit agent) never carry
+  // `compactionCheckpoints[]`. Gating the loadConfig + canonicalize work on a cheap
+  // field check avoids O(sessions.json) parsing + config I/O for those reads.
+  const entry = context.entry as Record<string, unknown> | undefined;
+  const rawCheckpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(rawCheckpoints) || rawCheckpoints.length === 0) {
+    return null;
+  }
   // Activate the chained read only for the configured main session key, not a hardcoded
   // literal. `resolveMainSessionKey` returns "global", "agent:<default>:<mainKey>", etc.,
   // depending on `session.scope` / `session.mainKey` / `agents.default`. Stores can also
@@ -178,11 +188,6 @@ function resolveMainSessionTranscriptFiles(
     sessionKey: context.key,
   });
   if (canonicalContextKey !== canonicalMainKey) {
-    return null;
-  }
-  const entry = context.entry as Record<string, unknown> | undefined;
-  const rawCheckpoints = entry?.compactionCheckpoints;
-  if (!Array.isArray(rawCheckpoints) || rawCheckpoints.length === 0) {
     return null;
   }
   const files: string[] = [];
