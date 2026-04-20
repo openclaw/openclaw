@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import {
   abortAgentHarnessRun,
   queueAgentHarnessMessage,
@@ -11,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   buildThreadResumeParams,
   buildTurnStartParams,
@@ -29,17 +29,7 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     runId: "run-1",
     provider: "codex",
     modelId: "gpt-5.4-codex",
-    model: {
-      id: "gpt-5.4-codex",
-      name: "gpt-5.4-codex",
-      provider: "codex",
-      api: "openai-codex-responses",
-      input: ["text"],
-      reasoning: true,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8_000,
-    } as Model<Api>,
+    model: createCodexTestModel("codex"),
     thinkLevel: "medium",
     disableTools: true,
     timeoutMs: 5_000,
@@ -253,10 +243,7 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.model = {
-      ...params.model,
-      input: ["text", "image"],
-    } as Model<Api>;
+    params.model = createCodexTestModel("codex", ["text", "image"]);
     params.images = [
       {
         type: "image",
