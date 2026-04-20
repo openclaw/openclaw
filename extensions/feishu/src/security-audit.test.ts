@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { collectFeishuSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 
-describe("security audit Feishu doc risk findings", () => {
+describe("Feishu security audit findings", () => {
   it.each([
     {
-      name: "warns when Feishu doc tool is enabled because create can grant requester access",
+      name: "warns when doc tool is enabled because create can grant requester access",
       cfg: {
         channels: {
           feishu: {
@@ -17,7 +17,7 @@ describe("security audit Feishu doc risk findings", () => {
       expectedFinding: "channels.feishu.doc_owner_open_id",
     },
     {
-      name: "treats Feishu SecretRef appSecret as configured for doc tool risk detection",
+      name: "treats SecretRef appSecret as configured for doc tool risk detection",
       cfg: {
         channels: {
           feishu: {
@@ -33,7 +33,7 @@ describe("security audit Feishu doc risk findings", () => {
       expectedFinding: "channels.feishu.doc_owner_open_id",
     },
     {
-      name: "does not warn for Feishu doc grant risk when doc tools are disabled",
+      name: "does not warn for doc grant risk when doc tools are disabled",
       cfg: {
         channels: {
           feishu: {
