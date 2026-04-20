@@ -11,6 +11,15 @@ export const FRIENDLIAI_DEFAULT_MAX_TOKENS = 202752;
 export function buildFriendliaiCatalogModels(): ModelDefinitionConfig[] {
   return [
     {
+      id: "zai-org/GLM-5.1",
+      name: "GLM-5.1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+      contextWindow: 202752,
+      maxTokens: 202752,
+    },
+    {
       id: "meta-llama/Llama-3.3-70B-Instruct",
       name: "Llama 3.3 70B Instruct",
       reasoning: false,
@@ -61,15 +70,6 @@ export function buildFriendliaiCatalogModels(): ModelDefinitionConfig[] {
       reasoning: false,
       input: ["text"],
       cost: { input: 1, output: 3.2, cacheRead: 0.5, cacheWrite: 0 },
-      contextWindow: 202752,
-      maxTokens: 202752,
-    },
-    {
-      id: "zai-org/GLM-5.1",
-      name: "GLM-5.1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
       contextWindow: 202752,
       maxTokens: 202752,
     },
