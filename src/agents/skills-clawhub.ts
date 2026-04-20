@@ -59,6 +59,16 @@ export type UpdateClawHubSkillResult =
     }
   | { ok: false; error: string };
 
+export type UninstallClawHubSkillResult =
+  | {
+      ok: true;
+      slug: string;
+      removed: boolean;
+      targetDir: string;
+      previousVersion: string | null;
+    }
+  | { ok: false; error: string };
+
 type Logger = {
   info?: (message: string) => void;
 };
@@ -406,6 +416,66 @@ export async function installSkillFromClawHub(params: {
   logger?: Logger;
 }): Promise<InstallClawHubSkillResult> {
   return await installRequestedSkillFromClawHub(params);
+}
+
+async function removeSkillFromLockfile(workspaceDir: string, slug: string): Promise<void> {
+  const lock = await readClawHubSkillsLockfile(workspaceDir);
+  if (!(slug in lock.skills)) {
+    return;
+  }
+  const nextSkills = { ...lock.skills };
+  delete nextSkills[slug];
+  await writeClawHubSkillsLockfile(workspaceDir, {
+    version: 1,
+    skills: nextSkills,
+  });
+}
+
+export async function uninstallSkillFromClawHub(params: {
+  workspaceDir: string;
+  slug: string;
+  logger?: Logger;
+}): Promise<UninstallClawHubSkillResult> {
+  let slug: string;
+  try {
+    // Accept any slug that was accepted at install time. Legacy non-ASCII
+    // tracked installs must still be removable; use the looser path-safety
+    // check rather than the ASCII-only install validator.
+    slug = normalizeTrackedSlug(params.slug);
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
+  }
+  let targetDir: string;
+  try {
+    targetDir = resolveSkillInstallDir(params.workspaceDir, slug);
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
+  }
+  try {
+    const lockBefore = await readClawHubSkillsLockfile(params.workspaceDir);
+    const previousVersion = lockBefore.skills[slug]?.version ?? null;
+    const originBefore = await readClawHubSkillOrigin(targetDir);
+    const dirExists = await fileExists(targetDir);
+
+    if (!dirExists && !(slug in lockBefore.skills) && !originBefore) {
+      return { ok: true, slug, removed: false, targetDir, previousVersion: null };
+    }
+
+    if (dirExists) {
+      params.logger?.info?.(`Removing skill ${slug} from ${targetDir}…`);
+      await fs.rm(targetDir, { recursive: true, force: true });
+    }
+    await removeSkillFromLockfile(params.workspaceDir, slug);
+    return {
+      ok: true,
+      slug,
+      removed: dirExists,
+      targetDir,
+      previousVersion: previousVersion ?? originBefore?.installedVersion ?? null,
+    };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
+  }
 }
 
 export async function updateSkillsFromClawHub(params: {

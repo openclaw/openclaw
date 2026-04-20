@@ -33,8 +33,12 @@ vi.mock("../infra/archive.js", () => ({
   fileExists: fileExistsMock,
 }));
 
-const { installSkillFromClawHub, searchSkillsFromClawHub, updateSkillsFromClawHub } =
-  await import("./skills-clawhub.js");
+const {
+  installSkillFromClawHub,
+  searchSkillsFromClawHub,
+  uninstallSkillFromClawHub,
+  updateSkillsFromClawHub,
+} = await import("./skills-clawhub.js");
 
 describe("skills-clawhub", () => {
   beforeEach(() => {
@@ -325,6 +329,165 @@ describe("skills-clawhub", () => {
         slug: "calendar-2",
       });
       expect(result).toMatchObject({ ok: true });
+    });
+  });
+
+  describe("uninstallSkillFromClawHub", () => {
+    beforeEach(() => {
+      // Use the real filesystem for directory existence checks so uninstall
+      // can tell when a skill dir is actually present.
+      fileExistsMock.mockImplementation(async (input: string) => {
+        try {
+          await fs.stat(input);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    });
+
+    async function createTrackedSkillFixture(slug: string, version = "1.0.0") {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-uninstall-"));
+      const skillDir = path.join(workspaceDir, "skills", slug);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), "# skill\n", "utf8");
+      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, ".clawhub", "origin.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            registry: "https://clawhub.ai",
+            slug,
+            installedVersion: version,
+            installedAt: 1,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, ".clawhub", "lock.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            skills: {
+              [slug]: { version, installedAt: 1 },
+              "other-skill": { version: "2.0.0", installedAt: 2 },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      return { workspaceDir, skillDir };
+    }
+
+    it("removes the skill directory and lockfile entry for a tracked install", async () => {
+      const { workspaceDir, skillDir } = await createTrackedSkillFixture("calendar", "1.2.3");
+      try {
+        const result = await uninstallSkillFromClawHub({
+          workspaceDir,
+          slug: "calendar",
+        });
+
+        expect(result).toMatchObject({
+          ok: true,
+          slug: "calendar",
+          removed: true,
+          previousVersion: "1.2.3",
+        });
+        await expect(fs.stat(skillDir)).rejects.toMatchObject({ code: "ENOENT" });
+
+        const lockRaw = await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8");
+        const lock = JSON.parse(lockRaw) as { skills: Record<string, unknown> };
+        expect(lock.skills).not.toHaveProperty("calendar");
+        expect(lock.skills).toHaveProperty("other-skill");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("is idempotent when the slug is not installed", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-uninstall-"));
+      try {
+        const result = await uninstallSkillFromClawHub({
+          workspaceDir,
+          slug: "ghost",
+        });
+        expect(result).toMatchObject({
+          ok: true,
+          slug: "ghost",
+          removed: false,
+          previousVersion: null,
+        });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("removes the lockfile entry even when the directory is already gone", async () => {
+      const { workspaceDir, skillDir } = await createTrackedSkillFixture("ghost", "0.1.0");
+      try {
+        await fs.rm(skillDir, { recursive: true, force: true });
+        const result = await uninstallSkillFromClawHub({
+          workspaceDir,
+          slug: "ghost",
+        });
+        expect(result).toMatchObject({
+          ok: true,
+          slug: "ghost",
+          removed: false,
+          previousVersion: "0.1.0",
+        });
+        const lockRaw = await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8");
+        const lock = JSON.parse(lockRaw) as { skills: Record<string, unknown> };
+        expect(lock.skills).not.toHaveProperty("ghost");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects path traversal attempts in slug", async () => {
+      const result = await uninstallSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "../evil",
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Invalid skill slug"),
+      });
+    });
+
+    it("rejects empty slug", async () => {
+      const result = await uninstallSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "",
+      });
+      expect(result).toMatchObject({ ok: false });
+    });
+
+    it("accepts legacy non-ASCII tracked slugs (symmetric with update)", async () => {
+      const slug = "re\u0430ct";
+      const { workspaceDir, skillDir } = await createTrackedSkillFixture(slug, "0.9.0");
+      try {
+        const result = await uninstallSkillFromClawHub({
+          workspaceDir,
+          slug,
+        });
+        expect(result).toMatchObject({
+          ok: true,
+          slug,
+          removed: true,
+          previousVersion: "0.9.0",
+        });
+        await expect(fs.stat(skillDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
     });
   });
 

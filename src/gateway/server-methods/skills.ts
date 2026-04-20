@@ -7,6 +7,7 @@ import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import {
   installSkillFromClawHub,
   searchSkillsFromClawHub,
+  uninstallSkillFromClawHub,
   updateSkillsFromClawHub,
 } from "../../agents/skills-clawhub.js";
 import { installSkill } from "../../agents/skills-install.js";
@@ -30,6 +31,7 @@ import {
   validateSkillsInstallParams,
   validateSkillsSearchParams,
   validateSkillsStatusParams,
+  validateSkillsUninstallParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -236,6 +238,44 @@ export const skillsHandlers: GatewayRequestHandlers = {
       result,
       result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
     );
+  },
+  "skills.uninstall": async ({ params, respond }) => {
+    if (!validateSkillsUninstallParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.uninstall params: ${formatValidationErrors(validateSkillsUninstallParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const cfg = loadConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const p = params as { slug: string; source?: "clawhub" };
+    const result = await uninstallSkillFromClawHub({
+      workspaceDir,
+      slug: p.slug,
+    });
+    if (result.ok) {
+      respond(
+        true,
+        {
+          ok: true,
+          slug: result.slug,
+          removed: result.removed,
+          targetDir: result.targetDir,
+          previousVersion: result.previousVersion,
+          message: result.removed
+            ? `Uninstalled ${result.slug}`
+            : `Skill ${result.slug} was not installed`,
+        },
+        undefined,
+      );
+      return;
+    }
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
   },
   "skills.update": async ({ params, respond }) => {
     if (!validateSkillsUpdateParams(params)) {
