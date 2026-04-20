@@ -22,7 +22,9 @@ type MatrixHandlerTestHarnessOptions = {
   logger?: RuntimeLogger;
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
+  allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
   groupAllowFrom?: string[];
+  groupAllowFromResolvedEntries?: MatrixMonitorHandlerParams["groupAllowFromResolvedEntries"];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: Set<string>;
@@ -48,7 +50,7 @@ type MatrixHandlerTestHarnessOptions = {
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
   buildPairingReply?: () => string;
   shouldHandleTextCommands?: () => boolean;
-  hasControlCommand?: () => boolean;
+  hasControlCommand?: MatrixMonitorHandlerParams["core"]["channel"]["text"]["hasControlCommand"];
   resolveMarkdownTableMode?: () => string;
   resolveAgentRoute?: () => typeof DEFAULT_ROUTE;
   resolveStorePath?: () => string;
@@ -115,6 +117,7 @@ export function createMatrixHandlerTestHarness(
       counts: { final: 0, block: 0, tool: 0 },
     }));
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
+  const cfgForHandler = options.cfg ?? {};
 
   const handler = createMatrixRoomMessageHandler({
     client: {
@@ -123,6 +126,9 @@ export function createMatrixHandlerTestHarness(
       ...options.client,
     } as never,
     core: {
+      config: {
+        loadConfig: () => cfgForHandler,
+      },
       channel: {
         pairing: {
           readAllowFromStore,
@@ -193,7 +199,7 @@ export function createMatrixHandlerTestHarness(
         enqueueSystemEvent,
       },
     } as never,
-    cfg: (options.cfg ?? {}) as never,
+    cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
     runtime:
       options.runtime ??
@@ -209,7 +215,9 @@ export function createMatrixHandlerTestHarness(
       } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
     allowFrom: options.allowFrom ?? [],
+    allowFromResolvedEntries: options.allowFromResolvedEntries,
     groupAllowFrom: options.groupAllowFrom ?? [],
+    groupAllowFromResolvedEntries: options.groupAllowFromResolvedEntries,
     roomsConfig: options.roomsConfig,
     accountAllowBots: options.accountAllowBots,
     configuredBotUserIds: options.configuredBotUserIds,
@@ -256,11 +264,13 @@ export function createMatrixTextMessageEvent(params: {
   originServerTs?: number;
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
+  unsigned?: MatrixRawEvent["unsigned"];
 }): MatrixRawEvent {
   return createMatrixRoomMessageEvent({
     eventId: params.eventId,
     sender: params.sender,
     originServerTs: params.originServerTs,
+    unsigned: params.unsigned,
     content: {
       msgtype: "m.text",
       body: params.body,
@@ -274,6 +284,7 @@ export function createMatrixRoomMessageEvent(params: {
   eventId: string;
   sender?: string;
   originServerTs?: number;
+  unsigned?: MatrixRawEvent["unsigned"];
   content: RoomMessageEventContent;
 }): MatrixRawEvent {
   return {
@@ -282,6 +293,7 @@ export function createMatrixRoomMessageEvent(params: {
     event_id: params.eventId,
     origin_server_ts: params.originServerTs ?? Date.now(),
     content: params.content,
+    ...(params.unsigned ? { unsigned: params.unsigned } : {}),
   } as MatrixRawEvent;
 }
 

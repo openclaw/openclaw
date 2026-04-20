@@ -25,6 +25,9 @@ const { registerQaLabCli } = vi.hoisted(() => ({
     qa.command("run").action(() => undefined);
   }),
 }));
+const { loadPrivateQaCliModule } = vi.hoisted(() => ({
+  loadPrivateQaCliModule: vi.fn(async () => ({ registerQaLabCli })),
+}));
 
 const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
   const action = vi.fn();
@@ -37,7 +40,13 @@ const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
-vi.mock("../../plugin-sdk/qa-lab.js", () => ({ registerQaLabCli }));
+vi.mock("./private-qa-cli.js", async () => {
+  const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
+  return {
+    ...actual,
+    loadPrivateQaCliModule,
+  };
+});
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -66,6 +75,7 @@ describe("registerSubCliCommands", () => {
     registerNodesCli.mockClear();
     nodesAction.mockClear();
     registerQaLabCli.mockClear();
+    loadPrivateQaCliModule.mockClear();
     registerCapabilityCli.mockClear();
     inferAction.mockClear();
   });

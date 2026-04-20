@@ -86,6 +86,25 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect((blocks[0] as { type?: string }).type).toBe("audio");
   });
 
+  it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
+    const statSpy = vi.spyOn(fs, "statSync");
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads([
+      {
+        text: "MEDIA:file://attacker/share/probe.mp3",
+        mediaUrl: "file://attacker/share/probe.mp3",
+      },
+    ]);
+
+    expect(blocks).toHaveLength(0);
+    expect(statSpy).not.toHaveBeenCalled();
+    expect(readSpy).not.toHaveBeenCalled();
+
+    statSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
   it("rejects a local audio file outside configured localRoots", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const allowedRoot = path.join(tmpDir, "allowed");

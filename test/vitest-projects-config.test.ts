@@ -11,6 +11,7 @@ import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-lig
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
+import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 describe("projects vitest config", () => {
@@ -40,6 +41,19 @@ describe("projects vitest config", () => {
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });
 
+  it("narrows the contracts lane to targeted contract files", () => {
+    const config = createContractsVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
+
+    expect(config.test.include).toEqual([
+      "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
+  });
+
   it("keeps the root ui lane aligned with the isolated jsdom setup", () => {
     const config = createUiVitestConfig();
     expect(config.test.environment).toBe("jsdom");
@@ -49,6 +63,15 @@ describe("projects vitest config", () => {
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
+  });
+
+  it("keeps the unit-ui shard aligned with the isolated jsdom setup", () => {
+    expect(unitUiConfig.test?.environment).toBe("jsdom");
+    expect(unitUiConfig.test?.isolate).toBe(true);
+    expect(unitUiConfig.test?.runner).toBeUndefined();
+    const setupFiles = normalizeConfigPaths(unitUiConfig.test?.setupFiles);
+    expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
+    expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
   });
 
   it("keeps the unit lane on the non-isolated runner by default", () => {
