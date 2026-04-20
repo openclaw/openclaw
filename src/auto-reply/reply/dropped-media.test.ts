@@ -97,7 +97,7 @@ describe("formatDroppedMediaNotice", () => {
       { displayName: "screenshot.png", code: "file-not-accessible" },
     ];
     const result = formatDroppedMediaNotice(dropped);
-    expect(result).toBe("\u26a0 Attachment not sent: screenshot.png (file not accessible)");
+    expect(result).toBe("\u26a0 Attachment not sent: `screenshot.png` (file not accessible)");
   });
 
   it("formats multiple file notice", () => {
@@ -107,8 +107,8 @@ describe("formatDroppedMediaNotice", () => {
     ];
     const result = formatDroppedMediaNotice(dropped);
     expect(result).toContain("\u26a0 2 attachments not sent:");
-    expect(result).toContain("\u2022 file1.png \u2014 file path blocked");
-    expect(result).toContain("\u2022 file2.jpg \u2014 file not accessible");
+    expect(result).toContain("\u2022 `file1.png` \u2014 file path blocked");
+    expect(result).toContain("\u2022 `file2.jpg` \u2014 file not accessible");
   });
 
   it("uses user-friendly reason labels, not internal codes", () => {
