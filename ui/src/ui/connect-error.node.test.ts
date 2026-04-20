@@ -26,4 +26,17 @@ describe("formatConnectError", () => {
       }),
     ).toBe("gateway pairing required: device is not approved yet");
   });
+
+  it("preserves surfaced pending approvals", () => {
+    expect(
+      formatConnectError({
+        message: "scope upgrade pending approval (requestId: req-123)",
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "scope-upgrade",
+          requestId: "req-123",
+        },
+      }),
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
+  });
 });
