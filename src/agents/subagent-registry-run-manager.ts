@@ -186,7 +186,11 @@ export function createSubagentRunManager(params: {
       });
       // PR-8 follow-up: drain this child from any parent's
       // `openSubagentRunIds` so `exit_plan_mode` no longer blocks on it.
-      drainCompletedSubagentFromParents(runId);
+      // Pass `requesterSessionKey` as fallback so the persist layer
+      // can scrub `blockingSubagentRunIds` even when the parent ctx was
+      // already evicted (the auto-approve flow makes this the common
+      // case — see drainCompletedSubagentFromParents docstring).
+      drainCompletedSubagentFromParents(runId, entry?.requesterSessionKey);
     } catch {
       // ignore
     }
@@ -468,7 +472,9 @@ export function createSubagentRunManager(params: {
       entry.suppressAnnounceReason = "killed";
       // PR-8 follow-up: drain killed runs from parents' open-sets too,
       // otherwise a killed child would block exit_plan_mode indefinitely.
-      drainCompletedSubagentFromParents(runId);
+      // Pass `requesterSessionKey` as fallback so the persist layer can
+      // scrub `blockingSubagentRunIds` when the parent ctx is gone.
+      drainCompletedSubagentFromParents(runId, entry.requesterSessionKey);
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
         entriesByChildSessionKey.set(entry.childSessionKey, entry);
       }

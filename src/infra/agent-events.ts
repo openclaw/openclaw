@@ -459,10 +459,29 @@ export function replaceOpenSubagentRunIdInParents(previousRunId: string, nextRun
  *
  * Keeps the drain logic in the same module that owns the set, rather
  * than exposing `AgentRunContext` internals to the registry layer.
+ *
+ * PR #68939 follow-up (drain-leak fix): the in-memory parent ctx may
+ * have already been GC'd before the subagent settles. The auto-approve
+ * flow makes this the COMMON case: parent calls `exit_plan_mode` →
+ * auto-approve fails because subagent is still running → parent run
+ * ends → subagent settles AFTER the parent ctx is gone. Without a
+ * fallback, `hadChild` returns false on every ctx, the persisted
+ * `blockingSubagentRunIds` set on the requester session is NEVER
+ * cleaned, and the leaked runId permanently blocks every future
+ * approval attempt on that session.
+ *
+ * The registry knows `entry.requesterSessionKey` even after the parent
+ * ctx is gone. Pass it as `fallbackSessionKey` so the persist layer can
+ * scrub the leaked runId from the right session even when no live ctx
+ * is available.
  */
-export function drainCompletedSubagentFromParents(childRunId: string): void {
+export function drainCompletedSubagentFromParents(
+  childRunId: string,
+  fallbackSessionKey?: string,
+): void {
   const state = getAgentEventState();
   const now = Date.now();
+  let persistRemovalFiredFromCtx = false;
   for (const ctx of state.runContextById.values()) {
     const set = ctx.openSubagentRunIds;
     if (!set) {
@@ -478,6 +497,7 @@ export function drainCompletedSubagentFromParents(childRunId: string): void {
       ctx.lastSubagentSettledAt = now;
     }
     if (hadChild && ctx.inPlanMode === true && ctx.sessionKey) {
+      persistRemovalFiredFromCtx = true;
       persistPlanModeSubagentGateState({
         sessionKey: ctx.sessionKey,
         mutate: (planMode) => {
@@ -490,6 +510,26 @@ export function drainCompletedSubagentFromParents(childRunId: string): void {
         },
       });
     }
+  }
+  // Fallback path: no in-memory parent ctx had the runId. The parent
+  // run was likely already evicted (auto-approve flow described above).
+  // Address the persisted set on the requester session directly.
+  if (!persistRemovalFiredFromCtx && fallbackSessionKey) {
+    persistPlanModeSubagentGateState({
+      sessionKey: fallbackSessionKey,
+      mutate: (planMode) => {
+        const nextIds = new Set(planMode.blockingSubagentRunIds ?? []);
+        if (!nextIds.delete(childRunId)) {
+          // Not actually leaked on this session — nothing to do. Avoids a
+          // pointless write that would bump `updatedAt` for no reason.
+          return;
+        }
+        planMode.blockingSubagentRunIds = [...nextIds];
+        if (nextIds.size === 0) {
+          planMode.lastSubagentSettledAt = now;
+        }
+      },
+    });
   }
 }
 
