@@ -704,8 +704,18 @@ export class VoiceCallWebhookServer {
 
     const params = new URLSearchParams(ctx.rawBody);
     const direction = params.get("Direction");
-    const isInbound = !direction || direction === "inbound";
-    if (!isInbound) {
+    // Allow realtime short-circuit for inbound AND outbound (outbound-api /
+    // outbound-dial). The realtime handler's buildTwiMLPayload already
+    // supports both directions internally — it explicitly maps
+    // `rawDirection === "outbound-api"` to `token.direction = "outbound"`.
+    //
+    // Without this, outbound calls fall through to decideTwimlResponse,
+    // which on a realtime-only config (streaming.streamPath undefined →
+    // canStream === false) returns PAUSE_TWIML — caller hears any
+    // pre-stream <Say> followed by 30s of silence, then hangup.
+    const isSupportedDirection =
+      !direction || direction === "inbound" || direction.startsWith("outbound");
+    if (!isSupportedDirection) {
       return false;
     }
 
