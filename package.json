@@ -989,6 +989,10 @@
       "types": "./dist/plugin-sdk/qa-channel.d.ts",
       "default": "./dist/plugin-sdk/qa-channel.js"
     },
+    "./plugin-sdk/qa-channel-protocol": {
+      "types": "./dist/plugin-sdk/qa-channel-protocol.d.ts",
+      "default": "./dist/plugin-sdk/qa-channel-protocol.js"
+    },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
