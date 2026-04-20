@@ -199,7 +199,7 @@ function tryFinishCronTaskRun(
     );
   }
 }
-/** Default max retries for one-shot jobs on transient errors (#24355). */
+/** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
 
 const TRANSIENT_PATTERNS: Record<string, RegExp> = {
@@ -508,8 +508,14 @@ export function applyJobResult(
         }
       }
     } else if (result.status === "error" && isJobEnabled(job)) {
-      // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const retryConfig = resolveRetryConfig(state.deps.cronConfig);
+      const transient = isTransientCronError(result.error, retryConfig.retryOn);
+      // Apply exponential backoff for errored recurring jobs to prevent retry storms.
+      // For transient errors, allow a short retry window before the natural next schedule.
+      const backoff = errorBackoffMs(
+        job.state.consecutiveErrors ?? 1,
+        transient ? retryConfig.backoffMs : undefined,
+      );
       let normalNext: number | undefined;
       try {
         normalNext =
@@ -523,27 +529,52 @@ export function applyJobResult(
         recordScheduleComputeError({ state, job, err });
       }
       const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        job.schedule.kind === "cron"
-          ? resolveCronNextRunWithLowerBound({
-              state,
-              job,
-              naturalNext: normalNext,
-              lowerBoundMs: backoffNext,
-              context: "error_backoff",
-            })
+      const withinRetryBudget = (job.state.consecutiveErrors ?? 1) <= retryConfig.maxAttempts;
+      if (job.schedule.kind === "cron") {
+        if (transient) {
+          const safeNaturalNext = resolveCronNextRunWithLowerBound({
+            state,
+            job,
+            naturalNext: normalNext,
+            lowerBoundMs: result.endedAt + MIN_REFIRE_GAP_MS,
+            context: "error_backoff",
+          });
+          const retryNext = Math.max(backoffNext, result.endedAt + MIN_REFIRE_GAP_MS);
+          // Retry transient cron failures on the backoff window while within budget.
+          // Once exhausted, fall back to ordinary cron scheduling.
+          job.state.nextRunAtMs =
+            withinRetryBudget && safeNaturalNext !== undefined ? retryNext : safeNaturalNext;
+        } else {
+          job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
+            state,
+            job,
+            naturalNext: normalNext,
+            lowerBoundMs: backoffNext,
+            context: "error_backoff",
+          });
+        }
+      } else {
+        // For transient recurring failures within budget, retry on the backoff window first.
+        // Once the retry budget is exhausted, fall back to the natural recurring schedule.
+        job.state.nextRunAtMs = transient
+          ? withinRetryBudget
+            ? backoffNext
+            : normalNext
           : normalNext !== undefined
             ? Math.max(normalNext, backoffNext)
             : backoffNext;
+      }
       state.deps.log.info(
         {
           jobId: job.id,
           consecutiveErrors: job.state.consecutiveErrors,
+          transient,
           backoffMs: backoff,
           nextRunAtMs: job.state.nextRunAtMs,
         },
-        "cron: applying error backoff",
+        transient
+          ? "cron: scheduling recurring retry after transient error"
+          : "cron: applying error backoff",
       );
     } else if (isJobEnabled(job)) {
       let naturalNext: number | undefined;
@@ -857,6 +888,7 @@ export async function onTimer(state: CronServiceState) {
 function isRunnableJob(params: {
   job: CronJob;
   nowMs: number;
+  cronConfig?: CronConfig;
   skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
@@ -895,7 +927,11 @@ function isRunnableJob(params: {
   if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
     return true;
   }
-  if (hasScheduledNextRunAtMs(next) && next > nowMs && isErrorBackoffPending(job, nowMs)) {
+  if (
+    hasScheduledNextRunAtMs(next) &&
+    next > nowMs &&
+    isErrorBackoffPending(job, nowMs, params.cronConfig)
+  ) {
     // Respect active retry backoff windows on restart, but allow missed-slot
     // replay once the backoff window has elapsed.
     return false;
@@ -920,7 +956,7 @@ function isRunnableJob(params: {
   return previousRunAtMs > lastRunAtMs;
 }
 
-function isErrorBackoffPending(job: CronJob, nowMs: number): boolean {
+function isErrorBackoffPending(job: CronJob, nowMs: number, cronConfig?: CronConfig): boolean {
   if (job.schedule.kind === "at" || job.state.lastStatus !== "error") {
     return false;
   }
@@ -933,7 +969,13 @@ function isErrorBackoffPending(job: CronJob, nowMs: number): boolean {
     typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
       ? Math.max(1, Math.floor(consecutiveErrorsRaw))
       : 1;
-  return nowMs < lastRunAtMs + errorBackoffMs(consecutiveErrors);
+  const retryConfig = resolveRetryConfig(cronConfig);
+  const transient = isTransientCronError(job.state.lastError, retryConfig.retryOn);
+  const backoffSchedule = transient ? retryConfig.backoffMs : undefined;
+  const backoffMs = errorBackoffMs(consecutiveErrors, backoffSchedule);
+  const pendingMs =
+    job.schedule.kind === "cron" && transient ? Math.max(backoffMs, MIN_REFIRE_GAP_MS) : backoffMs;
+  return nowMs < lastRunAtMs + pendingMs;
 }
 
 function collectRunnableJobs(
@@ -952,6 +994,7 @@ function collectRunnableJobs(
     isRunnableJob({
       job,
       nowMs,
+      cronConfig: state.deps.cronConfig,
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
       allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,

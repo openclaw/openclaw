@@ -19751,7 +19751,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 10,
                 title: "Cron Retry Max Attempts",
                 description:
-                  "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
+                  "Max retries for cron jobs on transient errors before permanent disable for one-shot jobs, or before falling back to ordinary recurring scheduling (default: 3).",
               },
               backoffMs: {
                 minItems: 1,
@@ -19781,7 +19781,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             additionalProperties: false,
             title: "Cron Retry Policy",
             description:
-              "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
+              "Overrides the default retry policy for cron jobs when they fail with transient errors (rate limit, overloaded, network, server_error). One-shot jobs retry before permanent disable; recurring jobs retry on the same backoff window before falling through to their natural schedule. Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
           },
           webhook: {
             type: "string",
@@ -26390,12 +26390,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.retry": {
       label: "Cron Retry Policy",
-      help: "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
+      help: "Overrides the default retry policy for cron jobs when they fail with transient errors (rate limit, overloaded, network, server_error). One-shot jobs retry before permanent disable; recurring jobs retry on the same backoff window before falling through to their natural schedule. Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
       tags: ["reliability", "automation"],
     },
     "cron.retry.maxAttempts": {
       label: "Cron Retry Max Attempts",
-      help: "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
+      help: "Max retries for cron jobs on transient errors before permanent disable for one-shot jobs, or before falling back to ordinary recurring scheduling (default: 3).",
       tags: ["reliability", "performance", "automation"],
     },
     "cron.retry.backoffMs": {

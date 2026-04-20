@@ -395,6 +395,297 @@ describe("cron service timer regressions", () => {
     expect(job!.state.nextRunAtMs).toBeUndefined();
   });
 
+  it("#24355: recurring cron job retries transient failures before the next natural schedule", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-transient-retry",
+      name: "daily noon",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 13 * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", error: "TypeError: fetch failed" })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 2, backoffMs: [1000, 2000], retryOn: ["network"] },
+      },
+    });
+
+    await onTimer(state);
+    const jobAfterRetry = state.store?.jobs.find((j) => j.id === "recurring-transient-retry");
+    expect(jobAfterRetry).toBeDefined();
+    expect(jobAfterRetry!.enabled).toBe(true);
+    expect(jobAfterRetry!.state.lastStatus).toBe("error");
+    expect(jobAfterRetry!.state.nextRunAtMs).toBe(scheduledAt + 2_000);
+
+    now = (jobAfterRetry!.state.nextRunAtMs ?? now) + 1;
+    await onTimer(state);
+
+    const finishedJob = state.store?.jobs.find((j) => j.id === "recurring-transient-retry");
+    expect(finishedJob).toBeDefined();
+    expect(finishedJob!.enabled).toBe(true);
+    expect(finishedJob!.state.lastStatus).toBe("ok");
+    expect(finishedJob!.state.nextRunAtMs).toBeGreaterThan(scheduledAt + 86_000_000);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("enforces the minimum refire gap for transient cron retries", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-transient-min-refire-gap",
+      name: "second-granularity transient retry",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "pulse" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValue({ status: "error", error: "TypeError: fetch failed" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 2, backoffMs: [100], retryOn: ["network"] },
+      },
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find(
+      (entry) => entry.id === "recurring-transient-min-refire-gap",
+    );
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.nextRunAtMs).toBe(scheduledAt + 2_000);
+  });
+
+  it("respects configured transient retry backoff during startup catch-up", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const retryAt = scheduledAt + 10 * 60_000;
+    const cronJob = createIsolatedRegressionJob({
+      id: "startup-transient-backoff",
+      name: "startup transient backoff",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: {
+        nextRunAtMs: retryAt,
+        lastRunAtMs: scheduledAt,
+        lastStatus: "error",
+        consecutiveErrors: 1,
+        lastError: "TypeError: fetch failed",
+      },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const now = scheduledAt + 2 * 60_000;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 2, backoffMs: [10 * 60_000], retryOn: ["network"] },
+      },
+    });
+
+    await runMissedJobs(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === "startup-transient-backoff");
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(job?.state.nextRunAtMs).toBe(retryAt);
+    expect(job?.state.lastStatus).toBe("error");
+  });
+
+  it("honors the minimum refire gap for transient cron startup catch-up", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const retryAt = scheduledAt + 2_000;
+    const cronJob = createIsolatedRegressionJob({
+      id: "startup-transient-min-refire-gap",
+      name: "startup transient min refire gap",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "pulse" },
+      state: {
+        nextRunAtMs: retryAt,
+        lastRunAtMs: scheduledAt,
+        lastStatus: "error",
+        consecutiveErrors: 1,
+        lastError: "TypeError: fetch failed",
+      },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const now = scheduledAt + 1_000;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 2, backoffMs: [100], retryOn: ["network"] },
+      },
+    });
+
+    await runMissedJobs(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === "startup-transient-min-refire-gap");
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(job?.state.nextRunAtMs).toBe(retryAt);
+    expect(job?.state.lastStatus).toBe("error");
+  });
+
+  it("falls back to ordinary cron scheduling after transient retry budget is exhausted", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-transient-budget-exhausted",
+      name: "recurring transient budget exhausted",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValue({ status: "error", error: "TypeError: fetch failed" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 0, backoffMs: [10 * 60_000], retryOn: ["network"] },
+      },
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find(
+      (entry) => entry.id === "recurring-transient-budget-exhausted",
+    );
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.nextRunAtMs).toBe(scheduledAt + 60_000);
+  });
+
+  it("keeps error backoff for non-transient recurring cron failures", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "recurring-permanent-error-backoff",
+      name: "recurring permanent error backoff",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: { nextRunAtMs: scheduledAt, consecutiveErrors: 2 },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValue({ status: "error", error: "invalid API key" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === "recurring-permanent-error-backoff");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.consecutiveErrors).toBe(3);
+    expect(job?.state.nextRunAtMs).toBe(scheduledAt + 5 * 60_000);
+  });
+
+  it("falls back to ordinary every scheduling after transient retry budget is exhausted", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "every-transient-budget-exhausted",
+      name: "every transient budget exhausted",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "briefing" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValue({ status: "error", error: "TypeError: fetch failed" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 0, backoffMs: [10 * 60_000], retryOn: ["network"] },
+      },
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((entry) => entry.id === "every-transient-budget-exhausted");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.nextRunAtMs).toBe(scheduledAt + 60_000);
+  });
+
   it("prevents spin loop when cron job completes within the scheduled second (#17821)", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
@@ -1171,6 +1462,51 @@ describe("cron service timer regressions", () => {
       const shouldDelete = applyJobResult(state, job, {
         status: "error",
         error: "synthetic failure",
+        startedAt,
+        endedAt,
+      });
+
+      expect(shouldDelete).toBe(false);
+      expect(job.state.runningAtMs).toBeUndefined();
+      expect(job.state.lastRunAtMs).toBe(startedAt);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.consecutiveErrors).toBe(1);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.enabled).toBe(true);
+    } finally {
+      nextRunSpy.mockRestore();
+    }
+  });
+
+  it("does not synthesize transient retries when cron schedule computation returns undefined (#66019)", () => {
+    const startedAt = Date.parse("2026-04-13T15:50:00.000Z");
+    const endedAt = startedAt + 25;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-66019-transient-error.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      cronConfig: {
+        retry: { maxAttempts: 2, backoffMs: [1000, 2000], retryOn: ["network"] },
+      },
+    });
+    const job = createIsolatedRegressionJob({
+      id: "cron-66019-transient-error",
+      name: "cron-66019-transient-error",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
+
+    try {
+      const shouldDelete = applyJobResult(state, job, {
+        status: "error",
+        error: "TypeError: fetch failed",
         startedAt,
         endedAt,
       });
