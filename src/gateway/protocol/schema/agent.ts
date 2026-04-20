@@ -157,6 +157,8 @@ export const AgentParamsSchema = Type.Object(
     inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    /** Optional Paperclip adapter metadata block. */
+    paperclip: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   },
   { additionalProperties: false },
 );
