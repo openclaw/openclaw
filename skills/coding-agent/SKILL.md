@@ -320,9 +320,10 @@ One zero-dependency tool that does this via native Copy-on-Write (APFS
 `clonefile()` / Linux `FICLONE`) is [cowback](https://github.com/jinbowang1/cowback):
 
 ```bash
-# One-time setup in the target project
+# Enable protection for this project (runs in background)
 cd /path/to/project
-cowback on          # watches + auto-snapshots on file changes
+cowback on          # auto-snapshots on file changes;
+                    # stays running until `cowback off` or reboot
 
 # Now spawn the agent as usual
 bash pty:true workdir:/path/to/project command:"codex --yolo exec 'your task'"
