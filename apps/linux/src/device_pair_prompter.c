@@ -147,6 +147,19 @@ static OcPairRequestInfo* build_info_from_payload(JsonNode *payload) {
     return info;
 }
 
+static void on_decision_rpc_response(const GatewayRpcResponse *response,
+                                     gpointer                  user_data)
+{
+    const gchar *method = (const gchar *)user_data;
+    if (!response) return;
+    if (!response->ok) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY,
+                    "device pair %s RPC failed: %s",
+                    method ? method : "(unknown)",
+                    response->error_msg ? response->error_msg : "(no detail)");
+    }
+}
+
 static void send_decision_rpc(const OcPairRequestInfo *info,
                               OcPairDecision decision)
 {
@@ -168,7 +181,8 @@ static void send_decision_rpc(const OcPairRequestInfo *info,
     json_builder_end_object(b);
     g_autoptr(JsonNode) params = json_builder_get_root(b);
 
-    g_autofree gchar *req_id = gateway_rpc_request(method, params, 0, NULL, NULL);
+    g_autofree gchar *req_id = gateway_rpc_request(
+        method, params, 0, on_decision_rpc_response, (gpointer)method);
     if (!req_id) {
         OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY,
                     "device pair %s RPC dispatch failed (WS not ready)", method);

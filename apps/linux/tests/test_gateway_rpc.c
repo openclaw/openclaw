@@ -17,17 +17,7 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
-static int tests_run = 0;
-static int tests_passed = 0;
-
-#define ASSERT(cond, msg) do { \
-    tests_run++; \
-    if (!(cond)) { \
-        g_printerr("FAIL [%s:%d]: %s\n", __FILE__, __LINE__, msg); \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
+#define ASSERT(cond, msg) g_assert_true(cond)
 
 /* ── Mock gateway_ws ─────────────────────────────────────────────── */
 
@@ -382,8 +372,7 @@ static void test_response_cleanup(void) {
 
     /* NULL response */
     gateway_rpc_response_free_members(NULL);
-    tests_run++;
-    tests_passed++; /* If we got here, no crash */
+    ASSERT(TRUE, "cleanup: null response safe");
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -421,19 +410,21 @@ static void test_interleaved_responses(void) {
 
 /* ── Main ────────────────────────────────────────────────────────── */
 
-int main(void) {
-    test_response_correlation();
-    test_unmatched_response();
-    test_error_response();
-    test_request_timeout();
-    test_fail_all_pending();
-    test_request_when_disconnected();
-    test_send_returns_false();
-    test_response_cleanup();
-    test_interleaved_responses();
+int main(int argc, char **argv) {
+    g_test_init(&argc, &argv, NULL);
+    g_log_set_always_fatal((GLogLevelFlags)(G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL));
 
+    g_test_add_func("/gateway_rpc/response_correlation", test_response_correlation);
+    g_test_add_func("/gateway_rpc/unmatched_response", test_unmatched_response);
+    g_test_add_func("/gateway_rpc/error_response", test_error_response);
+    g_test_add_func("/gateway_rpc/request_timeout", test_request_timeout);
+    g_test_add_func("/gateway_rpc/fail_all_pending", test_fail_all_pending);
+    g_test_add_func("/gateway_rpc/request_when_disconnected", test_request_when_disconnected);
+    g_test_add_func("/gateway_rpc/send_returns_false", test_send_returns_false);
+    g_test_add_func("/gateway_rpc/response_cleanup", test_response_cleanup);
+    g_test_add_func("/gateway_rpc/interleaved_responses", test_interleaved_responses);
+
+    int status = g_test_run();
     g_free(mock_last_sent_text);
-
-    g_print("gateway_rpc: %d/%d tests passed\n", tests_passed, tests_run);
-    return (tests_passed == tests_run) ? 0 : 1;
+    return status;
 }
