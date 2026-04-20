@@ -776,7 +776,7 @@ export const downloadVideoTool = {
         videoUrl
       ], { 
         cwd: workspaceRoot, 
-        timeout: 300000,
+        timeout: 600000,
         maxBuffer: 100 * 1024 * 1024,
         signal: abortController.signal
       });
