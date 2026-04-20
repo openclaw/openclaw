@@ -1,6 +1,5 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
   formatDurationPrecise,
@@ -12,6 +11,8 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
+import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
@@ -69,6 +70,7 @@ export class TelegramPollingSession {
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
   #transportState: TelegramPollingTransportState;
+  #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -76,6 +78,7 @@ export class TelegramPollingSession {
       initialTransport: opts.telegramTransport,
       createTelegramTransport: opts.createTelegramTransport,
     });
+    this.#status = createTelegramPollingStatusPublisher(opts.setStatus);
   }
 
   get activeRunner() {
@@ -95,12 +98,7 @@ export class TelegramPollingSession {
   }
 
   async runUntilAbort(): Promise<void> {
-    this.opts.setStatus?.({
-      mode: "polling",
-      connected: false,
-      lastConnectedAt: null,
-      lastEventAt: null,
-    });
+    this.#status.notePollingStart();
     try {
       while (!this.opts.abortSignal?.aborted) {
         const bot = await this.#createPollingBot();
@@ -126,10 +124,7 @@ export class TelegramPollingSession {
       // this, the undici keep-alive sockets survive beyond the session and
       // leak to api.telegram.org; see openclaw#68128.
       await this.#transportState.dispose();
-      this.opts.setStatus?.({
-        mode: "polling",
-        connected: false,
-      });
+      this.#status.notePollingStop();
     }
   }
 
@@ -224,84 +219,31 @@ export class TelegramPollingSession {
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     await this.#confirmPersistedOffset(bot);
 
-    let lastGetUpdatesAt = Date.now();
-    let lastApiActivityAt = Date.now();
-    let nextInFlightApiCallId = 0;
-    let latestInFlightApiStartedAt: number | null = null;
-    const inFlightApiStartedAt = new Map<number, number>();
-    let lastGetUpdatesStartedAt: number | null = null;
-    let lastGetUpdatesFinishedAt: number | null = null;
-    let lastGetUpdatesDurationMs: number | null = null;
-    let lastGetUpdatesOutcome = "not-started";
-    let lastGetUpdatesError: string | null = null;
-    let lastGetUpdatesOffset: number | null = null;
-    let inFlightGetUpdates = 0;
-    let _stopSequenceLogged = false;
-    let stallDiagLoggedAt = 0;
-
+    const liveness = new TelegramPollingLivenessTracker({
+      onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
+    });
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
-        const startedAt = Date.now();
-        const callId = nextInFlightApiCallId;
-        nextInFlightApiCallId += 1;
-        inFlightApiStartedAt.set(callId, startedAt);
-        latestInFlightApiStartedAt =
-          latestInFlightApiStartedAt == null
-            ? startedAt
-            : Math.max(latestInFlightApiStartedAt, startedAt);
+        const callId = liveness.noteApiCallStarted();
         try {
           const result = await prev(method, payload, signal);
-          lastApiActivityAt = Date.now();
+          liveness.noteApiCallSuccess();
           return result;
         } finally {
-          inFlightApiStartedAt.delete(callId);
-          if (latestInFlightApiStartedAt === startedAt) {
-            let newestStartedAt: number | null = null;
-            for (const activeStartedAt of inFlightApiStartedAt.values()) {
-              newestStartedAt =
-                newestStartedAt == null
-                  ? activeStartedAt
-                  : Math.max(newestStartedAt, activeStartedAt);
-            }
-            latestInFlightApiStartedAt = newestStartedAt;
-          }
+          liveness.noteApiCallFinished(callId);
         }
       }
 
-      const startedAt = Date.now();
-      lastGetUpdatesAt = startedAt;
-      lastGetUpdatesStartedAt = startedAt;
-      lastGetUpdatesOffset =
-        payload && typeof payload === "object" && "offset" in payload
-          ? ((payload as { offset?: number }).offset ?? null)
-          : null;
-      inFlightGetUpdates += 1;
-      lastGetUpdatesOutcome = "started";
-      lastGetUpdatesError = null;
-
+      liveness.noteGetUpdatesStarted(payload);
       try {
         const result = await prev(method, payload, signal);
-        const finishedAt = Date.now();
-        lastGetUpdatesFinishedAt = finishedAt;
-        lastGetUpdatesDurationMs = finishedAt - startedAt;
-        lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
-        lastApiActivityAt = finishedAt;
-        this.opts.setStatus?.({
-          ...createConnectedChannelStatusPatch(finishedAt),
-          mode: "polling",
-          lastError: null,
-        });
+        liveness.noteGetUpdatesSuccess(result);
         return result;
       } catch (err) {
-        const finishedAt = Date.now();
-        lastGetUpdatesFinishedAt = finishedAt;
-        lastGetUpdatesDurationMs = finishedAt - startedAt;
-        lastGetUpdatesOutcome = "error";
-        lastGetUpdatesError = formatErrorMessage(err);
-        lastApiActivityAt = finishedAt;
+        liveness.noteGetUpdatesError(err);
         throw err;
       } finally {
-        inFlightGetUpdates = Math.max(0, inFlightGetUpdates - 1);
+        liveness.noteGetUpdatesFinished();
       }
     });
 
@@ -349,41 +291,14 @@ export class TelegramPollingSession {
         return;
       }
 
-      const now = Date.now();
-      const activeElapsed =
-        inFlightGetUpdates > 0 && lastGetUpdatesStartedAt != null
-          ? now - lastGetUpdatesStartedAt
-          : 0;
-      const idleElapsed =
-        inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
-      const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
-      const apiLivenessAt =
-        latestInFlightApiStartedAt == null
-          ? lastApiActivityAt
-          : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
-      const apiElapsed = now - apiLivenessAt;
-
-      // Treat recent non-getUpdates success and recent non-getUpdates start as
-      // the same liveness signal. Slow delivery should suppress the watchdog,
-      // but only for the same bounded window as recent successful API traffic.
-      if (
-        elapsed > POLL_STALL_THRESHOLD_MS &&
-        apiElapsed > POLL_STALL_THRESHOLD_MS &&
-        runner.isRunning()
-      ) {
-        if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
-          return;
-        }
-        stallDiagLoggedAt = now;
+      const stall = liveness.detectStall({
+        thresholdMs: POLL_STALL_THRESHOLD_MS,
+        runnerIsRunning: runner.isRunning(),
+      });
+      if (stall) {
         this.#transportState.markDirty();
         stalledRestart = true;
-        const elapsedLabel =
-          inFlightGetUpdates > 0
-            ? `active getUpdates stuck for ${formatDurationPrecise(elapsed)}`
-            : `no completed getUpdates for ${formatDurationPrecise(elapsed)}`;
-        this.opts.log(
-          `[telegram] Polling stall detected (${elapsedLabel}); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
-        );
+        this.opts.log(`[telegram] ${stall.message}`);
         void stopRunner();
         void stopBot();
         if (!forceCycleTimer) {
@@ -413,7 +328,7 @@ export class TelegramPollingSession {
           : "runner stopped (maxRetryTime exceeded or graceful stop)";
       this.#forceRestarted = false;
       this.opts.log(
-        `[telegram][diag] polling cycle finished reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${String(lastGetUpdatesError)}` : ""}`,
+        `[telegram][diag] polling cycle finished reason=${reason} ${liveness.formatDiagnosticFields("error")}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
@@ -438,7 +353,7 @@ export class TelegramPollingSession {
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
       this.opts.log(
-        `[telegram][diag] polling cycle error reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"} err=${errMsg}${lastGetUpdatesError ? ` lastGetUpdatesError=${String(lastGetUpdatesError)}` : ""}`,
+        `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
