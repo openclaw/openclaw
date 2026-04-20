@@ -714,6 +714,18 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("preserves an explicitly requested visible string that ends with a channel delimiter", () => {
+    const input = [
+      'The user is instructing me to reply with exactly "Print <channel|>" and nothing else.',
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|>Print <channel|>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Print <channel|>");
+  });
+
   it("does not rewrite explanatory prose down to a single named literal", () => {
     const input = "Examples: `noise-999noise-999`. Final output: noise-999noise-999";
 

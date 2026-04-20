@@ -157,11 +157,13 @@ function stripModelSpecialTokensImpl(text: string): string {
   for (let idx = channelDelimiterMatches.length - 1; idx >= 0; idx -= 1) {
     const channelDelimiterMatch = channelDelimiterMatches[idx];
     const prefix = text.slice(0, channelDelimiterMatch.end);
-    const visibleSuffix = stripTrailingChannelDelimiters(
-      stripModelSpecialTokensImpl(text.slice(channelDelimiterMatch.end)),
-    );
+    const explicitLiteral = findExplicitSingleTargetLiteralInPreamble(prefix);
+    const rawVisibleSuffix = stripModelSpecialTokensImpl(text.slice(channelDelimiterMatch.end));
+    if (explicitLiteral && rawVisibleSuffix.trim() === explicitLiteral.trim()) {
+      return explicitLiteral;
+    }
+    const visibleSuffix = stripTrailingChannelDelimiters(rawVisibleSuffix);
     if (!visibleSuffix.trim()) {
-      const explicitLiteral = findExplicitSingleTargetLiteralInPreamble(prefix);
       if (explicitLiteral?.toLowerCase() === "<channel|>") {
         return explicitLiteral;
       }
