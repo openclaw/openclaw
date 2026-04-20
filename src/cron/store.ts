@@ -7,6 +7,7 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { CronStoreFile } from "./types.js";
 
 const serializedStoreCache = new Map<string, string>();
+const storesNeedingSplitMigration = new Set<string>();
 
 function resolveDefaultCronDir(): string {
   return path.join(resolveConfigDir(), "cron");
@@ -146,6 +147,8 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     // Load state file and merge.
     const statePath = resolveStatePath(storePath);
     const stateFile = await loadStateFile(statePath);
+    const hasLegacyInlineState =
+      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
 
     if (stateFile) {
       // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
@@ -158,7 +161,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
           backfillMissingRuntimeFields(job);
         }
       }
-    } else if (!hasInlineState(jobs as unknown as Array<Record<string, unknown>>)) {
+    } else if (!hasLegacyInlineState) {
       // No state file, no inline state: fresh clone or first run.
       for (const job of store.jobs) {
         backfillMissingRuntimeFields(job);
@@ -172,9 +175,13 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     }
 
     const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
+    const stateJson = JSON.stringify(extractStateFile(store), null, 2);
     serializedStoreCache.set(storePath, configJson);
-    if (stateFile) {
-      serializedStoreCache.set(`${storePath}:state`, JSON.stringify(stateFile, null, 2));
+    serializedStoreCache.set(`${storePath}:state`, stateJson);
+    if (hasLegacyInlineState) {
+      storesNeedingSplitMigration.add(storePath);
+    } else {
+      storesNeedingSplitMigration.delete(storePath);
     }
 
     return store;
@@ -182,6 +189,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
       serializedStoreCache.delete(`${storePath}:state`);
+      storesNeedingSplitMigration.delete(storePath);
       return { version: 1, jobs: [] };
     }
     throw err;
@@ -223,23 +231,28 @@ export async function saveCronStore(
 
   const configChanged = cachedConfig !== configJson;
   const stateChanged = cachedState !== stateJson;
+  const migrating = storesNeedingSplitMigration.has(storePath);
+  let stateNeedsWrite = stateChanged;
 
-  if (!configChanged && !stateChanged) {
-    return;
-  }
-
-  // Detect migration: state file does not exist on disk yet.
-  let migrating = false;
-  if (!cachedState) {
+  if (!stateNeedsWrite) {
     try {
-      await fs.promises.access(statePath, fs.constants.F_OK);
-    } catch {
-      migrating = true;
+      const diskStateJson = await fs.promises.readFile(statePath, "utf-8");
+      stateNeedsWrite = diskStateJson !== stateJson;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code === "ENOENT") {
+        stateNeedsWrite = true;
+      } else {
+        throw err;
+      }
     }
   }
 
+  if (!configChanged && !stateNeedsWrite && !migrating) {
+    return;
+  }
+
   // Write state first so migration never leaves stripped config without runtime state.
-  if (stateChanged || migrating) {
+  if (stateNeedsWrite || migrating) {
     await atomicWrite(statePath, stateJson);
     serializedStoreCache.set(stateCacheKey, stateJson);
   }
@@ -259,6 +272,7 @@ export async function saveCronStore(
     await atomicWrite(storePath, configJson);
     serializedStoreCache.set(storePath, configJson);
   }
+  storesNeedingSplitMigration.delete(storePath);
 }
 
 const RENAME_MAX_RETRIES = 3;

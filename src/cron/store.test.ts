@@ -186,6 +186,63 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
   });
 
+  it("recreates a missing state sidecar without rewriting unchanged config", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const payload = makeStore("job-1", true);
+    payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
+
+    await saveCronStore(store.storePath, payload);
+    await loadCronStore(store.storePath);
+    const configRawBefore = await fs.readFile(store.storePath, "utf-8");
+    await fs.rm(statePath);
+
+    const renamedDestinations: string[] = [];
+    const origRename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
+      renamedDestinations.push(String(dest));
+      return origRename(src, dest);
+    });
+
+    try {
+      await saveCronStore(store.storePath, payload);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const configRawAfter = await fs.readFile(store.storePath, "utf-8");
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+
+    expect(configRawAfter).toBe(configRawBefore);
+    expect(renamedDestinations).toContain(statePath);
+    expect(renamedDestinations).not.toContain(store.storePath);
+    expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(payload.jobs[0].createdAtMs + 60_000);
+  });
+
+  it("migrates legacy inline state into the state sidecar", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const legacy = makeStore("job-1", true);
+    legacy.jobs[0].state = {
+      lastRunAtMs: legacy.jobs[0].createdAtMs + 30_000,
+      nextRunAtMs: legacy.jobs[0].createdAtMs + 60_000,
+    };
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+    await saveCronStore(store.storePath, loaded);
+
+    const config = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+
+    expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
+    expect(config.jobs[0].state).toEqual({});
+    expect(stateFile.jobs["job-1"].updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
+    expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
+  });
+
   it("sanitizes invalid updatedAtMs values from the state sidecar", async () => {
     const store = await makeStorePath();
     const job = makeStore("job-1", true).jobs[0];
