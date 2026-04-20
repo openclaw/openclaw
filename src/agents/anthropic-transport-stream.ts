@@ -391,6 +391,36 @@ function convertAnthropicMessages(
   return params;
 }
 
+function resolveAnthropicToolInputSchema(
+  tool: NonNullable<Context["tools"]>[number],
+): Record<string, unknown> {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object"
+      ? tool.parameters
+      : "inputSchema" in tool && tool.inputSchema && typeof tool.inputSchema === "object"
+        ? tool.inputSchema
+        : undefined;
+
+  if (!schema || Array.isArray(schema)) {
+    return { type: "object", properties: {} };
+  }
+
+  const schemaObj = schema as Record<string, unknown>;
+  const properties =
+    schemaObj.properties &&
+    typeof schemaObj.properties === "object" &&
+    !Array.isArray(schemaObj.properties)
+      ? schemaObj.properties
+      : {};
+  const required = Array.isArray(schemaObj.required) ? schemaObj.required : [];
+
+  return {
+    type: "object",
+    properties,
+    required,
+  };
+}
+
 function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
@@ -398,11 +428,7 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   return tools.map((tool) => ({
     name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
     description: tool.description,
-    input_schema: {
-      type: "object",
-      properties: tool.parameters.properties || {},
-      required: tool.parameters.required || [],
-    },
+    input_schema: resolveAnthropicToolInputSchema(tool),
   }));
 }
 

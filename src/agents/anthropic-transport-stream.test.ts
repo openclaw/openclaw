@@ -309,6 +309,74 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("accepts plugin tools that expose inputSchema instead of parameters", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup something",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.tools).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup something",
+        input_schema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+          required: ["query"],
+        },
+      },
+    ]);
+  });
+
+  it("falls back to an empty object schema when a plugin tool is malformed", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup something",
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.tools).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup something",
+        input_schema: {
+          type: "object",
+          properties: {},
+        },
+      },
+    ]);
+  });
+
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
     const model = makeAnthropicTransportModel({
       requestTransport: {
