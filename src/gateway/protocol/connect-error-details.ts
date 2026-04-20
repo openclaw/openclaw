@@ -128,6 +128,29 @@ const CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON: Readonly<
   "metadata-upgrade": "device metadata change pending approval",
 };
 
+const CONNECT_PAIRING_REQUIRED_MESSAGE_MARKERS_BY_REASON: Readonly<
+  Record<ConnectPairingRequiredReason, readonly string[]>
+> = {
+  "not-paired": [
+    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON["not-paired"],
+    "device is not approved yet",
+  ],
+  "role-upgrade": [
+    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON["role-upgrade"],
+    "device role upgrade requires approval",
+    "device is asking for a higher role than currently approved",
+  ],
+  "scope-upgrade": [
+    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON["scope-upgrade"],
+    "device scope upgrade requires approval",
+    "device is asking for more scopes than currently approved",
+  ],
+  "metadata-upgrade": [
+    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON["metadata-upgrade"],
+    "device identity changed and must be re-approved",
+  ],
+};
+
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
 ): ConnectErrorDetailCode {
@@ -395,10 +418,10 @@ export function readConnectPairingRequiredMessage(
   }
   const normalized = normalizedMessage.trim().toLowerCase();
   let reason: ConnectPairingRequiredReason | undefined;
-  for (const [candidate, prefix] of Object.entries(
-    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON,
-  ) as Array<[ConnectPairingRequiredReason, string]>) {
-    if (normalized.includes(prefix)) {
+  for (const [candidate, markers] of Object.entries(
+    CONNECT_PAIRING_REQUIRED_MESSAGE_MARKERS_BY_REASON,
+  ) as Array<[ConnectPairingRequiredReason, readonly string[]]>) {
+    if (markers.some((marker) => normalized.includes(marker))) {
       reason = candidate;
       break;
     }
@@ -418,13 +441,44 @@ export function readConnectPairingRequiredMessage(
   };
 }
 
+function appendPairingRequestId(message: string, requestId: string | undefined): string {
+  const safeRequestId = normalizePairingConnectRequestId(requestId);
+  return safeRequestId ? `${message} (requestId: ${safeRequestId})` : message;
+}
+
 export function formatConnectPairingRequiredMessage(details: unknown): string {
   const pairing = readPairingConnectErrorDetails(details);
-  const base =
-    CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON[
-      pairing?.reason ?? ConnectPairingRequiredReasons.NOT_PAIRED
-    ];
-  return pairing?.requestId ? `${base} (requestId: ${pairing.requestId})` : base;
+  if (pairing?.reason === ConnectPairingRequiredReasons.SCOPE_UPGRADE) {
+    const approved = pairing.approvedScopes;
+    const requested = pairing.requestedScopes;
+    if (approved && requested) {
+      return appendPairingRequestId(
+        `device scope upgrade requires approval (approved: ${approved.join(", ")}; requested: ${requested.join(", ")})`,
+        pairing.requestId,
+      );
+    }
+  }
+  if (pairing?.reason === ConnectPairingRequiredReasons.ROLE_UPGRADE) {
+    const approved = pairing.approvedRoles;
+    const requested = pairing.requestedRole;
+    if (approved && requested) {
+      return appendPairingRequestId(
+        `device role upgrade requires approval (approved: ${approved.join(", ")}; requested: ${requested})`,
+        pairing.requestId,
+      );
+    }
+  }
+  if (pairing?.reason === ConnectPairingRequiredReasons.METADATA_UPGRADE) {
+    return appendPairingRequestId(
+      CONNECT_PAIRING_REQUIRED_MESSAGE_BY_REASON["metadata-upgrade"],
+      pairing.requestId,
+    );
+  }
+  const reason = pairing?.reason ?? ConnectPairingRequiredReasons.NOT_PAIRED;
+  return appendPairingRequestId(
+    `gateway pairing required: ${describePairingConnectRequirement(reason)}`,
+    pairing?.requestId,
+  );
 }
 
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {

@@ -484,7 +484,9 @@ describe("devices cli local fallback", () => {
   });
 
   it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
-    mockLocalPairingFallback("scope upgrade pending approval (requestId: req-123)");
+    mockLocalPairingFallback(
+      "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read) (requestId: req-1)",
+    );
 
     await runDevicesCommand(["list"]);
 

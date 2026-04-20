@@ -139,7 +139,41 @@ describe("pairing connect details", () => {
         requestId: "req-123",
         reason: "scope-upgrade",
       }),
-    ).toBe("scope upgrade pending approval (requestId: req-123)");
+    ).toBe(
+      "gateway pairing required: device is asking for more scopes than currently approved (requestId: req-123)",
+    );
+  });
+
+  it("formats pairing upgrades with approved and requested details", () => {
+    expect(
+      formatConnectPairingRequiredMessage({
+        code: "PAIRING_REQUIRED",
+        reason: "scope-upgrade",
+        requestId: "req-123",
+        approvedScopes: ["operator.read"],
+        requestedScopes: ["operator.admin", "operator.read"],
+      }),
+    ).toBe(
+      "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read) (requestId: req-123)",
+    );
+    expect(
+      formatConnectPairingRequiredMessage({
+        code: "PAIRING_REQUIRED",
+        reason: "role-upgrade",
+        requestId: "req-456",
+        approvedRoles: ["operator"],
+        requestedRole: "node",
+      }),
+    ).toBe(
+      "device role upgrade requires approval (approved: operator; requested: node) (requestId: req-456)",
+    );
+    expect(
+      formatConnectPairingRequiredMessage({
+        code: "PAIRING_REQUIRED",
+        reason: "metadata-upgrade",
+        requestId: "req-789",
+      }),
+    ).toBe("device metadata change pending approval (requestId: req-789)");
   });
 
   it("parses surfaced pairing-required messages", () => {
@@ -148,6 +182,21 @@ describe("pairing connect details", () => {
     ).toEqual({
       requestId: "req-123",
       reason: "scope-upgrade",
+    });
+    expect(
+      readConnectPairingRequiredMessage(
+        "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read) (requestId: req-456)",
+      ),
+    ).toEqual({
+      requestId: "req-456",
+      reason: "scope-upgrade",
+    });
+    expect(
+      readConnectPairingRequiredMessage(
+        "gateway pairing required: device is asking for a higher role than currently approved",
+      ),
+    ).toEqual({
+      reason: "role-upgrade",
     });
     expect(
       readConnectPairingRequiredMessage(
@@ -168,6 +217,8 @@ describe("pairing connect details", () => {
           reason: "scope-upgrade",
         },
       }),
-    ).toBe("scope upgrade pending approval (requestId: req-123)");
+    ).toBe(
+      "gateway pairing required: device is asking for more scopes than currently approved (requestId: req-123)",
+    );
   });
 });

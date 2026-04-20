@@ -160,7 +160,9 @@ describe("logs cli", () => {
 
   it("falls back to the local log file on loopback scope-upgrade errors", async () => {
     callGatewayFromCli.mockRejectedValueOnce(
-      new Error("scope upgrade pending approval (requestId: req-123)"),
+      new Error(
+        "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read) (requestId: req-1)",
+      ),
     );
     readConfiguredLogTail.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",

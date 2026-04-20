@@ -323,7 +323,9 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
   it("keeps invoke pairing guidance for scope upgrade rejections", async () => {
     gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("scope upgrade pending approval (requestId: req-123)"),
+      new Error(
+        "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read) (requestId: req-1)",
+      ),
     );
     const tool = createNodesTool();
 
@@ -334,7 +336,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
         invokeCommand: "device.status",
       }),
     ).rejects.toThrow(
-      "pairing required before node invoke. Approve pairing request req-123 and retry.",
+      "pairing required before node invoke. Approve pairing request req-1 and retry.",
     );
   });
 });

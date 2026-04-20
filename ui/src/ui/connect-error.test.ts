@@ -10,12 +10,13 @@ describe("formatConnectError", () => {
         details: {
           code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
           reason: "scope-upgrade",
+          requestId: "req-123",
           approvedScopes: ["operator.read"],
           requestedScopes: ["operator.admin", "operator.read"],
         },
       }),
     ).toBe(
-      "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read)",
+      "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read) (requestId: req-123)",
     );
   });
 
@@ -26,10 +27,13 @@ describe("formatConnectError", () => {
         details: {
           code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
           reason: "role-upgrade",
+          requestId: "req-456",
           approvedRoles: ["operator"],
           requestedRole: "node",
         },
       }),
-    ).toBe("device role upgrade requires approval (approved: operator; requested: node)");
+    ).toBe(
+      "device role upgrade requires approval (approved: operator; requested: node) (requestId: req-456)",
+    );
   });
 });

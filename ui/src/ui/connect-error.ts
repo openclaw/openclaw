@@ -30,25 +30,24 @@ function formatPairingRequiredError(error: ErrorWithMessageAndDetails): string {
   const pairingMessage = readConnectPairingRequiredMessage(message);
   const pairingReason = pairing?.reason ?? pairingMessage?.reason;
   if (normalizedMessage.startsWith("pairing required:") && pairingReason) {
+    if (pairing) {
+      return formatConnectPairingRequiredMessage(error.details);
+    }
     return `gateway pairing required: ${describePairingConnectRequirement(pairingReason)}`;
   }
   if (pairingMessage && normalizedMessage !== "pairing required") {
     return message;
   }
 
-  const approvedRoles = pairing?.approvedRoles?.join(", ") ?? "none";
-  const requestedRole = pairing?.requestedRole ?? "none";
-  const approvedScopes = pairing?.approvedScopes?.join(", ") ?? "none";
-  const requestedScopes = pairing?.requestedScopes?.join(", ") ?? "none";
   switch (pairing?.reason) {
     case "scope-upgrade":
       if (pairing.approvedScopes || pairing.requestedScopes) {
-        return `device scope upgrade requires approval (approved: ${approvedScopes}; requested: ${requestedScopes})`;
+        return formatConnectPairingRequiredMessage(error.details);
       }
       return formatConnectPairingRequiredMessage(error.details);
     case "role-upgrade":
       if (pairing.approvedRoles || pairing.requestedRole) {
-        return `device role upgrade requires approval (approved: ${approvedRoles}; requested: ${requestedRole})`;
+        return formatConnectPairingRequiredMessage(error.details);
       }
       return formatConnectPairingRequiredMessage(error.details);
     case "metadata-upgrade":
