@@ -47,6 +47,13 @@ describe("secrets configure plan helpers", () => {
               SERVICE_KEY: "plaintext-service-key", // pragma: allowlist secret
               AUTH_ENABLED: "enabled",
               TOKEN_REFRESH: "disabled",
+              PROFILE: "Bearer plaintext-profile-token", // pragma: allowlist secret
+              DASHBOARD_URL: "https://service.example?api_key=plaintext-url-secret", // pragma: allowlist secret
+              CONFIG_SLOT: {
+                source: "env",
+                provider: "default",
+                id: "CONFIG_SLOT_SECRET",
+              },
             },
             headers: {
               "X-Feature-Flag": "enabled",
@@ -55,6 +62,13 @@ describe("secrets configure plan helpers", () => {
               "X-Access-Key": "plaintext-access-key", // pragma: allowlist secret
               "X-Auth-Mode": "enabled",
               "X-Token-Refresh": "disabled",
+              "X-Relay": "Bearer plaintext-relay-token", // pragma: allowlist secret
+              "X-Endpoint": "https://example.invalid/mcp?token=plaintext-query-secret", // pragma: allowlist secret
+              "X-Config": {
+                source: "env",
+                provider: "default",
+                id: "X_CONFIG_SECRET",
+              },
             },
           },
         },
@@ -68,6 +82,12 @@ describe("secrets configure plan helpers", () => {
     expect(paths).toContain("mcp.servers.mission-control.headers.Authorization");
     expect(paths).toContain("mcp.servers.mission-control.headers.X-Custom-Auth");
     expect(paths).toContain("mcp.servers.mission-control.headers.X-Access-Key");
+    expect(paths).toContain("mcp.servers.mission-control.env.PROFILE");
+    expect(paths).toContain("mcp.servers.mission-control.env.DASHBOARD_URL");
+    expect(paths).toContain("mcp.servers.mission-control.env.CONFIG_SLOT");
+    expect(paths).toContain("mcp.servers.mission-control.headers.X-Relay");
+    expect(paths).toContain("mcp.servers.mission-control.headers.X-Endpoint");
+    expect(paths).toContain("mcp.servers.mission-control.headers.X-Config");
     expect(paths).not.toContain("mcp.servers.mission-control.env.AUTH_ENABLED");
     expect(paths).not.toContain("mcp.servers.mission-control.env.TOKEN_REFRESH");
     expect(paths).not.toContain("mcp.servers.mission-control.env.MC_URL");
