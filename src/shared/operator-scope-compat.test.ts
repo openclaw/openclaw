@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveMissingRequestedScope, roleScopesAllow } from "./operator-scope-compat.js";
+import {
+  resolveMissingRequestedScope,
+  resolveScopeOutsideRequestedRoles,
+  roleScopesAllow,
+} from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
   it("allows empty requested scope lists regardless of granted scopes", () => {
@@ -156,5 +160,23 @@ describe("roleScopesAllow", () => {
         allowedScopes: ["node.exec", "operator.admin"],
       }),
     ).toBeNull();
+  });
+
+  it("returns null when every requested scope belongs to one requested role", () => {
+    expect(
+      resolveScopeOutsideRequestedRoles({
+        requestedRoles: ["node", "operator"],
+        requestedScopes: ["node.exec", "operator.read"],
+      }),
+    ).toBeNull();
+  });
+
+  it("returns the first scope outside the requested role set", () => {
+    expect(
+      resolveScopeOutsideRequestedRoles({
+        requestedRoles: ["node", "operator"],
+        requestedScopes: ["node.exec", "vault.admin", "operator.read"],
+      }),
+    ).toBe("vault.admin");
   });
 });

@@ -4,6 +4,7 @@
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
@@ -100,13 +101,14 @@ export {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
-  resolveSessionKey,
-  resolveStorePath,
   updateLastRoute,
   updateSessionStore,
-  type SessionResetMode,
-  type SessionScope,
-} from "../config/sessions.js";
+  resolveSessionStoreEntry,
+} from "../config/sessions/store.js";
+export { resolveSessionKey } from "../config/sessions/session-key.js";
+export { resolveStorePath } from "../config/sessions/paths.js";
+export type { SessionResetMode } from "../config/sessions/reset.js";
+export type { SessionScope } from "../config/sessions/types.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
@@ -116,7 +118,6 @@ export {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
-export { resolveSessionStoreEntry } from "../config/sessions/store.js";
 export {
   isDangerousNameMatchingEnabled,
   resolveDangerousNameMatchingEnabled,

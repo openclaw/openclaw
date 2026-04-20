@@ -1,7 +1,11 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
@@ -26,10 +30,10 @@ export const __testing = {
 function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   const version = getActivePluginChannelRegistryVersion();
   const cached = targetNormalizerCacheByChannelId.get(channelId);
-  if (cached?.version === version) {
+  if (cached && cached.version === version) {
     return cached.normalizer;
   }
-  const plugin = getChannelPlugin(channelId);
+  const plugin = getLoadedChannelPluginForRead(channelId);
   const normalizer = plugin?.messaging?.normalizeTarget;
   targetNormalizerCacheByChannelId.set(channelId, {
     version,
@@ -42,14 +46,13 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   if (!raw) {
     return undefined;
   }
-  const fallback = raw.trim() || undefined;
+  const fallback = normalizeOptionalString(raw);
   if (!fallback) {
     return undefined;
   }
-  const providerId = normalizeChannelId(provider);
+  const providerId = normalizeOptionalLowercaseString(provider);
   const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
-  const normalized = normalizer?.(raw) ?? fallback;
-  return normalized || undefined;
+  return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
 export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
@@ -82,7 +85,8 @@ export function looksLikeTargetId(params: {
 }): boolean {
   const normalizedInput =
     params.normalized ?? normalizeTargetForProvider(params.channel, params.raw);
-  const lookup = getChannelPlugin(params.channel)?.messaging?.targetResolver?.looksLikeId;
+  const lookup = getLoadedChannelPluginForRead(params.channel)?.messaging?.targetResolver
+    ?.looksLikeId;
   if (lookup) {
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
@@ -113,7 +117,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
   if (!normalizedInput) {
     return undefined;
   }
-  const resolver = getChannelPlugin(params.channel)?.messaging?.targetResolver;
+  const resolver = getLoadedChannelPluginForRead(params.channel)?.messaging?.targetResolver;
   if (!resolver?.resolveTarget) {
     return undefined;
   }
@@ -146,7 +150,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
 }
 
 export function buildTargetResolverSignature(channel: ChannelId): string {
-  const plugin = getChannelPlugin(channel);
+  const plugin = getLoadedChannelPluginForRead(channel);
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const looksLike = resolver?.looksLikeId;

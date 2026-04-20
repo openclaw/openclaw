@@ -1,7 +1,9 @@
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
   text?: string;
@@ -31,14 +33,14 @@ type SendPayloadAdapter = Pick<
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
-  const text = typeof payload.text === "string" ? payload.text : undefined;
+  const text = readStringValue(payload.text);
   const mediaUrls = Array.isArray(payload.mediaUrls)
     ? payload.mediaUrls.filter(
         (entry): entry is string => typeof entry === "string" && entry.length > 0,
       )
     : undefined;
-  const mediaUrl = typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined;
-  const replyToId = typeof payload.replyToId === "string" ? payload.replyToId : undefined;
+  const mediaUrl = readStringValue(payload.mediaUrl);
+  const replyToId = readStringValue(payload.replyToId);
   return {
     text,
     mediaUrls,

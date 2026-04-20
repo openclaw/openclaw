@@ -1,11 +1,10 @@
 import {
-  isBlockedHostnameOrIp,
-  isPrivateNetworkOptInEnabled,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveBlueBubblesAccount } from "./accounts.js";
+  resolveBlueBubblesAccount,
+  resolveBlueBubblesEffectiveAllowPrivateNetwork,
+  resolveBlueBubblesPrivateNetworkConfigValue,
+} from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
-import { normalizeBlueBubblesServerUrl } from "./types.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
@@ -19,6 +18,14 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   password: string;
   accountId: string;
   allowPrivateNetwork: boolean;
+  allowPrivateNetworkConfig?: boolean;
+  /**
+   * Per-account send timeout from `channels.bluebubbles.sendTimeoutMs` (or
+   * `accounts.<id>.sendTimeoutMs`). Only returned when the caller configured
+   * a positive integer; `undefined` means "fall back to DEFAULT_SEND_TIMEOUT_MS".
+   * (#67486)
+   */
+  sendTimeoutMs?: number;
 } {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg ?? {},
@@ -49,18 +56,22 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     throw new Error("BlueBubbles password is required");
   }
 
-  let autoAllowPrivateNetwork = false;
-  try {
-    const hostname = new URL(normalizeBlueBubblesServerUrl(baseUrl)).hostname.trim();
-    autoAllowPrivateNetwork = Boolean(hostname) && isBlockedHostnameOrIp(hostname);
-  } catch {
-    autoAllowPrivateNetwork = false;
-  }
-
+  const rawSendTimeoutMs = account.config.sendTimeoutMs;
+  const sendTimeoutMs =
+    typeof rawSendTimeoutMs === "number" &&
+    Number.isInteger(rawSendTimeoutMs) &&
+    rawSendTimeoutMs > 0
+      ? rawSendTimeoutMs
+      : undefined;
   return {
     baseUrl,
     password,
     accountId: account.accountId,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config) || autoAllowPrivateNetwork,
+    allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
+      baseUrl,
+      config: account.config,
+    }),
+    allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(account.config),
+    sendTimeoutMs,
   };
 }

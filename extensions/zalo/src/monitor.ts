@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -20,7 +22,6 @@ import {
   resolveZaloRuntimeGroupPolicy,
 } from "./group-access.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
-import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "./runtime-api.js";
 import {
   createChannelPairingController,
   createChannelReplyPipeline,
@@ -35,11 +36,8 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-api.js";
 import { getZaloRuntime } from "./runtime.js";
-
-export type ZaloRuntimeEnv = {
-  log?: (message: string) => void;
-  error?: (message: string) => void;
-};
+export type { ZaloRuntimeEnv } from "./monitor.types.js";
+import type { ZaloRuntimeEnv } from "./monitor.types.js";
 
 export type ZaloMonitorOptions = {
   token: string;
@@ -62,6 +60,7 @@ const ZALO_TYPING_TIMEOUT_MS = 5_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 type ZaloStatusSink = (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+type ZaloWebhookModule = typeof import("./monitor.webhook.js");
 type ZaloProcessingContext = {
   token: string;
   account: ResolvedZaloAccount;
@@ -80,6 +79,13 @@ type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
   mediaMaxMb: number;
 };
+
+let zaloWebhookModulePromise: Promise<ZaloWebhookModule> | undefined;
+
+function loadZaloWebhookModule(): Promise<ZaloWebhookModule> {
+  zaloWebhookModulePromise ??= import("./monitor.webhook.js");
+  return zaloWebhookModulePromise;
+}
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
   message: ZaloMessage;
   text?: string;
@@ -132,7 +138,7 @@ export async function handleZaloWebhookRequest(
   res: ServerResponse,
 ): Promise<boolean> {
   const { handleZaloWebhookRequest: handleZaloWebhookRequestInternal } =
-    await import("./monitor.webhook.js");
+    await loadZaloWebhookModule();
   return await handleZaloWebhookRequestInternal(req, res, async ({ update, target }) => {
     await processUpdate({
       update,
@@ -175,9 +181,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 
   runtime.log?.(`[${account.accountId}] Zalo polling loop started timeout=${String(pollTimeout)}s`);
 
-  const poll = async () => {
+  const poll = async (): Promise<void> => {
     if (isStopped() || abortSignal.aborted) {
-      return;
+      return undefined;
     }
 
     try {
@@ -211,7 +217,7 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
   const { event_name, message } = update;
   const sharedContext = { token, account, config, runtime, core, statusSink, fetcher };
   if (!message) {
-    return;
+    return undefined;
   }
 
   switch (event_name) {
@@ -247,7 +253,7 @@ async function handleTextMessage(
   const { message } = params;
   const { text } = message;
   if (!text?.trim()) {
-    return;
+    return undefined;
   }
 
   await processMessageWithPipeline({
@@ -352,7 +358,7 @@ async function authorizeZaloMessage(
       } else if (groupAccess.reason === "sender_not_allowlisted") {
         logVerbose(core, runtime, `zalo: drop group sender ${senderId} (groupPolicy=allowlist)`);
       }
-      return;
+      return undefined;
     }
   }
 
@@ -378,7 +384,7 @@ async function authorizeZaloMessage(
   });
   if (directDmOutcome === "disabled") {
     logVerbose(core, runtime, `Blocked zalo DM from ${senderId} (dmPolicy=disabled)`);
-    return;
+    return undefined;
   }
   if (directDmOutcome === "unauthorized") {
     if (dmPolicy === "pairing") {
@@ -411,7 +417,7 @@ async function authorizeZaloMessage(
         `Blocked unauthorized zalo sender ${senderId} (dmPolicy=${dmPolicy})`,
       );
     }
-    return;
+    return undefined;
   }
 
   return {
@@ -659,7 +665,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   try {
     if (useWebhook) {
-      const { registerZaloWebhookTarget } = await import("./monitor.webhook.js");
+      const { registerZaloWebhookTarget } = await loadZaloWebhookModule();
       if (!webhookUrl || !webhookSecret) {
         throw new Error("Zalo webhookUrl and webhookSecret are required for webhook mode");
       }

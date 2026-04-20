@@ -1,11 +1,11 @@
 import {
+  compareTaskAuditFindingSortKeys,
   createEmptyTaskAuditSummary,
   type TaskAuditCode,
   type TaskAuditFinding,
   type TaskAuditSeverity,
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
-import { reconcileInspectableTasks } from "./task-registry.reconcile.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export type TaskAuditOptions = {
@@ -19,6 +19,12 @@ const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
+
+let taskAuditTaskProvider: () => TaskRecord[] = () => [];
+
+export function configureTaskAuditTaskProvider(provider: () => TaskRecord[]): void {
+  taskAuditTaskProvider = provider;
+}
 
 function createFinding(params: {
   severity: TaskAuditSeverity;
@@ -69,21 +75,22 @@ function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
 }
 
 function compareFindings(left: TaskAuditFinding, right: TaskAuditFinding): number {
-  const severityRank = (severity: TaskAuditSeverity) => (severity === "error" ? 0 : 1);
-  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
-  if (severityDiff !== 0) {
-    return severityDiff;
-  }
-  const leftAge = left.ageMs ?? -1;
-  const rightAge = right.ageMs ?? -1;
-  if (leftAge !== rightAge) {
-    return rightAge - leftAge;
-  }
-  return left.task.createdAt - right.task.createdAt;
+  return compareTaskAuditFindingSortKeys(
+    {
+      severity: left.severity,
+      ageMs: left.ageMs,
+      createdAt: left.task.createdAt,
+    },
+    {
+      severity: right.severity,
+      ageMs: right.ageMs,
+      createdAt: right.task.createdAt,
+    },
+  );
 }
 
 export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAuditFinding[] {
-  const tasks = options.tasks ?? reconcileInspectableTasks();
+  const tasks = options.tasks ?? taskAuditTaskProvider();
   const now = options.now ?? Date.now();
   const staleQueuedMs = options.staleQueuedMs ?? DEFAULT_STALE_QUEUED_MS;
   const staleRunningMs = options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;

@@ -22,6 +22,37 @@ import {
   requiresExecApproval,
 } from "./exec-approvals.js";
 
+function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
+  const approvals = {
+    version: 1,
+    defaults: {
+      ask: "always",
+    },
+    agents: {
+      runner: {
+        ask: agentAsk,
+      },
+    },
+  } as unknown as ExecApprovalsFile;
+  const summary = resolveExecPolicyScopeSummary({
+    approvals,
+    globalExecConfig: {
+      ask: "off",
+    },
+    configPath: "agents.list.runner.tools.exec",
+    scopeLabel: "agent:runner",
+    agentId: "runner",
+  });
+
+  expect(summary.ask).toMatchObject({
+    requested: "off",
+    host: "always",
+    hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+    effective: "always",
+    note: "more aggressive ask wins",
+  });
+}
+
 describe("exec approvals policy helpers", () => {
   it.each([
     { raw: " gateway ", expected: "gateway" },
@@ -275,7 +306,7 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
-  it("explains host ask=off suppression separately from stricter ask", () => {
+  it("does not let host ask=off suppress a stricter requested ask", () => {
     const summary = resolveExecPolicyScopeSummary({
       approvals: {
         version: 1,
@@ -293,102 +324,45 @@ describe("exec approvals policy helpers", () => {
     expect(summary.ask).toMatchObject({
       requested: "always",
       host: "off",
-      effective: "off",
-      note: "host ask=off suppresses prompts",
+      effective: "always",
+      note: "requested ask applies",
+    });
+  });
+
+  it("clamps askFallback to the effective security", () => {
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "always",
+          askFallback: "full",
+        },
+      },
+      scopeExecConfig: {
+        security: "allowlist",
+        ask: "always",
+      },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    });
+
+    expect(summary.askFallback).toEqual({
+      effective: "allowlist",
+      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
     });
   });
 
   it("skips malformed host fields when attributing their source", () => {
-    const approvals = {
-      version: 1,
-      defaults: {
-        ask: "always",
-      },
-      agents: {
-        runner: {
-          ask: "foo",
-        },
-      },
-    } as unknown as ExecApprovalsFile;
-    const summary = resolveExecPolicyScopeSummary({
-      approvals,
-      globalExecConfig: {
-        ask: "off",
-      },
-      configPath: "agents.list.runner.tools.exec",
-      scopeLabel: "agent:runner",
-      agentId: "runner",
-    });
-
-    expect(summary.ask).toMatchObject({
-      requested: "off",
-      host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
-      effective: "always",
-      note: "more aggressive ask wins",
-    });
+    expectMalformedAgentAskUsesDefaults("foo");
   });
 
   it("ignores malformed non-string host fields when attributing their source", () => {
-    const approvals = {
-      version: 1,
-      defaults: {
-        ask: "always",
-      },
-      agents: {
-        runner: {
-          ask: true,
-        },
-      },
-    } as unknown as ExecApprovalsFile;
-    const summary = resolveExecPolicyScopeSummary({
-      approvals,
-      globalExecConfig: {
-        ask: "off",
-      },
-      configPath: "agents.list.runner.tools.exec",
-      scopeLabel: "agent:runner",
-      agentId: "runner",
-    });
-
-    expect(summary.ask).toMatchObject({
-      requested: "off",
-      host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
-      effective: "always",
-      note: "more aggressive ask wins",
-    });
+    expectMalformedAgentAskUsesDefaults(true);
   });
 
   it("does not credit mixed-case host fields that resolution ignores", () => {
-    const approvals = {
-      version: 1,
-      defaults: {
-        ask: "always",
-      },
-      agents: {
-        runner: {
-          ask: "Always",
-        },
-      },
-    } as unknown as ExecApprovalsFile;
-    const summary = resolveExecPolicyScopeSummary({
-      approvals,
-      globalExecConfig: {
-        ask: "off",
-      },
-      configPath: "agents.list.runner.tools.exec",
-      scopeLabel: "agent:runner",
-      agentId: "runner",
-    });
-
-    expect(summary.ask).toMatchObject({
-      requested: "off",
-      host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
-      effective: "always",
-      note: "more aggressive ask wins",
-    });
+    expectMalformedAgentAskUsesDefaults("Always");
   });
 
   it("attributes host policy to wildcard agent entries before defaults", () => {

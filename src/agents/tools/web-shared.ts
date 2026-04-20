@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -20,7 +22,7 @@ export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): numb
 }
 
 export function normalizeCacheKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 export function readCache<T>(
@@ -149,11 +151,9 @@ export async function readResponseText(
       // Best-effort: return whatever we decoded so far.
     } finally {
       if (truncated) {
-        try {
-          await reader.cancel();
-        } catch {
-          // ignore
-        }
+        // Some mocked or non-compliant streams never settle cancel(); do not
+        // let cleanup turn a bounded read into a hung fetch.
+        void reader.cancel().catch(() => undefined);
       }
     }
 

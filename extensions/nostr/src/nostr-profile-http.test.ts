@@ -4,7 +4,7 @@
 
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
@@ -12,6 +12,19 @@ import {
   isNostrProfileRateLimitedForTest,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
+
+const runtimeScopeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./nostr-profile-http-runtime.js", async () => {
+  const webhookIngress = await import("openclaw/plugin-sdk/webhook-ingress");
+  const requestGuards = await import("openclaw/plugin-sdk/webhook-request-guards");
+  return {
+    createFixedWindowRateLimiter: webhookIngress.createFixedWindowRateLimiter,
+    readJsonBodyWithLimit: requestGuards.readJsonBodyWithLimit,
+    requestBodyErrorToText: requestGuards.requestBodyErrorToText,
+    getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
+  };
+});
 
 // Mock the channel exports
 vi.mock("./channel.js", () => ({
@@ -34,6 +47,34 @@ import { TEST_HEX_PUBLIC_KEY, TEST_SETUP_RELAY_URLS } from "./test-fixtures.js";
 // ============================================================================
 
 const TEST_PROFILE_RELAY_URL = TEST_SETUP_RELAY_URLS[0];
+
+afterAll(() => {
+  runtimeScopeMock.mockReset();
+});
+
+function setGatewayRuntimeScopes(scopes: readonly string[] | undefined): void {
+  if (!scopes) {
+    runtimeScopeMock.mockReturnValue(undefined);
+    return;
+  }
+  runtimeScopeMock.mockReturnValue({
+    client: {
+      connect: {
+        scopes: [...scopes],
+      },
+    },
+  });
+}
+
+function responseChunkText(chunk: unknown): string {
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  if (Buffer.isBuffer(chunk)) {
+    return chunk.toString();
+  }
+  return "";
+}
 
 function createMockRequest(
   method: string,
@@ -70,19 +111,21 @@ function createMockResponse(): ServerResponse & {
   _getData: () => string;
   _getStatusCode: () => number;
 } {
-  const res = new ServerResponse({} as IncomingMessage);
-
   let data = "";
   let statusCode = 200;
+  const res = Object.assign(new ServerResponse({} as IncomingMessage), {
+    _getData: () => data,
+    _getStatusCode: () => statusCode,
+  });
 
   res.write = function (chunk: unknown) {
-    data += String(chunk);
+    data += responseChunkText(chunk);
     return true;
   };
 
   res.end = function (chunk?: unknown) {
     if (chunk) {
-      data += String(chunk);
+      data += responseChunkText(chunk);
     }
     return this;
   };
@@ -94,10 +137,7 @@ function createMockResponse(): ServerResponse & {
     },
   });
 
-  (res as unknown as { _getData: () => string })._getData = () => data;
-  (res as unknown as { _getStatusCode: () => number })._getStatusCode = () => statusCode;
-
-  return res as ServerResponse & { _getData: () => string; _getStatusCode: () => number };
+  return res;
 }
 
 type MockResponse = ReturnType<typeof createMockResponse>;
@@ -173,6 +213,7 @@ describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearNostrProfileRateLimitStateForTest();
+    setGatewayRuntimeScopes(["operator.admin"]);
   });
 
   describe("route matching", () => {
@@ -321,6 +362,44 @@ describe("nostr-profile-http", () => {
 
       await run();
       expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
+      setGatewayRuntimeScopes(["operator.read"]);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: { name: "attacker" },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      const data = JSON.parse(res._getData());
+      expect(data.error).toBe("missing scope: operator.admin");
+      expect(publishNostrProfile).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+    });
+
+    it("rejects profile mutation when gateway scope context is missing", async () => {
+      setGatewayRuntimeScopes(undefined);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: { name: "attacker" },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      const data = JSON.parse(res._getData());
+      expect(data.error).toBe("missing scope: operator.admin");
+      expect(publishNostrProfile).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
 
     it("rejects private IP in picture URL (SSRF protection)", async () => {
@@ -482,6 +561,44 @@ describe("nostr-profile-http", () => {
 
       await run();
       expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects profile import when gateway caller is missing operator.admin", async () => {
+      setGatewayRuntimeScopes(["operator.read"]);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {
+          body: { autoMerge: true },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      const data = JSON.parse(res._getData());
+      expect(data.error).toBe("missing scope: operator.admin");
+      expect(importProfileFromRelays).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+    });
+
+    it("rejects profile import when gateway scope context is missing", async () => {
+      setGatewayRuntimeScopes(undefined);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {
+          body: { autoMerge: true },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      const data = JSON.parse(res._getData());
+      expect(data.error).toBe("missing scope: operator.admin");
+      expect(importProfileFromRelays).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
 
     it("auto-merges when requested", async () => {

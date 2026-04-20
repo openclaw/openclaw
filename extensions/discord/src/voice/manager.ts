@@ -5,9 +5,14 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  agentCommandFromIngress,
+  getTtsProvider,
+  resolveAgentDir,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  type ResolvedTtsConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -17,6 +22,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -300,7 +306,7 @@ async function transcribeAudio(params: {
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     mime: "audio/wav",
   });
-  return result.text?.trim() || undefined;
+  return normalizeOptionalString(result.text);
 }
 
 export class DiscordVoiceManager {
@@ -808,6 +814,7 @@ export class DiscordVoiceManager {
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {
       cfg: ttsCfg,
       providerConfigs: ttsConfig.providerConfigs,
+      preferredProviderId: getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig)),
     });
     const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, speaker.label);

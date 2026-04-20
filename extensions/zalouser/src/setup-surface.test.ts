@@ -6,10 +6,10 @@ import {
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
-const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 
 async function runSetup(params: {
   cfg?: OpenClawConfig;
@@ -27,6 +27,18 @@ async function runSetup(params: {
 }
 
 describe("zalouser setup wizard", () => {
+  function expectEnabledDefaultSetup(
+    result: Awaited<ReturnType<typeof runSetup>>,
+    dmPolicy?: "pairing" | "allowlist",
+  ) {
+    expect(result.accountId).toBe("default");
+    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+    if (dmPolicy) {
+      expect(result.cfg.channels?.zalouser?.dmPolicy).toBe(dmPolicy);
+    }
+  }
+
   function createQuickstartPrompter(params?: {
     note?: ReturnType<typeof createTestWizardPrompter>["note"];
     seen?: string[];
@@ -100,10 +112,7 @@ describe("zalouser setup wizard", () => {
       options: { quickstartDefaults: true },
     });
 
-    expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
-    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
-    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("pairing");
+    expectEnabledDefaultSetup(result, "pairing");
     expect(seen.indexOf("Zalo Personal DM policy")).toBeGreaterThanOrEqual(0);
     expect(seen.indexOf("Configure Zalo groups access?")).toBeGreaterThanOrEqual(0);
     expect(seen.indexOf("Zalo Personal DM policy")).toBeLessThan(
@@ -126,15 +135,10 @@ describe("zalouser setup wizard", () => {
       options: { quickstartDefaults: true },
     });
 
-    expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
-    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
-    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
+    expectEnabledDefaultSetup(result, "allowlist");
     expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
     expect(
-      note.mock.calls.some(([message]) =>
-        String(message).includes("No DM allowlist entries added yet."),
-      ),
+      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
   });
 
@@ -155,7 +159,7 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.channels?.zalouser?.groups).toEqual({});
     expect(
       note.mock.calls.some(([message]) =>
-        String(message).includes("No group allowlist entries added yet."),
+        message.includes("No group allowlist entries added yet."),
       ),
     ).toBe(true);
   });
@@ -208,9 +212,7 @@ describe("zalouser setup wizard", () => {
     expect(seen).not.toContain("Zalo Personal DM policy");
     expect(seen).toContain("Zalouser allowFrom (name or user id)");
     expect(
-      note.mock.calls.some(([message]) =>
-        String(message).includes("No DM allowlist entries added yet."),
-      ),
+      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
   });
 
@@ -354,7 +356,7 @@ describe("zalouser setup wizard", () => {
 
     expect(
       note.mock.calls.some(([message]) =>
-        String(message).includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
+        message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
       ),
     ).toBe(true);
   });

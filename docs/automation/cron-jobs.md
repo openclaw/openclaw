@@ -33,7 +33,9 @@ openclaw cron runs --id <job-id>
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Jobs persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
+- After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
@@ -42,6 +44,8 @@ openclaw cron runs --id <job-id>
 together`, and similar hints) and no descendant subagent run is still
   responsible for the final answer, OpenClaw re-prompts once for the actual
   result before delivery.
+
+<a id="maintenance"></a>
 
 Task reconciliation for cron is runtime-owned: an active cron task stays live while the
 cron runtime still tracks that job as running, even if an old child session row still exists.
@@ -59,6 +63,18 @@ mark the task `lost`.
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` for local wall-clock scheduling.
 
 Recurring top-of-hour expressions are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing or `--stagger 30s` for an explicit window.
+
+### Day-of-month and day-of-week use OR logic
+
+Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When both the day-of-month and day-of-week fields are non-wildcard, croner matches when **either** field matches — not both. This is standard Vixie cron behavior.
+
+```
+# Intended: "9 AM on the 15th, only if it's a Monday"
+# Actual:   "9 AM on every 15th, AND 9 AM on every Monday"
+0 9 15 * 1
+```
+
+This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw uses Croner's default OR behavior here. To require both conditions, use Croner's `+` day-of-week modifier (`0 9 15 * +1`) or schedule on one field and guard the other in your job's prompt or command.
 
 ## Execution styles
 
@@ -353,6 +369,10 @@ Model override note:
   },
 }
 ```
+
+The runtime state sidecar is derived from `cron.store`: a `.json` store such as
+`~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path
+without a `.json` suffix appends `-state.json`.
 
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 

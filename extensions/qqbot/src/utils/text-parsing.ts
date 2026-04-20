@@ -1,13 +1,52 @@
 import type { RefAttachmentSummary } from "../ref-index-store.js";
 
+const MAX_FACE_EXT_BYTES = 64 * 1024;
+
+function estimateBase64DecodedBytes(base64: string): number {
+  let effectiveLen = 0;
+  for (let i = 0; i < base64.length; i += 1) {
+    if (base64.charCodeAt(i) > 0x20) {
+      effectiveLen += 1;
+    }
+  }
+  if (effectiveLen === 0) {
+    return 0;
+  }
+
+  let padding = 0;
+  let end = base64.length - 1;
+  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+    end -= 1;
+  }
+  if (end >= 0 && base64[end] === "=") {
+    padding = 1;
+    end -= 1;
+    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+      end -= 1;
+    }
+    if (end >= 0 && base64[end] === "=") {
+      padding = 2;
+    }
+  }
+
+  return Math.max(0, Math.floor((effectiveLen * 3) / 4) - padding);
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 /** Replace QQ face tags with readable text labels. */
-export function parseFaceTags(text: string): string {
+export function parseFaceTags(text: string | undefined | null): string {
   if (!text) {
-    return text;
+    return "";
   }
 
   return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
     try {
+      if (estimateBase64DecodedBytes(ext) > MAX_FACE_EXT_BYTES) {
+        return "[Emoji: unknown emoji]";
+      }
       const decoded = Buffer.from(ext, "base64").toString("utf-8");
       const parsed = JSON.parse(decoded);
       const faceName = parsed.text || "unknown emoji";
@@ -19,9 +58,9 @@ export function parseFaceTags(text: string): string {
 }
 
 /** Remove internal framework markers before sending text outward. */
-export function filterInternalMarkers(text: string): string {
+export function filterInternalMarkers(text: string | undefined | null): string {
   if (!text) {
-    return text;
+    return "";
   }
 
   let result = text.replace(/\[\[[a-z_]+:\s*[^\]]*\]\]/gi, "");
@@ -62,7 +101,7 @@ export function buildAttachmentSummaries(
     return undefined;
   }
   return attachments.map((att, idx) => {
-    const ct = att.content_type?.toLowerCase() ?? "";
+    const ct = normalizeLowercaseStringOrEmpty(att.content_type);
     let type: RefAttachmentSummary["type"] = "unknown";
     if (ct.startsWith("image/")) {
       type = "image";

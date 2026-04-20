@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -20,6 +19,16 @@ type ResolveCommandConversationParams = {
 
 function firstText(values: Array<string | undefined>): string | undefined {
   return values.map((value) => value?.trim() ?? "").find(Boolean) || undefined;
+}
+
+function normalizeCommandContextText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).trim().toLowerCase();
+  }
+  return "";
 }
 
 function resolveThreadTargetId(raw?: string): string | undefined {
@@ -290,17 +299,13 @@ function buildSessionCommandParams(
     SenderId: "user-1",
     ...ctxOverrides,
   } as HandleCommandsParams["ctx"];
-  const channel = String(ctx.Provider ?? ctx.Surface ?? "")
-    .trim()
-    .toLowerCase();
+  const channel = normalizeCommandContextText(ctx.Provider ?? ctx.Surface);
   const senderId = typeof ctx.SenderId === "string" ? ctx.SenderId : undefined;
   return {
     ctx,
     cfg: baseCfg,
     command: {
-      surface: String(ctx.Surface ?? ctx.Provider ?? "")
-        .trim()
-        .toLowerCase(),
+      surface: normalizeCommandContextText(ctx.Surface ?? ctx.Provider),
       channel,
       channelId: channel,
       ownerList: [],
@@ -487,8 +492,13 @@ function expectIdleTimeoutSetReply(
 }
 
 describe("/session idle and /session max-age", () => {
+  beforeEach(async () => {
+    if (!handleSessionCommand) {
+      ({ handleSessionCommand } = await import("./commands-session.js"));
+    }
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();
     hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
@@ -497,13 +507,6 @@ describe("/session idle and /session max-age", () => {
     hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock.mockReset();
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     vi.useRealTimers();
-  });
-
-  beforeEach(async () => {
-    ({ handleSessionCommand } = await importFreshModule<typeof import("./commands-session.js")>(
-      import.meta.url,
-      "./commands-session.js?scope=commands-session-lifecycle",
-    ));
   });
 
   it("sets idle timeout for the focused thread-chat session", async () => {

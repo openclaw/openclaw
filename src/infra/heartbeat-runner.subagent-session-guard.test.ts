@@ -67,11 +67,15 @@ describe("runHeartbeatOnce", () => {
         },
       });
 
-      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith(
-        "120363401234567890@g.us",
-        "Final alert",
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: mainSessionKey,
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+        }),
         expect.anything(),
+        cfg,
       );
     });
   });

@@ -54,6 +54,8 @@ const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
   return {
+    compactEmbeddedPiSession: (...args: unknown[]) =>
+      embeddedRunMock.compactEmbeddedPiSession(...args),
     isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedPiRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
@@ -77,6 +79,22 @@ async function importEmbeddedRunMockModule<TModule extends object>(
     ...(opts?.includeActiveCount
       ? { getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size }
       : {}),
+  };
+}
+
+function createDispatchInboundMessageMockExports(
+  actual: typeof import("../auto-reply/dispatch.js"),
+): typeof import("../auto-reply/dispatch.js") {
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
+      return impl
+        ? (gatewayTestHoisted.dispatchInboundMessage(...args) as ReturnType<
+            typeof actual.dispatchInboundMessage
+          >)
+        : actual.dispatchInboundMessage(...args);
+    },
   };
 }
 
@@ -190,6 +208,29 @@ vi.mock("../config/config.js", async () => {
   return createGatewayConfigModuleMock(actual);
 });
 
+vi.mock("../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  const configActual =
+    await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const configMock = createGatewayConfigModuleMock(configActual);
+  const createConfigIO = vi.fn(() => ({
+    ...actual.createConfigIO(),
+    loadConfig: configMock.loadConfig,
+    readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
+    writeConfigFile: configMock.writeConfigFile,
+  }));
+  return {
+    ...actual,
+    createConfigIO,
+    getRuntimeConfig: configMock.getRuntimeConfig,
+    loadConfig: configMock.loadConfig,
+    readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
+    writeConfigFile: configMock.writeConfigFile,
+  };
+});
+
 vi.mock("../agents/pi-embedded.js", async () => {
   return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
     "../agents/pi-embedded.js",
@@ -254,29 +295,13 @@ vi.mock("../auto-reply/dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
-  return {
-    ...actual,
-    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
-      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
-      return impl
-        ? gatewayTestHoisted.dispatchInboundMessage(...args)
-        : actual.dispatchInboundMessage(...args);
-    },
-  };
+  return createDispatchInboundMessageMockExports(actual);
 });
 vi.mock("/src/auto-reply/dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
-  return {
-    ...actual,
-    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
-      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
-      return impl
-        ? gatewayTestHoisted.dispatchInboundMessage(...args)
-        : actual.dispatchInboundMessage(...args);
-    },
-  };
+  return createDispatchInboundMessageMockExports(actual);
 });
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>

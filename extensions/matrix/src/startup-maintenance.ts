@@ -2,15 +2,30 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   autoMigrateLegacyMatrixState,
   autoPrepareLegacyMatrixCrypto,
-  hasActionableMatrixMigration,
-  hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
+  resolveMatrixMigrationStatus,
+  type MatrixMigrationStatus,
 } from "./matrix-migration.runtime.js";
 
 type MatrixStartupLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
+
+function logWarningOnlyMatrixMigrationReasons(params: {
+  status: MatrixMigrationStatus;
+  log: MatrixStartupLogger;
+}): void {
+  if (params.status.legacyState && "warning" in params.status.legacyState) {
+    params.log.warn?.(`matrix: ${params.status.legacyState.warning}`);
+  }
+
+  if (params.status.legacyCrypto.warnings.length > 0) {
+    params.log.warn?.(
+      `matrix: legacy encrypted-state warnings:\n${params.status.legacyCrypto.warnings.map((entry) => `- ${entry}`).join("\n")}`,
+    );
+  }
+}
 
 async function runBestEffortMatrixMigrationStep(params: {
   label: string;
@@ -48,16 +63,16 @@ export async function runMatrixStartupMaintenance(params: {
     params.deps?.autoPrepareLegacyMatrixCrypto ?? autoPrepareLegacyMatrixCrypto;
   const trigger = params.trigger?.trim() || "gateway-startup";
   const logPrefix = params.logPrefix?.trim() || "gateway";
-  const actionable = hasActionableMatrixMigration({ cfg: params.cfg, env });
-  const pending = actionable || hasPendingMatrixMigration({ cfg: params.cfg, env });
+  const migrationStatus = resolveMatrixMigrationStatus({ cfg: params.cfg, env });
 
-  if (!pending) {
+  if (!migrationStatus.pending) {
     return;
   }
-  if (!actionable) {
+  if (!migrationStatus.actionable) {
     params.log.info?.(
       "matrix: migration remains in a warning-only state; no pre-migration snapshot was needed yet",
     );
+    logWarningOnlyMatrixMigrationReasons({ status: migrationStatus, log: params.log });
     return;
   }
 

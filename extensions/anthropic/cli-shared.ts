@@ -1,9 +1,11 @@
 import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`;
+export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`;
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   CLAUDE_CLI_DEFAULT_MODEL_REF,
+  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-5`,
   `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-5`,
@@ -12,9 +14,11 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
 
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",
+  "opus-4.7": "opus",
   "opus-4.6": "opus",
   "opus-4.5": "opus",
   "opus-4": "opus",
+  "claude-opus-4-7": "opus",
   "claude-opus-4-6": "opus",
   "claude-opus-4-5": "opus",
   "claude-opus-4": "opus",
@@ -39,10 +43,6 @@ export const CLAUDE_CLI_SESSION_ID_FIELDS = [
   "conversationId",
 ] as const;
 
-export const CLAUDE_CLI_HOST_MANAGED_ENV = {
-  CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-} as const;
-
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
@@ -50,8 +50,11 @@ export const CLAUDE_CLI_HOST_MANAGED_ENV = {
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
+  "ANTHROPIC_API_TOKEN",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
@@ -92,7 +95,7 @@ const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 
 export function isClaudeCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID;
+  return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
 export function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {

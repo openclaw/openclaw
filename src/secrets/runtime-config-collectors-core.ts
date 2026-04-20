@@ -1,10 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
-import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
@@ -400,9 +401,9 @@ function collectMediaRequestAssignments(params: {
     return;
   }
 
-  let providerRegistry: ReturnType<typeof buildMediaUnderstandingRegistry> | undefined;
+  let providerRegistry: ReturnType<typeof buildMediaUnderstandingCapabilityRegistry> | undefined;
   const getProviderRegistry = () => {
-    providerRegistry ??= buildMediaUnderstandingRegistry(undefined, params.config);
+    providerRegistry ??= buildMediaUnderstandingCapabilityRegistry(params.config);
     return providerRegistry;
   };
   const capabilityKeys = ["audio", "image", "video"] as const;
@@ -564,7 +565,8 @@ function collectSandboxSshAssignments(params: {
       "docker";
     const effectiveMode =
       (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ?? defaultsMode ?? "off";
-    const active = effectiveBackend.trim().toLowerCase() === "ssh" && effectiveMode !== "off";
+    const active =
+      normalizeOptionalLowercaseString(effectiveBackend) === "ssh" && effectiveMode !== "off";
     for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
       if (ssh && Object.prototype.hasOwnProperty.call(ssh, key)) {
         collectSecretInputAssignment({
@@ -590,7 +592,7 @@ function collectSandboxSshAssignments(params: {
   }
 
   const defaultsActive =
-    (defaultsBackend?.trim().toLowerCase() === "ssh" && defaultsMode !== "off") ||
+    (normalizeOptionalLowercaseString(defaultsBackend) === "ssh" && defaultsMode !== "off") ||
     inheritedDefaultsUsage.identityData ||
     inheritedDefaultsUsage.certificateData ||
     inheritedDefaultsUsage.knownHostsData;

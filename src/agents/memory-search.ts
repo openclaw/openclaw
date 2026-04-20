@@ -6,10 +6,9 @@ import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -225,30 +224,7 @@ function mergeConfig(
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
     overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
   };
-  const sync = {
-    onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
-    onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
-    watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
-    watchDebounceMs:
-      overrides?.sync?.watchDebounceMs ??
-      defaults?.sync?.watchDebounceMs ??
-      DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
-    sessions: {
-      deltaBytes:
-        overrides?.sync?.sessions?.deltaBytes ??
-        defaults?.sync?.sessions?.deltaBytes ??
-        DEFAULT_SESSION_DELTA_BYTES,
-      deltaMessages:
-        overrides?.sync?.sessions?.deltaMessages ??
-        defaults?.sync?.sessions?.deltaMessages ??
-        DEFAULT_SESSION_DELTA_MESSAGES,
-      postCompactionForce:
-        overrides?.sync?.sessions?.postCompactionForce ??
-        defaults?.sync?.sessions?.postCompactionForce ??
-        true,
-    },
-  };
+  const sync = resolveSyncConfig(defaults, overrides);
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
@@ -343,24 +319,24 @@ function mergeConfig(
       ...query,
       minScore,
       hybrid: {
-        enabled: Boolean(hybrid.enabled),
+        enabled: hybrid.enabled,
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
         mmr: {
-          enabled: Boolean(hybrid.mmr.enabled),
+          enabled: hybrid.mmr.enabled,
           lambda: Number.isFinite(hybrid.mmr.lambda)
             ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
             : DEFAULT_MMR_LAMBDA,
         },
         temporalDecay: {
-          enabled: Boolean(hybrid.temporalDecay.enabled),
+          enabled: hybrid.temporalDecay.enabled,
           halfLifeDays: temporalDecayHalfLifeDays,
         },
       },
     },
     cache: {
-      enabled: Boolean(cache.enabled),
+      enabled: cache.enabled,
       maxEntries:
         typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))
@@ -412,24 +388,12 @@ export function resolveMemorySearchConfig(
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider =
     resolved.provider === "auto" ? undefined : getMemoryEmbeddingProvider(resolved.provider);
-  const builtinMultimodalSupport =
-    resolved.provider === "auto"
-      ? false
-      : supportsMemoryMultimodalEmbeddings({
-          provider: resolved.provider,
-          model: resolved.model,
-        });
+  // Config resolution is a startup/doctor hot path; only validate adapters
+  // already registered by the active runtime instead of cold-loading plugins.
   if (
     multimodalActive &&
-    !(
-      // Fall back to the built-in helper when the provider is not registered yet
-      // or when a registered adapter does not implement multimodal capability checks.
-      (
-        multimodalProvider?.supportsMultimodalEmbeddings?.({
-          model: resolved.model,
-        }) ?? builtinMultimodalSupport
-      )
-    )
+    multimodalProvider &&
+    !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
   ) {
     throw new Error(
       "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",

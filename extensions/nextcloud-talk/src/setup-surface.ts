@@ -20,6 +20,14 @@ import type { CoreConfig } from "./types.js";
 const channel = "nextcloud-talk" as const;
 const CONFIGURE_API_FLAG = "__nextcloudTalkConfigureApiCredentials";
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
   channel,
   stepOrder: "text-first",
@@ -63,7 +71,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
       initialValue: hasApiCredentials,
     });
     if (!configureApiCredentials) {
-      return;
+      return undefined;
     }
     return {
       credentialValues: {
@@ -93,7 +101,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
           resolvedValue: resolvedAccount.secret || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim() || undefined
+              ? normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET)
               : undefined,
         };
       },

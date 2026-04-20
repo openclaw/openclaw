@@ -8,7 +8,7 @@ import {
 } from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export {
@@ -214,7 +214,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
 
   for (const match of text.matchAll(scanRe)) {
     const index = match.index ?? 0;
-    const isClose = Boolean(match[1]?.includes("/"));
+    const isClose = match[1]?.includes("/") ?? false;
 
     if (!inThinking && !isClose) {
       pushText(text.slice(cursor, index));

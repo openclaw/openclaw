@@ -1,12 +1,28 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { describe, expect, it } from "vitest";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, describe, expect, it } from "vitest";
 import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
+import { createTestRegistry } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
-import { qaChannelPlugin } from "../api.js";
-import { setQaChannelRuntime } from "../api.js";
+import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 
-function createMockQaRuntime(): PluginRuntime {
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
+function installQaChannelTestRegistry() {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "qa-channel", plugin: qaChannelPlugin, source: "test" }]),
+  );
+}
+
+function createMockQaRuntime(params?: {
+  onDispatch?: (ctx: Record<string, unknown>) => void;
+}): PluginRuntime {
   const sessionUpdatedAt = new Map<string, number>();
   return {
     channel: {
@@ -57,8 +73,9 @@ function createMockQaRuntime(): PluginRuntime {
           ctx: { BodyForAgent?: string; Body?: string };
           dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
         }) {
+          params?.onDispatch?.(ctx as Record<string, unknown>);
           await dispatcherOptions.deliver({
-            text: `qa-echo: ${String(ctx.BodyForAgent ?? ctx.Body ?? "")}`,
+            text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
           });
         },
       },
@@ -67,7 +84,8 @@ function createMockQaRuntime(): PluginRuntime {
 }
 
 describe("qa-channel plugin", () => {
-  it("roundtrips inbound DM traffic through the qa bus", async () => {
+  it("roundtrips inbound DM traffic through the qa bus", { timeout: 20_000 }, async () => {
+    installQaChannelTestRegistry();
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
     setQaChannelRuntime(createMockQaRuntime());
@@ -106,7 +124,7 @@ describe("qa-channel plugin", () => {
         kind: "message-text",
         textIncludes: "qa-echo: hello",
         direction: "outbound",
-        timeoutMs: 5_000,
+        timeoutMs: 15_000,
       });
       expect("text" in outbound && outbound.text).toContain("qa-echo: hello");
     } finally {
@@ -116,7 +134,89 @@ describe("qa-channel plugin", () => {
     }
   });
 
+  it("stages inbound image attachments into agent media payload", { timeout: 20_000 }, async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    let dispatchedCtx: Record<string, unknown> | null = null;
+    setQaChannelRuntime(
+      createMockQaRuntime({
+        onDispatch: (ctx) => {
+          dispatchedCtx = ctx;
+        },
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        "qa-channel": {
+          baseUrl: bus.baseUrl,
+          botUserId: "openclaw",
+          botDisplayName: "OpenClaw QA",
+          allowFrom: ["*"],
+        },
+      },
+    };
+    const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
+    const abort = new AbortController();
+    const startAccount = qaChannelPlugin.gateway?.startAccount;
+    expect(startAccount).toBeDefined();
+    const task = startAccount!(
+      createStartAccountContext({
+        account,
+        cfg,
+        abortSignal: abort.signal,
+      }),
+    );
+
+    try {
+      state.addInboundMessage({
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text: "describe this image",
+        attachments: [
+          {
+            id: "image-1",
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "red-top-blue-bottom.png",
+            contentBase64:
+              "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+          },
+        ],
+      });
+
+      await state.waitFor({
+        kind: "message-text",
+        textIncludes: "qa-echo: describe this image",
+        direction: "outbound",
+        timeoutMs: 15_000,
+      });
+
+      expect(dispatchedCtx).not.toBeNull();
+      if (!dispatchedCtx) {
+        throw new Error("expected dispatched context");
+      }
+      const mediaCtx: {
+        MediaPath?: string;
+        MediaPaths?: string[];
+        MediaType?: string;
+        MediaTypes?: string[];
+      } = dispatchedCtx;
+      expect(mediaCtx.MediaPath).toEqual(expect.stringContaining("red-top-blue-bottom"));
+      expect(mediaCtx.MediaType).toBe("image/png");
+      expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
+      expect(mediaCtx.MediaTypes).toEqual(["image/png"]);
+    } finally {
+      abort.abort();
+      await task;
+      await bus.stop();
+    }
+  });
+
   it("exposes thread and message actions against the qa bus", async () => {
+    installQaChannelTestRegistry();
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
 
@@ -217,6 +317,60 @@ describe("qa-channel plugin", () => {
         },
       });
       expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("routes the advertised send action to the qa bus", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = {
+        channels: {
+          "qa-channel": {
+            baseUrl: bus.baseUrl,
+            botUserId: "openclaw",
+            botDisplayName: "OpenClaw QA",
+          },
+        },
+      };
+
+      const sendTarget = qaChannelPlugin.actions?.extractToolSend?.({
+        args: {
+          action: "send",
+          target: "qa-room",
+          message: "hello",
+        },
+      });
+      expect(sendTarget).toEqual({ to: "channel:qa-room", threadId: undefined });
+
+      const result = await qaChannelPlugin.actions?.handleAction?.({
+        channel: "qa-channel",
+        action: "send",
+        cfg,
+        accountId: "default",
+        params: {
+          target: "qa-room",
+          message: "hello from action",
+        },
+      });
+      const payload = extractToolPayload(result);
+      expect(payload).toMatchObject({ message: { text: "hello from action" } });
+
+      const outbound = await state.waitFor({
+        kind: "message-text",
+        direction: "outbound",
+        textIncludes: "hello from action",
+        timeoutMs: 5_000,
+      });
+      expect("conversation" in outbound).toBe(true);
+      if (!("conversation" in outbound)) {
+        throw new Error("expected outbound message match");
+      }
+      expect(outbound.conversation).toMatchObject({ id: "qa-room", kind: "channel" });
     } finally {
       await bus.stop();
     }

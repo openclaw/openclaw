@@ -1,10 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveProviderModelPickerEntries,
   resolveProviderWizardOptions,
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
@@ -56,19 +57,10 @@ function resolveProviderDocsById(params?: {
       mode: "setup",
     })
       .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
-        Boolean(provider.docsPath?.trim()),
+        Boolean(normalizeOptionalString(provider.docsPath)),
       )
-      .map((provider) => [provider.id, provider.docsPath.trim()]),
+      .map((provider) => [provider.id, normalizeOptionalString(provider.docsPath)!]),
   );
-}
-
-export function resolveProviderSetupFlowOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowOption[] {
-  return resolveProviderSetupFlowContributions(params).map((contribution) => contribution.option);
 }
 
 export function resolveProviderSetupFlowContributions(params?: {
@@ -82,33 +74,37 @@ export function resolveProviderSetupFlowContributions(params?: {
   return sortFlowContributionsByLabel(
     resolveProviderWizardOptions(params ?? {})
       .filter((option) => includesProviderFlowScope(option.onboardingScopes, scope))
-      .map((option) => ({
-        id: `provider:setup:${option.value}`,
-        kind: "provider" as const,
-        surface: "setup" as const,
-        providerId: option.groupId,
-        option: {
-          value: option.value,
-          label: option.label,
-          ...(option.hint ? { hint: option.hint } : {}),
-          ...(option.assistantPriority !== undefined
-            ? { assistantPriority: option.assistantPriority }
-            : {}),
-          ...(option.assistantVisibility
-            ? { assistantVisibility: option.assistantVisibility }
-            : {}),
-          group: {
-            id: option.groupId,
-            label: option.groupLabel,
-            ...(option.groupHint ? { hint: option.groupHint } : {}),
+      .map((option) =>
+        Object.assign(
+          {
+            id: `provider:setup:${option.value}`,
+            kind: `provider` as const,
+            surface: `setup` as const,
+            providerId: option.groupId,
+            option: {
+              value: option.value,
+              label: option.label,
+              ...(option.hint ? { hint: option.hint } : {}),
+              ...(option.assistantPriority !== undefined
+                ? { assistantPriority: option.assistantPriority }
+                : {}),
+              ...(option.assistantVisibility
+                ? { assistantVisibility: option.assistantVisibility }
+                : {}),
+              group: {
+                id: option.groupId,
+                label: option.groupLabel,
+                ...(option.groupHint ? { hint: option.groupHint } : {}),
+              },
+              ...(docsByProvider.get(option.groupId)
+                ? { docs: { path: docsByProvider.get(option.groupId)! } }
+                : {}),
+            },
           },
-          ...(docsByProvider.get(option.groupId)
-            ? { docs: { path: docsByProvider.get(option.groupId)! } }
-            : {}),
-        },
-        ...(option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {}),
-        source: "runtime" as const,
-      })),
+          option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {},
+          { source: `runtime` as const },
+        ),
+      ),
   );
 }
 

@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -16,6 +17,7 @@ import {
   requireInRange,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { elevenLabsTTS } from "./tts.js";
@@ -53,7 +55,7 @@ type ElevenLabsProviderConfig = {
 };
 
 function parseBooleanValue(value: string): boolean | undefined {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (["true", "1", "yes", "on"].includes(normalized)) {
     return true;
   }
@@ -281,7 +283,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
   } catch (error) {
     return {
       handled: true,
-      warnings: [error instanceof Error ? error.message : String(error)],
+      warnings: [formatErrorMessage(error)],
     };
   }
 }
@@ -310,9 +312,9 @@ export async function listElevenLabsVoices(params: {
     ? json.voices
         .map((voice) => ({
           id: voice.voice_id?.trim() ?? "",
-          name: voice.name?.trim() || undefined,
-          category: voice.category?.trim() || undefined,
-          description: voice.description?.trim() || undefined,
+          name: trimToUndefined(voice.name),
+          category: trimToUndefined(voice.category),
+          description: trimToUndefined(voice.description),
         }))
         .filter((voice) => voice.id.length > 0)
     : [];
@@ -385,7 +387,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     },
     resolveTalkOverrides: ({ params }) => {
       const normalize = trimToUndefined(params.normalize);
-      const language = trimToUndefined(params.language)?.toLowerCase();
+      const language = normalizeLowercaseStringOrEmpty(trimToUndefined(params.language));
       const latencyTier = asFiniteNumber(params.latencyTier);
       const voiceSettings = {
         ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),

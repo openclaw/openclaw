@@ -15,30 +15,35 @@ const AudioFormatPolicySchema = z
 
 const QQBotSpeechQueryParamsSchema = z.record(z.string(), z.string()).optional();
 
-const QQBotTtsSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    provider: z.string().optional(),
-    baseUrl: z.string().optional(),
-    apiKey: z.string().optional(),
-    model: z.string().optional(),
-    voice: z.string().optional(),
-    authStyle: z.enum(["bearer", "api-key"]).optional(),
-    queryParams: QQBotSpeechQueryParamsSchema,
-    speed: z.number().optional(),
-  })
+const QQBotSpeechProviderSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.string().optional(),
+  baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+  model: z.string().optional(),
+});
+
+const QQBotTtsSchema = QQBotSpeechProviderSchema.extend({
+  voice: z.string().optional(),
+  authStyle: z.enum(["bearer", "api-key"]).optional(),
+  queryParams: QQBotSpeechQueryParamsSchema,
+  speed: z.number().optional(),
+})
   .strict()
   .optional();
 
-const QQBotSttSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    provider: z.string().optional(),
-    baseUrl: z.string().optional(),
-    apiKey: z.string().optional(),
-    model: z.string().optional(),
-  })
-  .strict()
+const QQBotSttSchema = QQBotSpeechProviderSchema.strict().optional();
+
+const QQBotStreamingSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        /** "partial" (default) enables block streaming; "off" disables it. */
+        mode: z.enum(["off", "partial"]).default("partial"),
+      })
+      .passthrough(),
+  ])
   .optional();
 
 const QQBotAccountSchema = z
@@ -56,13 +61,14 @@ const QQBotAccountSchema = z
     urlDirectUpload: z.boolean().optional(),
     upgradeUrl: z.string().optional(),
     upgradeMode: z.enum(["doc", "hot-reload"]).optional(),
+    streaming: QQBotStreamingSchema,
   })
-  .strict();
+  .passthrough();
 
 export const QQBotConfigSchema = QQBotAccountSchema.extend({
   tts: QQBotTtsSchema,
   stt: QQBotSttSchema,
-  accounts: z.object({}).catchall(QQBotAccountSchema).optional(),
+  accounts: z.object({}).catchall(QQBotAccountSchema.passthrough()).optional(),
   defaultAccount: z.string().optional(),
-});
+}).passthrough();
 export const qqbotChannelConfigSchema = buildChannelConfigSchema(QQBotConfigSchema);

@@ -4,6 +4,7 @@ import {
   type GraphResponse,
   deleteGraphRequest,
   escapeOData,
+  fetchGraphAbsoluteUrl,
   fetchGraphJson,
   postGraphBetaJson,
   postGraphJson,
@@ -34,6 +35,7 @@ type GraphPinnedMessage = {
 
 type GraphPinnedMessagesResponse = {
   value?: GraphPinnedMessage[];
+  "@odata.nextLink"?: string;
 };
 
 /**
@@ -62,7 +64,7 @@ function stripTargetPrefix(raw: string): string {
  * actual `19:xxx@thread.*` chat ID that Graph API requires.
  * Conversation IDs and `teamId/channelId` pairs pass through unchanged.
  */
-async function resolveGraphConversationId(to: string): Promise<string> {
+export async function resolveGraphConversationId(to: string): Promise<string> {
   const trimmed = to.trim();
   const isUserTarget = /^user:/i.test(trimmed);
   const cleaned = stripTargetPrefix(trimmed);
@@ -97,7 +99,7 @@ async function resolveGraphConversationId(to: string): Promise<string> {
   );
 }
 
-function resolveConversationPath(to: string): {
+export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
   chatId?: string;
@@ -114,6 +116,11 @@ function resolveConversationPath(to: string): {
       channelId,
     };
   }
+  // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
+  // or channel threads. Without a teamId/channelId pair (format "teamId/channelId")
+  // we route through /chats/{id} which works for group chats and 1:1 DMs.
+  // Channel operations that require /teams/{teamId}/channels/{channelId} paths
+  // must be called with the explicit teamId/channelId target format.
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
@@ -161,7 +168,14 @@ export type PinMessageMSTeamsParams = {
 
 /**
  * Pin a message in a chat conversation via Graph API.
- * Channel pinning uses a different endpoint (beta) handled separately.
+ *
+ * Chat pinning uses the v1.0 endpoint: `POST /chats/{chatId}/pinnedMessages`.
+ *
+ * Channel pinning uses `POST /teams/{teamId}/channels/{channelId}/pinnedMessages`.
+ * **Note:** The channel pin endpoint may require the Graph beta API or specific
+ * tenant-level permissions. As of March 2026, general availability is not
+ * confirmed for all tenants. If the call returns 404 or 403, the endpoint may
+ * not be enabled for the target tenant.
  */
 export async function pinMessageMSTeams(
   params: PinMessageMSTeamsParams,
@@ -171,20 +185,22 @@ export async function pinMessageMSTeams(
   const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
-    // Graph v1.0 doesn't have channel pin — use the pinnedMessages pattern on chat
-    // For channels, attempt POST to pinnedMessages (same shape, may require beta)
-    await postGraphJson<unknown>({
-      token,
-      path: `${conv.basePath}/pinnedMessages`,
-      body: { message: { id: params.messageId } },
-    });
-    return { ok: true };
+    // Graph v1.0 does not expose pinnedMessages on channels — only on chats.
+    // Attempting this would 404.
+    throw new Error(
+      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
+    );
   }
 
+  // Graph API expects message@odata.bind with the full message resource URI
+  const body = {
+    "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(params.messageId)}`,
+  };
   const result = await postGraphJson<{ id?: string }>({
     token,
     path: `${conv.basePath}/pinnedMessages`,
-    body: { message: { id: params.messageId } },
+    body,
   });
   return { ok: true, pinnedMessageId: result.id };
 }
@@ -200,6 +216,9 @@ export type UnpinMessageMSTeamsParams = {
  * Unpin a message in a chat conversation via Graph API.
  * `pinnedMessageId` is the pinned-message resource ID (from pin or list-pins),
  * not the underlying chat message ID.
+ *
+ * Channel unpin uses `DELETE /teams/{teamId}/channels/{channelId}/pinnedMessages/{id}`.
+ * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
  */
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
@@ -207,6 +226,12 @@ export async function unpinMessageMSTeams(
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
+  if (conv.kind === "channel") {
+    throw new Error(
+      "Pin/unpin is not supported for channel messages on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
+    );
+  }
   const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
@@ -221,8 +246,15 @@ export type ListPinsMSTeamsResult = {
   pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
 };
 
+/** Maximum number of pagination pages to follow to avoid unbounded loops. */
+const LIST_PINS_MAX_PAGES = 10;
+
 /**
  * List all pinned messages in a chat conversation via Graph API.
+ * Follows `@odata.nextLink` pagination to collect the full pin set.
+ *
+ * Channel list-pins uses the same endpoint pattern as channel pin/unpin.
+ * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
  */
 export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
@@ -230,15 +262,41 @@ export async function listPinsMSTeams(
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
+
+  if (conv.kind === "channel") {
+    throw new Error(
+      "Listing pinned messages is not supported for channels on Graph v1.0. " +
+        "Only chat conversations support pinned messages.",
+    );
+  }
+
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
-  const res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
-  const pins = (res.value ?? []).map((pin) => ({
-    id: pin.id ?? "",
-    pinnedMessageId: pin.id ?? "",
-    messageId: pin.message?.id,
-    text: pin.message?.body?.content,
-  }));
-  return { pins };
+  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
+    [];
+
+  let res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
+  let pages = 1;
+
+  while (true) {
+    for (const pin of res.value ?? []) {
+      allPins.push({
+        id: pin.id ?? "",
+        pinnedMessageId: pin.id ?? "",
+        messageId: pin.message?.id,
+        text: pin.message?.body?.content,
+      });
+    }
+
+    const nextLink = res["@odata.nextLink"];
+    if (!nextLink || pages >= LIST_PINS_MAX_PAGES) {
+      break;
+    }
+
+    res = await fetchGraphAbsoluteUrl<GraphPinnedMessagesResponse>({ token, url: nextLink });
+    pages++;
+  }
+
+  return { pins: allPins };
 }
 
 // ---------------------------------------------------------------------------
@@ -278,8 +336,22 @@ export type ListReactionsMSTeamsParams = {
   messageId: string;
 };
 
+/** Map well-known reaction type names to representative emoji for CLI display. */
+const REACTION_TYPE_EMOJI: Record<string, string> = {
+  like: "\u{1F44D}",
+  heart: "\u2764\uFE0F",
+  laugh: "\u{1F606}",
+  surprised: "\u{1F62E}",
+  sad: "\u{1F622}",
+  angry: "\u{1F621}",
+};
+
 export type ReactionSummary = {
   reactionType: string;
+  /** Display name for the reaction (matches reactionType for known types). */
+  name: string;
+  /** Emoji representation when available. */
+  emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;
 };
@@ -288,24 +360,38 @@ export type ListReactionsMSTeamsResult = {
   reactions: ReactionSummary[];
 };
 
-function validateReactionType(raw: string): TeamsReactionType {
-  const normalized = raw.toLowerCase().trim();
-  if (!TEAMS_REACTION_TYPES.includes(normalized as TeamsReactionType)) {
-    throw new Error(
-      `Invalid reaction type "${raw}". Valid types: ${TEAMS_REACTION_TYPES.join(", ")}`,
-    );
+/**
+ * Normalize a reaction type string. Graph setReaction/unsetReaction accepts
+ * the well-known legacy names (like, heart, laugh, surprised, sad, angry)
+ * as well as Unicode emoji values — so we pass unknown types through rather
+ * than rejecting them.
+ */
+function normalizeReactionType(raw: string): string {
+  const normalized = raw.trim();
+  if (!normalized) {
+    throw new Error(`Reaction type is required. Common types: ${TEAMS_REACTION_TYPES.join(", ")}`);
   }
-  return normalized as TeamsReactionType;
+  // Lowercase only the well-known names; Unicode emoji should pass through as-is
+  const lowered = normalized.toLowerCase();
+  if (TEAMS_REACTION_TYPES.includes(lowered as TeamsReactionType)) {
+    return lowered;
+  }
+  return normalized;
 }
 
 /**
  * Add an emoji reaction to a message via Graph API (beta).
+ *
+ * Writes (setReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. The resolver falls back to the app-only token when
+ * delegated auth is not configured, preserving today's behavior while letting
+ * delegated-auth-enabled deployments hit the user-scoped endpoint.
  */
 export async function reactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const reactionType = validateReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const reactionType = normalizeReactionType(params.reactionType);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
@@ -315,12 +401,15 @@ export async function reactMessageMSTeams(
 
 /**
  * Remove an emoji reaction from a message via Graph API (beta).
+ *
+ * Writes (unsetReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. See `reactMessageMSTeams` for fallback rules.
  */
 export async function unreactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const reactionType = validateReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const reactionType = normalizeReactionType(params.reactionType);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
@@ -341,24 +430,33 @@ export async function listReactionsMSTeams(
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
-  const grouped = new Map<string, Array<{ id: string; displayName?: string }>>();
+  const grouped = new Map<
+    string,
+    { count: number; users: Array<{ id: string; displayName?: string }> }
+  >();
   for (const reaction of msg.reactions ?? []) {
     const type = reaction.reactionType ?? "unknown";
     if (!grouped.has(type)) {
-      grouped.set(type, []);
+      grouped.set(type, { count: 0, users: [] });
     }
+    const group = grouped.get(type)!;
+    // Count every reaction regardless of whether the user ID is present
+    // (deleted accounts, guests, or anonymous users may lack a user ID)
+    group.count++;
     if (reaction.user?.id) {
-      grouped.get(type)!.push({
+      group.users.push({
         id: reaction.user.id,
         displayName: reaction.user.displayName,
       });
     }
   }
 
-  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, users]) => ({
+  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
-    count: users.length,
-    users,
+    name: type,
+    emoji: REACTION_TYPE_EMOJI[type],
+    count: group.count,
+    users: group.users,
   }));
 
   return { reactions };

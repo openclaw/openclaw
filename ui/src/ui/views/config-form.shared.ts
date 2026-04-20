@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHint, ConfigUiHints } from "../types.ts";
 
 export type JsonSchema = {
@@ -23,8 +24,7 @@ export function schemaType(schema: JsonSchema): string | undefined {
     return undefined;
   }
   if (Array.isArray(schema.type)) {
-    const filtered = schema.type.filter((t) => t !== "null");
-    return filtered[0] ?? schema.type[0];
+    return schema.type.find((t) => t !== "null") ?? schema.type[0];
   }
   return schema.type;
 }
@@ -125,7 +125,7 @@ function isEnvVarPlaceholder(value: string): boolean {
 }
 
 export function isSensitiveConfigPath(path: string): boolean {
-  const lowerPath = path.toLowerCase();
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const whitelisted = SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
   return !whitelisted && SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }

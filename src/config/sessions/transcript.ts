@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   resolveDefaultSessionStorePath,
@@ -184,7 +185,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   } catch (err) {
     return {
       ok: false,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: formatErrorMessage(err),
     };
   }
 
@@ -198,6 +199,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     : undefined;
   if (existingMessageId) {
     return { ok: true, sessionFile, messageId: existingMessageId };
+  }
+
+  const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
+    ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message)
+    : undefined;
+  if (latestEquivalentAssistantId) {
+    return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
   }
 
   const message = {
@@ -249,5 +257,73 @@ async function transcriptHasIdempotencyKey(
   } catch {
     return undefined;
   }
+  return undefined;
+}
+
+function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
+  return message.provider === "openclaw" && message.model === "delivery-mirror";
+}
+
+function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {
+  if (!Array.isArray(message.content)) {
+    return null;
+  }
+
+  const parts = message.content
+    .filter(
+      (
+        part,
+      ): part is {
+        type: "text";
+        text: string;
+      } => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
+    )
+    .map((part) => part.text.trim());
+
+  return parts.length > 0 ? parts.join("\n").trim() : null;
+}
+
+async function findLatestEquivalentAssistantMessageId(
+  transcriptPath: string,
+  message: SessionTranscriptAssistantMessage,
+): Promise<string | undefined> {
+  const expectedText = extractAssistantMessageText(message);
+  if (!expectedText) {
+    return undefined;
+  }
+
+  try {
+    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
+    const lines = raw.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index];
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          id?: unknown;
+          message?: SessionTranscriptAssistantMessage;
+        };
+        const candidate = parsed.message;
+        if (!candidate || candidate.role !== "assistant") {
+          continue;
+        }
+        const candidateText = extractAssistantMessageText(candidate);
+        if (candidateText !== expectedText) {
+          return undefined;
+        }
+        if (typeof parsed.id === "string" && parsed.id) {
+          return parsed.id;
+        }
+        return undefined;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
   return undefined;
 }

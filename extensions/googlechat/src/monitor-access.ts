@@ -1,3 +1,8 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -6,7 +11,6 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
-  resolveMentionGatingWithBypass,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
   type OpenClawConfig,
@@ -14,52 +18,18 @@ import {
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
+import { isSenderAllowed } from "./sender-allow.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
 function normalizeUserId(raw?: string | null): string {
-  const trimmed = raw?.trim() ?? "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
-  return trimmed.replace(/^users\//i, "").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
 
-function isEmailLike(value: string): boolean {
-  // Keep this intentionally loose; allowlists are user-provided config.
-  return value.includes("@");
-}
-
-export function isSenderAllowed(
-  senderId: string,
-  senderEmail: string | undefined,
-  allowFrom: string[],
-  allowNameMatching = false,
-) {
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-  const normalizedSenderId = normalizeUserId(senderId);
-  const normalizedEmail = senderEmail?.trim().toLowerCase() ?? "";
-  return allowFrom.some((entry) => {
-    const normalized = String(entry).trim().toLowerCase();
-    if (!normalized) {
-      return false;
-    }
-
-    // Accept `googlechat:<id>` but treat `users/...` as an *ID* only (deprecated `users/<email>`).
-    const withoutPrefix = normalized.replace(/^(googlechat|google-chat|gchat):/i, "");
-    if (withoutPrefix.startsWith("users/")) {
-      return normalizeUserId(withoutPrefix) === normalizedSenderId;
-    }
-
-    // Raw email allowlist entries are a break-glass override.
-    if (allowNameMatching && normalizedEmail && isEmailLike(withoutPrefix)) {
-      return withoutPrefix === normalizedEmail;
-    }
-
-    return withoutPrefix.replace(/^users\//i, "") === normalizedSenderId;
-  });
-}
+export { isSenderAllowed } from "./sender-allow.js";
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
@@ -80,7 +50,7 @@ function resolveGroupConfig(params: {
     return { entry: undefined, allowlistConfigured: false, deprecatedNameMatch: false };
   }
   const entry = entries[groupId];
-  const normalizedGroupName = groupName?.trim().toLowerCase() ?? "";
+  const normalizedGroupName = normalizeLowercaseStringOrEmpty(groupName ?? "");
   const deprecatedNameMatch =
     !entry &&
     Boolean(
@@ -90,7 +60,9 @@ function resolveGroupConfig(params: {
         if (!trimmed || trimmed === "*" || /^spaces\//i.test(trimmed)) {
           return false;
         }
-        return trimmed === groupName || trimmed.toLowerCase() === normalizedGroupName;
+        return (
+          trimmed === groupName || normalizeLowercaseStringOrEmpty(trimmed) === normalizedGroupName
+        );
       }),
     );
   const fallback = entries["*"];
@@ -123,13 +95,16 @@ const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
+  const deprecated = entries
+    .map((v) => normalizeOptionalString(v))
+    .filter((v): v is string => Boolean(v))
+    .filter((v) => /^users\/.+@.+/i.test(v));
   if (deprecated.length === 0) {
     return;
   }
   const key = deprecated
-    .map((v) => v.toLowerCase())
-    .toSorted()
+    .map((v) => normalizeLowercaseStringOrEmpty(v))
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -151,8 +126,8 @@ function warnMutableGroupKeysConfigured(
     return;
   }
   const warningKey = mutableKeys
-    .map((key) => key.toLowerCase())
-    .toSorted()
+    .map((key) => normalizeLowercaseStringOrEmpty(key))
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;
@@ -321,19 +296,23 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       cfg: config,
       surface: "googlechat",
     });
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup: true,
-      requireMention,
-      canDetectMention: true,
-      wasMentioned: mentionInfo.wasMentioned,
-      implicitMention: false,
-      hasAnyMention: mentionInfo.hasAnyMention,
-      allowTextCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
-      commandAuthorized: commandAuthorized === true,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: mentionInfo.wasMentioned,
+        hasAnyMention: mentionInfo.hasAnyMention,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup: true,
+        requireMention,
+        allowTextCommands,
+        hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
+        commandAuthorized: commandAuthorized === true,
+      },
     });
-    effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (mentionGate.shouldSkip) {
+    effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    if (mentionDecision.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
       return { ok: false };
     }
@@ -393,6 +372,6 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     ok: true,
     commandAuthorized,
     effectiveWasMentioned,
-    groupSystemPrompt: groupEntry?.systemPrompt?.trim() || undefined,
+    groupSystemPrompt: normalizeOptionalString(groupEntry?.systemPrompt),
   };
 }

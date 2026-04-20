@@ -8,6 +8,11 @@ export type {
   ChannelOutboundSessionRouteParams,
 } from "./core.js";
 
+import { createChannelPluginBase as createChannelPluginBaseFromCore } from "./core.js";
+
+export const createChannelPluginBase: typeof createChannelPluginBaseFromCore = (params) =>
+  createChannelPluginBaseFromCore(params);
+
 export {
   buildChannelConfigSchema,
   buildChannelOutboundSessionRoute,

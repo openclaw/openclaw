@@ -1,9 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { loadModelCatalog, resolveModelWithRegistry } from "./list.runtime.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
@@ -80,7 +80,14 @@ export function appendDiscoveredRows(params: {
   });
 
   for (const model of sorted) {
-    if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     if (!matchesRowFilter(params.context.filter, model)) {
@@ -127,6 +134,16 @@ export async function appendCatalogSupplementRows(params: {
     if (!model || !matchesRowFilter(params.context.filter, model)) {
       continue;
     }
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
+      continue;
+    }
     params.rows.push(
       buildRow({
         model,
@@ -162,6 +179,17 @@ export function appendConfiguredRows(params: {
       continue;
     }
     if (params.context.filter.local && !model) {
+      continue;
+    }
+    if (
+      model &&
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     params.rows.push(

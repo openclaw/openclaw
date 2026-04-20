@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,
@@ -36,6 +37,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -55,6 +57,7 @@ import {
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
+import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
@@ -87,10 +90,29 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 
-function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
+function shouldIgnoreMemoryWatchPath(
+  watchPath: string,
+  stats?: { isDirectory?: () => boolean },
+  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
+): boolean {
   const normalized = path.normalize(watchPath);
-  const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
-  return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+  const parts = normalized
+    .split(path.sep)
+    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
+  if (parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment))) {
+    return true;
+  }
+  if (stats?.isDirectory?.()) {
+    return false;
+  }
+  const extension = normalizeLowercaseStringOrEmpty(path.extname(normalized));
+  if (extension.length === 0 || extension === ".md") {
+    return false;
+  }
+  if (!multimodalSettings) {
+    return true;
+  }
+  return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
@@ -144,6 +166,7 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -168,6 +191,14 @@ export abstract class MemoryManagerSyncOps {
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
+  protected resetVectorState(): void {
+    this.vectorReady = null;
+    this.vector.available = null;
+    this.vector.loadError = undefined;
+    this.vector.dims = undefined;
+    this.vectorDegradedWriteWarningShown = false;
+  }
+
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) {
       return false;
@@ -183,7 +214,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       ready = (await this.vectorReady) || false;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       this.vector.available = false;
       this.vector.loadError = message;
       this.vectorReady = null;
@@ -216,7 +247,7 @@ export abstract class MemoryManagerSyncOps {
       this.vector.available = true;
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       this.vector.available = false;
       this.vector.loadError = message;
       log.warn(`sqlite-vec unavailable: ${message}`);
@@ -244,7 +275,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
     }
   }
@@ -340,7 +371,7 @@ export abstract class MemoryManagerSyncOps {
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory", "**", "*.md"),
+      path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -364,7 +395,7 @@ export abstract class MemoryManagerSyncOps {
         }
         if (
           stat.isFile() &&
-          (entry.toLowerCase().endsWith(".md") ||
+          (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
           watchPaths.add(entry);
@@ -375,7 +406,8 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
+      ignored: (watchPath, stats) =>
+        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
@@ -753,20 +785,20 @@ export abstract class MemoryManagerSyncOps {
     const files = targetSessionFiles
       ? Array.from(targetSessionFiles)
       : await listSessionFilesForAgent(this.agentId);
-    const activePaths = targetSessionFiles
-      ? null
-      : new Set(files.map((file) => sessionPathForFile(file)));
-    const existingRows =
-      activePaths === null
+    const sessionPlan = resolveMemorySessionSyncPlan({
+      needsFullReindex: params.needsFullReindex,
+      files,
+      targetSessionFiles,
+      sessionsDirtyFiles: this.sessionsDirtyFiles,
+      existingRows: targetSessionFiles
         ? null
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
-          }).rows;
-    const existingHashes =
-      existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
-    const indexAll =
-      params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
+          }).rows,
+      sessionPathForFile,
+    });
+    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -1001,7 +1033,7 @@ export abstract class MemoryManagerSyncOps {
         this.sessionsDirty = false;
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       const activated =
         this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
       if (activated) {
@@ -1099,6 +1131,7 @@ export abstract class MemoryManagerSyncOps {
       vectorAvailable: this.vector.available,
       vectorLoadError: this.vector.loadError,
       vectorDims: this.vector.dims,
+      vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
       vectorReady: this.vectorReady,
     };
 
@@ -1113,14 +1146,12 @@ export abstract class MemoryManagerSyncOps {
       this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
       this.vector.loadError = originalState.vectorLoadError;
       this.vector.dims = originalState.vectorDims;
+      this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
       this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
     };
 
     this.db = tempDb;
-    this.vectorReady = null;
-    this.vector.available = null;
-    this.vector.loadError = undefined;
-    this.vector.dims = undefined;
+    this.resetVectorState();
     this.fts.available = false;
     this.fts.loadError = undefined;
     this.ensureSchema();
@@ -1188,9 +1219,7 @@ export abstract class MemoryManagerSyncOps {
       });
 
       this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-      this.vectorReady = null;
-      this.vector.available = null;
-      this.vector.loadError = undefined;
+      this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {

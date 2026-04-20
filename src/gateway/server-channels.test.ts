@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  type ChannelGatewayContext,
+  type ChannelId,
+  type ChannelPlugin,
+} from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -7,6 +11,7 @@ import {
 } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -188,6 +193,68 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("consumes rejected stop tasks during manual abort", async () => {
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      const startAccount = vi.fn(
+        async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+          await new Promise<void>((_resolve, reject) => {
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
+      );
+      installTestRegistry(
+        createTestPlugin({
+          startAccount,
+        }),
+      );
+      const manager = createManager();
+
+      await manager.startChannels();
+      vi.runAllTicks();
+      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      await Promise.resolve();
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+    }
+  });
+
+  it("does not allow a second account task to start when stop times out", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>(() => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+  });
+
   it("marks enabled/configured when account descriptors omit them", () => {
     installTestRegistry(
       createTestPlugin({
@@ -220,16 +287,20 @@ describe("server-channels auto restart", () => {
   });
 
   it("passes channelRuntime through channel gateway context when provided", async () => {
-    const channelRuntime = { marker: "channel-runtime" } as unknown as PluginRuntime["channel"];
-    const startAccount = vi.fn(async (ctx) => {
-      expect(ctx.channelRuntime).toBe(channelRuntime);
-    });
+    const channelRuntime = {
+      ...createRuntimeChannel(),
+      marker: "channel-runtime",
+    } as PluginRuntime["channel"] & { marker: string };
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });
 
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
+    const [ctx] = startAccount.mock.calls[0] ?? [];
+    expect(ctx?.channelRuntime).toMatchObject({ marker: "channel-runtime" });
+    expect(ctx?.channelRuntime).not.toBe(channelRuntime);
   });
 
   it("deduplicates concurrent start requests for the same account", async () => {
@@ -280,12 +351,11 @@ describe("server-channels auto restart", () => {
 
   it("does not resolve channelRuntime until a channel starts", async () => {
     const channelRuntime = {
+      ...createRuntimeChannel(),
       marker: "lazy-channel-runtime",
-    } as unknown as PluginRuntime["channel"];
+    } as PluginRuntime["channel"] & { marker: string };
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
-    const startAccount = vi.fn(async (ctx) => {
-      expect(ctx.channelRuntime).toBe(channelRuntime);
-    });
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ resolveChannelRuntime });
@@ -299,6 +369,54 @@ describe("server-channels auto restart", () => {
 
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
+    const [ctx] = startAccount.mock.calls[0] ?? [];
+    expect(ctx?.channelRuntime).toMatchObject({ marker: "lazy-channel-runtime" });
+    expect(ctx?.channelRuntime).not.toBe(channelRuntime);
+  });
+
+  it("fails fast when channelRuntime is not a full plugin runtime surface", async () => {
+    installTestRegistry(createTestPlugin({ startAccount: vi.fn(async () => {}) }));
+    const manager = createManager({
+      channelRuntime: { marker: "partial-runtime" } as unknown as PluginRuntime["channel"],
+    });
+
+    await expect(manager.startChannel("discord", DEFAULT_ACCOUNT_ID)).rejects.toThrow(
+      "channelRuntime must provide runtimeContexts.register/get/watch; pass createPluginRuntime().channel or omit channelRuntime.",
+    );
+    await expect(manager.startChannel("discord", DEFAULT_ACCOUNT_ID)).rejects.toThrow(
+      "channelRuntime must provide runtimeContexts.register/get/watch; pass createPluginRuntime().channel or omit channelRuntime.",
+    );
+  });
+
+  it("keeps auto-restart running when scoped runtime cleanup throws", async () => {
+    const baseChannelRuntime = createRuntimeChannel();
+    const channelRuntime: PluginRuntime["channel"] = {
+      ...baseChannelRuntime,
+      runtimeContexts: {
+        ...baseChannelRuntime.runtimeContexts,
+        register: () => ({
+          dispose: () => {
+            throw new Error("cleanup boom");
+          },
+        }),
+      },
+    };
+    const startAccount = vi.fn(async ({ channelRuntime }: ChannelGatewayContext<TestAccount>) => {
+      channelRuntime?.runtimeContexts.register({
+        channelId: "discord",
+        accountId: DEFAULT_ACCOUNT_ID,
+        capability: "approval.native",
+        context: { token: "tracked" },
+      });
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ channelRuntime });
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(30);
+
+    expect(startAccount.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("continues starting later channels after one startup failure", async () => {

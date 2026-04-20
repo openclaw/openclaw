@@ -7,29 +7,15 @@ import {
 } from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
-vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
-  getBundledChannelRuntimeMap: () => new Map(),
-  getBundledChannelConfigSchemaMap: () => new Map(),
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
-  return {
-    ...actual,
-    monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
-  };
-});
+vi.mock("./monitor-runtime.js", () => ({
+  monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
+}));
 
-const { nextcloudTalkPlugin } = await import("./channel.js");
+const { nextcloudTalkGatewayAdapter } = await import("./gateway.js");
 
 function buildAccount(): ResolvedNextcloudTalkAccount {
   return {
@@ -54,7 +40,7 @@ function mockStartedMonitor() {
 }
 
 function startNextcloudAccount(abortSignal?: AbortSignal) {
-  return nextcloudTalkPlugin.gateway!.startAccount!(
+  return nextcloudTalkGatewayAdapter.startAccount!(
     createStartAccountContext({
       account: buildAccount(),
       abortSignal,
@@ -70,7 +56,7 @@ describe("nextcloud-talk startAccount lifecycle", () => {
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = mockStartedMonitor();
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: nextcloudTalkPlugin.gateway!.startAccount!,
+      startAccount: nextcloudTalkGatewayAdapter.startAccount!,
       account: buildAccount(),
     });
     await expectStopPendingUntilAbort({

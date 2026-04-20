@@ -279,6 +279,12 @@ export default defineSetupPluginEntry(myChannelPlugin);
 This avoids loading heavy runtime code (crypto libraries, CLI registrations,
 background services) during setup flows.
 
+Bundled workspace channels that keep setup-safe exports in sidecar modules can
+use `defineBundledChannelSetupEntry(...)` from
+`openclaw/plugin-sdk/channel-entry-contract` instead of
+`defineSetupPluginEntry(...)`. That bundled contract also supports an optional
+`runtime` export so setup-time runtime wiring can stay lightweight and explicit.
+
 **When OpenClaw uses `setupEntry` instead of the full entry:**
 
 - The channel is disabled but needs setup/onboarding surfaces
@@ -522,6 +528,12 @@ openclaw plugins install <package-name>
   `npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
   trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>
+
+Bundled OpenClaw-owned plugins are the only startup repair exception: when a
+packaged install sees one enabled by plugin config, legacy channel config, or
+its bundled default-enabled manifest, startup installs that plugin's missing
+runtime dependencies before import. Third-party plugins should not rely on
+startup installs; keep using the explicit plugin installer.
 
 ## Related
 

@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { resetModelsJsonReadyCacheForTest } from "./models-config.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -38,6 +39,8 @@ export function installModelsConfigTestHooks(opts?: {
     previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
     delete process.env.OPENCLAW_AGENT_DIR;
     delete process.env.PI_CODING_AGENT_DIR;
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     if (shouldResetPluginLoaderState) {
       resetPluginLoaderTestStateForTest();
     }
@@ -59,6 +62,8 @@ export function installModelsConfigTestHooks(opts?: {
     } else {
       process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
     }
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     if (shouldResetPluginLoaderState) {
       resetPluginLoaderTestStateForTest();
     }
@@ -99,10 +104,15 @@ export function unsetEnv(vars: string[]) {
 }
 
 export const COPILOT_TOKEN_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+const COPILOT_DISCOVERY_ENV_VARS = [
+  ...COPILOT_TOKEN_ENV_VARS,
+  "OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS",
+];
 
 export async function withUnsetCopilotTokenEnv<T>(fn: () => Promise<T>): Promise<T> {
-  return withTempEnv(COPILOT_TOKEN_ENV_VARS, async () => {
+  return withTempEnv(COPILOT_DISCOVERY_ENV_VARS, async () => {
     unsetEnv(COPILOT_TOKEN_ENV_VARS);
+    process.env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS = "github-copilot";
     return fn();
   });
 }
@@ -124,8 +134,11 @@ export async function withCopilotGithubToken<T>(
   token: string,
   fn: (fetchMock: MockFn) => Promise<T>,
 ): Promise<T> {
-  return withTempEnv(["COPILOT_GITHUB_TOKEN"], async () => {
+  return withTempEnv(COPILOT_DISCOVERY_ENV_VARS, async () => {
     process.env.COPILOT_GITHUB_TOKEN = token;
+    delete process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    process.env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS = "github-copilot";
     const fetchMock = mockCopilotTokenExchangeSuccess();
     return fn(fetchMock);
   });

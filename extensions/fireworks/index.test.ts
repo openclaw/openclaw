@@ -35,6 +35,21 @@ function createDynamicContext(params: {
   };
 }
 
+function createFireworksDefaultRuntimeModel(params: { reasoning: boolean }): ProviderRuntimeModel {
+  return {
+    id: FIREWORKS_DEFAULT_MODEL_ID,
+    name: FIREWORKS_DEFAULT_MODEL_ID,
+    provider: "fireworks",
+    api: "openai-completions",
+    baseUrl: FIREWORKS_BASE_URL,
+    reasoning: params.reasoning,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
+  };
+}
+
 describe("fireworks provider plugin", () => {
   it("registers Fireworks with api-key auth wizard metadata", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
@@ -74,7 +89,7 @@ describe("fireworks provider plugin", () => {
     expect(catalog.provider.baseUrl).toBe(FIREWORKS_BASE_URL);
     expect(catalog.provider.models?.map((model) => model.id)).toEqual([FIREWORKS_DEFAULT_MODEL_ID]);
     expect(catalog.provider.models?.[0]).toMatchObject({
-      reasoning: true,
+      reasoning: false,
       input: ["text", "image"],
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
       maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
@@ -87,20 +102,7 @@ describe("fireworks provider plugin", () => {
       createDynamicContext({
         provider: "fireworks",
         modelId: "accounts/fireworks/models/qwen3.6-plus",
-        models: [
-          {
-            id: FIREWORKS_DEFAULT_MODEL_ID,
-            name: FIREWORKS_DEFAULT_MODEL_ID,
-            provider: "fireworks",
-            api: "openai-completions",
-            baseUrl: FIREWORKS_BASE_URL,
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-          },
-        ],
+        models: [createFireworksDefaultRuntimeModel({ reasoning: true })],
       }),
     );
 
@@ -110,6 +112,40 @@ describe("fireworks provider plugin", () => {
       api: "openai-completions",
       baseUrl: FIREWORKS_BASE_URL,
       reasoning: true,
+    });
+  });
+
+  it("disables reasoning metadata for Fireworks Kimi dynamic models", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createDynamicContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/kimi-k2p5",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      provider: "fireworks",
+      id: "accounts/fireworks/models/kimi-k2p5",
+      reasoning: false,
+    });
+  });
+
+  it("disables reasoning metadata for Fireworks Kimi k2.5 aliases", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createDynamicContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      provider: "fireworks",
+      id: "accounts/fireworks/routers/kimi-k2.5-turbo",
+      reasoning: false,
     });
   });
 });

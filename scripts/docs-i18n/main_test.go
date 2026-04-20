@@ -25,6 +25,18 @@ func (fakeDocsTranslator) TranslateRaw(_ context.Context, text, _, _ string) (st
 
 func (fakeDocsTranslator) Close() {}
 
+type invalidFrontmatterTranslator struct{}
+
+func (invalidFrontmatterTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return "<body>\n" + text + "\n</body>\n", nil
+}
+
+func (invalidFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (invalidFrontmatterTranslator) Close() {}
+
 func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
 
@@ -72,5 +84,25 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 		if !containsLine(got, want) {
 			t.Fatalf("expected final localized page link %q in output:\n%s", want, got)
 		}
+	}
+}
+
+func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
+	t.Parallel()
+
+	tm := &TranslationMemory{entries: map[string]TMEntry{}}
+	source := "Gateway"
+
+	translated, err := translateSnippet(context.Background(), invalidFrontmatterTranslator{}, tm, "gateway/index.md:frontmatter:title", source, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateSnippet returned error: %v", err)
+	}
+	if translated != source {
+		t.Fatalf("expected fallback to source text, got %q", translated)
+	}
+
+	cacheKey := cacheKey(cacheNamespace(), "en", "zh-CN", "gateway/index.md:frontmatter:title", hashText(source))
+	if _, ok := tm.Get(cacheKey); ok {
+		t.Fatalf("expected fallback translation not to be cached")
 	}
 }

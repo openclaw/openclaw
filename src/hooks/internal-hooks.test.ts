@@ -9,6 +9,7 @@ import {
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
+  setInternalHooksEnabled,
   triggerInternalHook,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
@@ -22,10 +23,12 @@ const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 describe("hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
   });
 
   afterEach(() => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
   });
 
   describe("registerInternalHook", () => {
@@ -144,6 +147,16 @@ describe("hooks", () => {
     it("should not throw if no handlers are registered", async () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await expect(triggerInternalHook(event)).resolves.not.toThrow();
+    });
+
+    it("skips hook execution when internal hooks are disabled", async () => {
+      const handler = vi.fn();
+      registerInternalHook("command:new", handler);
+      setInternalHooksEnabled(false);
+
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it("stores handlers in the global singleton registry", async () => {

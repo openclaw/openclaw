@@ -1,5 +1,5 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -35,6 +35,7 @@ function shouldIgnoreReadinessFailure(
 export function createReadinessChecker(deps: {
   channelManager: ChannelManager;
   startedAt: number;
+  getStartupPending?: () => boolean;
   cacheTtlMs?: number;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
@@ -51,6 +52,9 @@ export function createReadinessChecker(deps: {
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const failing: string[] = [];
+    if (deps.getStartupPending?.()) {
+      failing.push("startup-sidecars");
+    }
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
       if (!accounts) {

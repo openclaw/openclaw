@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "@openclaw/plugin-sdk/config-runtime";
-import { defineSingleProviderPluginEntry } from "@openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "@openclaw/plugin-sdk/provider-model-shared";
-import { jsonResult, readProviderEnvValue } from "@openclaw/plugin-sdk/provider-web-search";
 import { Type } from "@sinclair/typebox";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
+import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -24,14 +24,25 @@ import {
 } from "./x-search-tool-shared.js";
 
 const PROVIDER_ID = "xai";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
+type CodeExecutionModule = typeof import("./code-execution.js");
+type XSearchModule = typeof import("./x-search.js");
+
+let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
+let xSearchModulePromise: Promise<XSearchModule> | undefined;
+
+function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
+  codeExecutionModulePromise ??= import("./code-execution.js");
+  return codeExecutionModulePromise;
+}
+
+function loadXSearchModule(): Promise<XSearchModule> {
+  xSearchModulePromise ??= import("./x-search.js");
+  return xSearchModulePromise;
+}
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
-    resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
-    readProviderEnvValue(["XAI_API_KEY"]),
+    resolveFallbackXaiAuth(config as never)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
 
@@ -94,7 +105,7 @@ function createLazyCodeExecutionTool(ctx: {
       }),
     }),
     execute: async (toolCallId: string, args: Record<string, unknown>) => {
-      const { createCodeExecutionTool } = await import("./code-execution.js");
+      const { createCodeExecutionTool } = await loadCodeExecutionModule();
       const tool = createCodeExecutionTool({
         config: ctx.config as never,
         runtimeConfig: (ctx.runtimeConfig as never) ?? null,
@@ -122,7 +133,7 @@ function createLazyXSearchTool(ctx: {
   }
 
   return createXSearchToolDefinition(async (toolCallId: string, args: Record<string, unknown>) => {
-    const { createXSearchTool } = await import("./x-search.js");
+    const { createXSearchTool } = await loadXSearchModule();
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
@@ -162,16 +173,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildXaiProvider,
     },
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-    prepareExtraParams: (ctx) => {
-      const extraParams = ctx.extraParams;
-      if (extraParams && extraParams.tool_stream !== undefined) {
-        return extraParams;
-      }
-      return {
-        ...extraParams,
-        tool_stream: true,
-      };
-    },
+    prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
     wrapStreamFn: wrapXaiProviderStream,
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's

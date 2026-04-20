@@ -1,4 +1,5 @@
 import { logWarn } from "../logger.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -8,8 +9,6 @@ import {
   describeStdioMcpServerLaunchConfig,
   resolveStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
-
-export type McpTransportType = "stdio" | HttpMcpTransportType;
 
 type ResolvedBaseMcpTransportConfig = {
   description: string;
@@ -58,7 +57,7 @@ function getRequestedTransport(rawServer: unknown): string {
   ) {
     return "";
   }
-  return ((rawServer as { transport?: string }).transport ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty((rawServer as { transport?: string }).transport);
 }
 
 function resolveHttpTransportConfig(

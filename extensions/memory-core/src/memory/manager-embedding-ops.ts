@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
@@ -35,6 +36,7 @@ import {
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
 const VECTOR_TABLE = "chunks_vec";
@@ -414,7 +416,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     try {
       return await params.run();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       if (this.isBatchTimeoutError(message)) {
         log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
         try {
@@ -444,7 +446,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       await this.resetBatchFailureCount();
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       const attempts = (err as { batchAttempts?: number }).batchAttempts ?? 1;
       const forceDisable = /asyncBatchEmbedContent not available/i.test(message);
       const failure = await this.recordBatchFailure({
@@ -504,12 +506,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private deleteFileRecord(pathname: string, source: MemorySource): void {
     this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
-  }
-
-  private isStructuredInputTooLargeError(message: string): boolean {
-    return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-      message,
-    );
   }
 
   /**
@@ -573,12 +569,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
-    if (this.vector.enabled && !vectorReady && chunks.length > 0) {
-      const errDetail = this.vector.loadError ? `: ${this.vector.loadError}` : "";
-      log.warn(
-        `chunks written for ${entry.path} without vector embeddings — chunks_vec not updated (sqlite-vec unavailable${errDetail}). Vector recall degraded for this file.`,
-      );
-    }
+    this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
+      vectorEnabled: this.vector.enabled,
+      vectorReady,
+      chunkCount: chunks.length,
+      warningShown: this.vectorDegradedWriteWarningShown,
+      loadError: this.vector.loadError,
+      warn: (message) => log.warn(message),
+    });
     this.upsertFileRecord(entry, source);
   }
 
@@ -642,11 +640,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         ? await this.embedChunksWithBatch(chunks, entry, options.source)
         : await this.embedChunksInBatches(chunks);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       if (
         "kind" in entry &&
         entry.kind === "multimodal" &&
-        this.isStructuredInputTooLargeError(message)
+        /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
+          message,
+        )
       ) {
         log.warn("memory embeddings: skipping multimodal file rejected as too large", {
           path: entry.path,

@@ -1,7 +1,8 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
-import { withStartedActionClient } from "./client.js";
+import { withResolvedActionClient, withStartedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";
 
 function requireCrypto(
@@ -43,9 +44,9 @@ export async function requestMatrixVerification(
     const ownUser = params.ownUser ?? (!params.userId && !params.deviceId && !params.roomId);
     return await crypto.requestVerification({
       ownUser,
-      userId: params.userId?.trim() || undefined,
-      deviceId: params.deviceId?.trim() || undefined,
-      roomId: params.roomId?.trim() || undefined,
+      userId: normalizeOptionalString(params.userId),
+      deviceId: normalizeOptionalString(params.deviceId),
+      roomId: normalizeOptionalString(params.roomId),
     });
   });
 }
@@ -67,8 +68,8 @@ export async function cancelMatrixVerification(
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     return await crypto.cancelVerification(resolveVerificationId(requestId), {
-      reason: opts.reason?.trim() || undefined,
-      code: opts.code?.trim() || undefined,
+      reason: normalizeOptionalString(opts.reason),
+      code: normalizeOptionalString(opts.code),
     });
   });
 }
@@ -151,7 +152,7 @@ export async function confirmMatrixVerificationReciprocateQr(
 export async function getMatrixEncryptionStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     const recoveryKey = await crypto.getRecoveryKey();
     return {
@@ -167,7 +168,7 @@ export async function getMatrixEncryptionStatus(
 export async function getMatrixVerificationStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const status = await client.getOwnDeviceVerificationStatus();
     const payload = {
       ...status,
@@ -185,7 +186,7 @@ export async function getMatrixVerificationStatus(
 }
 
 export async function getMatrixRoomKeyBackupStatus(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(
+  return await withResolvedActionClient(
     opts,
     async (client) => await client.getRoomKeyBackupStatus(),
   );
@@ -210,7 +211,7 @@ export async function restoreMatrixRoomKeyBackup(
     opts,
     async (client) =>
       await client.restoreRoomKeyBackup({
-        recoveryKey: opts.recoveryKey?.trim() || undefined,
+        recoveryKey: normalizeOptionalString(opts.recoveryKey),
       }),
   );
 }
@@ -229,7 +230,7 @@ export async function bootstrapMatrixVerification(
     opts,
     async (client) =>
       await client.bootstrapOwnDeviceVerification({
-        recoveryKey: opts.recoveryKey?.trim() || undefined,
+        recoveryKey: normalizeOptionalString(opts.recoveryKey),
         forceResetCrossSigning: opts.forceResetCrossSigning === true,
       }),
   );

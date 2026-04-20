@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -25,7 +26,7 @@ export type ResolvedMatrixAccount = {
 };
 
 function clean(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveMatrixAccountAuthView(params: {
@@ -178,11 +179,11 @@ export function resolveMatrixAccount(params: {
           userId: authView.userId || "",
         })
       : false;
-  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
+  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || hasStored);
   return {
     accountId,
     enabled,
-    name: base.name?.trim() || undefined,
+    name: normalizeOptionalString(base.name),
     configured,
     homeserver: authView.homeserver || undefined,
     userId: authView.userId || undefined,

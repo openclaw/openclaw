@@ -2,6 +2,10 @@ import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "openclaw/plugin-sdk/setup";
+import {
   createSetupInputPresenceValidator,
   mergeAllowFromEntries,
   promptParsedAllowFromForAccount,
@@ -10,7 +14,6 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { applyAccountNameToChannelSection, patchScopedAccountConfig } from "../runtime-api.js";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -22,6 +25,10 @@ type NextcloudSetupInput = ChannelSetupInput & {
   secretFile?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
   return mergeAllowFromEntries(allowFrom, ["*"]);
@@ -122,16 +129,16 @@ async function promptNextcloudTalkAllowFrom(params: {
     message: "Nextcloud Talk allowFrom (user id)",
     placeholder: "username",
     parseEntries: (raw) => ({
-      entries: String(raw)
+      entries: raw
         .split(/[\n,;]+/g)
-        .map((value) => value.trim().toLowerCase())
+        .map(normalizeLowercaseStringOrEmpty)
         .filter(Boolean),
     }),
     getExistingAllowFrom: ({ cfg, accountId }) =>
       resolveNextcloudTalkAccount({ cfg, accountId }).config.allowFrom ?? [],
     mergeEntries: ({ existing, parsed }) =>
       mergeAllowFromEntries(
-        existing.map((value) => String(value).trim().toLowerCase()),
+        existing.map((value) => normalizeLowercaseStringOrEmpty(String(value))),
         parsed,
       ),
     applyAllowFrom: ({ cfg, accountId, allowFrom }) =>

@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
+
+vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
+  getBootstrapChannelPlugin: (
+    await import("./message-action-test-fixtures.js")
+  ).createFeishuMessageActionBootstrapRegistryMock(),
+}));
 
 describe("normalizeMessageActionInput", () => {
   type NormalizeMessageActionInputCase = {

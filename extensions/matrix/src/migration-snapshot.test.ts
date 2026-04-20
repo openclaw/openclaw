@@ -2,6 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+
+const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
+  available: true,
+}));
+
+vi.mock("./legacy-crypto-inspector-availability.js", () => ({
+  isMatrixLegacyCryptoInspectorAvailable: () => legacyCryptoInspectorAvailability.available,
+}));
+
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import {
   hasActionableMatrixMigration,
@@ -13,9 +22,38 @@ import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 
 const createBackupArchiveMock = vi.hoisted(() => vi.fn());
 
+const MATRIX_CREDENTIALS = {
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "tok-123",
+} as const;
+
+function makeMatrixMigrationConfig() {
+  return {
+    channels: {
+      matrix: MATRIX_CREDENTIALS,
+    },
+  } as never;
+}
+
+function seedLegacyMatrixCrypto(home: string) {
+  const stateDir = path.join(home, ".openclaw");
+  const { rootDir } = resolveMatrixAccountStorageRoot({
+    stateDir,
+    ...MATRIX_CREDENTIALS,
+  });
+  fs.mkdirSync(path.join(rootDir, "crypto"), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "crypto", "bot-sdk.json"),
+    JSON.stringify({ deviceId: "DEVICE123" }),
+    "utf8",
+  );
+}
+
 describe("matrix migration snapshots", () => {
   beforeEach(() => {
     createBackupArchiveMock.mockReset();
+    legacyCryptoInspectorAvailability.available = true;
     createBackupArchiveMock.mockImplementation(
       async (params: { output?: string; includeWorkspace?: boolean }) => {
         const outputDir = params.output;
@@ -86,34 +124,14 @@ describe("matrix migration snapshots", () => {
 
   it("treats legacy Matrix crypto as actionable when the extension inspector is present", async () => {
     await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const { rootDir } = resolveMatrixAccountStorageRoot({
-        stateDir,
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "tok-123",
-      });
-      fs.mkdirSync(path.join(rootDir, "crypto"), { recursive: true });
-      fs.writeFileSync(
-        path.join(rootDir, "crypto", "bot-sdk.json"),
-        JSON.stringify({ deviceId: "DEVICE123" }),
-        "utf8",
-      );
-
-      const cfg = {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            accessToken: "tok-123",
-          },
-        },
-      } as never;
+      seedLegacyMatrixCrypto(home);
+      const cfg = makeMatrixMigrationConfig();
 
       const detection = detectLegacyMatrixCrypto({
         cfg,
         env: process.env,
       });
+      expect(detection.inspectorAvailable).toBe(true);
       expect(detection.plans).toHaveLength(1);
       expect(detection.warnings).toEqual([]);
       expect(
@@ -122,6 +140,31 @@ describe("matrix migration snapshots", () => {
           env: process.env,
         }),
       ).toBe(true);
+    });
+  });
+
+  it("keeps legacy Matrix crypto pending but not actionable when the inspector artifact is unavailable", async () => {
+    legacyCryptoInspectorAvailability.available = false;
+
+    await withTempHome(async (home) => {
+      seedLegacyMatrixCrypto(home);
+      const cfg = makeMatrixMigrationConfig();
+
+      const detection = detectLegacyMatrixCrypto({
+        cfg,
+        env: process.env,
+      });
+      expect(detection.inspectorAvailable).toBe(false);
+      expect(detection.plans).toHaveLength(1);
+      expect(detection.warnings).toContain(
+        "Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.",
+      );
+      expect(
+        hasActionableMatrixMigration({
+          cfg,
+          env: process.env,
+        }),
+      ).toBe(false);
     });
   });
 });

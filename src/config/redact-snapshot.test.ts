@@ -565,9 +565,21 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot);
     const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
+    const sourceConfig = result.sourceConfig as Record<
+      string,
+      Record<string, Record<string, string>>
+    >;
     const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
+    const runtimeConfig = result.runtimeConfig as Record<
+      string,
+      Record<string, Record<string, string>>
+    >;
     expect(parsed.channels.discord.token).toBe(REDACTED_SENTINEL);
+    expect(sourceConfig.gateway.auth.token).toBe(REDACTED_SENTINEL);
     expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
+    expect(runtimeConfig.channels.discord.token).toBe(REDACTED_SENTINEL);
+    expect(result.sourceConfig).toBe(result.resolved);
+    expect(result.runtimeConfig).toBe(result.config);
   });
 
   it("handles null raw gracefully", () => {
@@ -610,7 +622,11 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
+    expect(result.sourceConfig).toEqual({});
     expect(result.resolved).toEqual({});
+    expect(result.runtimeConfig).toEqual({});
+    expect(result.sourceConfig).toBe(result.resolved);
+    expect(result.runtimeConfig).toBe(result.config);
   });
 
   it("handles deeply nested tokens in accounts", () => {
@@ -1145,5 +1161,68 @@ describe("redactConfigSnapshot", () => {
     >;
     expect(channels.slack.accounts[0].botToken).toBe(REDACTED_SENTINEL);
     expect(channels.slack.accounts[1].botToken).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  browser: {
+    cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+    profiles: {
+      remote: {
+        cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+      },
+      prod: {
+        cdpUrl: "https://alice:secret@chrome.prod.example.com",
+      },
+      local: {
+        cdpUrl: "ws://localhost:9222",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        browser: {
+          cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+          profiles: {
+            remote: {
+              cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+            },
+            prod: {
+              cdpUrl: "https://alice:secret@chrome.prod.example.com",
+            },
+            local: {
+              cdpUrl: "ws://localhost:9222",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.browser.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.remote.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.prod.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("user:pass@");
+    expect(result.raw).not.toContain("supersecret123");
+    expect(result.raw).not.toContain("staging-secret");
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.browser.cdpUrl).toBe(
+      "https://user:pass@chrome.browserless.io?token=supersecret123",
+    );
+    expect(restored.browser.profiles.remote.cdpUrl).toBe(
+      "https://chrome.staging.example.com?token=staging-secret",
+    );
+    expect(restored.browser.profiles.prod.cdpUrl).toBe(
+      "https://alice:secret@chrome.prod.example.com",
+    );
+    expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
   });
 });

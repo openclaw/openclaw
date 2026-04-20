@@ -2,22 +2,21 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import {
-  buildProbeChannelStatusSummary,
-  PAIRING_APPROVED_MESSAGE,
-} from "openclaw/plugin-sdk/channel-status";
+import { buildProbeChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { type ResolvedBlueBubblesAccount } from "./accounts.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  type ResolvedBlueBubblesAccount,
+  resolveBlueBubblesEffectiveAllowPrivateNetwork,
+} from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import {
   bluebubblesCapabilities,
@@ -39,6 +38,7 @@ import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
+import { createBlueBubblesPairingText } from "./pairing.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
@@ -135,7 +135,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           looksLikeId: looksLikeBlueBubblesExplicitTargetId,
           hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
           resolveTarget: async ({ normalized }) => {
-            const to = normalized?.trim();
+            const to = normalizeOptionalString(normalized);
             if (!to) {
               return null;
             }
@@ -160,7 +160,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
 
           // Helper to extract a clean handle from any BlueBubbles target format
           const extractCleanDisplay = (value: string | undefined): string | null => {
-            const trimmed = value?.trim();
+            const trimmed = normalizeOptionalString(value);
             if (!trimmed) {
               return null;
             }
@@ -196,7 +196,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           };
 
           // Try to get a clean display from the display parameter first
-          const trimmedDisplay = display?.trim();
+          const trimmedDisplay = normalizeOptionalString(display);
           if (trimmedDisplay) {
             if (!shouldParseDisplay(trimmedDisplay)) {
               return trimmedDisplay;
@@ -214,7 +214,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           }
 
           // Last resort: return display or target as-is
-          return display?.trim() || target?.trim() || "";
+          return normalizeOptionalString(display) || normalizeOptionalString(target) || "";
         },
       },
       setup: blueBubblesSetupAdapter,
@@ -228,7 +228,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
-            allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+            allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
+              baseUrl: account.baseUrl,
+              config: account.config,
+            }),
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;
@@ -286,35 +289,22 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
+        currentChannelId: normalizeOptionalString(context.To),
         currentThreadTs: context.ReplyToIdFull ?? context.ReplyToId,
         hasRepliedRef,
       }),
     },
     pairing: {
-      text: {
-        idLabel: "bluebubblesSenderId",
-        message: PAIRING_APPROVED_MESSAGE,
-        normalizeAllowEntry: createPairingPrefixStripper(
-          /^bluebubbles:/i,
-          normalizeBlueBubblesHandle,
-        ),
-        notify: async ({ cfg, id, message, accountId }) => {
-          await (
-            await loadBlueBubblesChannelRuntime()
-          ).sendMessageBlueBubbles(id, message, {
-            cfg: cfg,
-            accountId,
-          });
-        },
-      },
+      text: createBlueBubblesPairingText(async (id, message, params) => {
+        await (await loadBlueBubblesChannelRuntime()).sendMessageBlueBubbles(id, message, params);
+      }),
     },
     outbound: {
       base: {
         deliveryMode: "direct",
         textChunkLimit: 4000,
         resolveTarget: ({ to }) => {
-          const trimmed = to?.trim();
+          const trimmed = normalizeOptionalString(to);
           if (!trimmed) {
             return {
               ok: false,
@@ -328,7 +318,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         channel: "bluebubbles",
         sendText: async ({ cfg, to, text, accountId, replyToId }) => {
           const runtime = await loadBlueBubblesChannelRuntime();
-          const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
+          const rawReplyToId = normalizeOptionalString(replyToId) ?? "";
           const replyToMessageGuid = rawReplyToId
             ? runtime.resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
             : "";

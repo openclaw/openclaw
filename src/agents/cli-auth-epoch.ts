@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -97,9 +98,9 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.enterpriseUrl ?? null,
         credential.projectId ?? null,
         credential.accountId ?? null,
-        credential.managedBy ?? null,
       ]);
   }
+  throw new Error("Unsupported auth profile credential type");
 }
 
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
@@ -135,14 +136,17 @@ function getAuthProfileCredential(
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   authProfileId?: string;
+  skipLocalCredential?: boolean;
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
-  const authProfileId = params.authProfileId?.trim() || undefined;
+  const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
 
-  const localFingerprint = getLocalCliCredentialFingerprint(provider);
-  if (localFingerprint) {
-    parts.push(`local:${provider}:${localFingerprint}`);
+  if (params.skipLocalCredential !== true) {
+    const localFingerprint = getLocalCliCredentialFingerprint(provider);
+    if (localFingerprint) {
+      parts.push(`local:${provider}:${localFingerprint}`);
+    }
   }
 
   if (authProfileId) {

@@ -3,7 +3,10 @@ import type {
   InteractiveButtonStyle,
   InteractiveReply,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { DiscordComponentButtonStyle, DiscordComponentMessageSpec } from "./components.js";
+import type {
+  DiscordComponentButtonStyle,
+  DiscordComponentMessageSpec,
+} from "./components.types.js";
 
 function resolveDiscordInteractiveButtonStyle(
   style?: InteractiveButtonStyle,

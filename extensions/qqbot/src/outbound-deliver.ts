@@ -32,6 +32,18 @@ import { filterInternalMarkers } from "./utils/text-parsing.js";
 
 // Type definitions.
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalString(value)?.toLowerCase() ?? "";
+}
+
 export interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
@@ -151,7 +163,7 @@ export async function parseAndSendMediaTags(
 
   const tagCounts = mediaTagMatches.reduce(
     (acc, m) => {
-      const t = m[1].toLowerCase();
+      const t = normalizeLowercaseStringOrEmpty(m[1]);
       acc[t] = (acc[t] ?? 0) + 1;
       return acc;
     },
@@ -184,8 +196,8 @@ export async function parseAndSendMediaTags(
       sendQueue.push({ type: "text", content: filterInternalMarkers(textBefore) });
     }
 
-    const tagName = match[1].toLowerCase();
-    let mediaPath = decodeMediaPath(match[2]?.trim() ?? "", log, prefix);
+    const tagName = normalizeLowercaseStringOrEmpty(match[1]);
+    let mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log, prefix);
 
     if (mediaPath) {
       const typeMap: Record<string, QueueItem["type"]> = {
@@ -497,6 +509,7 @@ async function sendQQBotTextChunk(params: {
   if (event.channelId) {
     return await sendChannelMessage(token, event.channelId, text, event.messageId);
   }
+  return undefined;
 }
 
 async function sendTextChunks(

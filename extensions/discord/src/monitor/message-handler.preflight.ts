@@ -3,9 +3,10 @@ import { Routes, type APIMessage } from "discord-api-types/v10";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildMentionRegexes,
+  implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
-  resolveMentionGatingWithBypass,
+  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
@@ -18,8 +19,9 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { logDebug } from "openclaw/plugin-sdk/text-runtime";
+import { logDebug, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -30,6 +32,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import {
@@ -181,10 +184,10 @@ function resolveDiscordMentionState(params: {
   referencedAuthorId?: string;
   senderIsPluralKit: boolean;
   transcript?: string;
-}): { implicitMention: boolean; wasMentioned: boolean } {
+}) {
   if (params.isDirectMessage) {
     return {
-      implicitMention: false,
+      implicitMentionKinds: [],
       wasMentioned: false,
     };
   }
@@ -203,12 +206,15 @@ function resolveDiscordMentionState(params: {
       },
       transcript: params.transcript,
     });
-  const implicitMention = Boolean(
-    params.botId && params.referencedAuthorId && params.referencedAuthorId === params.botId,
+  const implicitMentionKinds = implicitMentionKindWhen(
+    "reply_to_bot",
+    Boolean(params.botId) &&
+      Boolean(params.referencedAuthorId) &&
+      params.referencedAuthorId === params.botId,
   );
 
   return {
-    implicitMention,
+    implicitMentionKinds,
     wasMentioned,
   };
 }
@@ -229,18 +235,16 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   webhookId?: string | null;
   threadBinding?: BoundThreadLookupRecordLike;
 }): boolean {
-  const webhookId = params.webhookId?.trim() || "";
+  const webhookId = normalizeOptionalString(params.webhookId) ?? "";
   if (!webhookId) {
     return false;
   }
   const boundWebhookId =
-    typeof params.threadBinding?.webhookId === "string"
-      ? params.threadBinding.webhookId.trim()
-      : typeof params.threadBinding?.metadata?.webhookId === "string"
-        ? params.threadBinding.metadata.webhookId.trim()
-        : "";
+    normalizeOptionalString(params.threadBinding?.webhookId) ??
+    normalizeOptionalString(params.threadBinding?.metadata?.webhookId) ??
+    "";
   if (!boundWebhookId) {
-    const threadId = params.threadId?.trim() || "";
+    const threadId = normalizeOptionalString(params.threadId) ?? "";
     if (!threadId) {
       return false;
     }
@@ -572,9 +576,7 @@ export async function preflightDiscordMessage(
   // Resolve thread parent early for binding inheritance
   const channelName =
     channelInfo?.name ??
-    ((isGuildMessage || isGroupDm) && message.channel && "name" in message.channel
-      ? message.channel.name
-      : undefined);
+    (isGuildMessage || isGroupDm ? resolveDiscordChannelNameSafe(message.channel) : undefined);
   const { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } =
     await loadDiscordThreadingRuntime();
   const earlyThreadChannel = resolveDiscordThreadChannel({
@@ -603,7 +605,7 @@ export async function preflightDiscordMessage(
   // Use the active runtime snapshot for bindings lookup; routing inputs are
   // still payload-derived, but this path should not reparse config from disk.
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
-    ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
+    ? params.data.rawMember.roles
     : [];
   const freshCfg = loadConfig();
   const conversationRuntime = await loadConversationRuntime();
@@ -620,7 +622,12 @@ export async function preflightDiscordMessage(
     }),
     parentConversationId: earlyThreadParentId,
   });
-  const bindingConversationId = isDirectMessage ? `user:${author.id}` : messageChannelId;
+  const bindingConversationId = isDirectMessage
+    ? (resolveDiscordConversationIdentity({
+        isDirectMessage,
+        userId: author.id,
+      }) ?? `user:${author.id}`)
+    : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
     conversationRuntime.getSessionBindingService().resolveByConversation({
@@ -689,10 +696,9 @@ export async function preflightDiscordMessage(
       (message.mentionedRoles?.length ?? 0) > 0 ||
       (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
   );
-  const hasUserOrRoleMention = Boolean(
+  const hasUserOrRoleMention =
     !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0),
-  );
+    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0);
 
   if (
     isGuildMessage &&
@@ -887,7 +893,7 @@ export async function preflightDiscordMessage(
   }
 
   const mentionText = hasTypedText ? baseText : "";
-  const { implicitMention, wasMentioned } = resolveDiscordMentionState({
+  const { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({
     authorIsBot: Boolean(author.bot),
     botId,
     hasAnyMention,
@@ -946,23 +952,27 @@ export async function preflightDiscordMessage(
   }
 
   const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
-  const mentionGate = resolveMentionGatingWithBypass({
-    isGroup: isGuildMessage,
-    requireMention: Boolean(shouldRequireMention),
-    canDetectMention,
-    wasMentioned,
-    implicitMention,
-    hasAnyMention,
-    allowTextCommands,
-    hasControlCommand: hasControlCommandInMessage,
-    commandAuthorized,
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned,
+      hasAnyMention,
+      implicitMentionKinds,
+    },
+    policy: {
+      isGroup: isGuildMessage,
+      requireMention: shouldRequireMention,
+      allowTextCommands,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    },
   });
-  const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
   logDebug(
-    `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionGate.shouldSkip=${mentionGate.shouldSkip} wasMentioned=${wasMentioned}`,
+    `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
   );
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionGate.shouldSkip) {
+    if (botId && mentionDecision.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);
       logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
       logger.info(
@@ -983,7 +993,7 @@ export async function preflightDiscordMessage(
   }
 
   if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
-    const botMentioned = isDirectMessage || wasMentioned || implicitMention;
+    const botMentioned = isDirectMessage || wasMentioned || mentionDecision.implicitMention;
     if (!botMentioned) {
       logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
       logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
@@ -998,7 +1008,7 @@ export async function preflightDiscordMessage(
     ignoreOtherMentions &&
     hasUserOrRoleMention &&
     !wasMentioned &&
-    !implicitMention
+    !mentionDecision.implicitMention
   ) {
     logDebug(`[discord-preflight] drop: other-mention`);
     logVerbose(
@@ -1072,6 +1082,7 @@ export async function preflightDiscordMessage(
     messageChannelId,
     author,
     sender,
+    memberRoleIds,
     channelInfo,
     channelName,
     isGuildMessage,
@@ -1103,7 +1114,7 @@ export async function preflightDiscordMessage(
     shouldRequireMention,
     hasAnyMention,
     allowTextCommands,
-    shouldBypassMention: mentionGate.shouldBypassMention,
+    shouldBypassMention: mentionDecision.shouldBypassMention,
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,

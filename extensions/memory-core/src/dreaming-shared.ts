@@ -1,9 +1,5 @@
-export function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
+export { asNullableRecord as asRecord } from "openclaw/plugin-sdk/text-runtime";
+export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export function normalizeTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -13,6 +9,14 @@ export function normalizeTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-export function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+export function includesSystemEventToken(cleanedBody: string, eventText: string): boolean {
+  const normalizedBody = normalizeTrimmedString(cleanedBody);
+  const normalizedEventText = normalizeTrimmedString(eventText);
+  if (!normalizedBody || !normalizedEventText) {
+    return false;
+  }
+  if (normalizedBody === normalizedEventText) {
+    return true;
+  }
+  return normalizedBody.split(/\r?\n/).some((line) => line.trim() === normalizedEventText);
 }

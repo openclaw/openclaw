@@ -56,11 +56,12 @@ class MockGatewayClient {
 }
 
 vi.mock("@agentclientprotocol/sdk", () => ({
-  AgentSideConnection: class {
-    constructor(factory: (conn: unknown) => unknown, stream: unknown) {
-      mockState.agentSideConnectionCtor(factory, stream);
-      factory({});
-    }
+  AgentSideConnection: function AgentSideConnection(
+    factory: (conn: unknown) => unknown,
+    stream: unknown,
+  ) {
+    mockState.agentSideConnectionCtor(factory, stream);
+    factory({});
   },
   ndJsonStream: vi.fn(() => ({ type: "mock-stream" })),
 }));
@@ -143,9 +144,9 @@ describe("serveAcpGateway startup", () => {
   async function emitHelloAndWaitForAgentSideConnection() {
     const gateway = getMockGateway();
     gateway.emitHello();
-    await vi.waitFor(() => {
-      expect(mockState.agentSideConnectionCtor).toHaveBeenCalledTimes(1);
-    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockState.agentSideConnectionCtor).toHaveBeenCalledTimes(1);
   }
 
   async function stopServeWithSigint(

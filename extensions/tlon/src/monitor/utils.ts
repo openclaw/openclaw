@@ -1,3 +1,4 @@
+import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeShip } from "../targets.js";
 
 // Cite types for message references
@@ -181,19 +182,21 @@ export async function resolveAuthorizedMessageText(params: {
   return citedContent + rawText;
 }
 
-export function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+export const asRecord = asNullableObjectRecord;
+export const formatErrorMessage = sharedFormatErrorMessage;
+export const readString = readStringField;
+
+function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
-export function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function readString(
-  record: Record<string, unknown> | null,
-  key: string,
+function readStringField(
+  record: Record<string, unknown> | null | undefined,
+  field: string,
 ): string | undefined {
-  const value = record?.[key];
+  const value = record?.[field];
   return typeof value === "string" ? value : undefined;
 }
 

@@ -1,10 +1,11 @@
 import { readErrorName } from "../infra/errors.js";
-import { isTimeoutErrorMessage, type FailoverReason } from "./pi-embedded-helpers.js";
 import {
   classifyFailoverSignal,
   type FailoverClassification,
   type FailoverSignal,
 } from "./pi-embedded-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
@@ -40,7 +41,15 @@ export class FailoverError extends Error {
 }
 
 export function isFailoverError(err: unknown): err is FailoverError {
-  return err instanceof FailoverError;
+  if (err instanceof FailoverError) {
+    return true;
+  }
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    (err as { name?: unknown }).name === "FailoverError" &&
+    typeof (err as { reason?: unknown }).reason === "string",
+  );
 }
 
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {

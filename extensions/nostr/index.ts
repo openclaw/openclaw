@@ -87,6 +87,7 @@ export default defineBundledChannelEntry({
       path: "/api/channels/nostr",
       auth: "gateway",
       match: "prefix",
+      gatewayRuntimeScopeSurface: "trusted-operator",
       handler: httpHandler,
     });
   },

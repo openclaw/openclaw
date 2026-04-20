@@ -1,29 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  loadConfig,
-  type OpenClawConfig,
-} from "../config/config.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
+import {
+  asConfig,
+  buildTestWebSearchProviders,
+  loadAuthStoreWithProfiles,
+  resetPluginWebSearchProvidersMock,
+} from "./runtime.test-support.ts";
 
-type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
-
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
+const { resolveExternalAuthProfilesWithPluginsMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveExternalAuthProfilesWithPluginsMock: vi.fn(() => []),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
 }));
 
 const OPENAI_ENV_KEY_REF = {
@@ -33,17 +37,6 @@ const OPENAI_ENV_KEY_REF = {
 } as const;
 
 type SecretsRuntimeEnvSnapshot = ReturnType<typeof captureEnv>;
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
 
 function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   const envSnapshot = captureEnv([
@@ -67,84 +60,21 @@ function endSecretsRuntimeIsolationForTest(envSnapshot: SecretsRuntimeEnvSnapsho
   clearConfigCache();
 }
 
-function createTestProvider(params: {
-  id: WebProviderUnderTest;
-  pluginId: string;
-  order: number;
-}): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
-    const providerConfig =
-      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
-        ? (searchConfig[params.id] as { apiKey?: unknown })
-        : undefined;
-    return providerConfig?.apiKey ?? searchConfig?.apiKey;
-  };
-  return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} test provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    autoDetectOrder: params.order,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: readSearchConfigKey,
-    setCredentialValue: (searchConfigTarget, value) => {
-      const providerConfig =
-        params.id === "brave" || params.id === "firecrawl"
-          ? searchConfigTarget
-          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
-      providerConfig.apiKey = value;
-    },
-    getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
-        ?.webSearch?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-      const entries = (plugins.entries ??= {});
-      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
-      const config = (entry.config ??= {});
-      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-      webSearch.apiKey = value;
-    },
-    resolveRuntimeMetadata:
-      params.id === "perplexity"
-        ? () => ({
-            perplexityTransport: "search_api" as const,
-          })
-        : undefined,
-    createTool: () => null,
-  };
-}
-
-function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
-  return [
-    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
-    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
-    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
-    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
-    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
-    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
-  ];
-}
-
 describe("secrets runtime snapshot core lanes", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
 
   beforeEach(() => {
     envSnapshot = beginSecretsRuntimeIsolationForTest();
-    resolvePluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
+    resolveExternalAuthProfilesWithPluginsMock.mockReset();
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+    resetPluginWebSearchProvidersMock();
   });
 
   afterEach(() => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
-  async function prepareOpenAiRuntimeSnapshot() {
+  async function prepareOpenAiRuntimeSnapshot(params?: { includeAuthStoreRefs?: boolean }) {
     return withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -166,6 +96,7 @@ describe("secrets runtime snapshot core lanes", () => {
           }),
           env: { OPENAI_API_KEY: "sk-runtime" },
           agentDirs: ["/tmp/openclaw-agent-main"],
+          includeAuthStoreRefs: params?.includeAuthStoreRefs,
           loadablePluginOrigins: new Map(),
           loadAuthStore: () =>
             loadAuthStoreWithProfiles({
@@ -212,6 +143,7 @@ describe("secrets runtime snapshot core lanes", () => {
         OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header",
         REVIEW_SKILL_API_KEY: "sk-skill-ref",
       },
+      includeAuthStoreRefs: false,
       loadablePluginOrigins: new Map(),
     });
 
@@ -256,6 +188,7 @@ describe("secrets runtime snapshot core lanes", () => {
         REMOTE_GATEWAY_TOKEN: "remote-token-ref",
         REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
       },
+      includeAuthStoreRefs: false,
       loadablePluginOrigins: new Map(),
     });
 
@@ -341,7 +274,7 @@ describe("secrets runtime snapshot core lanes", () => {
   });
 
   it("activates runtime snapshots for loadConfig", async () => {
-    const prepared = await prepareOpenAiRuntimeSnapshot();
+    const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
     activateSecretsRuntimeSnapshot(prepared);
 
     expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");

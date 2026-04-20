@@ -79,7 +79,11 @@ const discordApproveTestPlugin: ChannelPlugin = {
       nativeCommands: true,
     },
   }),
-  auth: discordNativeApprovalAdapterForTests.auth,
+  approvalCapability: {
+    authorizeActorAction: discordNativeApprovalAdapterForTests.auth.authorizeActorAction,
+    getActionAvailabilityState:
+      discordNativeApprovalAdapterForTests.auth.getActionAvailabilityState,
+  },
 };
 
 const slackApproveTestPlugin: ChannelPlugin = {
@@ -91,6 +95,19 @@ const slackApproveTestPlugin: ChannelPlugin = {
       chatTypes: ["direct", "group", "thread"],
       reactions: true,
       threads: true,
+      nativeCommands: true,
+    },
+  }),
+};
+
+const whatsappApproveTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "whatsapp",
+    label: "WhatsApp",
+    docsPath: "/channels/whatsapp",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
       nativeCommands: true,
     },
   }),
@@ -108,10 +125,11 @@ const signalApproveTestPlugin: ChannelPlugin = {
       nativeCommands: true,
     },
   }),
-  auth: createResolvedApproverActionAuthAdapter({
+  approvalCapability: createResolvedApproverActionAuthAdapter({
     channelLabel: "Signal",
     resolveApprovers: ({ cfg, accountId }) => {
-      const signal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : cfg.channels?.signal;
+      const scopedSignal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : undefined;
+      const signal = scopedSignal ?? cfg.channels?.signal;
       return resolveApprovalApprovers({
         allowFrom: signal?.allowFrom,
         defaultTo: signal?.defaultTo,
@@ -302,14 +320,16 @@ const telegramApproveTestPlugin: ChannelPlugin = {
     },
     config: {
       listAccountIds: listConfiguredTelegramAccountIds,
-      resolveAccount: (cfg, accountId) => resolveTelegramTestAccount(cfg, accountId),
-      defaultAccountId: (cfg) =>
+      resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
+        resolveTelegramTestAccount(cfg, accountId),
+      defaultAccountId: (cfg: OpenClawConfig) =>
         (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
         DEFAULT_ACCOUNT_ID,
     },
   }),
-  auth: telegramNativeApprovalAdapter.auth,
   approvalCapability: {
+    authorizeActorAction: telegramNativeApprovalAdapter.auth.authorizeActorAction,
+    getActionAvailabilityState: telegramNativeApprovalAdapter.auth.getActionAvailabilityState,
     resolveApproveCommandBehavior: ({ cfg, accountId, senderId, approvalKind }) => {
       if (approvalKind !== "exec") {
         return undefined;
@@ -339,6 +359,7 @@ function setApprovePluginRegistry(): void {
     createTestRegistry([
       { pluginId: "discord", plugin: discordApproveTestPlugin, source: "test" },
       { pluginId: "slack", plugin: slackApproveTestPlugin, source: "test" },
+      { pluginId: "whatsapp", plugin: whatsappApproveTestPlugin, source: "test" },
       { pluginId: "signal", plugin: signalApproveTestPlugin, source: "test" },
       { pluginId: "telegram", plugin: telegramApproveTestPlugin, source: "test" },
     ]),
@@ -608,7 +629,7 @@ describe("handleApproveCommand", () => {
           pluginId: "slack",
           plugin: {
             ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
-            auth: {
+            approvalCapability: {
               authorizeActorAction: () => ({ authorized: true }),
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
@@ -635,6 +656,62 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("does not allow empty helper approvers to bypass unauthorized sender checks", async () => {
+    const params = buildApproveParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: {
+          signal: {
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "+15551239999",
+      },
+    );
+    params.command.isAuthorizedSender = false;
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-chat /approve available to authorized senders when helper approvers are empty", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true });
+    const params = buildApproveParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: {
+          signal: {
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "+15551239999",
+      },
+    );
+    params.command.isAuthorizedSender = true;
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
   });
 
   it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {
@@ -798,7 +875,7 @@ describe("handleApproveCommand", () => {
           pluginId: "matrix",
           plugin: {
             ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-            auth: {
+            approvalCapability: {
               authorizeActorAction: ({ approvalKind }: { approvalKind: "exec" | "plugin" }) =>
                 approvalKind === "plugin"
                   ? { authorized: true }

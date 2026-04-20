@@ -7,11 +7,12 @@ import {
   listCombinedAccountIds,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sdk/secret-input";
-import type { OpenClawConfig } from "../api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate } from "./nostr-bus.js";
+import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
 
 export interface NostrAccountConfig {
   enabled?: boolean;
@@ -96,7 +97,7 @@ export function resolveNostrAccount(opts: {
 
   return {
     accountId,
-    name: nostrCfg?.name?.trim() || undefined,
+    name: normalizeOptionalString(nostrCfg?.name),
     enabled: baseEnabled,
     configured,
     privateKey,

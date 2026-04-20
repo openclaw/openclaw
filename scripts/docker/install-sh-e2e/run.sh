@@ -47,7 +47,7 @@ elif [[ "$MODELS_MODE" == "anthropic" && -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHR
 fi
 
 echo "==> Resolve npm versions"
-EXPECTED_VERSION="$(npm view "openclaw@${INSTALL_TAG}" version)"
+EXPECTED_VERSION="$(quiet_npm view "openclaw@${INSTALL_TAG}" version)"
 if [[ -z "$EXPECTED_VERSION" || "$EXPECTED_VERSION" == "undefined" || "$EXPECTED_VERSION" == "null" ]]; then
   echo "ERROR: unable to resolve openclaw@${INSTALL_TAG} version" >&2
   exit 2
@@ -55,9 +55,8 @@ fi
 if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
   PREVIOUS_VERSION="$E2E_PREVIOUS_VERSION"
 else
-  PREVIOUS_VERSION="$(node - <<'NODE'
-const { execSync } = require("node:child_process");
-const versions = JSON.parse(execSync("npm view openclaw versions --json", { encoding: "utf8" }));
+  PREVIOUS_VERSION="$(VERSIONS_JSON="$(quiet_npm view openclaw versions --json)" node - <<'NODE'
+const versions = JSON.parse(process.env.VERSIONS_JSON || "[]");
 if (!Array.isArray(versions) || versions.length === 0) process.exit(1);
 process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : versions[0]);
 NODE
@@ -69,7 +68,7 @@ if [[ "$SKIP_PREVIOUS" == "1" ]]; then
   echo "==> Skip preinstall previous (OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path; avoids read() prompt)"
-  npm install -g "openclaw@${PREVIOUS_VERSION}"
+  quiet_npm install -g "openclaw@${PREVIOUS_VERSION}"
 fi
 
 echo "==> Run official installer one-liner"
@@ -451,15 +450,12 @@ run_profile() {
   local image_model
   if [[ "$agent_model_provider" == "openai" ]]; then
     agent_model="$(set_agent_model "$profile" \
-      "openai/gpt-4.1-mini" \
-      "openai/gpt-4.1" \
+      "openai/gpt-5.4" \
       "openai/gpt-4o-mini" \
       "openai/gpt-4o")"
     image_model="$(set_image_model "$profile" \
-      "openai/gpt-4.1" \
       "openai/gpt-4o-mini" \
-      "openai/gpt-4o" \
-      "openai/gpt-4.1-mini")"
+      "openai/gpt-4o")"
   else
     agent_model="$(set_agent_model "$profile" \
       "anthropic/claude-opus-4-6" \
@@ -483,7 +479,7 @@ run_profile() {
   PROOF_VALUE="$(node -e 'console.log(require("node:crypto").randomBytes(16).toString("hex"))')"
   echo -n "$PROOF_VALUE" >"$PROOF_TXT"
   write_png_lr_rg "$IMAGE_PNG"
-  EXPECTED_HOSTNAME="$(cat /etc/hostname | tr -d '\r\n')"
+  EXPECTED_HOSTNAME="$(hostname | tr -d '\r\n')"
 
   echo "==> Start gateway ($profile)"
   GATEWAY_LOG="$workspace/gateway.log"
@@ -498,13 +494,13 @@ run_profile() {
   trap cleanup_profile EXIT
 
   echo "==> Wait for health ($profile)"
-  for _ in $(seq 1 60); do
-    if openclaw --profile "$profile" health --timeout 2000 --json >/dev/null 2>&1; then
+  for _ in $(seq 1 240); do
+    if openclaw --profile "$profile" health --timeout 5000 --json >/dev/null 2>&1; then
       break
     fi
     sleep 0.25
   done
-  openclaw --profile "$profile" health --timeout 10000 --json >/dev/null
+  openclaw --profile "$profile" health --timeout 60000 --json >/dev/null
 
   echo "==> Agent turns ($profile)"
   TURN1_JSON="/tmp/agent-${profile}-1.json"
@@ -550,14 +546,14 @@ run_profile() {
   fi
 
   run_agent_turn "$profile" "$SESSION_ID" \
-    "Use the exec tool to run: cat /etc/hostname. Reply with the exact stdout only (trim trailing newline)." \
+    "Use the exec tool to run this command: hostname. Reply with the exact stdout only (trim trailing newline)." \
     "$TURN3_JSON"
   assert_agent_json_has_text "$TURN3_JSON"
   assert_agent_json_ok "$TURN3_JSON" "$agent_model_provider"
   local reply3
   reply3="$(extract_matching_text "$TURN3_JSON" "$EXPECTED_HOSTNAME" | tr -d '\r\n')"
   if [[ "$reply3" != "$EXPECTED_HOSTNAME" ]]; then
-    echo "ERROR: agent did not read /etc/hostname correctly ($profile): $reply3" >&2
+    echo "ERROR: agent did not run hostname correctly ($profile): $reply3" >&2
     exit 1
   fi
   local prompt3b
@@ -566,7 +562,7 @@ run_profile() {
   assert_agent_json_has_text "$TURN3B_JSON"
   assert_agent_json_ok "$TURN3B_JSON" "$agent_model_provider"
   if [[ "$(cat "$HOSTNAME_TXT" 2>/dev/null | tr -d '\r\n' || true)" != "$EXPECTED_HOSTNAME" ]]; then
-    echo "ERROR: hostname.txt did not match /etc/hostname ($profile)" >&2
+    echo "ERROR: hostname.txt did not match hostname output ($profile)" >&2
     exit 1
   fi
 

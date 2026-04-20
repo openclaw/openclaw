@@ -15,8 +15,9 @@ chunks and searching them using embeddings, keywords, or both.
 
 ## Quick start
 
-If you have an OpenAI, Gemini, Voyage, or Mistral API key configured, memory
-search works automatically. To set a provider explicitly:
+If you have a GitHub Copilot subscription, OpenAI, Gemini, Voyage, or Mistral
+API key configured, memory search works automatically. To set a provider
+explicitly:
 
 ```json5
 {
@@ -35,15 +36,16 @@ node-llama-cpp).
 
 ## Supported providers
 
-| Provider | ID        | Needs API key | Notes                                                |
-| -------- | --------- | ------------- | ---------------------------------------------------- |
-| OpenAI   | `openai`  | Yes           | Auto-detected, fast                                  |
-| Gemini   | `gemini`  | Yes           | Supports image/audio indexing                        |
-| Voyage   | `voyage`  | Yes           | Auto-detected                                        |
-| Mistral  | `mistral` | Yes           | Auto-detected                                        |
-| Bedrock  | `bedrock` | No            | Auto-detected when the AWS credential chain resolves |
-| Ollama   | `ollama`  | No            | Local, must set explicitly                           |
-| Local    | `local`   | No            | GGUF model, ~0.6 GB download                         |
+| Provider       | ID               | Needs API key | Notes                                                |
+| -------------- | ---------------- | ------------- | ---------------------------------------------------- |
+| Bedrock        | `bedrock`        | No            | Auto-detected when the AWS credential chain resolves |
+| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                        |
+| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription             |
+| Local          | `local`          | No            | GGUF model, ~0.6 GB download                         |
+| Mistral        | `mistral`        | Yes           | Auto-detected                                        |
+| Ollama         | `ollama`         | No            | Local, must set explicitly                           |
+| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                  |
+| Voyage         | `voyage`         | Yes           | Auto-detected                                        |
 
 ## How search works
 
@@ -66,6 +68,8 @@ flowchart LR
   keys).
 
 If only one path is available (no embeddings or no FTS), the other runs alone.
+
+When embeddings are unavailable, OpenClaw still uses lexical ranking over FTS results instead of falling back to raw exact-match ordering only. That degraded mode boosts chunks with stronger query-term coverage and relevant file paths, which keeps recall useful even without `sqlite-vec` or an embedding provider.
 
 ## Improving search quality
 
@@ -138,5 +142,6 @@ earlier conversations. This is opt-in via
 
 ## Further reading
 
+- [Active Memory](/concepts/active-memory) -- sub-agent memory for interactive chat sessions
 - [Memory](/concepts/memory) -- file layout, backends, tools
 - [Memory configuration reference](/reference/memory-config) -- all config knobs

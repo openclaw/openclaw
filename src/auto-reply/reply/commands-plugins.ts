@@ -12,7 +12,7 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
@@ -29,6 +29,7 @@ import {
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -128,12 +129,14 @@ function formatPluginsList(report: PluginStatusReport): string {
 }
 
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
-  const target = rawName.trim().toLowerCase();
+  const target = normalizeOptionalLowercaseString(rawName);
   if (!target) {
     return undefined;
   }
   return report.plugins.find(
-    (plugin) => plugin.id.toLowerCase() === target || plugin.name.toLowerCase() === target,
+    (plugin) =>
+      normalizeOptionalLowercaseString(plugin.id) === target ||
+      normalizeOptionalLowercaseString(plugin.name) === target,
   );
 }
 
@@ -356,61 +359,6 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const loaded = await loadPluginCommandState(params.workspaceDir, {
-    loadModules: pluginsCommand.action !== "list",
-  });
-  if (!loaded.ok) {
-    return {
-      shouldContinue: false,
-      reply: { text: `⚠️ ${loaded.error}` },
-    };
-  }
-
-  if (pluginsCommand.action === "list") {
-    return {
-      shouldContinue: false,
-      reply: { text: formatPluginsList(loaded.report) },
-    };
-  }
-
-  if (pluginsCommand.action === "inspect") {
-    if (!pluginsCommand.name) {
-      return {
-        shouldContinue: false,
-        reply: { text: formatPluginsList(loaded.report) },
-      };
-    }
-    if (pluginsCommand.name.toLowerCase() === "all") {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
-        },
-      };
-    }
-    const payload = buildPluginInspectJson({
-      id: pluginsCommand.name,
-      config: loaded.config,
-      report: loaded.report,
-    });
-    if (!payload) {
-      return {
-        shouldContinue: false,
-        reply: { text: `🔌 No plugin named "${pluginsCommand.name}" found.` },
-      };
-    }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: renderJsonBlock(`🔌 Plugin "${payload.inspect.plugin.id}"`, {
-          ...payload.inspect,
-          compatibilityWarnings: payload.compatibilityWarnings,
-          install: payload.install,
-        }),
-      },
-    };
-  }
-
   const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
     label: "/plugins write",
     allowedScopes: ["operator.admin"],
@@ -442,6 +390,61 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
       shouldContinue: false,
       reply: {
         text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
+      },
+    };
+  }
+
+  const loaded = await loadPluginCommandState(params.workspaceDir, {
+    loadModules: pluginsCommand.action !== "list",
+  });
+  if (!loaded.ok) {
+    return {
+      shouldContinue: false,
+      reply: { text: `⚠️ ${loaded.error}` },
+    };
+  }
+
+  if (pluginsCommand.action === "list") {
+    return {
+      shouldContinue: false,
+      reply: { text: formatPluginsList(loaded.report) },
+    };
+  }
+
+  if (pluginsCommand.action === "inspect") {
+    if (!pluginsCommand.name) {
+      return {
+        shouldContinue: false,
+        reply: { text: formatPluginsList(loaded.report) },
+      };
+    }
+    if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
+        },
+      };
+    }
+    const payload = buildPluginInspectJson({
+      id: pluginsCommand.name,
+      config: loaded.config,
+      report: loaded.report,
+    });
+    if (!payload) {
+      return {
+        shouldContinue: false,
+        reply: { text: `🔌 No plugin named "${pluginsCommand.name}" found.` },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: {
+        text: renderJsonBlock(`🔌 Plugin "${payload.inspect.plugin.id}"`, {
+          ...payload.inspect,
+          compatibilityWarnings: payload.compatibilityWarnings,
+          install: payload.install,
+        }),
       },
     };
   }

@@ -5,6 +5,10 @@ const SIGNATURE_HEADER = "x-nextcloud-talk-signature";
 const RANDOM_HEADER = "x-nextcloud-talk-random";
 const BACKEND_HEADER = "x-nextcloud-talk-backend";
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 /**
  * Verify the HMAC-SHA256 signature of an incoming webhook request.
  * Signature is calculated as: HMAC-SHA256(random + body, secret)
@@ -41,7 +45,7 @@ export function extractNextcloudTalkHeaders(
   headers: Record<string, string | string[] | undefined>,
 ): NextcloudTalkWebhookHeaders | null {
   const getHeader = (name: string): string | undefined => {
-    const value = headers[name] ?? headers[name.toLowerCase()];
+    const value = headers[name] ?? headers[normalizeLowercaseStringOrEmpty(name)];
     return Array.isArray(value) ? value[0] : value;
   };
 

@@ -1,10 +1,51 @@
 import { createRequire } from "node:module";
 import { dirname, join, sep } from "node:path";
-
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 
-type CanvasModule = typeof import("@napi-rs/canvas");
-type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+type CanvasLike = {
+  toBuffer(type: "image/png"): Buffer;
+};
+
+type CanvasModule = {
+  createCanvas(width: number, height: number): CanvasLike;
+};
+
+type PdfTextItem = {
+  str: string;
+};
+
+type PdfTextContent = {
+  items: Array<PdfTextItem | object>;
+};
+
+type PdfViewport = {
+  width: number;
+  height: number;
+};
+
+type PdfPage = {
+  getTextContent(): Promise<PdfTextContent>;
+  getViewport(params: { scale: number }): PdfViewport;
+  render(params: { canvas: unknown; viewport: PdfViewport }): { promise: Promise<void> };
+};
+
+type PdfDocument = {
+  numPages: number;
+  getPage(pageNumber: number): Promise<PdfPage>;
+};
+
+type PdfJsModule = {
+  getDocument(params: {
+    data: Uint8Array;
+    disableWorker?: boolean;
+    standardFontDataUrl?: string;
+  }): {
+    promise: Promise<PdfDocument>;
+  };
+};
+
+const CANVAS_MODULE = "@napi-rs/canvas";
+const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
 
 let canvasModulePromise: Promise<CanvasModule> | null = null;
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
@@ -26,7 +67,7 @@ let standardFontDataPathCache: string | null = null;
 // from an actual pdf.js operation.
 registerUnhandledRejectionHandler((reason: unknown): boolean => {
   const err = reason as { message?: string; stack?: string } | undefined;
-  const stack = String(err?.stack ?? "");
+  const stack = err?.stack ?? "";
   return stack.includes("pdf.worker") && stack.includes("ModuleJob.run");
 });
 
@@ -62,7 +103,7 @@ function getStandardFontDataPath(): string | undefined {
 
 async function loadCanvasModule(): Promise<CanvasModule> {
   if (!canvasModulePromise) {
-    canvasModulePromise = import("@napi-rs/canvas").catch((err) => {
+    canvasModulePromise = (import(CANVAS_MODULE) as Promise<CanvasModule>).catch((err) => {
       canvasModulePromise = null;
       throw new Error(
         `Optional dependency @napi-rs/canvas is required for PDF image extraction: ${String(err)}`,
@@ -74,7 +115,7 @@ async function loadCanvasModule(): Promise<CanvasModule> {
 
 async function loadPdfJsModule(): Promise<PdfJsModule> {
   if (!pdfJsModulePromise) {
-    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch((err) => {
+    pdfJsModulePromise = (import(PDFJS_MODULE) as Promise<PdfJsModule>).catch((err) => {
       pdfJsModulePromise = null;
       throw new Error(
         `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
@@ -104,21 +145,12 @@ export async function extractPdfContent(params: {
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
   const { buffer, maxPages, maxPixels, minTextChars, pageNumbers, onImageExtractionError } = params;
-  const { getDocument } = await loadPdfJsModule();
-  // `pdfjs-dist/legacy/build/pdf.mjs` ships narrower `.d.ts` than the runtime
-  // accepts: `DocumentInitParameters` includes `standardFontDataUrl`, but the
-  // legacy build's inline types only declare `{ data, disableWorker }`. Extend
-  // the inferred parameter type structurally so we can pass the
-  // runtime-supported option without an `any` cast.
-  type GetDocumentParams = Parameters<typeof getDocument>[0] & {
-    standardFontDataUrl?: string | URL;
-  };
-  const getDocumentParams: GetDocumentParams = {
+  const pdfJsModule = await loadPdfJsModule();
+  const pdf = await pdfJsModule.getDocument({
     data: new Uint8Array(buffer),
     disableWorker: true,
     standardFontDataUrl: getStandardFontDataPath(),
-  };
-  const pdf = await getDocument(getDocumentParams).promise;
+  }).promise;
 
   const effectivePages: number[] = pageNumbers
     ? pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, maxPages)
@@ -129,7 +161,7 @@ export async function extractPdfContent(params: {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
     const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
+      .map((item) => ("str" in item ? item.str : ""))
       .filter(Boolean)
       .join(" ");
     if (pageText) {
@@ -150,7 +182,6 @@ export async function extractPdfContent(params: {
     return { text, images: [] };
   }
 
-  const { createCanvas } = canvasModule;
   const images: PdfExtractedImage[] = [];
   const pixelBudget = Math.max(1, maxPixels);
 
@@ -160,7 +191,7 @@ export async function extractPdfContent(params: {
     const pagePixels = viewport.width * viewport.height;
     const scale = Math.min(1, Math.sqrt(pixelBudget / Math.max(1, pagePixels)));
     const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
+    const canvas = canvasModule.createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
     await page.render({
       canvas: canvas as unknown as HTMLCanvasElement,
       viewport: scaled,
