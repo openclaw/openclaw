@@ -67,6 +67,7 @@ export async function getMemorySearchManager(params: {
     const statusOnly = params.purpose === "status";
     const baseCacheKey = buildQmdCacheKey(params.agentId, qmdResolved);
     const cacheKey = `${baseCacheKey}:${statusOnly ? "status" : "full"}`;
+    const pendingCreateKey = buildPendingQmdCreateKey(params, qmdResolved);
     const cached = QMD_MANAGER_CACHE.get(cacheKey);
     if (cached) {
       return { manager: cached };
@@ -146,15 +147,15 @@ export async function getMemorySearchManager(params: {
     };
 
     if (!statusOnly) {
-      const pending = PENDING_QMD_MANAGER_CREATES.get(cacheKey);
+      const pending = PENDING_QMD_MANAGER_CREATES.get(pendingCreateKey);
       if (pending) {
         return await pending;
       }
 
       const pendingCreate = createQmdManager().finally(() => {
-        PENDING_QMD_MANAGER_CREATES.delete(cacheKey);
+        PENDING_QMD_MANAGER_CREATES.delete(pendingCreateKey);
       });
-      PENDING_QMD_MANAGER_CREATES.set(cacheKey, pendingCreate);
+      PENDING_QMD_MANAGER_CREATES.set(pendingCreateKey, pendingCreate);
       return await pendingCreate;
     }
     return await createQmdManager();
@@ -223,9 +224,11 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
+  const pendingCreates = Array.from(PENDING_QMD_MANAGER_CREATES.values());
+  await Promise.allSettled(pendingCreates);
   const managers = Array.from(QMD_MANAGER_CACHE.values());
-  QMD_MANAGER_CACHE.clear();
   PENDING_QMD_MANAGER_CREATES.clear();
+  QMD_MANAGER_CACHE.clear();
   for (const manager of managers) {
     try {
       await manager.close?.();
@@ -394,4 +397,16 @@ function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
   return `${agentId}:${JSON.stringify(config)}`;
+}
+
+function buildPendingQmdCreateKey(
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    purpose?: "default" | "status";
+  },
+  qmdConfig: ResolvedQmdConfig,
+): string {
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  return `${buildQmdCacheKey(params.agentId, qmdConfig)}:${workspaceDir}:${JSON.stringify(params.cfg)}`;
 }
