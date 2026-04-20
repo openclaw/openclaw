@@ -84,4 +84,44 @@ describe("group runtime loading", () => {
     expect(groupsRuntimeLoads).toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
+
+  it("falls back to Discord guild/channel overrides when plugin runtime is unavailable", async () => {
+    vi.doMock("./groups.runtime.js", () => ({
+      getChannelPlugin: () => undefined,
+      normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+    }));
+    const groups = await import("./groups.js");
+
+    await expect(
+      groups.resolveGroupRequireMention({
+        cfg: {
+          channels: {
+            discord: {
+              guilds: {
+                "145": {
+                  channels: {
+                    "123": { requireMention: false },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx: {
+          Provider: "discord",
+          AccountId: "default",
+          From: "discord:channel:123",
+          GroupChannel: "#general",
+          GroupSpace: "145",
+        },
+        groupResolution: {
+          key: "discord:channel:123",
+          channel: "discord",
+          id: "123",
+          chatType: "channel",
+        },
+      }),
+    ).resolves.toBe(false);
+    vi.doUnmock("./groups.runtime.js");
+  });
 });

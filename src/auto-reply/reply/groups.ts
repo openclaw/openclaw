@@ -37,6 +37,58 @@ async function resolveRuntimeChannelId(raw?: string | null): Promise<string | nu
   }
 }
 
+function normalizeDiscordSlug(raw?: string | null): string {
+  return (normalizeOptionalLowercaseString(raw) ?? "")
+    .replace(/^#/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function resolveDiscordRequireMentionFallback(params: {
+  cfg: OpenClawConfig;
+  groupId?: string;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+}): boolean | undefined {
+  const discordCfg = params.accountId
+    ? (params.cfg.channels?.discord?.accounts?.[params.accountId] ?? params.cfg.channels?.discord)
+    : params.cfg.channels?.discord;
+  const guilds = discordCfg?.guilds;
+  if (!guilds || Object.keys(guilds).length === 0) {
+    return undefined;
+  }
+
+  const groupSpace = normalizeOptionalString(params.groupSpace) ?? "";
+  const groupSpaceSlug = normalizeDiscordSlug(groupSpace);
+  const guildEntry =
+    (groupSpace ? guilds[groupSpace] : undefined) ??
+    (groupSpaceSlug ? guilds[groupSpaceSlug] : undefined) ??
+    Object.values(guilds).find((entry) => normalizeDiscordSlug(entry?.slug) === groupSpaceSlug) ??
+    guilds["*"];
+  if (!guildEntry) {
+    return undefined;
+  }
+
+  const channelEntries = guildEntry.channels;
+  const groupId = normalizeOptionalString(params.groupId) ?? "";
+  const channelSlug = normalizeDiscordSlug(params.groupChannel);
+  const channelEntry =
+    (groupId ? channelEntries?.[groupId] : undefined) ??
+    (channelSlug
+      ? (channelEntries?.[channelSlug] ?? channelEntries?.[`#${channelSlug}`])
+      : undefined) ??
+    channelEntries?.["*"];
+
+  if (typeof channelEntry?.requireMention === "boolean") {
+    return channelEntry.requireMention;
+  }
+  if (typeof guildEntry.requireMention === "boolean") {
+    return guildEntry.requireMention;
+  }
+  return undefined;
+}
+
 export async function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
@@ -69,6 +121,18 @@ export async function resolveGroupRequireMention(params: {
   }
   if (typeof requireMention === "boolean") {
     return requireMention;
+  }
+  if (channel === "discord") {
+    const discordFallback = resolveDiscordRequireMentionFallback({
+      cfg,
+      groupId,
+      groupChannel,
+      groupSpace,
+      accountId: ctx.AccountId,
+    });
+    if (typeof discordFallback === "boolean") {
+      return discordFallback;
+    }
   }
   return resolveChannelGroupRequireMention({
     cfg,
