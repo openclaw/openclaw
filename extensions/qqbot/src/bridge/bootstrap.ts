@@ -14,11 +14,21 @@
  *    evaluation time when `channel.ts` imports this file. Provides the adapter
  *    immediately for code that runs synchronously during startup.
  *
- * Heavy `openclaw/plugin-sdk/*` dependencies are lazy-imported inside each
- * method body so that this module evaluates with minimal overhead and avoids
- * INEFFECTIVE_DYNAMIC_IMPORT build warnings.
+ * Heavy async-only dependencies (`media-runtime`, `config-runtime`,
+ * `approval-gateway-runtime`) are lazy-imported inside each async method body
+ * so that this module evaluates with minimal overhead.
+ *
+ * Synchronous dependencies (`secret-input`, `temp-path`) are imported
+ * statically at the top level so they work reliably in both production and
+ * vitest (which resolves bare specifiers via `resolve.alias`, not Node CJS).
  */
 
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   registerPlatformAdapter,
   registerPlatformAdapterFactory,
@@ -68,29 +78,26 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     getTempDir(): string {
-      const { resolvePreferredOpenClawTmpDir } = require("openclaw/plugin-sdk/temp-path") as typeof import("openclaw/plugin-sdk/temp-path");
       return resolvePreferredOpenClawTmpDir();
     },
 
     hasConfiguredSecret(value: unknown): boolean {
-      const { hasConfiguredSecretInput } = require("openclaw/plugin-sdk/secret-input") as typeof import("openclaw/plugin-sdk/secret-input");
       return hasConfiguredSecretInput(value);
     },
 
     normalizeSecretInputString(value: unknown): string | undefined {
-      const { normalizeSecretInputString: normalize } = require("openclaw/plugin-sdk/secret-input") as typeof import("openclaw/plugin-sdk/secret-input");
-      return normalize(value) ?? undefined;
+      return normalizeSecretInputString(value) ?? undefined;
     },
 
     resolveSecretInputString(params: { value: unknown; path: string }): string | undefined {
-      const { normalizeResolvedSecretInputString } = require("openclaw/plugin-sdk/secret-input") as typeof import("openclaw/plugin-sdk/secret-input");
       return normalizeResolvedSecretInputString(params) ?? undefined;
     },
 
     async resolveApproval(approvalId: string, decision: string): Promise<boolean> {
       try {
         const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
-        const { resolveApprovalOverGateway } = await import("openclaw/plugin-sdk/approval-gateway-runtime");
+        const { resolveApprovalOverGateway } =
+          await import("openclaw/plugin-sdk/approval-gateway-runtime");
         const cfg = loadConfig();
         await resolveApprovalOverGateway({
           cfg,

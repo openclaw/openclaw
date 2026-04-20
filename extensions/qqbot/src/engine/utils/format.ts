@@ -42,7 +42,13 @@ export function formatErrorMessage(err: unknown): string {
   if (typeof err === "string") {
     return err;
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (
+    err === null ||
+    err === undefined ||
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint"
+  ) {
     return String(err);
   }
   try {

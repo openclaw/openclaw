@@ -23,7 +23,7 @@ export type GatewayAccount = _GatewayAccount;
  *
  * This is NOT a custom adapter — it's the exact same object shape that
  * the framework injects. We define it here so core/ doesn't need to
- * `import from "openclaw/plugin-sdk"`.
+ * depend on the plugin-sdk root barrel.
  */
 export interface GatewayPluginRuntime {
   channel: {
