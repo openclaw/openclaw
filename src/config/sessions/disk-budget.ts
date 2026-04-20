@@ -193,6 +193,8 @@ export async function enforceSessionDiskBudget(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   activeSessionKey?: string;
+  /** Additional session keys to exclude from budget enforcement (e.g. active subagent sessions). */
+  excludeKeys?: ReadonlySet<string>;
   maintenance: SessionDiskBudgetConfig;
   warnOnly: boolean;
   dryRun?: boolean;
@@ -249,6 +251,7 @@ export async function enforceSessionDiskBudget(params: {
 
   let removedFiles = 0;
   let removedEntries = 0;
+  let skippedProtected = 0;
   let freedBytes = 0;
 
   const referencedPaths = resolveReferencedSessionTranscriptPaths({
@@ -295,6 +298,10 @@ export async function enforceSessionDiskBudget(params: {
         break;
       }
       if (activeSessionKey && normalizeLowercaseStringOrEmpty(key) === activeSessionKey) {
+        continue;
+      }
+      if (params.excludeKeys?.has(key)) {
+        skippedProtected++;
         continue;
       }
       const entry = params.store[key];
@@ -375,5 +382,9 @@ export async function enforceSessionDiskBudget(params: {
     maxBytes,
     highWaterBytes,
     overBudget: true,
+    skippedProtected,
   };
+  if (skippedProtected > 0) {
+    log.info("protected active sessions from disk budget enforcement", { count: skippedProtected });
+  }
 }
