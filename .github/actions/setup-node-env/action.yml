@@ -59,7 +59,12 @@ runs:
     - name: Capture node path
       if: inputs.install-deps == 'true'
       shell: bash
-      run: echo "NODE_BIN=$(dirname "$(node -p "process.execPath")")" >> "$GITHUB_ENV"
+      run: |
+        node_bin="$(dirname "$(node -p 'process.execPath')")"
+        if command -v cygpath >/dev/null 2>&1; then
+          node_bin="$(cygpath -u "$node_bin")"
+        fi
+        echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'
