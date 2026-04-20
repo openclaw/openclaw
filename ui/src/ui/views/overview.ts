@@ -86,6 +86,11 @@ export function renderOverview(props: OverviewProps) {
       <div class="muted" style="margin-top: 8px">
         ${t("overview.pairing.hint")}
         <div style="margin-top: 6px">
+          If the device was already paired, this usually means it asked for more access than you
+          previously approved. OpenClaw keeps the old approval and creates a new pending upgrade
+          request instead of widening scopes silently.
+        </div>
+        <div style="margin-top: 6px">
           <span class="mono">openclaw devices list</span><br />
           <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
         </div>
@@ -260,11 +265,9 @@ export function renderOverview(props: OverviewProps) {
                       type="button"
                       class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
                       style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${
-                        props.showGatewayToken
-                          ? t("overview.access.hideToken")
-                          : t("overview.access.showToken")
-                      }
+                      title=${props.showGatewayToken
+                        ? t("overview.access.hideToken")
+                        : t("overview.access.showToken")}
                       aria-label=${t("overview.access.toggleTokenVisibility")}
                       aria-pressed=${props.showGatewayToken}
                       @click=${props.onToggleGatewayTokenVisibility}
@@ -291,11 +294,9 @@ export function renderOverview(props: OverviewProps) {
                       type="button"
                       class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
                       style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${
-                        props.showGatewayPassword
-                          ? t("overview.access.hidePassword")
-                          : t("overview.access.showPassword")
-                      }
+                      title=${props.showGatewayPassword
+                        ? t("overview.access.hidePassword")
+                        : t("overview.access.showPassword")}
                       aria-label=${t("overview.access.togglePasswordVisibility")}
                       aria-pressed=${props.showGatewayPassword}
                       @click=${props.onToggleGatewayPasswordVisibility}
