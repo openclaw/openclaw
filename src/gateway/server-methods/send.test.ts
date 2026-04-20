@@ -156,6 +156,16 @@ async function runPollWithClient(
   return { respond };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: { connect?: { scopes?: string[] } } | null,
@@ -349,6 +359,7 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         message: expect.stringContaining("unsupported channel: webchat"),
       }),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -356,6 +367,7 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         message: expect.stringContaining("Use `chat.send`"),
       }),
+      undefined,
     );
   });
 
@@ -426,6 +438,7 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         message: expect.stringContaining("Channel is required"),
       }),
+      undefined,
     );
   });
 
@@ -536,6 +549,75 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         message: expect.stringContaining("Channel is required"),
       }),
+      undefined,
+    );
+  });
+
+  it("dedupes concurrent poll sends before channel resolution resumes", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const sendPollDeferred = createDeferred<{
+      messageId: string;
+    }>();
+    mocks.sendPoll.mockReturnValueOnce(sendPollDeferred.promise);
+
+    const firstRequest = sendHandlers.poll({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers.poll({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+
+    sendPollDeferred.resolve({ messageId: "poll-concurrent" });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "idem-poll-concurrent",
+        messageId: "poll-concurrent",
+        channel: "slack",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+    expect(secondRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "idem-poll-concurrent",
+        messageId: "poll-concurrent",
+        channel: "slack",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack", cached: true }),
     );
   });
 

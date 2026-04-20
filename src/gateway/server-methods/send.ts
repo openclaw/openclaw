@@ -59,27 +59,29 @@ const getInflightMap = (context: GatewayRequestContext) => {
   return inflight;
 };
 
-async function resolveGatewayInflightMap(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string;
-  respond: RespondFn;
-}): Promise<Map<string, Promise<InflightResult>> | undefined> {
+function resolveGatewayInflightMap(params: { context: GatewayRequestContext; dedupeKey: string }):
+  | {
+      kind: "cached";
+      cached: NonNullable<ReturnType<GatewayRequestContext["dedupe"]["get"]>>;
+    }
+  | {
+      kind: "inflight";
+      inflight: Promise<InflightResult>;
+    }
+  | {
+      kind: "ready";
+      inflightMap: Map<string, Promise<InflightResult>>;
+    } {
   const cached = params.context.dedupe.get(params.dedupeKey);
   if (cached) {
-    params.respond(cached.ok, cached.payload, cached.error, {
-      cached: true,
-    });
-    return undefined;
+    return { kind: "cached", cached };
   }
   const inflightMap = getInflightMap(params.context);
   const inflight = inflightMap.get(params.dedupeKey);
   if (inflight) {
-    const result = await inflight;
-    const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-    params.respond(result.ok, result.payload, result.error, meta);
-    return undefined;
+    return { kind: "inflight", inflight };
   }
-  return inflightMap;
+  return { kind: "ready", inflightMap };
 }
 
 async function runGatewayInflightWork(params: {
@@ -310,10 +312,20 @@ export const sendHandlers: GatewayRequestHandlers = {
     const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
-    const inflightMap = await resolveGatewayInflightMap({ context, dedupeKey, respond });
-    if (!inflightMap) {
+    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
+    if (inflight.kind === "cached") {
+      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
+        cached: true,
+      });
       return;
     }
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
+      return;
+    }
+    const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
@@ -395,10 +407,20 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `send:${idem}`;
-    const inflightMap = await resolveGatewayInflightMap({ context, dedupeKey, respond });
-    if (!inflightMap) {
+    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
+    if (inflight.kind === "cached") {
+      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
+        cached: true,
+      });
       return;
     }
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
+      return;
+    }
+    const inflightMap = inflight.inflightMap;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -568,21 +590,20 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `poll:${idem}`;
-    const cached = context.dedupe.get(dedupeKey);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
+    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
+    if (inflight.kind === "cached") {
+      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
         cached: true,
       });
       return;
     }
-    const inflightMap = getInflightMap(context);
-    const inflight = inflightMap.get(dedupeKey);
-    if (inflight) {
-      const result = await inflight;
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
       const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
+    const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
@@ -609,7 +630,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
         return {
           ok: false,
-          error: errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `isAnonymous is not supported for ${channel} polls`,
+          ),
         };
       }
       const poll = {
@@ -623,7 +647,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       const accountId = normalizeOptionalString(request.accountId);
       try {
         if (!outbound?.sendPoll) {
-          const error = errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
+          const error = errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unsupported poll channel: ${channel}`,
+          );
           return { ok: false, error };
         }
         const resolvedTarget = resolveGatewayOutboundTarget({
@@ -666,12 +693,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
     })();
 
-    inflightMap.set(dedupeKey, work);
-    try {
-      const result = await work;
-      respond(result.ok, result.payload, result.error, result.meta);
-    } finally {
-      inflightMap.delete(dedupeKey);
-    }
+    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
 };
