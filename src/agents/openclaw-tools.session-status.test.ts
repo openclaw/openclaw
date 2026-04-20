@@ -186,6 +186,8 @@ function createCommandsStatusRuntimeModuleMock() {
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
       resolveDefaultThinkingLevel?: () => unknown;
+      isGroup?: boolean;
+      defaultGroupActivation?: () => "always" | "mention";
     }) => {
       resolveQueueSettingsMock({
         channel: params.statusChannel,
@@ -222,6 +224,10 @@ function createCommandsStatusRuntimeModuleMock() {
             configuredAgent?.thinkingDefault ?? (await params.resolveDefaultThinkingLevel?.()),
         },
         sessionEntry: params.sessionEntry,
+        groupActivation:
+          params.isGroup && typeof params.defaultGroupActivation === "function"
+            ? params.defaultGroupActivation()
+            : undefined,
         modelAuth,
         includeTranscriptUsage: params.includeTranscriptUsage,
       });
@@ -912,6 +918,46 @@ describe("session_status tool", () => {
         }),
       }),
     );
+  });
+
+  it("derives default group activation from channel config when no session override exists", async () => {
+    const savedConfig = mockConfig;
+    try {
+      resetSessionStore({
+        main: {
+          sessionId: "status-group-default",
+          updatedAt: 10,
+          channel: "discord",
+          chatType: "channel",
+          groupId: "channel:123",
+        },
+      });
+
+      mockConfig = {
+        ...createMockConfig(),
+        channels: {
+          discord: {
+            groups: {
+              "*": { requireMention: false },
+            },
+          },
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool();
+
+      await tool.execute("call-group-default-activation", {});
+
+      const firstCall = buildStatusMessageMock.mock.calls[0]?.[0] as {
+        groupActivation?: string;
+      };
+      expect(firstCall?.groupActivation).toBe("always");
+    } finally {
+      mockConfig = savedConfig;
+    }
   });
 
   it("resolves sessionId inputs", async () => {

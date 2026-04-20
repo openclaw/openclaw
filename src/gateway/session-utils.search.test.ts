@@ -652,4 +652,40 @@ describe("listSessionsFromStore search", () => {
       },
     });
   });
+
+  test("derives canonical openai-codex gpt-5.4 context tokens when the session entry is missing them", () => {
+    const now = Date.now();
+    const result = listSingleSession({
+      cfg: {
+        session: { mainKey: "main" },
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      } as unknown as OpenClawConfig,
+      storePath: path.join(os.tmpdir(), "openclaw-session-utils-codex-default-context"),
+      key: "agent:main:main",
+      entry: {
+        sessionId: "sess-codex-default-context",
+        updatedAt: now,
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+        totalTokens: 3_000,
+        totalTokensFresh: true,
+        inputTokens: 2_000,
+        outputTokens: 1_000,
+      } as SessionEntry,
+    });
+
+    expect(result.sessions[0]).toMatchObject({
+      key: "agent:main:main",
+      modelProvider: "openai-codex",
+      model: "gpt-5.4",
+      totalTokens: 3_000,
+      totalTokensFresh: true,
+      contextTokens: 272_000,
+    });
+  });
 });

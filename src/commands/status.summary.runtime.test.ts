@@ -39,6 +39,23 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
 
     expect(contextTokens).toBe(272_000);
   });
+
+  it("uses canonical openai-codex gpt-5.4 context tokens instead of the generic 200k fallback", () => {
+    const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      allowAsyncLoad: false,
+    });
+
+    expect(contextTokens).toBe(272_000);
+  });
 });
 
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {

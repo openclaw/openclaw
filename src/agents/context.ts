@@ -381,6 +381,26 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+function resolveKnownProviderModelContextTokens(params: {
+  provider?: string;
+  model?: string;
+}): number | undefined {
+  const provider = normalizeProviderId(params.provider ?? "");
+  const normalized = normalizeLowercaseStringOrEmpty(params.model ?? "");
+  const model = normalized.includes("/")
+    ? (normalized.split("/").at(-1) ?? normalized)
+    : normalized;
+
+  // Match the runtime forward-compat metadata used by the embedded runner so
+  // read-only status/session callers do not fall all the way back to the
+  // generic 200k default for the modern Codex GPT-5.4 lane.
+  if (provider === "openai-codex" && (model === "gpt-5.4" || model === "gpt-5.4-codex")) {
+    return 272_000;
+  }
+
+  return undefined;
+}
+
 export function resolveContextTokensForModel(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -389,8 +409,12 @@ export function resolveContextTokensForModel(params: {
   fallbackContextTokens?: number;
   allowAsyncLoad?: boolean;
 }): number | undefined {
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
-    return params.contextTokensOverride;
+  const contextTokensOverride =
+    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+      ? Math.floor(params.contextTokensOverride)
+      : undefined;
+  if (contextTokensOverride !== undefined) {
+    return contextTokensOverride;
   }
 
   const ref = resolveProviderModelRef({
@@ -464,6 +488,14 @@ export function resolveContextTokensForModel(params: {
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
     }
+  }
+
+  const knownContextTokens = resolveKnownProviderModelContextTokens({
+    provider: ref?.provider ?? params.provider,
+    model: ref?.model ?? params.model,
+  });
+  if (knownContextTokens !== undefined) {
+    return knownContextTokens;
   }
 
   return params.fallbackContextTokens;
