@@ -282,4 +282,176 @@ describe("splitMediaFromOutput", () => {
       extractMarkdownImages,
     );
   });
+
+  // ====================================================================
+  // Indented code block heuristic protection (Fix A)
+  // ====================================================================
+
+  it("does not extract MEDIA: from 4-space indented code block", () => {
+    const input = "\u4F7F\u7528\u793A\u4F8B\uFF1A\n\n    MEDIA: /tmp/screenshot.png\n\n\u4EE5\u4E0A\u4E3A\u7528\u6CD5\u3002";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("does not extract MEDIA: from tab-indented code block", () => {
+    const input = "\u793A\u4F8B\uFF1A\n\n\tMEDIA: /tmp/file.png\n\n\u8BF4\u660E\u3002";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("does not extract MEDIA: from multi-line indented code block", () => {
+    const input = "\u4EE3\u7801\uFF1A\n\n    line1\n    MEDIA: /tmp/test.png\n    line3\n\n\u7ED3\u675F\u3002";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("does not extract MEDIA: from indented code block with blank lines within", () => {
+    const input = "\u4EE3\u7801\uFF1A\n\n    block1\n\n    MEDIA: /tmp/file.png\n\n\u7ED3\u675F\u3002";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("does not treat indented line after paragraph as code block", () => {
+    const input = "some text\n    MEDIA: /tmp/real.png";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toBe("some text");
+  });
+
+  it("does not extract MEDIA: from indented code block immediately after fenced block", () => {
+    const input = "```\nfenced content\n```\n    MEDIA: /tmp/indented-after-fence.png\n\n\u7ED3\u675F\u3002";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  // ====================================================================
+  // cleanedText whitespace protection (Fix A+)
+  // ====================================================================
+
+  it("preserves indented code block formatting when real MEDIA: is also present", () => {
+    const input =
+      "MEDIA: /tmp/real-image.png\n\n\u4EE3\u7801\u793A\u4F8B\uFF1A\n\n    MEDIA: /tmp/example.png\n    console.log('hello');";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/real-image.png"]);
+    expect(result.text).toContain("    MEDIA: /tmp/example.png");
+    expect(result.text).toContain("    console.log('hello');");
+  });
+
+  it("preserves fenced code block content when real MEDIA: is extracted", () => {
+    const input =
+      "MEDIA: /tmp/photo.png\n```\n    indented inside fence\n```\nafter";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/photo.png"]);
+    expect(result.text).toContain("    indented inside fence");
+  });
+
+  it("preserves tab indentation in code blocks alongside real MEDIA extraction", () => {
+    const input = "MEDIA: /tmp/img.png\n\n\u4EE3\u7801\uFF1A\n\n\tconst x = 1;\n\tconst y = 2;";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/img.png"]);
+    expect(result.text).toContain("\tconst x = 1;");
+    expect(result.text).toContain("\tconst y = 2;");
+  });
+
+  it("collapses blank lines within indented code block when MEDIA is extracted (known limitation)", () => {
+    const input =
+      "MEDIA: /tmp/real.png\n\n    block1\n\n    block2";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toContain("    block1");
+    expect(result.text).toContain("    block2");
+    expect(result.text).not.toContain("\n\n");
+  });
+
+  // ====================================================================
+  // Segments correctness
+  // ====================================================================
+
+  it("segments correctly reflect indented code block as text", () => {
+    const input = "Before\nMEDIA:https://example.com/a.png\n\n    MEDIA: /tmp/code.png\n\nAfter";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["https://example.com/a.png"]);
+    const textContent = result.segments
+      ?.filter((s) => s.type === "text")
+      .map((s) => s.text)
+      .join("\n");
+    expect(textContent).toContain("    MEDIA: /tmp/code.png");
+  });
+
+  // ====================================================================
+  // Fence closing with trailing text (Fix C)
+  // ====================================================================
+
+  it("does not extract MEDIA: when fence closing has trailing text", () => {
+    const input = "```\nMEDIA: /tmp/inside.png\n``` not closed\nMEDIA: /tmp/also-inside.png";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("extracts MEDIA: after valid fence close with trailing whitespace only", () => {
+    const input = "```\nMEDIA: /tmp/inside.png\n```   \nMEDIA: /tmp/outside.png";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/outside.png"]);
+  });
+
+  it("malformed fence + audio_as_voice: tag is stripped regardless (pre-existing behavior)", () => {
+    const input = "```\ncode\n``` not closed\n[[audio_as_voice]]\nsome text";
+    const result = splitMediaFromOutput(input);
+    expect(result.audioAsVoice).toBe(true);
+  });
+
+  // ====================================================================
+  // Case sensitivity alignment
+  // ====================================================================
+
+  it("does not extract lowercase media: directive", () => {
+    const input = "media: /tmp/file.png";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  // ====================================================================
+  // Edge cases
+  // ====================================================================
+
+  it("handles document starting with indented MEDIA: line", () => {
+    const input = "    MEDIA: /tmp/file.png";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
+  it("handles mixed: real MEDIA + fenced code + indented code in one output", () => {
+    const input = [
+      "MEDIA: /tmp/real.png",
+      "\u89E3\u91CA\uFF1A",
+      "```",
+      "MEDIA: /tmp/fenced.png",
+      "```",
+      "",
+      "    MEDIA: /tmp/indented.png",
+      "",
+      "\u5B8C\u6210\u3002",
+    ].join("\n");
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
+    expect(result.text).toContain("MEDIA: /tmp/fenced.png");
+    expect(result.text).toContain("    MEDIA: /tmp/indented.png");
+    expect(result.text).toContain("\u5B8C\u6210\u3002");
+  });
+
+  it("handles audio_as_voice with indented code block", () => {
+    const input = "[[audio_as_voice]]\n\n    MEDIA: /tmp/code-example.png\n\n\u8BF4\u660E\u3002";
+    const result = splitMediaFromOutput(input);
+    expect(result.audioAsVoice).toBe(true);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toContain("    MEDIA: /tmp/code-example.png");
+  });
 });
