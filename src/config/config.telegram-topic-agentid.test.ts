@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { OpenClawSchema } from "./zod-schema.js";
+import { TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("telegram topic agentId schema", () => {
   it("accepts valid agentId in forum group topic config", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001234567890": {
-              topics: {
-                "42": {
-                  agentId: "main",
-                },
-              },
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "42": {
+              agentId: "main",
             },
           },
         },
@@ -24,23 +20,17 @@ describe("telegram topic agentId schema", () => {
       console.error(res.error.format());
       return;
     }
-    expect(res.data.channels?.telegram?.groups?.["-1001234567890"]?.topics?.["42"]?.agentId).toBe(
-      "main",
-    );
+    expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]?.agentId).toBe("main");
   });
 
   it("accepts valid agentId in DM topic config", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          direct: {
-            "123456789": {
-              topics: {
-                "99": {
-                  agentId: "support",
-                  systemPrompt: "You are support",
-                },
-              },
+    const res = TelegramConfigSchema.safeParse({
+      direct: {
+        "123456789": {
+          topics: {
+            "99": {
+              agentId: "support",
+              systemPrompt: "You are support",
             },
           },
         },
@@ -52,22 +42,16 @@ describe("telegram topic agentId schema", () => {
       console.error(res.error.format());
       return;
     }
-    expect(res.data.channels?.telegram?.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe(
-      "support",
-    );
+    expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
   });
 
   it("accepts empty config without agentId (backward compatible)", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001234567890": {
-              topics: {
-                "42": {
-                  systemPrompt: "Be helpful",
-                },
-              },
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "42": {
+              systemPrompt: "Be helpful",
             },
           },
         },
@@ -79,23 +63,19 @@ describe("telegram topic agentId schema", () => {
       console.error(res.error.format());
       return;
     }
-    expect(res.data.channels?.telegram?.groups?.["-1001234567890"]?.topics?.["42"]).toEqual({
+    expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]).toEqual({
       systemPrompt: "Be helpful",
     });
   });
 
   it("accepts multiple topics with different agentIds", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001234567890": {
-              topics: {
-                "1": { agentId: "main" },
-                "3": { agentId: "zu" },
-                "5": { agentId: "q" },
-              },
-            },
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "1": { agentId: "main" },
+            "3": { agentId: "zu" },
+            "5": { agentId: "q" },
           },
         },
       },
@@ -106,24 +86,20 @@ describe("telegram topic agentId schema", () => {
       console.error(res.error.format());
       return;
     }
-    const topics = res.data.channels?.telegram?.groups?.["-1001234567890"]?.topics;
+    const topics = res.data.groups?.["-1001234567890"]?.topics;
     expect(topics?.["1"]?.agentId).toBe("main");
     expect(topics?.["3"]?.agentId).toBe("zu");
     expect(topics?.["5"]?.agentId).toBe("q");
   });
 
   it("rejects unknown fields in topic config (strict schema)", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001234567890": {
-              topics: {
-                "42": {
-                  agentId: "main",
-                  unknownField: "should fail",
-                },
-              },
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "42": {
+              agentId: "main",
+              unknownField: "should fail",
             },
           },
         },
@@ -136,18 +112,14 @@ describe("telegram topic agentId schema", () => {
 
 describe("telegram disableAudioPreflight schema", () => {
   it("accepts disableAudioPreflight for groups and topics", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          groups: {
-            "*": {
-              requireMention: true,
-              disableAudioPreflight: true,
-              topics: {
-                "123": {
-                  disableAudioPreflight: false,
-                },
-              },
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "*": {
+          requireMention: true,
+          disableAudioPreflight: true,
+          topics: {
+            "123": {
+              disableAudioPreflight: false,
             },
           },
         },
@@ -159,20 +131,16 @@ describe("telegram disableAudioPreflight schema", () => {
       return;
     }
 
-    const group = res.data.channels?.telegram?.groups?.["*"];
+    const group = res.data.groups?.["*"];
     expect(group?.disableAudioPreflight).toBe(true);
     expect(group?.topics?.["123"]?.disableAudioPreflight).toBe(false);
   });
 
   it("rejects non-boolean disableAudioPreflight values", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          groups: {
-            "*": {
-              disableAudioPreflight: "yes",
-            },
-          },
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "*": {
+          disableAudioPreflight: "yes",
         },
       },
     });
@@ -181,12 +149,8 @@ describe("telegram disableAudioPreflight schema", () => {
   });
 
   it("accepts telegram botToken without tokenFile", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          botToken: "123:ABC",
-        },
-      },
+    const res = TelegramConfigSchema.safeParse({
+      botToken: "123:ABC",
     });
 
     expect(res.success).toBe(true);
@@ -194,17 +158,13 @@ describe("telegram disableAudioPreflight schema", () => {
       return;
     }
 
-    expect(res.data.channels?.telegram?.botToken).toBe("123:ABC");
-    expect(res.data.channels?.telegram?.tokenFile).toBeUndefined();
+    expect(res.data.botToken).toBe("123:ABC");
+    expect(res.data.tokenFile).toBeUndefined();
   });
 
   it("accepts telegram tokenFile without botToken", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          tokenFile: "/run/agenix/telegram-token",
-        },
-      },
+    const res = TelegramConfigSchema.safeParse({
+      tokenFile: "/run/agenix/telegram-token",
     });
 
     expect(res.success).toBe(true);
@@ -212,18 +172,14 @@ describe("telegram disableAudioPreflight schema", () => {
       return;
     }
 
-    expect(res.data.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
-    expect(res.data.channels?.telegram?.botToken).toBeUndefined();
+    expect(res.data.tokenFile).toBe("/run/agenix/telegram-token");
+    expect(res.data.botToken).toBeUndefined();
   });
 
   it("accepts telegram botToken and tokenFile together", () => {
-    const res = OpenClawSchema.safeParse({
-      channels: {
-        telegram: {
-          botToken: "fallback:token",
-          tokenFile: "/run/agenix/telegram-token",
-        },
-      },
+    const res = TelegramConfigSchema.safeParse({
+      botToken: "fallback:token",
+      tokenFile: "/run/agenix/telegram-token",
     });
 
     expect(res.success).toBe(true);
@@ -231,7 +187,7 @@ describe("telegram disableAudioPreflight schema", () => {
       return;
     }
 
-    expect(res.data.channels?.telegram?.botToken).toBe("fallback:token");
-    expect(res.data.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
+    expect(res.data.botToken).toBe("fallback:token");
+    expect(res.data.tokenFile).toBe("/run/agenix/telegram-token");
   });
 });
