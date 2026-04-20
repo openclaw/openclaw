@@ -324,4 +324,24 @@ describe("WhatsApp group allowlist access control", () => {
 
     expect(result.allowed).toBe(false);
   });
+
+  it("still blocks configured group admins when groupPolicy is disabled", async () => {
+    const result = await checkGroupAccess({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groupPolicy: "disabled",
+            groups: {
+              "1203630@g.us": {
+                admin: "+15550001111",
+              },
+            },
+          },
+        },
+      },
+      senderE164: "+15550001111",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
 });
