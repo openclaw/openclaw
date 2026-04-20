@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CONFIG_PATH } from "../config/paths.js";
+import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
@@ -139,7 +139,7 @@ export function resolveHookMappings(
     return [];
   }
 
-  const configDir = path.resolve(opts?.configDir ?? path.dirname(CONFIG_PATH));
+  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,
