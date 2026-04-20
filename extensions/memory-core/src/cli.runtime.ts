@@ -9,12 +9,15 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
   defaultRuntime,
+  filterSessionSummaryDailyMemoryFiles,
   formatErrorMessage,
   getRuntimeConfig,
   getMemorySearchManager,
   isRich,
+  listDailyMemoryFiles,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
+  parseDailyMemoryFileName,
   resolveCommandSecretRefsViaGateway,
   resolveDefaultAgentId,
   resolveSessionTranscriptsDirForAgent,
@@ -126,8 +129,6 @@ function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown>
   return asRecord(entry?.config) ?? {};
 }
 
-const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
-
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
   let stat;
@@ -140,16 +141,39 @@ async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
     throw err;
   }
   if (stat.isFile()) {
-    return DAILY_MEMORY_FILE_NAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
+    if (parseDailyMemoryFileName(path.basename(resolvedPath))) {
+      return [resolvedPath];
+    }
+    const error = new Error(
+      `Expected a dated daily memory file (YYYY-MM-DD.md or YYYY-MM-DD-*.md) or a directory containing those files: ${resolvedPath}`,
+    ) as NodeJS.ErrnoException;
+    error.code = "EINVAL";
+    throw error;
   }
   if (!stat.isDirectory()) {
     return [];
   }
-  const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && DAILY_MEMORY_FILE_NAME_RE.test(entry.name))
-    .map((entry) => path.join(resolvedPath, entry.name))
-    .toSorted((a, b) => path.basename(a).localeCompare(path.basename(b)));
+  return (
+    await listDailyMemoryFiles(resolvedPath, {
+      tolerateDirectoryErrors: false,
+    })
+  ).map((entry) => entry.absolutePath);
+}
+
+function formatHistoricalDailyFilePathError(params: {
+  commandName: "memory rem-harness" | "memory rem-backfill";
+  inputPath: string;
+  error: unknown;
+}): string {
+  const resolvedPath = shortenHomePath(path.resolve(params.inputPath));
+  const code = (params.error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "EACCES" || code === "EPERM") {
+    return `${params.commandName} cannot read ${resolvedPath}. Check permissions or pass a readable dated memory file/directory.`;
+  }
+  if (code === "EINVAL" || code === "ENOTDIR") {
+    return `${params.commandName} expected ${resolvedPath} to be a dated daily memory file (YYYY-MM-DD.md or YYYY-MM-DD-*.md) or a directory containing those files.`;
+  }
+  return `${params.commandName} failed to read ${resolvedPath}: ${formatErrorMessage(params.error)}`;
 }
 
 async function createHistoricalRemHarnessWorkspace(params: {
@@ -184,14 +208,51 @@ async function createHistoricalRemHarnessWorkspace(params: {
     nowMs: params.nowMs,
     timezone: params.timezone,
   });
+  const groundedWorkspaceSourceFiles =
+    await filterSessionSummaryDailyMemoryFiles(workspaceSourceFiles);
   return {
     workspaceDir,
     sourceFiles,
-    workspaceSourceFiles,
+    workspaceSourceFiles: groundedWorkspaceSourceFiles,
     importedFileCount: seeded.importedFileCount,
     importedSignalCount: seeded.importedSignalCount,
     skippedPaths: seeded.skippedPaths,
   };
+}
+
+async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Promise<string[]> {
+  const memoryDir = path.join(workspaceDir, "memory");
+  try {
+    const files = await filterSessionSummaryDailyMemoryFiles(
+      await listHistoricalDailyFiles(memoryDir),
+    );
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return files;
+    }
+    const recentDays = new Set<string>();
+    for (let index = files.length - 1; index >= 0; index -= 1) {
+      const isoDay = extractIsoDayFromPath(files[index] ?? "");
+      if (!isoDay || recentDays.has(isoDay)) {
+        continue;
+      }
+      recentDays.add(isoDay);
+      if (recentDays.size >= limit) {
+        break;
+      }
+    }
+    if (recentDays.size === 0) {
+      return [];
+    }
+    return files.filter((filePath) => {
+      const isoDay = extractIsoDayFromPath(filePath);
+      return isoDay ? recentDays.has(isoDay) : false;
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
 }
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
@@ -318,8 +379,7 @@ function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] 
 }
 
 function extractIsoDayFromPath(filePath: string): string | null {
-  const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
-  return match?.[1] ?? null;
+  return parseDailyMemoryFileName(path.basename(filePath))?.day ?? null;
 }
 
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
@@ -327,6 +387,69 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.replace(/^##\s+/, "").trimEnd())
     .filter((line, index, lines) => !(line.length === 0 && lines[index - 1]?.length === 0));
+}
+
+const MERGED_DIARY_LIST_LINE_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
+
+function shouldDedupeMergedDiaryLine(line: string): boolean {
+  return MERGED_DIARY_LIST_LINE_RE.test(line.trim());
+}
+
+function collectBackfillDiaryEntries(params: {
+  files: Array<{ path: string; renderedMarkdown: string }>;
+  resolveSourcePath?: (filePath: string, isoDay: string) => string;
+}): Array<{ isoDay: string; sourcePath?: string; bodyLines: string[] }> {
+  const entries = new Map<
+    string,
+    { isoDay: string; sourcePath?: string; bodyLines: string[]; seenLines: Set<string> }
+  >();
+  for (const file of params.files) {
+    const isoDay = extractIsoDayFromPath(file.path);
+    if (!isoDay) {
+      continue;
+    }
+    const bodyLines = groundedMarkdownToDiaryLines(file.renderedMarkdown);
+    if (bodyLines.length === 0) {
+      continue;
+    }
+    const sourcePath = params.resolveSourcePath?.(file.path, isoDay) ?? file.path;
+    const existing = entries.get(isoDay);
+    if (!existing) {
+      entries.set(isoDay, {
+        isoDay,
+        sourcePath,
+        bodyLines: [...bodyLines],
+        seenLines: new Set(bodyLines.filter((line) => shouldDedupeMergedDiaryLine(line))),
+      });
+      continue;
+    }
+    if (existing.sourcePath && existing.sourcePath !== sourcePath) {
+      existing.sourcePath = undefined;
+    }
+    if (
+      existing.bodyLines.length > 0 &&
+      existing.bodyLines[existing.bodyLines.length - 1] !== "" &&
+      bodyLines[0] !== ""
+    ) {
+      existing.bodyLines.push("");
+    }
+    for (const line of bodyLines) {
+      if (line === "") {
+        if (existing.bodyLines[existing.bodyLines.length - 1] !== "") {
+          existing.bodyLines.push(line);
+        }
+        continue;
+      }
+      if (shouldDedupeMergedDiaryLine(line) && existing.seenLines.has(line)) {
+        continue;
+      }
+      if (shouldDedupeMergedDiaryLine(line)) {
+        existing.seenLines.add(line);
+      }
+      existing.bodyLines.push(line);
+    }
+  }
+  return [...entries.values()].map(({ seenLines: _seenLines, ...entry }) => entry);
 }
 
 function parseGroundedRef(
@@ -360,7 +483,60 @@ function collectGroundedShortTermSeedItems(
   signalCount: number;
   dayBucket?: string;
 }> {
-  const items: Array<{
+  const items = new Map<
+    string,
+    {
+      path: string;
+      startLine: number;
+      endLine: number;
+      snippet: string;
+      score: number;
+      query: string;
+      signalCount: number;
+      dayBucket?: string;
+    }
+  >();
+
+  const normalizeGroundedSeedText = (text: string): string =>
+    text.trim().replace(/\s+/g, " ").toLowerCase();
+
+  const isCanonicalGroundedSeedPath = (filePath: string, dayBucket?: string): boolean => {
+    if (!dayBucket) {
+      return false;
+    }
+    const parsed = parseDailyMemoryFileName(path.posix.basename(filePath));
+    return parsed?.day === dayBucket && parsed.canonical;
+  };
+
+  const shouldPreferGroundedSeedItem = (
+    current: {
+      path: string;
+      startLine: number;
+      endLine: number;
+      dayBucket?: string;
+    },
+    next: {
+      path: string;
+      startLine: number;
+      endLine: number;
+      dayBucket?: string;
+    },
+  ): boolean => {
+    const currentCanonical = isCanonicalGroundedSeedPath(current.path, current.dayBucket);
+    const nextCanonical = isCanonicalGroundedSeedPath(next.path, next.dayBucket);
+    if (currentCanonical !== nextCanonical) {
+      return nextCanonical;
+    }
+    if (current.path !== next.path) {
+      return next.path.localeCompare(current.path) < 0;
+    }
+    if (current.startLine !== next.startLine) {
+      return next.startLine < current.startLine;
+    }
+    return next.endLine < current.endLine;
+  };
+
+  const buildGroundedSeedKey = (item: {
     path: string;
     startLine: number;
     endLine: number;
@@ -369,8 +545,10 @@ function collectGroundedShortTermSeedItems(
     query: string;
     signalCount: number;
     dayBucket?: string;
-  }> = [];
-  const seen = new Set<string>();
+  }): string =>
+    item.dayBucket
+      ? `${item.dayBucket}:${item.query}:${normalizeGroundedSeedText(item.snippet)}`
+      : `${item.path}:${item.startLine}:${item.endLine}:${item.query}:${normalizeGroundedSeedText(item.snippet)}`;
 
   for (const file of previews) {
     const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
@@ -402,12 +580,7 @@ function collectGroundedShortTermSeedItems(
       if (!parsedRef) {
         continue;
       }
-      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      items.push({
+      const item = {
         path: parsedRef.path,
         startLine: parsedRef.startLine,
         endLine: parsedRef.endLine,
@@ -416,11 +589,16 @@ function collectGroundedShortTermSeedItems(
         query: signal.query,
         signalCount: signal.signalCount,
         ...(dayBucket ? { dayBucket } : {}),
-      });
+      };
+      const key = buildGroundedSeedKey(item);
+      const existing = items.get(key);
+      if (!existing || shouldPreferGroundedSeedItem(existing, item)) {
+        items.set(key, item);
+      }
     }
   }
 
-  return items;
+  return [...items.values()];
 }
 
 function matchesPromotionSelector(
@@ -1563,12 +1741,25 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
       let skippedPaths: string[] = [];
       let cleanupWorkspaceDir: string | null = null;
       if (opts.path) {
-        const historical = await createHistoricalRemHarnessWorkspace({
-          inputPath: opts.path,
-          remLimit: remConfig.limit,
-          nowMs,
-          timezone: remConfig.timezone,
-        });
+        let historical;
+        try {
+          historical = await createHistoricalRemHarnessWorkspace({
+            inputPath: opts.path,
+            remLimit: remConfig.limit,
+            nowMs,
+            timezone: remConfig.timezone,
+          });
+        } catch (error) {
+          defaultRuntime.error(
+            formatHistoricalDailyFilePathError({
+              commandName: "memory rem-harness",
+              inputPath: opts.path,
+              error,
+            }),
+          );
+          process.exitCode = 1;
+          return;
+        }
         workspaceDir = historical.workspaceDir;
         cleanupWorkspaceDir = historical.workspaceDir;
         sourceFiles = historical.sourceFiles;
@@ -1579,7 +1770,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
         if (sourceFiles.length === 0) {
           await fs.rm(historical.workspaceDir, { recursive: true, force: true });
           defaultRuntime.error(
-            `Memory rem-harness found no YYYY-MM-DD.md files at ${shortenHomePath(path.resolve(opts.path))}.`,
+            `Memory rem-harness found no dated memory files (YYYY-MM-DD.md or YYYY-MM-DD-*.md) at ${shortenHomePath(path.resolve(opts.path))}.`,
           );
           process.exitCode = 1;
           return;
@@ -1806,10 +1997,23 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-backfill-"),
       );
       try {
-        const sourceFiles = await listHistoricalDailyFiles(opts.path);
+        let sourceFiles: string[];
+        try {
+          sourceFiles = await listHistoricalDailyFiles(opts.path);
+        } catch (error) {
+          defaultRuntime.error(
+            formatHistoricalDailyFilePathError({
+              commandName: "memory rem-backfill",
+              inputPath: opts.path,
+              error,
+            }),
+          );
+          process.exitCode = 1;
+          return;
+        }
         if (sourceFiles.length === 0) {
           defaultRuntime.error(
-            `Memory rem-backfill found no YYYY-MM-DD.md files at ${shortenHomePath(path.resolve(opts.path))}.`,
+            `Memory rem-backfill found no dated memory files (YYYY-MM-DD.md or YYYY-MM-DD-*.md) at ${shortenHomePath(path.resolve(opts.path))}.`,
           );
           process.exitCode = 1;
           return;
@@ -1822,28 +2026,28 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           await fs.copyFile(filePath, dst);
           workspaceSourceFiles.push(dst);
         }
+        const groundedInputPaths = await filterSessionSummaryDailyMemoryFiles(workspaceSourceFiles);
+        if (groundedInputPaths.length === 0) {
+          defaultRuntime.error(
+            `Memory rem-backfill found no non-bookkeeping dated memory files (YYYY-MM-DD.md or YYYY-MM-DD-*.md) at ${shortenHomePath(path.resolve(opts.path))}.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
         const grounded = await previewGroundedRemMarkdown({
           workspaceDir: scratchDir,
-          inputPaths: workspaceSourceFiles,
+          inputPaths: groundedInputPaths,
         });
-        const sourcePathByDay = new Map(
+        const sourcePathByFileName = new Map(
           sourceFiles
-            .map((sourcePath) => [extractIsoDayFromPath(sourcePath), sourcePath] as const)
+            .map((sourcePath) => [path.basename(sourcePath), sourcePath] as const)
             .filter((entry): entry is [string, string] => Boolean(entry[0])),
         );
-        const entries = grounded.files
-          .map((file) => {
-            const isoDay = extractIsoDayFromPath(file.path);
-            if (!isoDay) {
-              return null;
-            }
-            return {
-              isoDay,
-              sourcePath: sourcePathByDay.get(isoDay) ?? file.path,
-              bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
-            };
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        const entries = collectBackfillDiaryEntries({
+          files: grounded.files,
+          resolveSourcePath: (filePath) =>
+            sourcePathByFileName.get(path.basename(filePath)) ?? filePath,
+        });
 
         const written = await writeBackfillDiaryEntries({
           workspaceDir,

@@ -39,6 +39,9 @@ describe("generateSlugViaLLM", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "cron",
+        disableTools: true,
         timeoutMs: 15_000,
         cleanupBundleMcpOnRunEnd: true,
       }),

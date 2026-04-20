@@ -1,4 +1,4 @@
-import fsCore from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -289,9 +289,9 @@ describe("buildSessionStartupContextPrelude", () => {
     await fs.writeFile(readableB, "notes readable b", "utf-8");
     await fs.writeFile(flaky, "notes flaky", "utf-8");
 
-    const originalStat = fsCore.promises.stat.bind(fsCore.promises);
+    const originalStat = fsSync.promises.stat.bind(fsSync.promises);
     const statSpy = vi
-      .spyOn(fsCore.promises, "stat")
+      .spyOn(fsSync.promises, "stat")
       .mockImplementation(async (target, options) => {
         if (String(target) === flaky) {
           throw new Error("transient stat failure");
@@ -327,9 +327,9 @@ describe("buildSessionStartupContextPrelude", () => {
       "utf-8",
     );
 
-    const originalReaddir = fsCore.promises.readdir.bind(fsCore.promises);
+    const originalReaddir = fsSync.promises.readdir.bind(fsSync.promises);
     const readdirSpy = vi
-      .spyOn(fsCore.promises, "readdir")
+      .spyOn(fsSync.promises, "readdir")
       .mockImplementation(async (target, options) => originalReaddir(target, options));
 
     const prelude = await buildSessionStartupContextPrelude({
@@ -363,6 +363,22 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toBeNull();
   });
 
+  it("returns null when the memory path is not a directory", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.rm(path.join(workspaceDir, "memory"), { recursive: true, force: true });
+    await fs.writeFile(path.join(workspaceDir, "memory"), "not a directory", "utf-8");
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toBeNull();
+  });
+
   it("honors startupContext.dailyMemoryDays override", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
@@ -389,6 +405,167 @@ describe("buildSessionStartupContextPrelude", () => {
 
     expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
     expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+  });
+
+  it("falls back to dated-slug daily notes when the canonical day file is absent", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-reset-summary.md"),
+      "slugged notes",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11-reset-summary.md]");
+    expect(prelude).toContain("slugged notes");
+  });
+
+  it("loads canonical and dated-slug notes for the same day with canonical first", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "canonical", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-reset-summary.md"),
+      "slugged",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("canonical");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11-reset-summary.md]");
+    expect(prelude).toContain("slugged");
+    expect(prelude?.indexOf("memory/2026-04-11.md")).toBeLessThan(
+      prelude?.indexOf("memory/2026-04-11-reset-summary.md") ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("keeps UTC-dated session summaries visible across local day boundaries", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12-reset-summary.md"),
+      "boundary session summary",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).toContain("boundary session summary");
+  });
+
+  it("caps UTC/local boundary loading to startupContext.dailyMemoryDays", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12-reset-summary.md"),
+      "boundary session summary",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10.md"),
+      "older local notes",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              dailyMemoryDays: 2,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+  });
+
+  it("prioritizes UTC-dated session summaries ahead of older local days when budget is tight", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-10.md"),
+      "yesterday notes",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-12-reset-summary.md"),
+      "boundary session summary",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: {
+              maxFileChars: 100,
+              maxTotalChars: 260,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 12, 0, 30, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-12-reset-summary.md]");
+    expect(prelude).toContain("boundary session summary");
+    expect(prelude).not.toContain("[Untrusted daily memory: memory/2026-04-10.md]");
+    expect(prelude?.indexOf("memory/2026-04-11.md")).toBeLessThan(
+      prelude?.indexOf("memory/2026-04-12-reset-summary.md") ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("does not persist the recent-file index while loading startup context", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-reset-summary.md"),
+      "slugged notes",
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: { defaults: { userTimezone: "America/Chicago" } },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11-reset-summary.md]");
+    await expect(
+      fs.access(path.join(workspaceDir, ".openclaw", ".recent-daily-files.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("clamps oversized startupContext limits to safe caps", async () => {
@@ -470,6 +647,45 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("...[truncated]...");
     const firstBlock = prelude?.slice(prelude.indexOf("[Untrusted daily memory:"));
     expect(firstBlock?.length).toBeLessThanOrEqual(180);
+  });
+
+  it("stops opening more same-day files once the startup budget is exhausted", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11.md"),
+      "x".repeat(500),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11-reset-summary.md"),
+      "this file should never be opened",
+      "utf-8",
+    );
+
+    const readSpy = vi.spyOn(fsSync, "read");
+    try {
+      const prelude = await buildSessionStartupContextPrelude({
+        workspaceDir,
+        cfg: {
+          agents: {
+            defaults: {
+              userTimezone: "America/Chicago",
+              startupContext: {
+                maxFileChars: 500,
+                maxTotalChars: 180,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+      });
+
+      expect(prelude).toContain("[Untrusted daily memory: memory/2026-04-11.md]");
+      expect(prelude).not.toContain("memory/2026-04-11-reset-summary.md");
+      expect(readSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 });
 

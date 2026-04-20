@@ -48,9 +48,9 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Session start (required)
 
-- Read `SOUL.md`, `USER.md`, and today+yesterday in `memory/`.
-- Read `MEMORY.md` when present.
-- Do it before responding.
+- Use runtime-provided startup context first.
+- That context may already include `SOUL.md`, `USER.md`, recent dated notes from `memory/`, and `MEMORY.md`.
+- Only reread startup files directly when the provided context is missing something important or the user asks.
 
 ## Soul (required)
 
@@ -66,9 +66,10 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 ## Memory system (recommended)
 
 - Daily log: `memory/YYYY-MM-DD.md` (create `memory/` if needed).
+- Session-memory and similar hooks may also create dated notes like `memory/YYYY-MM-DD-topic.md`.
 - Long-term memory: `MEMORY.md` for durable facts, preferences, and decisions.
-- Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
-- On session start, read today + yesterday + `MEMORY.md` when present.
+- Lowercase `memory.md` is legacy fallback only; do not keep both root files on purpose.
+- On session start, trust runtime-loaded startup context first. If you need a deeper follow-up read, prefer today's and yesterday's dated notes plus `MEMORY.md` when present, otherwise `memory.md`.
 - Capture: decisions, preferences, constraints, open loops.
 - Avoid secrets unless explicitly requested.
 

@@ -11,6 +11,7 @@ import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   isShortTermMemoryPath,
+  readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
@@ -69,7 +70,9 @@ describe("short-term promotion", () => {
 
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("memory/2026-04-03-session-reset.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("2026-04-03-session-reset.md")).toBe(true);
     expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
@@ -536,6 +539,221 @@ describe("short-term promotion", () => {
       expect(applied.applied).toBe(1);
       const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memory).toContain('Always use "Happy Together" calendar');
+    });
+  });
+
+  it("deduplicates grounded same-day variants before ranking promotions", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        'Always use "Happy Together" calendar for flights and reservations.',
+      ]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03-reset-summary.md"),
+        'Always use "Happy Together" calendar for flights and reservations.\n',
+        "utf-8",
+      );
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+          {
+            path: "memory/2026-04-03-reset-summary.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:lasting-update",
+            signalCount: 2,
+            dayBucket: "2026-04-03",
+          },
+          {
+            path: "memory/2026-04-03-reset-summary.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            score: 0.82,
+            query: "__dreaming_grounded_backfill__:candidate",
+            signalCount: 1,
+            dayBucket: "2026-04-03",
+          },
+        ],
+        dedupeByQueryPerDay: true,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        includePromoted: true,
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]?.groundedCount).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(2);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "calendar recall",
+        results: [
+          {
+            path: "memory/2026-04-03-reset-summary.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: 'Always use "Happy Together" calendar for flights and reservations.',
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+      });
+
+      const rankedAfterRecall = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        includePromoted: true,
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+      });
+
+      expect(rankedAfterRecall).toHaveLength(1);
+      expect(rankedAfterRecall[0]?.path).toBe("memory/2026-04-03.md");
+      expect(rankedAfterRecall[0]?.groundedCount).toBe(3);
+      expect(rankedAfterRecall[0]?.recallCount).toBe(1);
+    });
+  });
+
+  it("prefers canonical same-day paths after a slugged variant was recalled first", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const snippet = 'Always use "Happy Together" calendar for flights and reservations.';
+      const sluggedRelativePath = "memory/2026-04-03-reset-summary.md";
+      const sluggedPath = path.join(workspaceDir, sluggedRelativePath);
+      await fs.writeFile(sluggedPath, `${snippet}\n`, "utf-8");
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "calendar recall",
+        results: [
+          {
+            path: sluggedRelativePath,
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "calendar canonical recall",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.88,
+            snippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        includePromoted: true,
+        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+      });
+
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]?.path).toBe("memory/2026-04-03.md");
+
+      await fs.rm(sluggedPath);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.path).toBe("memory/2026-04-03.md");
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("source=memory/2026-04-03.md:1-1");
+    });
+  });
+
+  it("does not merge identical same-day snippets across different memory subdirectories", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNoteInSubdir(workspaceDir, "daily", "2026-04-03", ["same snippet"]);
+      await writeDailyMemoryNoteInSubdir(workspaceDir, "travel", "2026-04-03", ["same snippet"]);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "q1",
+        results: [
+          {
+            path: "memory/daily/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "same snippet",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "q2",
+        results: [
+          {
+            path: "memory/travel/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet: "same snippet",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        includePromoted: true,
+      });
+
+      expect(ranked).toHaveLength(2);
+      expect(ranked.map((entry) => entry.path).toSorted()).toEqual([
+        "memory/daily/2026-04-03.md",
+        "memory/travel/2026-04-03.md",
+      ]);
     });
   });
 
@@ -1427,6 +1645,52 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps repeated snippets in one daily file as separate recall entries", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "header",
+        "Repeat backup note.",
+        "middle",
+        "tail",
+        "Repeat backup note.",
+      ]);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "backup repeat",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.9,
+            snippet: "Repeat backup note.",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 5,
+            endLine: 5,
+            score: 0.85,
+            snippet: "Repeat backup note.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      const repeatedEntries = entries
+        .filter((entry) => entry.snippet === "Repeat backup note.")
+        .toSorted((left, right) => left.startLine - right.startLine);
+
+      expect(repeatedEntries).toHaveLength(2);
+      expect(repeatedEntries.map((entry) => [entry.path, entry.startLine, entry.endLine])).toEqual([
+        ["memory/2026-04-01.md", 2, 2],
+        ["memory/2026-04-01.md", 5, 5],
+      ]);
+    });
+  });
+
   it("rehydrates legacy basename-only short-term paths from the memory directory", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Legacy basename path note."]);
@@ -1468,7 +1732,65 @@ describe("short-term promotion", () => {
 
       expect(applied.applied).toBe(1);
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
-      expect(memoryText).toContain("source=2026-04-01.md:1-1");
+      expect(memoryText).toContain("source=memory/2026-04-01.md:1-1");
+    });
+  });
+
+  it("rehydrates missing same-day source paths from surviving sibling daily variants", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-01-reset.md"),
+        "Sibling variant path note.\n",
+        "utf-8",
+      );
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "sibling variant",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Sibling variant path note.",
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-02T00:00:00.000Z"),
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+      });
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.path).toBe("memory/2026-04-01-reset.md");
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("source=memory/2026-04-01-reset.md:1-1");
+      const rankedAfterApply = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        includePromoted: true,
+        nowMs: Date.parse("2026-04-03T10:04:00.000Z"),
+      });
+      expect(rankedAfterApply[0]?.path).toBe("memory/2026-04-01-reset.md");
+      expect(rankedAfterApply[0]?.promotedAt).toBeTruthy();
     });
   });
 

@@ -11,6 +11,11 @@ import {
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
+import {
+  filterSessionSummaryDailyMemoryFiles,
+  listDailyMemoryFiles,
+  parseDailyMemoryFileName,
+} from "../../memory-host-sdk/runtime-files.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
 import {
@@ -227,9 +232,15 @@ export type DoctorMemoryRemHarnessErrorPayload = {
   error: string;
 };
 
+export type DoctorMemoryRemHarnessPayload =
+  | DoctorMemoryRemHarnessSuccessPayload
+  | DoctorMemoryRemHarnessErrorPayload;
+
+const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
+const SHORT_TERM_MEMORY_DIR_RE = /(?:^|\/)memory\/(?:[^/]+\/)*[^/]+$/;
+
 function extractIsoDayFromPath(filePath: string): string | null {
-  const match = filePath.replaceAll("\\", "/").match(/(\d{4}-\d{2}-\d{2})\.md$/i);
-  return match?.[1] ?? null;
+  return parseDailyMemoryFileName(path.basename(filePath))?.day ?? null;
 }
 
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
@@ -239,20 +250,81 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
     .filter((line, index, lines) => line.length > 0 || (index > 0 && lines[index - 1]?.length > 0));
 }
 
+const MERGED_DIARY_LIST_LINE_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
+
+function shouldDedupeMergedDiaryLine(line: string): boolean {
+  return MERGED_DIARY_LIST_LINE_RE.test(line.trim());
+}
+
+function collectBackfillDiaryEntries(
+  files: Array<{ path: string; renderedMarkdown: string }>,
+): Array<{ isoDay: string; sourcePath?: string; bodyLines: string[] }> {
+  const entries = new Map<
+    string,
+    { isoDay: string; sourcePath?: string; bodyLines: string[]; seenLines: Set<string> }
+  >();
+  for (const file of files) {
+    const isoDay = extractIsoDayFromPath(file.path);
+    if (!isoDay) {
+      continue;
+    }
+    const bodyLines = groundedMarkdownToDiaryLines(file.renderedMarkdown);
+    if (bodyLines.length === 0) {
+      continue;
+    }
+    const sourcePath = file.path;
+    const existing = entries.get(isoDay);
+    if (!existing) {
+      entries.set(isoDay, {
+        isoDay,
+        sourcePath,
+        bodyLines: [...bodyLines],
+        seenLines: new Set(bodyLines.filter((line) => shouldDedupeMergedDiaryLine(line))),
+      });
+      continue;
+    }
+    if (existing.sourcePath && existing.sourcePath !== sourcePath) {
+      existing.sourcePath = undefined;
+    }
+    if (
+      existing.bodyLines.length > 0 &&
+      existing.bodyLines[existing.bodyLines.length - 1] !== "" &&
+      bodyLines[0] !== ""
+    ) {
+      existing.bodyLines.push("");
+    }
+    for (const line of bodyLines) {
+      if (line === "") {
+        if (existing.bodyLines[existing.bodyLines.length - 1] !== "") {
+          existing.bodyLines.push(line);
+        }
+        continue;
+      }
+      if (shouldDedupeMergedDiaryLine(line) && existing.seenLines.has(line)) {
+        continue;
+      }
+      if (shouldDedupeMergedDiaryLine(line)) {
+        existing.seenLines.add(line);
+      }
+      existing.bodyLines.push(line);
+    }
+  }
+  return [...entries.values()].map(({ seenLines: _seenLines, ...entry }) => entry);
+}
+
 async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
-  let entries: string[] = [];
   try {
-    entries = await fs.readdir(memoryDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    return (
+      await listDailyMemoryFiles(memoryDir, {
+        tolerateDirectoryErrors: false,
+      })
+    ).map((entry) => entry.absolutePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
       return [];
     }
-    throw err;
+    throw error;
   }
-  return entries
-    .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/i.test(name))
-    .map((name) => path.join(memoryDir, name))
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveDreamingConfig(
@@ -346,8 +418,8 @@ function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string):
 
 function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
-  if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
-    return true;
+  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
+    return false;
   }
   if (
     /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/.test(
@@ -356,7 +428,11 @@ function isShortTermMemoryPath(filePath: string): boolean {
   ) {
     return true;
   }
-  return /^(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized);
+  const baseName = path.posix.basename(normalized);
+  if (!parseDailyMemoryFileName(baseName)) {
+    return false;
+  }
+  return normalized === baseName || SHORT_TERM_MEMORY_DIR_RE.test(normalized);
 }
 
 type DreamingStoreStats = Pick<
@@ -986,7 +1062,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
     const agentId = resolveDefaultAgentId(cfg);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const memoryDir = path.join(workspaceDir, "memory");
-    const sourceFiles = await listWorkspaceDailyFiles(memoryDir);
+    const sourceFiles = await filterSessionSummaryDailyMemoryFiles(
+      await listWorkspaceDailyFiles(memoryDir),
+    );
     if (sourceFiles.length === 0) {
       const dreamDiary = await readDreamDiary(workspaceDir);
       const payload: DoctorMemoryDreamActionPayload = {
@@ -1009,19 +1087,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
       pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
       cfg,
     });
-    const entries = grounded.files
-      .map((file) => {
-        const isoDay = extractIsoDayFromPath(file.path);
-        if (!isoDay) {
-          return null;
-        }
-        return {
-          isoDay,
-          sourcePath: file.path,
-          bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
-        };
-      })
-      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    const entries = collectBackfillDiaryEntries(grounded.files);
     const written = await writeBackfillDiaryEntries({
       workspaceDir,
       entries,

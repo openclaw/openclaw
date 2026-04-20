@@ -361,8 +361,8 @@ describe("doctor.memory.status", () => {
           version: 1,
           updatedAt: recentIso,
           entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
+            "memory:memory/2026-04-03-reset-summary.md:1:2": {
+              path: "memory/2026-04-03-reset-summary.md",
               startLine: 1,
               endLine: 2,
               snippet: "Emma prefers shorter, lower-pressure check-ins.",
@@ -381,6 +381,16 @@ describe("doctor.memory.status", () => {
               recallCount: 9,
               dailyCount: 5,
               promotedAt: recentIso,
+            },
+            "memory:memory/dreaming/2026-04-05.md:1:2": {
+              path: "memory/dreaming/2026-04-05.md",
+              startLine: 1,
+              endLine: 2,
+              snippet: "Generated dreaming report that should stay excluded.",
+              source: "memory",
+              recallCount: 4,
+              dailyCount: 2,
+              promotedAt: undefined,
             },
           },
         },
@@ -430,13 +440,17 @@ describe("doctor.memory.status", () => {
           version: 1,
           updatedAt: recentIso,
           entries: {
-            "memory:memory/2026-04-03.md:1:2": {
+            "memory:memory/2026-04-03-reset-summary.md:1:2": {
               lightHits: 2,
               remHits: 3,
             },
             "memory:memory/2026-04-02.md:1:2": {
               lightHits: 9,
               remHits: 9,
+            },
+            "memory:memory/dreaming/2026-04-05.md:1:2": {
+              lightHits: 4,
+              remHits: 4,
             },
           },
         },
@@ -545,7 +559,7 @@ describe("doctor.memory.status", () => {
             promotedToday: 2,
             shortTermEntries: [
               expect.objectContaining({
-                path: "memory/2026-04-03.md",
+                path: "memory/2026-04-03-reset-summary.md",
                 snippet: "Emma prefers shorter, lower-pressure check-ins.",
                 totalSignalCount: 3,
                 lightHits: 2,
@@ -555,7 +569,7 @@ describe("doctor.memory.status", () => {
             ],
             signalEntries: [
               expect.objectContaining({
-                path: "memory/2026-04-03.md",
+                path: "memory/2026-04-03-reset-summary.md",
                 totalSignalCount: 3,
               }),
             ],
@@ -992,14 +1006,18 @@ describe("doctor.memory.dreamDiary", () => {
   it("backfills the dream diary from workspace memory files", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-backfill-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-02-19.md"), "source\n", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-02-19-reset-summary.md"),
+      "source\n",
+      "utf-8",
+    );
     await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
     resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
     previewGroundedRemMarkdown.mockResolvedValue({
       scannedFiles: 1,
       files: [
         {
-          path: path.join(workspaceDir, "memory", "2026-02-19.md"),
+          path: path.join(workspaceDir, "memory", "2026-02-19-reset-summary.md"),
           renderedMarkdown: "What Happened\n1. Bunji — partner\n",
         },
       ],
@@ -1015,7 +1033,7 @@ describe("doctor.memory.dreamDiary", () => {
       await invokeDoctorMemoryBackfillDreamDiary(respond);
       expect(previewGroundedRemMarkdown).toHaveBeenCalledWith({
         workspaceDir,
-        inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
+        inputPaths: [path.join(workspaceDir, "memory", "2026-02-19-reset-summary.md")],
       });
       expect(writeBackfillDiaryEntries).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1034,6 +1052,136 @@ describe("doctor.memory.dreamDiary", () => {
           scannedFiles: 1,
           written: 1,
           replaced: 1,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges same-day canonical and dated-slug notes into one backfill entry", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-merge-"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-02-19.md"), "canonical\n", "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-02-19-reset-summary.md"),
+      "summary\n",
+      "utf-8",
+    );
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    previewGroundedRemMarkdown.mockResolvedValue({
+      scannedFiles: 2,
+      files: [
+        {
+          path: path.join(workspaceDir, "memory", "2026-02-19.md"),
+          renderedMarkdown:
+            "What Happened\n1. Canonical detail\n\nReflections\n1. Canonical reflection\n",
+        },
+        {
+          path: path.join(workspaceDir, "memory", "2026-02-19-reset-summary.md"),
+          renderedMarkdown: "What Happened\n1. Reset detail\n\nReflections\n1. Reset reflection\n",
+        },
+      ],
+    });
+    writeBackfillDiaryEntries.mockResolvedValue({
+      dreamsPath: path.join(workspaceDir, "DREAMS.md"),
+      written: 1,
+      replaced: 0,
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      const entries = (
+        writeBackfillDiaryEntries.mock.calls[0]?.[0] as
+          | { entries?: Array<{ isoDay: string; sourcePath?: string; bodyLines: string[] }> }
+          | undefined
+      )?.entries;
+      expect(entries).toHaveLength(1);
+      expect(entries?.[0]?.isoDay).toBe("2026-02-19");
+      expect(entries?.[0]?.sourcePath).toBeUndefined();
+      expect(entries?.[0]?.bodyLines).toEqual(
+        expect.arrayContaining([
+          "What Happened",
+          "1. Canonical detail",
+          "1. Reset detail",
+          "Reflections",
+          "1. Canonical reflection",
+          "1. Reset reflection",
+        ]),
+      );
+      expect(entries?.[0]?.bodyLines.filter((line) => line === "What Happened")).toHaveLength(2);
+      expect(entries?.[0]?.bodyLines.filter((line) => line === "Reflections")).toHaveLength(2);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 2,
+          written: 1,
+          replaced: 0,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores session-summary bookkeeping files during dream-diary backfill", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-dream-diary-bookkeeping-"),
+    );
+    const memoryDir = path.join(workspaceDir, "memory");
+    const canonicalPath = path.join(memoryDir, "2026-02-19.md");
+    const sessionSummaryPath = path.join(memoryDir, "2026-02-19-session-reset.md");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(canonicalPath, "durable\n", "utf-8");
+    await fs.writeFile(
+      sessionSummaryPath,
+      [
+        "# Session: 2026-02-19 10:00:00 America/New_York",
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: abc123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    previewGroundedRemMarkdown.mockResolvedValue({
+      scannedFiles: 1,
+      files: [
+        {
+          path: canonicalPath,
+          renderedMarkdown: "What Happened\n1. Durable detail\n",
+        },
+      ],
+    });
+    writeBackfillDiaryEntries.mockResolvedValue({
+      dreamsPath: path.join(workspaceDir, "DREAMS.md"),
+      written: 1,
+      replaced: 0,
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).toHaveBeenCalledWith({
+        workspaceDir,
+        inputPaths: [canonicalPath],
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 1,
+          written: 1,
+          replaced: 0,
         }),
         undefined,
       );
@@ -1062,6 +1210,63 @@ describe("doctor.memory.dreamDiary", () => {
         }),
         undefined,
       );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no-ops backfill when the workspace only has session-summary bookkeeping files", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-dream-diary-bookkeeping-only-"),
+    );
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-02-19-session-reset.md"),
+      [
+        "# Session: 2026-02-19 10:00:00 America/New_York",
+        "",
+        "- **Session Key**: agent:main:main",
+        "- **Session ID**: abc123",
+        "- **Source**: cli",
+        "",
+        "assistant: bookkeeping only",
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 0,
+          written: 0,
+          replaced: 0,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces memory path errors during dream-diary backfill", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-invalid-"));
+    await fs.writeFile(path.join(workspaceDir, "memory"), "not a directory\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await expect(invokeDoctorMemoryBackfillDreamDiary(respond)).rejects.toMatchObject({
+        code: "ENOTDIR",
+      });
+      expect(respond).not.toHaveBeenCalled();
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

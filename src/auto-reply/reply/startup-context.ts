@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { listRecentDailyMemoryFiles } from "../../memory-host-sdk/runtime-files.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -12,7 +13,6 @@ const STARTUP_MEMORY_FILE_MAX_BYTES_CAP = 64 * 1024;
 const STARTUP_MEMORY_FILE_MAX_CHARS_CAP = 10_000;
 const STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP = 50_000;
 const STARTUP_MEMORY_DAILY_DAYS_CAP = 14;
-const STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY = 4;
 
 export function shouldApplyStartupContext(params: {
   cfg?: OpenClawConfig;
@@ -88,26 +88,48 @@ function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string
   return shifted.toISOString().slice(0, 10);
 }
 
-function buildStartupMemoryDateStamps(params: {
+function buildStartupTargetDays(params: {
+  dailyMemoryDays: number;
   nowMs: number;
   timezone: string;
-  dailyMemoryDays: number;
 }): string[] {
-  const localTodayStamp = formatDateStamp(params.nowMs, params.timezone);
-  const utcTodayStamp = formatDateStamp(params.nowMs, "UTC");
-  const localWindow: string[] = [];
-
-  for (let offset = 0; offset < params.dailyMemoryDays; offset += 1) {
-    localWindow.push(shiftDateStampByCalendarDays(localTodayStamp, offset));
+  const orderedDays: string[] = [];
+  const seen = new Set<string>();
+  const localToday = formatDateStamp(params.nowMs, params.timezone);
+  const utcToday = formatDateStamp(params.nowMs, "UTC");
+  const addDay = (day: string) => {
+    if (orderedDays.length >= params.dailyMemoryDays || seen.has(day)) {
+      return;
+    }
+    seen.add(day);
+    orderedDays.push(day);
+  };
+  for (let offset = 0; orderedDays.length < params.dailyMemoryDays; offset += 1) {
+    addDay(shiftDateStampByCalendarDays(localToday, offset));
+    if (utcToday !== localToday) {
+      // Older session-memory hooks stamped files in UTC, so prioritize that adjacent day
+      // before older local history when calendars diverge around midnight.
+      addDay(shiftDateStampByCalendarDays(utcToday, offset));
+    }
   }
+  return orderedDays;
+}
 
-  if (utcTodayStamp === localTodayStamp || localWindow.includes(utcTodayStamp)) {
-    return localWindow;
-  }
-
-  return utcTodayStamp > localTodayStamp
-    ? [utcTodayStamp, ...localWindow]
-    : [...localWindow, utcTodayStamp];
+async function resolveStartupDailyMemoryPaths(params: {
+  workspaceDir: string;
+  dailyMemoryDays: number;
+  nowMs: number;
+  timezone: string;
+}): Promise<string[]> {
+  const targetDays = buildStartupTargetDays(params);
+  return (
+    await listRecentDailyMemoryFiles({
+      memoryDir: path.join(params.workspaceDir, "memory"),
+      days: targetDays,
+      // Startup context should stay read-only even on the first reset/new turn.
+      persistIndex: false,
+    })
+  ).map((entry) => entry.relativePath);
 }
 
 function trimStartupMemoryContent(content: string, maxChars: number): string {
@@ -221,91 +243,6 @@ async function readStartupMemoryFile(params: {
   }
 }
 
-async function listStartupMemoryPathsByDate(params: {
-  workspaceDir: string;
-  stamps: string[];
-}): Promise<Map<string, string[]>> {
-  const memoryDir = path.join(params.workspaceDir, "memory");
-  const uniqueStamps = Array.from(new Set(params.stamps));
-  const fallback = new Map(uniqueStamps.map((stamp) => [stamp, [`${stamp}.md`]]));
-  const stampSet = new Set(uniqueStamps);
-
-  try {
-    const entries = await fs.promises.readdir(memoryDir, { withFileTypes: true });
-    const sluggedNamesByStamp = new Map<string, string[]>();
-
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) {
-        continue;
-      }
-      const stamp = entry.name.slice(0, 10);
-      if (!stampSet.has(stamp)) {
-        continue;
-      }
-      if (entry.name === `${stamp}.md`) {
-        continue;
-      }
-      if (!entry.name.startsWith(`${stamp}-`)) {
-        continue;
-      }
-      const names = sluggedNamesByStamp.get(stamp);
-      if (names) {
-        names.push(entry.name);
-      } else {
-        sluggedNamesByStamp.set(stamp, [entry.name]);
-      }
-    }
-
-    const sluggedNameResults = await Promise.allSettled(
-      Array.from(sluggedNamesByStamp.entries()).flatMap(([stamp, names]) =>
-        names.map(async (name) => ({
-          stamp,
-          name,
-          stat: await fs.promises.stat(path.join(memoryDir, name)),
-        })),
-      ),
-    );
-    const sluggedStatsByStamp = new Map<
-      string,
-      Array<{ name: string; stat: Awaited<ReturnType<typeof fs.promises.stat>> }>
-    >();
-    for (const result of sluggedNameResults) {
-      if (result.status !== "fulfilled") {
-        continue;
-      }
-      const existing = sluggedStatsByStamp.get(result.value.stamp);
-      if (existing) {
-        existing.push({ name: result.value.name, stat: result.value.stat });
-      } else {
-        sluggedStatsByStamp.set(result.value.stamp, [
-          { name: result.value.name, stat: result.value.stat },
-        ]);
-      }
-    }
-
-    return new Map(
-      uniqueStamps.map((stamp) => {
-        const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
-          .toSorted((left, right) => {
-            const mtimeDiff = Number(right.stat.mtimeMs) - Number(left.stat.mtimeMs);
-            if (mtimeDiff !== 0) {
-              return mtimeDiff;
-            }
-            return right.name.localeCompare(left.name);
-          })
-          .map((entry) => entry.name);
-        const exactName = `${stamp}.md`;
-        return [
-          stamp,
-          [exactName, ...newestSluggedNames.slice(0, STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY)],
-        ];
-      }),
-    );
-  } catch {
-    return fallback;
-  }
-}
-
 export async function buildSessionStartupContextPrelude(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -314,25 +251,23 @@ export async function buildSessionStartupContextPrelude(params: {
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);
-  const dailyPaths: string[] = [];
-  const stamps = buildStartupMemoryDateStamps({
+  const dailyPaths = await resolveStartupDailyMemoryPaths({
+    workspaceDir: params.workspaceDir,
+    dailyMemoryDays: limits.dailyMemoryDays,
     nowMs,
     timezone,
-    dailyMemoryDays: limits.dailyMemoryDays,
   });
-  const relativePathsByDate = await listStartupMemoryPathsByDate({
-    workspaceDir: params.workspaceDir,
-    stamps,
-  });
-  for (const stamp of stamps) {
-    const relativePaths = relativePathsByDate.get(stamp) ?? [`${stamp}.md`];
-    for (const relativePath of relativePaths) {
-      dailyPaths.push(`memory/${relativePath}`);
-    }
-  }
-  const loaded: Array<{ relativePath: string; content: string }> = [];
 
-  for (const relativePath of dailyPaths) {
+  const sections: string[] = [];
+  let totalChars = 0;
+  let hadUnreadDailyPaths = false;
+
+  for (const [index, relativePath] of dailyPaths.entries()) {
+    const remainingChars = limits.maxTotalChars - totalChars;
+    if (remainingChars <= 0) {
+      hadUnreadDailyPaths = index < dailyPaths.length;
+      break;
+    }
     const content = await readStartupMemoryFile({
       workspaceDir: params.workspaceDir,
       relativePath,
@@ -341,37 +276,30 @@ export async function buildSessionStartupContextPrelude(params: {
     if (!content?.trim()) {
       continue;
     }
-    loaded.push({
+    const block = fitStartupMemoryBlock({
       relativePath,
       content: trimStartupMemoryContent(content, limits.maxFileChars),
-    });
-  }
-
-  if (loaded.length === 0) {
-    return null;
-  }
-
-  const sections: string[] = [];
-  let totalChars = 0;
-  for (const entry of loaded) {
-    const remainingChars = limits.maxTotalChars - totalChars;
-    const block = fitStartupMemoryBlock({
-      relativePath: entry.relativePath,
-      content: entry.content,
       maxChars: remainingChars,
     });
     if (!block) {
       if (sections.length > 0) {
-        sections.push("...[additional startup memory truncated]...");
+        hadUnreadDailyPaths = true;
       }
-      break;
-    }
-    if (sections.length > 0 && totalChars + block.length > limits.maxTotalChars) {
-      sections.push("...[additional startup memory truncated]...");
       break;
     }
     sections.push(block);
     totalChars += block.length;
+    if (totalChars >= limits.maxTotalChars) {
+      hadUnreadDailyPaths = index < dailyPaths.length - 1;
+      break;
+    }
+  }
+
+  if (sections.length === 0) {
+    return null;
+  }
+  if (hadUnreadDailyPaths) {
+    sections.push("...[additional startup memory truncated]...");
   }
 
   return [

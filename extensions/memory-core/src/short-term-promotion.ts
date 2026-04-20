@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
+  parseDailyMemoryFileName,
+  type MemorySearchResult,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -13,11 +16,10 @@ import {
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
 
-const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
+const SHORT_TERM_MEMORY_DIR_RE = /(?:^|\/)memory\/(?:[^/]+\/)*[^/]+$/;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
-const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
@@ -365,6 +367,131 @@ function normalizeIsoDay(isoLike: string): string | null {
   }
   const match = isoLike.trim().match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] ?? null;
+}
+
+function extractDailyMemoryDayFromPath(filePath: string): string | null {
+  return parseDailyMemoryFileName(path.posix.basename(normalizeMemoryPath(filePath)))?.day ?? null;
+}
+
+type DailyMemoryPathInfo = {
+  normalizedPath: string;
+  day: string;
+  dir: string;
+  canonical: boolean;
+};
+
+function parseDailyMemoryPathInfo(filePath: string): DailyMemoryPathInfo | null {
+  const normalizedPath = normalizeMemoryPath(filePath);
+  const parsed = parseDailyMemoryFileName(path.posix.basename(normalizedPath));
+  if (!parsed) {
+    return null;
+  }
+  return {
+    normalizedPath,
+    day: parsed.day,
+    dir: path.posix.dirname(normalizedPath),
+    canonical: parsed.canonical,
+  };
+}
+
+function compareDailyVariantPathPreference(leftPath: string, rightPath: string): number {
+  const left = parseDailyMemoryPathInfo(leftPath);
+  const right = parseDailyMemoryPathInfo(rightPath);
+  if (!left || !right || left.day !== right.day || left.dir !== right.dir) {
+    return 0;
+  }
+  if (left.canonical !== right.canonical) {
+    return left.canonical ? -1 : 1;
+  }
+  return left.normalizedPath.localeCompare(right.normalizedPath);
+}
+
+function findExistingDailyVariantEntryKey(params: {
+  entries: Record<string, ShortTermRecallEntry>;
+  claimHash?: string;
+  candidatePath?: string;
+}): string | null {
+  if (!params.claimHash || !params.candidatePath) {
+    return null;
+  }
+  const normalizedCandidatePath = normalizeMemoryPath(params.candidatePath);
+  const candidateDay = extractDailyMemoryDayFromPath(normalizedCandidatePath);
+  if (!candidateDay) {
+    return null;
+  }
+  const candidateDir = path.posix.dirname(normalizedCandidatePath);
+  let preferredKey: string | null = null;
+  let preferredPath: string | null = null;
+  for (const [key, entry] of Object.entries(params.entries)) {
+    if (!entry || entry.source !== "memory" || entry.claimHash !== params.claimHash) {
+      continue;
+    }
+    const normalizedEntryPath = normalizeMemoryPath(entry.path);
+    if (extractDailyMemoryDayFromPath(normalizedEntryPath) !== candidateDay) {
+      continue;
+    }
+    if (path.posix.dirname(normalizedEntryPath) !== candidateDir) {
+      continue;
+    }
+    if (normalizedEntryPath === normalizedCandidatePath) {
+      continue;
+    }
+    if (
+      preferredKey === null ||
+      preferredPath === null ||
+      compareDailyVariantPathPreference(normalizedEntryPath, preferredPath) < 0
+    ) {
+      preferredKey = key;
+      preferredPath = normalizedEntryPath;
+    }
+  }
+  return preferredKey;
+}
+
+function resolveMergedEntryLocation(params: {
+  existing?: Pick<ShortTermRecallEntry, "path" | "startLine" | "endLine">;
+  candidatePath: string;
+  candidateStartLine: number;
+  candidateEndLine: number;
+}): { path: string; startLine: number; endLine: number } {
+  const normalizedCandidatePath = normalizeMemoryPath(params.candidatePath);
+  const candidateLocation = {
+    path: normalizedCandidatePath,
+    startLine: Math.max(1, Math.floor(params.candidateStartLine)),
+    endLine: Math.max(1, Math.floor(params.candidateEndLine)),
+  };
+  const existing = params.existing;
+  if (!existing) {
+    return candidateLocation;
+  }
+  const normalizedExistingPath = normalizeMemoryPath(existing.path);
+  const preference = compareDailyVariantPathPreference(
+    normalizedExistingPath,
+    normalizedCandidatePath,
+  );
+  if (preference < 0) {
+    return {
+      path: existing.path,
+      startLine: existing.startLine,
+      endLine: existing.endLine,
+    };
+  }
+  if (preference > 0) {
+    return candidateLocation;
+  }
+  if (normalizedExistingPath !== normalizedCandidatePath) {
+    return {
+      path: existing.path,
+      startLine: existing.startLine,
+      endLine: existing.endLine,
+    };
+  }
+  return candidateLocation;
+}
+
+function isBenignSourcePathProbeError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM";
 }
 
 function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
@@ -865,13 +992,14 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
   }
-  if (SHORT_TERM_PATH_RE.test(normalized)) {
-    return true;
-  }
   if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
     return true;
   }
-  return SHORT_TERM_BASENAME_RE.test(normalized);
+  const baseName = path.posix.basename(normalized);
+  if (!parseDailyMemoryFileName(baseName)) {
+    return false;
+  }
+  return normalized === baseName || SHORT_TERM_MEMORY_DIR_RE.test(normalized);
 }
 
 async function shortTermRecallSourceExists(params: {
@@ -952,7 +1080,7 @@ export async function recordShortTermRecalls(params: {
         continue;
       }
       const claimHash = snippet ? buildClaimHash(snippet) : undefined;
-      const groundedKey = claimHash
+      const directGroundedKey = claimHash
         ? buildEntryKey({
             path: normalizedPath,
             startLine: Math.max(1, Math.floor(result.startLine)),
@@ -961,9 +1089,24 @@ export async function recordShortTermRecalls(params: {
             claimHash,
           })
         : null;
+      const groundedKey = claimHash
+        ? directGroundedKey && store.entries[directGroundedKey]
+          ? directGroundedKey
+          : (findExistingDailyVariantEntryKey({
+              entries: store.entries,
+              claimHash,
+              candidatePath: normalizedPath,
+            }) ?? null)
+        : null;
       const baseKey = buildEntryKey(result);
       const key = groundedKey && store.entries[groundedKey] ? groundedKey : baseKey;
       const existing = store.entries[key];
+      const location = resolveMergedEntryLocation({
+        existing,
+        candidatePath: normalizedPath,
+        candidateStartLine: result.startLine,
+        candidateEndLine: result.endLine,
+      });
       const score = clampScore(result.score);
       const recallDaysBase = existing?.recallDays ?? [];
       const queryHashesBase = existing?.queryHashes ?? [];
@@ -987,9 +1130,9 @@ export async function recordShortTermRecalls(params: {
 
       store.entries[key] = {
         key,
-        path: normalizedPath,
-        startLine: Math.max(1, Math.floor(result.startLine)),
-        endLine: Math.max(1, Math.floor(result.endLine)),
+        path: location.path,
+        startLine: location.startLine,
+        endLine: location.endLine,
         source: "memory",
         snippet: snippet || existing?.snippet || "",
         recallCount,
@@ -1002,7 +1145,9 @@ export async function recordShortTermRecalls(params: {
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
-        ...(existing?.claimHash ? { claimHash: existing.claimHash } : {}),
+        ...((existing?.claimHash ?? claimHash)
+          ? { claimHash: existing?.claimHash ?? claimHash }
+          : {}),
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
@@ -1094,14 +1239,28 @@ export async function recordGroundedShortTermCandidates(params: {
       }
       const queryHash = hashQuery(effectiveQuery);
       const claimHash = buildClaimHash(item.snippet);
-      const key = buildEntryKey({
+      const requestedKey = buildEntryKey({
         path: item.path,
         startLine: item.startLine,
         endLine: item.endLine,
         source: "memory",
         claimHash,
       });
-      const existing = store.entries[key];
+      const existingKey =
+        store.entries[requestedKey] != null
+          ? requestedKey
+          : (findExistingDailyVariantEntryKey({
+              entries: store.entries,
+              claimHash,
+              candidatePath: item.path,
+            }) ?? requestedKey);
+      const existing = store.entries[existingKey];
+      const location = resolveMergedEntryLocation({
+        existing,
+        candidatePath: item.path,
+        candidateStartLine: item.startLine,
+        candidateEndLine: item.endLine,
+      });
       const recallDaysBase = existing?.recallDays ?? [];
       const queryHashesBase = existing?.queryHashes ?? [];
       const dedupeSignal =
@@ -1121,11 +1280,11 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
-      store.entries[key] = {
-        key,
-        path: item.path,
-        startLine: item.startLine,
-        endLine: item.endLine,
+      store.entries[existingKey] = {
+        key: existingKey,
+        path: location.path,
+        startLine: location.startLine,
+        endLine: location.endLine,
         source: "memory",
         snippet: item.snippet,
         recallCount: Math.max(0, Math.floor(existing?.recallCount ?? 0)),
@@ -1363,6 +1522,76 @@ export async function readShortTermRecallEntries(params: {
 function resolveShortTermSourcePathCandidates(
   workspaceDir: string,
   candidatePath: string,
+): Promise<Array<{ absolutePath: string; relativePath: string }>> {
+  return (async () => {
+    const normalizedPath = normalizeMemoryPath(candidatePath);
+    const relativeRoots = [normalizedPath];
+    if (!normalizedPath.startsWith("memory/")) {
+      relativeRoots.push(path.posix.join("memory", path.posix.basename(normalizedPath)));
+    }
+    const seenAbsolutePaths = new Set<string>();
+    const seenRelativePaths = new Set<string>();
+    const candidates: Array<{ absolutePath: string; relativePath: string }> = [];
+    const addRelativePath = (relativePath: string) => {
+      const normalizedRelativePath = normalizeMemoryPath(relativePath);
+      const absolutePath = path.resolve(workspaceDir, normalizedRelativePath);
+      if (seenAbsolutePaths.has(absolutePath)) {
+        return;
+      }
+      seenAbsolutePaths.add(absolutePath);
+      seenRelativePaths.add(normalizedRelativePath);
+      candidates.push({ absolutePath, relativePath: normalizedRelativePath });
+    };
+
+    for (const relativeRoot of relativeRoots) {
+      const parsedRoot = parseDailyMemoryPathInfo(relativeRoot);
+      if (!parsedRoot) {
+        continue;
+      }
+      const absoluteDir = path.resolve(workspaceDir, parsedRoot.dir === "." ? "" : parsedRoot.dir);
+      let dirEntries;
+      try {
+        dirEntries = await fs.readdir(absoluteDir, { withFileTypes: true });
+      } catch (error) {
+        if (isBenignSourcePathProbeError(error)) {
+          continue;
+        }
+        throw error;
+      }
+      const variantPaths = dirEntries
+        .filter((entry) => entry.isFile())
+        .map((entry) => parseDailyMemoryFileName(entry.name))
+        .filter(
+          (entry): entry is NonNullable<typeof entry> =>
+            entry !== null && entry.day === parsedRoot.day,
+        )
+        .toSorted((left, right) => {
+          if (left.canonical !== right.canonical) {
+            return left.canonical ? -1 : 1;
+          }
+          return left.fileName.localeCompare(right.fileName);
+        })
+        .map((entry) =>
+          parsedRoot.dir === "." ? entry.fileName : path.posix.join(parsedRoot.dir, entry.fileName),
+        );
+      for (const variantPath of variantPaths) {
+        addRelativePath(variantPath);
+      }
+    }
+
+    for (const relativeRoot of relativeRoots) {
+      if (!seenRelativePaths.has(relativeRoot)) {
+        addRelativePath(relativeRoot);
+      }
+    }
+
+    return candidates;
+  })();
+}
+
+function resolveShortTermSourcePathCandidatesLegacy(
+  workspaceDir: string,
+  candidatePath: string,
 ): string[] {
   const normalizedPath = normalizeMemoryPath(candidatePath);
   const basenames = [normalizedPath];
@@ -1485,11 +1714,22 @@ async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
 ): Promise<PromotionCandidate | null> {
-  const sourcePaths = resolveShortTermSourcePathCandidates(workspaceDir, candidate.path);
+  const sourcePaths = await resolveShortTermSourcePathCandidates(workspaceDir, candidate.path);
+  if (sourcePaths.length === 0) {
+    for (const sourcePath of resolveShortTermSourcePathCandidatesLegacy(
+      workspaceDir,
+      candidate.path,
+    )) {
+      sourcePaths.push({
+        absolutePath: sourcePath,
+        relativePath: normalizeMemoryPath(path.relative(workspaceDir, sourcePath)),
+      });
+    }
+  }
   for (const sourcePath of sourcePaths) {
     let rawSource: string;
     try {
-      rawSource = await fs.readFile(sourcePath, "utf-8");
+      rawSource = await fs.readFile(sourcePath.absolutePath, "utf-8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         continue;
@@ -1504,6 +1744,7 @@ async function rehydratePromotionCandidate(
     }
     return {
       ...candidate,
+      path: sourcePath.relativePath,
       startLine: relocated.startLine,
       endLine: relocated.endLine,
       snippet: relocated.snippet,
@@ -1657,6 +1898,7 @@ export async function applyShortTermPromotions(
       if (!entry) {
         continue;
       }
+      entry.path = candidate.path;
       entry.startLine = candidate.startLine;
       entry.endLine = candidate.endLine;
       entry.snippet = candidate.snippet;

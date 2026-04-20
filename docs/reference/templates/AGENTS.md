@@ -20,7 +20,7 @@ Use runtime-provided startup context first.
 That context may already include:
 
 - `AGENTS.md`, `SOUL.md`, and `USER.md`
-- recent daily memory such as `memory/YYYY-MM-DD.md`
+- recent daily memory such as `memory/YYYY-MM-DD.md` or `memory/YYYY-MM-DD-topic.md`
 - `MEMORY.md` when this is the main session
 
 Do not manually reread startup files unless:
@@ -34,6 +34,7 @@ Do not manually reread startup files unless:
 You wake up fresh each session. These files are your continuity:
 
 - **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) — raw logs of what happened
+- **Dated session notes:** some automations and hooks may also create `memory/YYYY-MM-DD-topic.md`
 - **Long-term:** `MEMORY.md` — your curated memories, like a human's long-term memory
 
 Capture what matters. Decisions, context, things to remember. Skip the secrets unless asked to keep them.
@@ -207,7 +208,7 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 
 Periodically (every few days), use a heartbeat to:
 
-1. Read through recent `memory/YYYY-MM-DD.md` files
+1. Read through recent dated notes in `memory/` (for example `memory/YYYY-MM-DD.md` or `memory/YYYY-MM-DD-topic.md`)
 2. Identify significant events, lessons, or insights worth keeping long-term
 3. Update `MEMORY.md` with distilled learnings
 4. Remove outdated info from MEMORY.md that's no longer relevant
