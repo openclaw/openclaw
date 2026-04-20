@@ -432,6 +432,81 @@ describe("runCliAgent with process supervisor", () => {
     expect(onAssistantTurn).toHaveBeenCalledWith("Hello");
   });
 
+  it("re-emits Claude tool use when the same toolUseId later receives richer input", async () => {
+    const sessionFile = "/tmp/session.jsonl";
+    const promptFilePath = resolveClaudePromptFilePath(sessionFile);
+    const onToolUseEvent = vi.fn();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "sid-bash-rich" }),
+          JSON.stringify({
+            type: "stream_event",
+            session_id: "sid-bash-rich",
+            event: {
+              type: "content_block_start",
+              index: 2,
+              content_block: {
+                type: "tool_use",
+                id: "toolu_same",
+                name: "Bash",
+                input: {},
+              },
+            },
+          }),
+          JSON.stringify({
+            type: "stream_event",
+            session_id: "sid-bash-rich",
+            event: {
+              type: "content_block_delta",
+              index: 2,
+              delta: {
+                type: "input_json_delta",
+                partial_json: `{"command":"cat ${promptFilePath}"}`,
+              },
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            session_id: "sid-bash-rich",
+            result: "ok",
+          }),
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s-bash-rich",
+      sessionFile,
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-bash-rich",
+      onToolUseEvent,
+    });
+
+    expect(onToolUseEvent).toHaveBeenCalledTimes(2);
+    expect(onToolUseEvent.mock.calls[0]?.[0]).toEqual({
+      name: "Bash",
+      toolUseId: "toolu_same",
+      input: {},
+    });
+    expect(onToolUseEvent.mock.calls[1]?.[0]).toEqual({
+      name: "Bash",
+      toolUseId: "toolu_same",
+      input: { command: `cat ${promptFilePath}` },
+    });
+  });
+
   it("retries incomplete prompt-file reads in the same session until the full file is read", async () => {
     const sessionFile = "/tmp/session.jsonl";
     const promptFilePath = resolveClaudePromptFilePath(sessionFile);

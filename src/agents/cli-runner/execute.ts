@@ -380,6 +380,7 @@ export async function executeWithOverflowProtection(
       }
     >();
     const emittedToolStarts = new Set<string>();
+    const emittedToolInputsById = new Map<string, string>();
     const cliDebugEnabled = cliBackendLog.isEnabled("debug");
 
     const matchingCliSessionBinding =
@@ -775,11 +776,19 @@ export async function executeWithOverflowProtection(
                   }
                 },
                 onToolUse: ({ name, toolUseId, input }) => {
-                  const toolStartKey =
-                    toolUseId?.trim() || `${name}:${JSON.stringify(input ?? null)}`;
-                  if (!emittedToolStarts.has(toolStartKey)) {
-                    emittedToolStarts.add(toolStartKey);
+                  const normalizedToolUseId = toolUseId?.trim();
+                  const inputSignature = JSON.stringify(input ?? null);
+                  const toolStartKey = normalizedToolUseId || `${name}:${inputSignature}`;
+                  const shouldEmit =
+                    normalizedToolUseId !== undefined
+                      ? emittedToolInputsById.get(normalizedToolUseId) !== inputSignature
+                      : !emittedToolStarts.has(toolStartKey);
+                  if (shouldEmit) {
                     params.onToolUseEvent?.({ name, toolUseId, input });
+                    if (normalizedToolUseId !== undefined) {
+                      emittedToolInputsById.set(normalizedToolUseId, inputSignature);
+                    }
+                    emittedToolStarts.add(toolStartKey);
                     cliBackendLog.info(
                       `cli tool start: ${name}${toolUseId ? ` (${toolUseId})` : ""}`,
                     );
