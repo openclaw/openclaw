@@ -566,6 +566,30 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+// RFC 7230 token: "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "."
+//                 / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+const HTTP_HEADER_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function validateCorsHeaderList(
+  values: readonly string[] | undefined,
+  path: "gateway.http.cors.allowedHeaders" | "gateway.http.cors.exposedHeaders",
+): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const value of values ?? []) {
+    if (value.length === 0) {
+      issues.push({ path, message: `${path}: empty string is not a valid header name.` });
+      continue;
+    }
+    if (!HTTP_HEADER_TOKEN_RE.test(value)) {
+      issues.push({
+        path,
+        message: `${path}: "${value}" is not a valid HTTP header name (RFC 7230 token — letters, digits, and !#$%&'*+-.^_\`|~).`,
+      });
+    }
+  }
+  return issues;
+}
+
 function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
   const cors = config.gateway?.http?.cors;
   if (!cors?.enabled) {
@@ -620,6 +644,8 @@ function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
       });
     }
   }
+  issues.push(...validateCorsHeaderList(cors.allowedHeaders, "gateway.http.cors.allowedHeaders"));
+  issues.push(...validateCorsHeaderList(cors.exposedHeaders, "gateway.http.cors.exposedHeaders"));
   return issues;
 }
 
