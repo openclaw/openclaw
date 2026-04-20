@@ -13,6 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isAbortRequestText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -687,6 +688,7 @@ export const dispatchTelegramMessage = async ({
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
+          humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload, info) => {
             if (isDispatchSuperseded()) {
               return;
