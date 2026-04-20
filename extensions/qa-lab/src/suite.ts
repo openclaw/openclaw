@@ -770,3 +770,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     }
   }
 }
+
+export const qaSuiteProgressTesting = {
+  parseQaSuiteBooleanEnv,
+  shouldLogQaSuiteProgress,
+};
