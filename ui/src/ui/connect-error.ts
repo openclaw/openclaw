@@ -1,4 +1,8 @@
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  buildPairingConnectErrorMessage,
+  ConnectErrorDetailCodes,
+  readPairingConnectErrorDetails,
+} from "../../../src/gateway/protocol/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "./gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -29,7 +33,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
     case ConnectErrorDetailCodes.AUTH_RATE_LIMITED:
       return "too many failed authentication attempts";
     case ConnectErrorDetailCodes.PAIRING_REQUIRED:
-      return "gateway pairing required";
+      return `gateway ${buildPairingConnectErrorMessage(readPairingConnectErrorDetails(error.details)?.reason)}`;
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
       return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
