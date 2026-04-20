@@ -231,6 +231,8 @@ Tracked as future work. The current denylist (33 paths) is comprehensive against
 - Added regression coverage in `src/agents/tools/gateway-tool-guard-coverage.test.ts` proving `config.apply` can reorder agents without tripping the dangerous-flag diff when an existing dangerous per-agent sandbox flag is already enabled.
 - Validation: `corepack pnpm test src/security/dangerous-config-flags.test.ts src/agents/tools/gateway-tool-guard-coverage.test.ts`; `corepack pnpm format:check src/security/dangerous-config-flags.ts src/security/dangerous-config-flags.test.ts src/agents/tools/gateway-tool-guard-coverage.test.ts`.
 - Comment-loop summary: Greptile's earlier threads were resolved and its latest summary was merge-positive. Codex kept commenting because the previous `@codex review` retrigger landed on commit `bd9e303789`, where the unstable index-based dangerous-flag diff bug was still present and unresolved.
+- Re-queried the live review threads and branch history before cleanup. The remaining open Codex thread still targeted the same index-based dangerous-flag rendering gap, and the repeated comments were caused by review requests landing on stale PR head `bd9e303789` instead of the local follow-up commit `21de8e507f`.
+- Revalidated `21de8e507f` locally with `corepack pnpm test src/security/dangerous-config-flags.test.ts src/agents/tools/gateway-tool-guard-coverage.test.ts` and `corepack pnpm format:check src/security/dangerous-config-flags.ts src/security/dangerous-config-flags.test.ts src/agents/tools/gateway-tool-guard-coverage.test.ts` before pushing and resolving the addressed thread.
 
 [CODEX]
 
