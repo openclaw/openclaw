@@ -823,9 +823,14 @@ export async function runMemoryFlushIfNeeded(params: {
           });
         }
       }
-      if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
-      }
+      // NOTE: Do NOT update memoryFlushCompactionCount to nextCount here.
+      // memoryFlushCompactionCount records the compaction count at the time the
+      // flush was initiated (pre-increment). If we overwrite it with the
+      // post-increment value, hasAlreadyFlushedForCurrentCompaction will
+      // compare equal on the next cycle and incorrectly skip the flush,
+      // causing memoryFlush to fire on every other auto-compaction cycle
+      // instead of every cycle. See #12590.
+      void nextCount;
     }
     if (params.storePath && params.sessionKey) {
       try {

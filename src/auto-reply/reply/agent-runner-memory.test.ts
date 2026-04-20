@@ -192,7 +192,11 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     expect(persisted.main.sessionId).toBe("session-rotated");
     expect(persisted.main.compactionCount).toBe(2);
-    expect(persisted.main.memoryFlushCompactionCount).toBe(2);
+    // memoryFlushCompactionCount records the pre-increment count at which the
+    // flush was initiated, not the post-increment count. This ensures
+    // hasAlreadyFlushedForCurrentCompaction does not falsely skip the next
+    // cycle's flush (see #12590).
+    expect(persisted.main.memoryFlushCompactionCount).toBe(1);
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
