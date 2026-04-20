@@ -9,7 +9,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { GatewayAccount } from "../types.js";
-import { MAX_UPLOAD_SIZE, formatFileSize } from "../utils/file-utils.js";
+import { MAX_UPLOAD_SIZE, formatFileSize, getImageMimeType } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import {
   parseQQBotPayload,
@@ -23,10 +23,7 @@ import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import {
   sendText as senderSendText,
-  sendImage as senderSendImage,
-  sendVoiceMessage as senderSendVoice,
-  sendVideoMessage as senderSendVideo,
-  sendFileMessage as senderSendFile,
+  sendMedia as senderSendMedia,
   withTokenRetry,
   buildDeliveryTarget,
   accountToCreds,
@@ -319,17 +316,9 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
     try {
       const fileBuffer = await readStructuredPayloadLocalFile(imageUrl);
       const base64Data = fileBuffer.toString("base64");
-      const ext = normalizeLowercaseStringOrEmpty(path.extname(imageUrl));
-      const mimeTypes: Record<string, string> = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".bmp": "image/bmp",
-      };
-      const mimeType = mimeTypes[ext];
+      const mimeType = getImageMimeType(imageUrl);
       if (!mimeType) {
+        const ext = normalizeLowercaseStringOrEmpty(path.extname(imageUrl));
         log?.error(`Unsupported image format: ${ext}`);
         return;
       }
@@ -353,9 +342,13 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       creds,
       async () => {
         if (deliveryTarget.type === "c2c" || deliveryTarget.type === "group") {
-          await senderSendImage(deliveryTarget, imageUrl, creds, {
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "image",
+            source: { url: imageUrl },
             msgId: target.messageId,
-            localPath: originalImagePath,
+            localPathForMeta: originalImagePath,
           });
         } else if (deliveryTarget.type === "dm") {
           await senderSendText(deliveryTarget, `![](${payload.path})`, creds, {
@@ -439,11 +432,14 @@ export async function sendTextAsVoiceReply(
       creds,
       async () => {
         if (deliveryTarget.type === "c2c" || deliveryTarget.type === "group") {
-          await senderSendVoice(deliveryTarget, creds, {
-            voiceBase64: silkBase64,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "voice",
+            source: { base64: silkBase64 },
             msgId: target.messageId,
             ttsText,
-            filePath: silkPath,
+            localPathForMeta: silkPath,
           });
         } else {
           log?.error(`Voice not supported in ${deliveryTarget.type}, sending text fallback`);
@@ -485,20 +481,25 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       creds,
       async () => {
         if (isHttpUrl) {
-          await senderSendVideo(deliveryTarget, creds, {
-            videoUrl: videoPath,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "video",
+            source: { url: videoPath },
             msgId: target.messageId,
           });
         } else {
           const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
-          const videoBase64 = fileBuffer.toString("base64");
           log?.debug?.(
             `Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
-          await senderSendVideo(deliveryTarget, creds, {
-            videoBase64,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "video",
+            source: { buffer: fileBuffer },
             msgId: target.messageId,
-            localPath: videoPath,
+            localPathForMeta: videoPath,
           });
         }
       },
@@ -542,19 +543,24 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
       creds,
       async () => {
         if (isHttpUrl) {
-          await senderSendFile(deliveryTarget, creds, {
-            fileUrl: filePath,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "file",
+            source: { url: filePath },
             msgId: target.messageId,
             fileName,
           });
         } else {
           const fileBuffer = await readStructuredPayloadLocalFile(filePath);
-          const fileBase64 = fileBuffer.toString("base64");
-          await senderSendFile(deliveryTarget, creds, {
-            fileBase64,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "file",
+            source: { buffer: fileBuffer, fileName },
             msgId: target.messageId,
             fileName,
-            localFilePath: filePath,
+            localPathForMeta: filePath,
           });
         }
       },

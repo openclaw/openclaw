@@ -67,6 +67,7 @@ import {
   downloadFile,
   fileExistsAsync,
   formatFileSize,
+  getImageMimeType,
   readFileAsync,
 } from "../utils/file-utils.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
@@ -89,10 +90,7 @@ import {
 import { ReplyLimiter, type ReplyLimitResult } from "./reply-limiter.js";
 import {
   sendText as senderSendText,
-  sendImage as senderSendImage,
-  sendVoiceMessage as senderSendVoice,
-  sendVideoMessage as senderSendVideo,
-  sendFileMessage as senderSendFile,
+  sendMedia as senderSendMedia,
   initApiConfig,
   accountToCreds,
   type DeliveryTarget,
@@ -354,54 +352,37 @@ export async function sendPhoto(
     debugLog(`sendPhoto: urlDirectUpload=false, downloading URL first...`);
     const localFile = await downloadToFallbackDir(mediaPath, "sendPhoto");
     if (localFile) {
-      return await sendPhoto(ctx, localFile);
+      return await sendPhotoFromLocal(ctx, localFile);
     }
     return { channel: "qqbot", error: `Failed to download image: ${mediaPath.slice(0, 80)}` };
   }
 
-  let imageUrl = mediaPath;
-
   if (isLocal) {
-    if (!(await fileExistsAsync(mediaPath))) {
-      return { channel: "qqbot", error: "Image not found" };
-    }
-    const sizeCheck = checkFileSize(mediaPath);
-    if (!sizeCheck.ok) {
-      return { channel: "qqbot", error: sizeCheck.error! };
-    }
-    const fileBuffer = await readFileAsync(mediaPath);
-    const ext = normalizeLowercaseStringOrEmpty(path.extname(mediaPath));
-    const mimeTypes: Record<string, string> = {
-      ".jpg": "image/jpeg",
-      ".jpeg": "image/jpeg",
-      ".png": "image/png",
-      ".gif": "image/gif",
-      ".webp": "image/webp",
-      ".bmp": "image/bmp",
-    };
-    const mimeType = mimeTypes[ext];
-    if (!mimeType) {
-      return { channel: "qqbot", error: `Unsupported image format: ${ext}` };
-    }
-    imageUrl = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
-    debugLog(`sendPhoto: local → Base64 (${formatFileSize(fileBuffer.length)})`);
-  } else if (!isHttp && !isData) {
+    return await sendPhotoFromLocal(ctx, mediaPath);
+  }
+
+  if (!isHttp && !isData) {
     return { channel: "qqbot", error: `Unsupported image source: ${mediaPath.slice(0, 50)}` };
   }
 
+  // Remote URL or data: URL — try direct upload first, fall back to
+  // download-then-local on failure.
   try {
-    const localPath = isLocal ? mediaPath : undefined;
     const creds = accountToCreds(ctx.account);
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
 
     if (target.type === "c2c" || target.type === "group") {
-      const r = await senderSendImage(target, imageUrl, creds, {
+      const r = await senderSendMedia({
+        target,
+        creds,
+        kind: "image",
+        source: { url: mediaPath },
         msgId: ctx.replyToId,
-        content: undefined,
-        localPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     }
+
+
     if (isHttp) {
       const r = await senderSendText(target, `![](${mediaPath})`, creds, {
         msgId: ctx.replyToId,
@@ -413,14 +394,15 @@ export async function sendPhoto(
   } catch (err) {
     const msg = formatErrorMessage(err);
 
-    // Fall back to plugin-managed download + Base64 when QQ fails to fetch the URL directly.
+    // Fall back to plugin-managed download + local upload when QQ fails to
+    // fetch the URL directly. One-shot, non-recursive.
     if (isHttp && !isData) {
       debugWarn(
         `sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
-      const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath);
-      if (retryResult) {
-        return retryResult;
+      const localFile = await downloadToFallbackDir(mediaPath, "sendPhoto");
+      if (localFile) {
+        return await sendPhotoFromLocal(ctx, localFile);
       }
     }
 
@@ -429,24 +411,46 @@ export async function sendPhoto(
   }
 }
 
-/** Download a remote image locally and retry `sendPhoto` through the local-file path. */
-async function downloadAndRetrySendPhoto(
+/** Send a photo from a validated local file path. */
+async function sendPhotoFromLocal(
   ctx: MediaTargetContext,
-  httpUrl: string,
-): Promise<OutboundResult | null> {
-  try {
-    const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
-    const localFile = await downloadFile(httpUrl, downloadDir);
-    if (!localFile) {
-      debugError(`sendPhoto fallback: download also failed for ${httpUrl.slice(0, 80)}`);
-      return null;
-    }
+  mediaPath: string,
+): Promise<OutboundResult> {
+  if (!(await fileExistsAsync(mediaPath))) {
+    return { channel: "qqbot", error: "Image not found" };
+  }
+  const sizeCheck = checkFileSize(mediaPath);
+  if (!sizeCheck.ok) {
+    return { channel: "qqbot", error: sizeCheck.error! };
+  }
+  const mimeType = getImageMimeType(mediaPath);
+  if (!mimeType) {
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(mediaPath));
+    return { channel: "qqbot", error: `Unsupported image format: ${ext}` };
+  }
+  debugLog(`sendPhoto: local (${formatFileSize(sizeCheck.size)})`);
 
-    debugLog(`sendPhoto fallback: downloaded → ${localFile}, retrying as Base64`);
-    return await sendPhoto(ctx, localFile);
+  try {
+    const creds = accountToCreds(ctx.account);
+    const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
+
+    if (target.type === "c2c" || target.type === "group") {
+      const r = await senderSendMedia({
+        target,
+        creds,
+        kind: "image",
+        source: { localPath: mediaPath },
+        msgId: ctx.replyToId,
+        localPathForMeta: mediaPath,
+      });
+      return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
+    }
+    debugLog(`sendPhoto: channel does not support local images`);
+    return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
   } catch (err) {
-    debugError(`sendPhoto fallback error:`, err);
-    return null;
+    const msg = formatErrorMessage(err);
+    debugError(`sendPhoto (local) failed: ${msg}`);
+    return { channel: "qqbot", error: msg };
   }
 }
 
@@ -476,8 +480,11 @@ export async function sendVoice(
         const creds = accountToCreds(ctx.account);
         const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
         if (target.type === "c2c" || target.type === "group") {
-          const r = await senderSendVoice(target, creds, {
-            voiceUrl: mediaPath,
+          const r = await senderSendMedia({
+            target,
+            creds,
+            kind: "voice",
+            source: { url: mediaPath },
             msgId: ctx.replyToId,
           });
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
@@ -553,10 +560,13 @@ async function sendVoiceFromLocal(
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
 
     if (target.type === "c2c" || target.type === "group") {
-      const r = await senderSendVoice(target, creds, {
-        voiceBase64: uploadBase64,
+      const r = await senderSendMedia({
+        target,
+        creds,
+        kind: "voice",
+        source: { base64: uploadBase64 },
         msgId: ctx.replyToId,
-        filePath: safeMediaPath,
+        localPathForMeta: safeMediaPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     }
@@ -595,8 +605,11 @@ export async function sendVideoMsg(
       const creds = accountToCreds(ctx.account);
       const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
       if (target.type === "c2c" || target.type === "group") {
-        const r = await senderSendVideo(target, creds, {
-          videoUrl: mediaPath,
+        const r = await senderSendMedia({
+          target,
+          creds,
+          kind: "video",
+          source: { url: mediaPath },
           msgId: ctx.replyToId,
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
@@ -637,19 +650,19 @@ async function sendVideoFromLocal(
   if (!sizeCheck.ok) {
     return { channel: "qqbot", error: sizeCheck.error! };
   }
-
-  const fileBuffer = await readFileAsync(mediaPath);
-  const videoBase64 = fileBuffer.toString("base64");
-  debugLog(`sendVideoMsg: local video (${formatFileSize(fileBuffer.length)})`);
+  debugLog(`sendVideoMsg: local video (${formatFileSize(sizeCheck.size)})`);
 
   try {
     const creds = accountToCreds(ctx.account);
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
     if (target.type === "c2c" || target.type === "group") {
-      const r = await senderSendVideo(target, creds, {
-        videoBase64,
+      const r = await senderSendMedia({
+        target,
+        creds,
+        kind: "video",
+        source: { localPath: mediaPath },
         msgId: ctx.replyToId,
-        localPath: mediaPath,
+        localPathForMeta: mediaPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     }
@@ -695,8 +708,11 @@ export async function sendDocument(
       const creds = accountToCreds(ctx.account);
       const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
       if (target.type === "c2c" || target.type === "group") {
-        const r = await senderSendFile(target, creds, {
-          fileUrl: mediaPath,
+        const r = await senderSendMedia({
+          target,
+          creds,
+          kind: "file",
+          source: { url: mediaPath },
           msgId: ctx.replyToId,
           fileName,
         });
@@ -740,22 +756,23 @@ async function sendDocumentFromLocal(
   if (!sizeCheck.ok) {
     return { channel: "qqbot", error: sizeCheck.error! };
   }
-  const fileBuffer = await readFileAsync(mediaPath);
-  if (fileBuffer.length === 0) {
+  if (sizeCheck.size === 0) {
     return { channel: "qqbot", error: `File is empty: ${mediaPath}` };
   }
-  const fileBase64 = fileBuffer.toString("base64");
-  debugLog(`sendDocument: local file (${formatFileSize(fileBuffer.length)})`);
+  debugLog(`sendDocument: local file (${formatFileSize(sizeCheck.size)})`);
 
   try {
     const creds = accountToCreds(ctx.account);
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
     if (target.type === "c2c" || target.type === "group") {
-      const r = await senderSendFile(target, creds, {
-        fileBase64,
+      const r = await senderSendMedia({
+        target,
+        creds,
+        kind: "file",
+        source: { localPath: mediaPath },
         msgId: ctx.replyToId,
         fileName,
-        localFilePath: mediaPath,
+        localPathForMeta: mediaPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
     }

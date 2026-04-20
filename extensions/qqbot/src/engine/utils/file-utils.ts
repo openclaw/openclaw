@@ -103,29 +103,50 @@ export function formatFileSize(bytes: number): string {
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  const mimeTypes: Record<string, string> = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".bmp": "image/bmp",
-    ".mp4": "video/mp4",
-    ".mov": "video/quicktime",
-    ".avi": "video/x-msvideo",
-    ".mkv": "video/x-matroska",
-    ".webm": "video/webm",
-    ".pdf": "application/pdf",
-    ".doc": "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".xls": "application/vnd.ms-excel",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".zip": "application/zip",
-    ".tar": "application/x-tar",
-    ".gz": "application/gzip",
-    ".txt": "text/plain",
-  };
-  return mimeTypes[ext] ?? "application/octet-stream";
+  return MIME_TYPES[ext] ?? "application/octet-stream";
+}
+
+/** Canonical ext → MIME table. Single source of truth. */
+const MIME_TYPES: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".avi": "video/x-msvideo",
+  ".mkv": "video/x-matroska",
+  ".webm": "video/webm",
+  ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".zip": "application/zip",
+  ".tar": "application/x-tar",
+  ".gz": "application/gzip",
+  ".txt": "text/plain",
+};
+
+/** Extensions accepted as image uploads by the QQ Bot media pipeline. */
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
+
+/**
+ * Return the image MIME type for a local file path, or `null` if the
+ * extension is not in the supported image whitelist.
+ *
+ * Use this instead of `getMimeType` when the caller must enforce
+ * "image formats only" as a business rule (e.g. constructing a
+ * `data:image/...;base64,` URL).
+ */
+export function getImageMimeType(filePath: string): string | null {
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+  if (!IMAGE_EXTENSIONS.has(ext)) {
+    return null;
+  }
+  return MIME_TYPES[ext] ?? null;
 }
 
 /** Download a remote file into a local directory. */
