@@ -148,7 +148,22 @@ export function shouldShortCircuitForMissingUserTail(params: {
   if (promptHasContent || params.hasImages) {
     return false;
   }
-  return !messagesEndWithUserTurn(params.messages);
+  if (messagesEndWithUserTurn(params.messages)) {
+    return false;
+  }
+  // Only short-circuit when the trailing assistant turn carries real content.
+  // Empty or aborted trailing assistants are removed by
+  // `dropTrailingEmptyAssistantTurns` before the request is sent, so treating
+  // them as a short-circuit trigger would be a false positive when a previous
+  // attempt left a stale empty/aborted assistant in the session buffer.
+  const last = params.messages[params.messages.length - 1];
+  if (!last || typeof last !== "object") {
+    return false;
+  }
+  if ((last as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  return !isEffectivelyEmptyAssistantContent(last);
 }
 
 function extractToolResultMatchIds(record: Record<string, unknown>): Set<string> {
