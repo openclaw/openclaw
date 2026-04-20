@@ -129,9 +129,13 @@ const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
 type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
-function createQmdCfg(agentId: string, workspace: string = "/tmp/workspace"): OpenClawConfig {
+function createQmdCfg(
+  agentId: string,
+  workspace: string = "/tmp/workspace",
+  qmd: Record<string, unknown> = {},
+): OpenClawConfig {
   return {
-    memory: { backend: "qmd", qmd: {} },
+    memory: { backend: "qmd", qmd },
     agents: { list: [{ id: agentId, default: true, workspace }] },
   };
 }
@@ -327,8 +331,8 @@ describe("getMemorySearchManager caching", () => {
     expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
   });
 
-  it("does not reuse pending full qmd creation across different configs", async () => {
-    const agentId = "pending-qmd-config-reload";
+  it("does not reuse pending full qmd creation across different workspaces", async () => {
+    const agentId = "pending-qmd-workspace-reload";
     const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
     const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
     const firstFallback = createManagerMock({
@@ -373,6 +377,70 @@ describe("getMemorySearchManager caching", () => {
       env: process.env,
       cwd: "/tmp/workspace-b",
     });
+  });
+
+  it("does not reuse pending full qmd creation across different qmd configs", async () => {
+    const agentId = "pending-qmd-config-reload";
+    const firstCfg = createQmdCfg(agentId, "/tmp/workspace", { command: "qmd" });
+    const secondCfg = createQmdCfg(agentId, "/tmp/workspace", { command: "qmd-alt" });
+    const firstGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    const secondGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    createQmdManagerMock
+      .mockImplementationOnce(async () => await firstGate.promise)
+      .mockImplementationOnce(async () => await secondGate.promise);
+
+    const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
+    await Promise.resolve();
+    const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
+
+    firstGate.resolve(
+      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
+    );
+    secondGate.resolve(
+      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
+    );
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    requireManager(first);
+    requireManager(second);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(1, {
+      command: "qmd",
+      env: process.env,
+      cwd: "/tmp/workspace",
+    });
+    expect(checkQmdBinaryAvailability).toHaveBeenNthCalledWith(2, {
+      command: "qmd-alt",
+      env: process.env,
+      cwd: "/tmp/workspace",
+    });
+    expect(first.manager).not.toBe(second.manager);
+  });
+
+  it("reuses pending full qmd creation when raw cfg differs but qmd inputs match", async () => {
+    const agentId = "pending-qmd-unrelated-config";
+    const firstCfg = createQmdCfg(agentId);
+    const secondCfg = {
+      ...createQmdCfg(agentId),
+      session: { store: "/tmp/alternate-session-store.json" },
+    } as OpenClawConfig;
+    const createGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    createQmdManagerMock.mockImplementationOnce(async () => await createGate.promise);
+
+    const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
+    await Promise.resolve();
+    const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
+
+    createGate.resolve(
+      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
+    );
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    requireManager(first);
+    requireManager(second);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    expect(first.manager).toBe(second.manager);
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache qmd managers for status-only requests", async () => {
