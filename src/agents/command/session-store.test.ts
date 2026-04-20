@@ -685,6 +685,65 @@ describe("clearCliSessionInStore", () => {
       expect(
         loadSessionStore(storePath, { skipCache: true })[existingKey]?.claudeCliSessionId,
       ).toBe("claude-session-1");
+=======
+  it("keeps lastInteractionAt monotonic across overlapping CLI runs", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-overlapping-cli-runs";
+      const sessionId = "test-session-overlap";
+      const newerLastInteractionAt = 2_000;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId,
+              updatedAt: newerLastInteractionAt,
+              lastInteractionAt: newerLastInteractionAt,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const staleSessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1_000,
+          lastInteractionAt: 1_000,
+        },
+      };
+
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      try {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore: staleSessionStore,
+          defaultProvider: "claude-cli",
+          defaultModel: "claude-sonnet-4-6",
+          result: {
+            meta: {
+              durationMs: 1,
+              agentMeta: {
+                sessionId: "cli-session-overlap",
+                provider: "claude-cli",
+                model: "claude-sonnet-4-6",
+              },
+            },
+          } as EmbeddedPiRunResult,
+        });
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+
+      expect(staleSessionStore[sessionKey]?.lastInteractionAt).toBe(newerLastInteractionAt);
+      const persisted = loadSessionStore(storePath, { skipCache: true });
+      expect(persisted[sessionKey]?.lastInteractionAt).toBe(newerLastInteractionAt);
     });
   });
 });
