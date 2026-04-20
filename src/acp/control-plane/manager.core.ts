@@ -703,19 +703,6 @@ export class AcpSessionManager {
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
 
-    // Check if there's already an active turn for this session
-    // If so, throw SESSION_BUSY error with exit code 75 (EX_TEMPFAIL)
-    // This allows callers to distinguish "session busy, retry" from "real crash/timeout"
-    const actorKey = normalizeActorKey(sessionKey);
-    const activeTurn = this.activeTurnBySession.get(actorKey);
-    if (activeTurn) {
-      throw new AcpRuntimeError(
-        "SESSION_BUSY",
-        `Session ${sessionKey} is busy processing another turn. ` +
-          `Exit code 75 (EX_TEMPFAIL) indicates this condition.`,
-      );
-    }
-
     await this.withSessionActor(
       sessionKey,
       async () => {
