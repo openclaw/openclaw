@@ -71,7 +71,9 @@ export function sanitizeMediaDisplayName(mediaSource: string): string {
   }
   // Normalize Windows backslash paths for cross-platform safety
   const normalized = mediaSource.replace(/\\/g, "/");
-  return path.basename(normalized) || mediaSource;
+  // Strip URL query/fragment to avoid leaking signed tokens or credentials
+  const withoutParams = normalized.replace(/[?#].*$/, "");
+  return path.basename(withoutParams) || mediaSource;
 }
 
 /** Derive a reason code from the error thrown during media normalization. */

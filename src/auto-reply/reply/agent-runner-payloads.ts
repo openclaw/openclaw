@@ -53,7 +53,10 @@ async function normalizeReplyPayloadMedia(params: {
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
-      droppedMedia: droppedMedia.length > 0 ? droppedMedia : undefined,
+      droppedMedia:
+        [...(params.payload.droppedMedia ?? []), ...droppedMedia].length > 0
+          ? [...(params.payload.droppedMedia ?? []), ...droppedMedia]
+          : undefined,
     });
   }
 }
