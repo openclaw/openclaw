@@ -7,5 +7,5 @@ read_when:
 
 # BOOT.md
 
-添加简短、明确的说明，说明 OpenClaw 在启动时应该做什么（启用 `hooks.internal.enabled`）。
+添加关于 OpenClaw 启动时应该做什么的简短、明确的指令（启用 `hooks.internal.enabled`）。
 如果任务发送消息，请使用消息工具，然后使用确切的静默令牌 `NO_REPLY` / `no_reply` 回复。
