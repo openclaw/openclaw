@@ -24,17 +24,35 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
-vi.mock("../../agents/auth-profiles/store.js", () => ({
-  ensureAuthProfileStore: () => ({
+vi.mock("../../agents/auth-profiles/store.js", () => {
+  const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
-  }),
-  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
-    authProfilesStoreMock.profiles[profileId],
-  hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
-  saveAuthProfileStore: vi.fn(),
-  updateAuthProfileStoreWithLock: vi.fn(),
-}));
+  });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {
+      authProfilesStoreMock.profiles = {};
+    },
+    ensureAuthProfileStore: store,
+    ensureAuthProfileStoreForLocalUpdate: store,
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+    loadAuthProfileStore: store,
+    loadAuthProfileStoreForRuntime: store,
+    loadAuthProfileStoreForSecretsRuntime: store,
+    loadAuthProfileStoreWithoutExternalProfiles: store,
+    replaceRuntimeAuthProfileStoreSnapshots: (
+      snapshots: Array<{
+        store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
+      }>,
+    ) => {
+      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+    },
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+  };
+});
 
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
