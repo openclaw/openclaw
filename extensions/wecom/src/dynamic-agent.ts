@@ -6,6 +6,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveWeComAccountMulti } from "./accounts.js";
 
 export interface DynamicAgentConfig {
   enabled: boolean;
@@ -17,12 +18,25 @@ export interface DynamicAgentConfig {
 /**
  * **getDynamicAgentConfig (read dynamic Agent configuration)**
  *
- * Reads the dynamic Agent configuration from the global config, providing default values.
+ * Reads the dynamic Agent configuration, honoring account-scoped overrides.
+ *
+ * Resolution order (highest priority last — later wins):
+ *   1. Top-level `channels.wecom.dynamicAgents`
+ *   2. `channels.wecom.accounts.<accountId>.dynamicAgents` (when an accountId is provided)
+ *
+ * When `accountId` is omitted, only the top-level config is used (legacy behavior).
  */
-export function getDynamicAgentConfig(config: OpenClawConfig): DynamicAgentConfig {
-  const dynamicAgents = (
-    config as { channels?: { wecom?: { dynamicAgents?: Partial<DynamicAgentConfig> } } }
-  )?.channels?.wecom?.dynamicAgents;
+export function getDynamicAgentConfig(
+  config: OpenClawConfig,
+  accountId?: string,
+): DynamicAgentConfig {
+  // resolveWeComAccountMulti merges top-level + per-account config via the
+  // existing mergeWeComAccountConfig helper, so account-level dynamicAgents
+  // overrides the top-level one automatically.
+  const merged = resolveWeComAccountMulti({ cfg: config, accountId }).config as {
+    dynamicAgents?: Partial<DynamicAgentConfig>;
+  };
+  const dynamicAgents = merged.dynamicAgents;
   return {
     enabled: dynamicAgents?.enabled ?? false,
     dmCreateAgent: dynamicAgents?.dmCreateAgent ?? true,
@@ -60,14 +74,17 @@ export function generateAgentId(
  *
  * Determines whether a dynamic Agent should be used based on config and sender info.
  * Admins (adminUsers) always bypass dynamic routing and use the main Agent.
+ *
+ * Pass `accountId` so that per-account `dynamicAgents` overrides are honored.
  */
 export function shouldUseDynamicAgent(params: {
   chatType: "dm" | "group";
   senderId: string;
   config: OpenClawConfig;
+  accountId?: string;
 }): boolean {
-  const { chatType, senderId, config } = params;
-  const dynamicConfig = getDynamicAgentConfig(config);
+  const { chatType, senderId, config, accountId } = params;
+  const dynamicConfig = getDynamicAgentConfig(config, accountId);
 
   if (!dynamicConfig.enabled) {
     return false;

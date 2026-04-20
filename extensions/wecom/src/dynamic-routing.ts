@@ -85,11 +85,12 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
     };
   }
 
-  // Determine whether to use dynamic Agent
+  // Determine whether to use dynamic Agent (account-aware)
   const useDynamicAgent = shouldUseDynamicAgent({
     chatType,
     senderId,
     config,
+    accountId,
   });
   log?.(`[dynamic-routing] Whether to use dynamic routing: useDynamicAgent=${useDynamicAgent}`);
 

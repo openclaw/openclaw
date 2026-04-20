@@ -18,7 +18,7 @@ import type { WeComConfig } from "./utils.js";
 // ============================================================================
 
 export const wecomSetupAdapter: ChannelSetupAdapter = {
-  applyAccountConfig: ({ cfg, input }) => {
+  applyAccountConfig: ({ cfg, accountId, input }) => {
     const patch: Partial<WeComConfig> = {};
 
     if (input.token !== undefined) {
@@ -29,12 +29,12 @@ export const wecomSetupAdapter: ChannelSetupAdapter = {
     }
 
     // Enable by default on first-time configuration
-    const account = resolveWeComAccountMulti({ cfg });
+    const account = resolveWeComAccountMulti({ cfg, accountId });
     if (!account.botId && !account.secret) {
       patch.enabled = true;
     }
 
-    return setWeComAccountMulti(cfg, patch);
+    return setWeComAccountMulti(cfg, patch, accountId);
   },
 };
 
@@ -43,23 +43,28 @@ export const wecomSetupAdapter: ChannelSetupAdapter = {
 // ============================================================================
 
 /**
- * Set WeCom dmPolicy
+ * Set WeCom dmPolicy for the given account (or the default account when omitted).
  */
 function setWeComDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
+  accountId?: string,
 ): OpenClawConfig {
-  const account = resolveWeComAccountMulti({ cfg });
+  const account = resolveWeComAccountMulti({ cfg, accountId });
   const existingAllowFrom = account.config.allowFrom ?? [];
   const allowFrom =
     dmPolicy === "open"
       ? addWildcardAllowFrom(existingAllowFrom.map((x) => String(x)))
       : existingAllowFrom.map((x) => String(x));
 
-  return setWeComAccountMulti(cfg, {
-    dmPolicy,
-    allowFrom,
-  });
+  return setWeComAccountMulti(
+    cfg,
+    {
+      dmPolicy,
+      allowFrom,
+    },
+    accountId,
+  );
 }
 
 const dmPolicy: ChannelSetupDmPolicy = {
@@ -67,15 +72,15 @@ const dmPolicy: ChannelSetupDmPolicy = {
   channel: CHANNEL_ID,
   policyKey: `channels.${CHANNEL_ID}.dmPolicy`,
   allowFromKey: `channels.${CHANNEL_ID}.allowFrom`,
-  getCurrent: (cfg) => {
-    const account = resolveWeComAccountMulti({ cfg });
+  getCurrent: (cfg, accountId) => {
+    const account = resolveWeComAccountMulti({ cfg, accountId });
     return account.config.dmPolicy ?? "open";
   },
-  setPolicy: (cfg, policy) => {
-    return setWeComDmPolicy(cfg, policy);
+  setPolicy: (cfg, policy, accountId) => {
+    return setWeComDmPolicy(cfg, policy, accountId);
   },
-  promptAllowFrom: async ({ cfg, prompter }) => {
-    const account = resolveWeComAccountMulti({ cfg });
+  promptAllowFrom: async ({ cfg, prompter, accountId }) => {
+    const account = resolveWeComAccountMulti({ cfg, accountId });
     const existingAllowFrom = account.config.allowFrom ?? [];
 
     const entry = await prompter.text({
@@ -89,7 +94,7 @@ const dmPolicy: ChannelSetupDmPolicy = {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    return setWeComAccountMulti(cfg, { allowFrom });
+    return setWeComAccountMulti(cfg, { allowFrom }, accountId);
   },
 };
 
@@ -143,8 +148,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
       envPrompt: "Use Bot ID from environment variable?",
       keepPrompt: "Bot ID is configured, keep current value?",
       inputPrompt: "WeCom bot Bot ID",
-      inspect: ({ cfg }) => {
-        const account = resolveWeComAccountMulti({ cfg });
+      inspect: ({ cfg, accountId }) => {
+        const account = resolveWeComAccountMulti({ cfg, accountId });
         const hasValue = Boolean(account.botId?.trim());
         return {
           accountConfigured: hasValue,
@@ -152,8 +157,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
           resolvedValue: account.botId || undefined,
         };
       },
-      applySet: ({ cfg, resolvedValue }) => {
-        return setWeComAccountMulti(cfg, { botId: resolvedValue });
+      applySet: ({ cfg, accountId, resolvedValue }) => {
+        return setWeComAccountMulti(cfg, { botId: resolvedValue }, accountId);
       },
     },
     {
@@ -163,8 +168,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
       envPrompt: "Use Secret from environment variable?",
       keepPrompt: "Secret is configured, keep current value?",
       inputPrompt: "WeCom bot Secret",
-      inspect: ({ cfg }) => {
-        const account = resolveWeComAccountMulti({ cfg });
+      inspect: ({ cfg, accountId }) => {
+        const account = resolveWeComAccountMulti({ cfg, accountId });
         const hasValue = Boolean(account.secret?.trim());
         return {
           accountConfigured: hasValue,
@@ -172,8 +177,8 @@ export const wecomSetupWizard: ChannelSetupWizard = {
           resolvedValue: account.secret || undefined,
         };
       },
-      applySet: ({ cfg, resolvedValue }) => {
-        return setWeComAccountMulti(cfg, { secret: resolvedValue });
+      applySet: ({ cfg, accountId, resolvedValue }) => {
+        return setWeComAccountMulti(cfg, { secret: resolvedValue }, accountId);
       },
     },
   ],
