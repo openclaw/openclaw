@@ -18,6 +18,11 @@ import {
 } from "./provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
+function parseThinkingSignatureJson(signature: unknown): Record<string, unknown> {
+  expect(typeof signature).toBe("string");
+  return JSON.parse(signature as string) as Record<string, unknown>;
+}
+
 describe("openai transport stream", () => {
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
@@ -642,6 +647,153 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "medium", summary: "auto" });
   });
 
+  it("uses previous_response_id for codex responses tool continuations on HTTP", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: "Check the weather.",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+            responseId: "resp_tool_turn",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_weather|fc_weather",
+                name: "get_weather",
+                arguments: { city: "Taipei" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_weather|fc_weather",
+            toolName: "get_weather",
+            content: [{ type: "text", text: "Sunny, 70F." }],
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      previous_response_id?: string;
+      input?: Array<{ type?: string; call_id?: string; output?: string }>;
+    };
+
+    expect(params.previous_response_id).toBe("resp_tool_turn");
+    expect(params.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_weather",
+        output: "Sunny, 70F.",
+      },
+    ]);
+  });
+
+  it("keeps full context for codex responses when follow-up input is not tool-only", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: "Check the weather.",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+            responseId: "resp_tool_turn",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_weather|fc_weather",
+                name: "get_weather",
+                arguments: { city: "Taipei" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_weather|fc_weather",
+            toolName: "get_weather",
+            content: [{ type: "text", text: "Sunny, 70F." }],
+            isError: false,
+            timestamp: 3,
+          },
+          {
+            role: "user",
+            content: "Summarize it for me.",
+            timestamp: 4,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      previous_response_id?: string;
+      input?: Array<{ role?: string }>;
+    };
+
+    expect(params.previous_response_id).toBeUndefined();
+    expect(params.input?.some((item) => item.role === "user")).toBe(true);
+  });
+
   it.each([
     {
       label: "openai",
@@ -1165,6 +1317,82 @@ describe("openai transport stream", () => {
     ) as { reasoning_effort?: unknown };
 
     expect(params.reasoning_effort).toBe("high");
+  });
+
+  it("replays encrypted_content for OpenAI-compatible completions assistant turns", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "doubao-seed-2-0-lite-260215",
+        name: "Doubao Seed 2.0 Lite",
+        api: "openai-completions",
+        provider: "volcengine",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: "Check the weather.",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "volcengine",
+            model: "doubao-seed-2-0-lite-260215",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Beijing weather lookup will use a tool.",
+                thinkingSignature: JSON.stringify({
+                  v: 1,
+                  type: "openai-completions-reasoning",
+                  field: "reasoning_content",
+                  content: "Beijing weather lookup will use a tool.",
+                  encrypted_content: "enc_blob",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_weather",
+                name: "get_weather",
+                arguments: { city: "Beijing" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_weather",
+            toolName: "get_weather",
+            content: [{ type: "text", text: "5C" }],
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    const assistantMessage = params.messages?.find((message) => message.role === "assistant");
+    expect(assistantMessage?.reasoning_content).toBe("Beijing weather lookup will use a tool.");
+    expect(assistantMessage?.encrypted_content).toBe("enc_blob");
   });
 
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
@@ -1754,6 +1982,94 @@ describe("openai transport stream", () => {
     expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
       false,
     );
+  });
+
+  it("captures encrypted_content from OpenAI-compatible completions reasoning chunks", async () => {
+    const model = {
+      id: "doubao-seed-2-0-lite-260215",
+      name: "Doubao Seed 2.0 Lite",
+      api: "openai-completions",
+      provider: "volcengine",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-encrypted",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_content: "Tool lookup is needed.",
+              encrypted_content: "enc_blob",
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-encrypted",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toHaveLength(1);
+    const thinkingBlock = output.content[0] as {
+      type?: string;
+      thinking?: string;
+      thinkingSignature?: unknown;
+    };
+    expect(thinkingBlock.type).toBe("thinking");
+    expect(thinkingBlock.thinking).toBe("Tool lookup is needed.");
+    expect(parseThinkingSignatureJson(thinkingBlock.thinkingSignature)).toMatchObject({
+      type: "openai-completions-reasoning",
+      field: "reasoning_content",
+      content: "Tool lookup is needed.",
+      encrypted_content: "enc_blob",
+    });
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
@@ -2430,9 +2746,14 @@ describe("openai transport stream", () => {
       {
         type: "thinking",
         thinking: "Hidden fallback reasoning.",
-        thinkingSignature: "reasoning",
       },
     ]);
+    const thinkingBlock = output.content[1] as { thinkingSignature?: unknown };
+    expect(parseThinkingSignatureJson(thinkingBlock.thinkingSignature)).toMatchObject({
+      type: "openai-completions-reasoning",
+      field: "reasoning",
+      content: "Hidden fallback reasoning.",
+    });
   });
 
   it("keeps a streaming tool call intact when visible reasoning text arrives mid-call", async () => {
