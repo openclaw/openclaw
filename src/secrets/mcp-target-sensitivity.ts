@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isNonEmptyString } from "./shared.js";
 
 const ALWAYS_SENSITIVE_MCP_HEADER_NAMES = new Set([
@@ -120,10 +121,32 @@ function isBenignMcpLiteralValue(value: unknown): boolean {
   }
   return (
     BENIGN_MCP_LITERAL_VALUES.has(literal.normalized) ||
-    URL_LIKE_MCP_LITERAL.test(literal.trimmed) ||
+    (URL_LIKE_MCP_LITERAL.test(literal.trimmed) && !hasSensitiveMcpUrlValue(literal.trimmed)) ||
     INTEGER_LIKE_MCP_LITERAL.test(literal.trimmed) ||
     MIME_LIKE_MCP_LITERAL.test(literal.trimmed)
   );
+}
+
+function hasSensitiveMcpUrlValue(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.username || parsed.password) {
+    return true;
+  }
+  for (const [key, paramValue] of parsed.searchParams.entries()) {
+    if (isLikelySensitiveMcpEnvName(key) || isLikelySensitiveMcpHeaderName(key)) {
+      return true;
+    }
+    const normalizedValue = normalizeLowercaseStringOrEmpty(paramValue);
+    if (SENSITIVE_MCP_VALUE_FRAGMENTS.some((fragment) => normalizedValue.includes(fragment))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function tokenizeMcpName(value: string): string[] {
@@ -180,6 +203,9 @@ export function shouldAuditPlaintextMcpValue(params: {
   if (nameLooksSensitive) {
     return true;
   }
+  if (hasSensitiveMcpUrlValue(literal.trimmed)) {
+    return true;
+  }
   return SENSITIVE_MCP_VALUE_FRAGMENTS.some((fragment) => literal.normalized.includes(fragment));
 }
 
@@ -187,10 +213,30 @@ export function shouldIncludeConfigureMcpCandidate(params: {
   kind: "env" | "header";
   name: string;
   value: unknown;
+  refValue?: unknown;
 }): boolean {
+  const hasConfiguredRef = Boolean(
+    resolveSecretInputRef({
+      value: params.value,
+      refValue: params.refValue,
+    }).ref,
+  );
+  if (hasConfiguredRef) {
+    return true;
+  }
+  const literal = getNormalizedMcpLiteralValue(params.value);
   const nameLooksSensitive =
     params.kind === "env"
       ? isLikelySensitiveMcpEnvName(params.name)
       : isLikelySensitiveMcpHeaderName(params.name);
-  return nameLooksSensitive && !isBenignMcpLiteralValue(params.value);
+  if (!literal || isBenignMcpLiteralValue(params.value)) {
+    return false;
+  }
+  if (nameLooksSensitive) {
+    return true;
+  }
+  if (hasSensitiveMcpUrlValue(literal.trimmed)) {
+    return true;
+  }
+  return SENSITIVE_MCP_VALUE_FRAGMENTS.some((fragment) => literal.normalized.includes(fragment));
 }

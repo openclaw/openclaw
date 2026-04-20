@@ -79,6 +79,7 @@ function shouldIncludeConfigureCandidate(path: {
   entry: { id: string };
   pathSegments: string[];
   value: unknown;
+  refValue?: unknown;
 }): boolean {
   const leafSegment = path.pathSegments.at(-1) ?? "";
   if (path.entry.id === "mcp.servers.*.env.*") {
@@ -86,6 +87,7 @@ function shouldIncludeConfigureCandidate(path: {
       kind: "env",
       name: leafSegment,
       value: path.value,
+      refValue: path.refValue,
     });
   }
   if (path.entry.id === "mcp.servers.*.headers.*") {
@@ -93,6 +95,7 @@ function shouldIncludeConfigureCandidate(path: {
       kind: "header",
       name: leafSegment,
       value: path.value,
+      refValue: path.refValue,
     });
   }
   return true;

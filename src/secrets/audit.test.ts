@@ -823,6 +823,49 @@ describe("secrets audit", () => {
     ).toBe(false);
   });
 
+  it("flags core mcp URLs with embedded credentials as plaintext secrets", async () => {
+    await writeJsonFile(fixture.configPath, {
+      mcp: {
+        servers: {
+          demo: {
+            command: "node",
+            env: {
+              DASHBOARD_URL: "https://user:pass@example.invalid/mcp",
+            },
+            headers: {
+              "X-Endpoint": "https://example.invalid/mcp?api_key=secret-query-value",
+            },
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "mcp.servers.demo.env.DASHBOARD_URL",
+      ),
+    ).toBe(true);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "mcp.servers.demo.headers.X-Endpoint",
+      ),
+    ).toBe(true);
+  });
+
   it("does not flag ordinary custom core mcp literals as plaintext secrets", async () => {
     await writeJsonFile(fixture.configPath, {
       mcp: {
