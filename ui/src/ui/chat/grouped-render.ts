@@ -102,27 +102,27 @@ function generateDetailsId(message: unknown, index: number): string {
   return `tool-${idString}-${index}`;
 }
 
-function getVideoStorageKey(videoSrc: string, messageId: string): string {
-  // Create a unique key based on video source and message
-  const hash = btoa(videoSrc).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50);
-  return `video_progress_${hash}_${messageId}`;
+function getMediaStorageKey(mediaSrc: string, messageId: string, type: 'audio' | 'video'): string {
+  // Create a unique key based on media source and message
+  const hash = btoa(encodeURIComponent(mediaSrc)).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50);
+  return `${type}_progress_${hash}_${messageId}`;
 }
 
-function saveVideoProgress(videoSrc: string, messageId: string, currentTime: number) {
+function saveMediaProgress(mediaSrc: string, messageId: string, type: 'audio' | 'video', currentTime: number) {
   try {
-    const key = getVideoStorageKey(videoSrc, messageId);
+    const key = getMediaStorageKey(mediaSrc, messageId, type);
     localStorage.setItem(key, JSON.stringify({
       currentTime,
       timestamp: Date.now()
     }));
   } catch (e) {
-    console.warn('Failed to save video progress:', e);
+    console.warn(`Failed to save ${type} progress:`, e);
   }
 }
 
-function getVideoProgress(videoSrc: string, messageId: string): number | null {
+function getMediaProgress(mediaSrc: string, messageId: string, type: 'audio' | 'video'): number | null {
   try {
-    const key = getVideoStorageKey(videoSrc, messageId);
+    const key = getMediaStorageKey(mediaSrc, messageId, type);
     const saved = localStorage.getItem(key);
     if (saved) {
       const data = JSON.parse(saved);
@@ -133,7 +133,7 @@ function getVideoProgress(videoSrc: string, messageId: string): number | null {
       localStorage.removeItem(key);
     }
   } catch (e) {
-    console.warn('Failed to load video progress:', e);
+    console.warn(`Failed to load ${type} progress:`, e);
   }
   return null;
 }
@@ -924,7 +924,9 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
 
   for (let i = 0; i < audioBlocks.length; i++) {
     const audio = audioBlocks[i];
-    // Add error handler to hide the "Unavailable" message
+    const audioInstanceId = messageId ? `${messageId}_audio_${i}` : `audio_${Date.now()}_${i}`;
+    const audioSrc = audio.data;
+    
     const handleError = (e: Event) => {
       const audioEl = e.target as HTMLAudioElement;
       const wrapper = audioEl.closest('.chat-media-wrapper') as HTMLElement;
@@ -936,7 +938,38 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
     
     elements.push(html`
       <div class="chat-media-wrapper">
-        <audio controls class="chat-message-audio" @error=${handleError}>
+        <audio 
+          controls 
+          class="chat-message-audio" 
+          @error=${handleError}
+          @loadedmetadata=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            const savedTime = getMediaProgress(audioSrc, audioInstanceId, 'audio');
+            if (savedTime && savedTime < audioEl.duration) {
+              audioEl.currentTime = savedTime;
+              console.log(`Resumed audio at ${savedTime}s`);
+            }
+          }}
+          @timeupdate=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            // Save every 5 seconds to avoid too many writes
+            const currentTime = Math.floor(audioEl.currentTime);
+            if (currentTime % 5 === 0 && currentTime !== Math.floor((audioEl as any).lastSavedTime || 0)) {
+              saveMediaProgress(audioSrc, audioInstanceId, 'audio', audioEl.currentTime);
+              (audioEl as any).lastSavedTime = audioEl.currentTime;
+            }
+          }}
+          @pause=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            saveMediaProgress(audioSrc, audioInstanceId, 'audio', audioEl.currentTime);
+          }}
+          @ended=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            // Clear progress when audio finishes
+            const key = getMediaStorageKey(audioSrc, audioInstanceId, 'audio');
+            localStorage.removeItem(key);
+          }}
+        >
           <source src=${audio.data} type=${audio.mimeType} />
           Your browser does not support the audio element.
         </audio>
@@ -970,10 +1003,9 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
           @error=${handleError}
           @loadedmetadata=${(e: Event) => {
             const videoEl = e.target as HTMLVideoElement;
-            const savedTime = getVideoProgress(videoSrc, videoInstanceId);
+            const savedTime = getMediaProgress(videoSrc, videoInstanceId, 'video');
             if (savedTime && savedTime < videoEl.duration) {
               videoEl.currentTime = savedTime;
-              // Optional: show a small indicator that resume happened
               console.log(`Resumed video at ${savedTime}s`);
             }
           }}
@@ -981,19 +1013,19 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
             const videoEl = e.target as HTMLVideoElement;
             // Save every 5 seconds to avoid too many writes
             const currentTime = Math.floor(videoEl.currentTime);
-            if (currentTime % 5 === 0 && currentTime !== Math.floor(videoEl.lastSavedTime || 0)) {
-              saveVideoProgress(videoSrc, videoInstanceId, videoEl.currentTime);
+            if (currentTime % 5 === 0 && currentTime !== Math.floor((videoEl as any).lastSavedTime || 0)) {
+              saveMediaProgress(videoSrc, videoInstanceId, 'video', videoEl.currentTime);
               (videoEl as any).lastSavedTime = videoEl.currentTime;
             }
           }}
           @pause=${(e: Event) => {
             const videoEl = e.target as HTMLVideoElement;
-            saveVideoProgress(videoSrc, videoInstanceId, videoEl.currentTime);
+            saveMediaProgress(videoSrc, videoInstanceId, 'video', videoEl.currentTime);
           }}
           @ended=${(e: Event) => {
             const videoEl = e.target as HTMLVideoElement;
             // Clear progress when video finishes
-            const key = getVideoStorageKey(videoSrc, videoInstanceId);
+            const key = getMediaStorageKey(videoSrc, videoInstanceId, 'video');
             localStorage.removeItem(key);
           }}
         >
