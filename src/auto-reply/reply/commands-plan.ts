@@ -82,29 +82,79 @@ function parsePlanCommand(raw: string, channel: string): ParsedPlanCommand | nul
   const second = normalizeLowercaseStringOrEmpty(tokens[1] ?? "");
   const tail = tokens.slice(1).join(" ").trim();
 
+  // Codex review #68939 (2026-04-20): reject trailing tokens on
+  // single-token commands so typos like `/plan off later` don't
+  // silently execute the mode change. `normalizeLowercaseStringOrEmpty`
+  // returns `""` (never undefined) when a token is absent, so the
+  // precise "no extra arg" predicate is `tokens.length === 1`.
+  const rejectTrailingTokens = (verb: string) =>
+    tokens.length > 1
+      ? ({
+          ok: false,
+          error: `Usage: /plan ${verb} — unexpected trailing argument "${tokens.slice(1).join(" ")}". This command takes no arguments.`,
+        } as const)
+      : null;
+
   switch (first) {
-    case "status":
+    case "status": {
+      const err = rejectTrailingTokens("status");
+      if (err) {
+        return err;
+      }
       return { ok: true, sub: { kind: "status" } };
-    case "view":
+    }
+    case "view": {
+      const err = rejectTrailingTokens("view");
+      if (err) {
+        return err;
+      }
       return { ok: true, sub: { kind: "view" } };
-    case "on":
+    }
+    case "on": {
+      const err = rejectTrailingTokens("on");
+      if (err) {
+        return err;
+      }
       return { ok: true, sub: { kind: "on" } };
-    case "off":
+    }
+    case "off": {
+      const err = rejectTrailingTokens("off");
+      if (err) {
+        return err;
+      }
       return { ok: true, sub: { kind: "off" } };
-    case "restate":
+    }
+    case "restate": {
+      const err = rejectTrailingTokens("restate");
+      if (err) {
+        return err;
+      }
       return { ok: true, sub: { kind: "restate" } };
+    }
     case "accept": {
-      // Codex review #68939: reject malformed `/plan accept <garbage>`
-      // so a typo like `/plan accept editss` doesn't silently land as
-      // a bare approval (allowEdits=false). Only `edits` / `edit` (or
-      // no argument at all) are valid.
-      if (second !== undefined && second !== "edits" && second !== "edit") {
+      // Codex review #68939 (2026-04-20): `normalizeLowercaseStringOrEmpty`
+      // returns `""` (never undefined) when `tokens[1]` is absent, so
+      // the prior check `second !== undefined && ...` ALWAYS fired and
+      // rejected the documented bare `/plan accept` form. Treat empty
+      // string the same as missing.
+      const isBareAccept = second === "";
+      const isEditsAccept = second === "edits" || second === "edit";
+      if (!isBareAccept && !isEditsAccept) {
         return {
           ok: false,
           error: `Usage: /plan accept [edits] — unknown argument "${second}". Valid forms: /plan accept, /plan accept edits.`,
         };
       }
-      const allowEdits = second === "edits" || second === "edit";
+      // Reject trailing tokens beyond the `edits` / `edit` qualifier so
+      // `/plan accept edits now` doesn't silently approve.
+      const maxTokens = isEditsAccept ? 2 : 1;
+      if (tokens.length > maxTokens) {
+        return {
+          ok: false,
+          error: `Usage: /plan accept [edits] — unexpected trailing argument "${tokens.slice(maxTokens).join(" ")}".`,
+        };
+      }
+      const allowEdits = isEditsAccept;
       return { ok: true, sub: { kind: "accept", allowEdits } };
     }
     case "revise": {
