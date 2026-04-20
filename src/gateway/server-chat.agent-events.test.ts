@@ -1467,4 +1467,114 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  // Regression for greptile P1 on PR #69277: a thinking-only delta must NOT
+  // append a `{type:"text", text:""}` block, otherwise the ACP translator
+  // converts it into a spurious empty `agent_message_chunk`.
+  it("emits a thinking-only chat delta with no empty text block", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_000,
+    });
+    chatRunState.registry.add("run-thinking", {
+      sessionKey: "session-thinking",
+      clientRunId: "client-thinking",
+    });
+
+    handler({
+      runId: "run-thinking",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "weighing options" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: {
+        content?: Array<{ type?: string; text?: string; thinking?: string }>;
+      };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.message?.content).toEqual([{ type: "thinking", thinking: "weighing options" }]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  // Regression for greptile outside-diff comment on PR #69277: a throttled
+  // thinking event must still be flushed via the pre-final delta path even
+  // when no assistant text has accumulated, so the client receives the
+  // latest reasoning slice as a delta rather than first seeing it in the
+  // final event.
+  it("flushes a pending thinking-only delta before the final event", () => {
+    const dateSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-thinking-flush", {
+      sessionKey: "session-thinking-flush",
+      clientRunId: "client-thinking-flush",
+    });
+
+    handler({
+      runId: "run-thinking-flush",
+      seq: 1,
+      stream: "thinking",
+      ts: 1_000,
+      data: { text: "first thought" },
+    });
+
+    dateSpy.mockReturnValue(1_050);
+    handler({
+      runId: "run-thinking-flush",
+      seq: 2,
+      stream: "thinking",
+      ts: 1_050,
+      data: { text: "first thought, then more" },
+    });
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+
+    dateSpy.mockReturnValue(2_000);
+    emitLifecycleEnd(handler, "run-thinking-flush", 3);
+
+    // Cumulative broadcast calls: first delta (1_000) + pre-final flush (2_000)
+    // + final (2_000). Without the flush fix, the middle entry would be missing
+    // and the throttled second thinking slice would only surface in `final`.
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+
+    const firstDeltaPayload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: {
+        content?: Array<{ type?: string; text?: string; thinking?: string }>;
+      };
+    };
+    expect(firstDeltaPayload.state).toBe("delta");
+    expect(firstDeltaPayload.message?.content).toEqual([
+      { type: "thinking", thinking: "first thought" },
+    ]);
+
+    const flushPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: {
+        content?: Array<{ type?: string; text?: string; thinking?: string }>;
+      };
+    };
+    expect(flushPayload.state).toBe("delta");
+    expect(flushPayload.message?.content).toEqual([
+      { type: "thinking", thinking: "first thought, then more" },
+    ]);
+
+    const finalPayload = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: {
+        content?: Array<{ type?: string; text?: string; thinking?: string }>;
+      };
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content).toEqual([
+      { type: "thinking", thinking: "first thought, then more" },
+    ]);
+
+    dateSpy.mockRestore();
+  });
 });

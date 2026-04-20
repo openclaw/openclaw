@@ -708,7 +708,14 @@ export function createAgentEventHandler({
     if (thinkingText) {
       blocks.push({ type: "thinking", thinking: thinkingText });
     }
-    blocks.push({ type: "text", text: mergedText });
+    // Guard against producing a spurious empty `{type:"text", text:""}` block
+    // for thinking-only deltas (before any assistant text has arrived). The
+    // ACP translator would otherwise convert that into an empty
+    // `agent_message_chunk`. `emitChatFinal` already uses an equivalent
+    // `if (hasVisibleText)` guard for the final payload.
+    if (mergedText) {
+      blocks.push({ type: "text", text: mergedText });
+    }
     return blocks;
   };
 
@@ -870,8 +877,13 @@ export function createAgentEventHandler({
       clientRunId,
       sourceRunId,
     );
+    // The text-based suppression flags only trigger when there IS assistant
+    // text to suppress; when text is empty (thinking-only run, or pre-text
+    // throttled tail) they are all false, so dropping the standalone `!text`
+    // bail allows reasoning-only flushes to reach the client. The
+    // `!textGrew && !thinkingGrew` check below still bails when there is
+    // genuinely nothing new to broadcast.
     if (
-      !text ||
       shouldSuppressSilent ||
       shouldSuppressSilentLeadFragment ||
       shouldSuppressHeartbeatStreaming
@@ -933,9 +945,7 @@ export function createAgentEventHandler({
     if (jobState === "done") {
       const hasVisibleText = Boolean(text) && !shouldSuppressSilent;
       const hasThinking = finalThinkingText.length > 0;
-      let finalContent:
-        | Array<{ type: string; text?: string; thinking?: string }>
-        | undefined;
+      let finalContent: Array<{ type: string; text?: string; thinking?: string }> | undefined;
       if (hasVisibleText || hasThinking) {
         finalContent = [];
         if (hasThinking) {
