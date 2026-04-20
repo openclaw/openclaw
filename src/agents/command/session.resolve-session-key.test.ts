@@ -25,7 +25,7 @@ vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),
 }));
 
-const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
+const { resolveSession, resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
   await import("./session.js");
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
@@ -125,5 +125,29 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore).toBe(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats stale lastInteractionAt as the freshness anchor when resolving sessions", () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "stale-session",
+        updatedAt: Date.now(),
+        lastInteractionAt: Date.now() - 2 * 60 * 60 * 1000,
+      },
+    });
+
+    const result = resolveSession({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+          mainKey: "main",
+          reset: { mode: "idle", idleMinutes: 60 },
+        },
+      } satisfies OpenClawConfig,
+      sessionKey: "agent:main:main",
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe("stale-session");
   });
 });

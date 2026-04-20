@@ -142,6 +142,31 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.modelOverrideSource).toBe("auto");
   });
 
+  it("does not advance lastInteractionAt for automatic selection repairs", () => {
+    const before = Date.now() - 5_000;
+    const lastInteractionAt = before - 60_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-auto",
+      updatedAt: before,
+      lastInteractionAt,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      selectionSource: "auto",
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.updatedAt).toBeGreaterThan(before);
+    expect(entry.lastInteractionAt).toBe(lastInteractionAt);
+  });
+
   it("sets liveModelSwitchPending only when explicitly requested", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5",

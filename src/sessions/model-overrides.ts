@@ -16,8 +16,10 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
-  const profileOverrideSource = params.profileOverrideSource ?? "user";
+  const profileOverrideSource = profileOverride ? (params.profileOverrideSource ?? "user") : undefined;
   const selectionSource = params.selectionSource ?? "user";
+  const shouldAdvanceLastInteractionAt =
+    selectionSource !== "auto" || (profileOverride ? profileOverrideSource !== "auto" : false);
   let updated = false;
   let selectionUpdated = false;
 
@@ -122,7 +124,9 @@ export function applyModelOverrideToSessionEntry(params: {
     delete entry.fallbackNoticeReason;
     const overrideNow = Date.now();
     entry.updatedAt = overrideNow;
-    entry.lastInteractionAt = overrideNow;
+    if (shouldAdvanceLastInteractionAt) {
+      entry.lastInteractionAt = overrideNow;
+    }
   }
 
   return { updated };

@@ -215,6 +215,7 @@ export async function createModelSelectionState(params: {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        selectionSource: "auto",
       });
       if (updated) {
         sessionStore[sessionKey] = sessionEntry;

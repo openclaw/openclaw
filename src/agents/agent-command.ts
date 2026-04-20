@@ -706,6 +706,7 @@ async function agentCommandInternal(
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+            selectionSource: "auto",
           });
           if (updated) {
             await persistSessionEntry({
