@@ -241,6 +241,22 @@ function pickCliSessionId(
   return undefined;
 }
 
+/**
+ * Claude CLI SessionStart hooks emit `hook_started` and `hook_response` events
+ * that carry a transient per-hook `session_id` which is distinct from the
+ * conversation session that `--resume` operates on. When resuming, the hook
+ * events arrive before the `init` record, so the conversation session_id is
+ * only available from non-hook records. Treat hook records as ineligible for
+ * setting the conversation sessionId.
+ */
+function isTransientClaudeHookRecord(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "system") {
+    return false;
+  }
+  const subtype = parsed.subtype;
+  return subtype === "hook_started" || subtype === "hook_response";
+}
+
 export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {
@@ -429,8 +445,15 @@ export function parseCliJsonl(
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
-      if (!sessionId) {
-        sessionId = pickCliSessionId(parsed, backend);
+      const candidateSessionId = pickCliSessionId(parsed, backend);
+      if (candidateSessionId) {
+        // Prefer sessionIds from real records (init/stream_event/result) over
+        // transient hook records, which emit a different per-hook session_id
+        // that cannot be resumed. Fall back to a hook-emitted id only if no
+        // real record has provided one yet.
+        if (!isTransientClaudeHookRecord(parsed) || !sessionId) {
+          sessionId = candidateSessionId;
+        }
       }
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();

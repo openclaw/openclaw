@@ -313,6 +313,49 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("ignores SessionStart hook session_ids when resuming (they are transient and unresumable)", () => {
+    // When Claude CLI is invoked with `--resume <conversation-id>`, the
+    // SessionStart:resume hook emits `hook_started`/`hook_response` records
+    // carrying a per-hook transient session_id that precedes the conversation
+    // session_id in the `init` record. Storing the hook session_id and passing
+    // it to a subsequent `--resume` fails with "No conversation found", so
+    // parseCliJsonl must prefer the session_id from non-hook records.
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "system",
+          subtype: "hook_started",
+          hook_name: "SessionStart:resume",
+          session_id: "transient-hook-id",
+        }),
+        JSON.stringify({
+          type: "system",
+          subtype: "hook_response",
+          hook_name: "SessionStart:resume",
+          session_id: "transient-hook-id",
+        }),
+        JSON.stringify({ type: "system", subtype: "init", session_id: "resumed-session" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "resumed-session",
+          result: "resumed reply",
+          usage: { input_tokens: 4, output_tokens: 2 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toMatchObject({
+      text: "resumed reply",
+      sessionId: "resumed-session",
+    });
+  });
+
   it("extracts nested Claude API errors from failed stream-json output", () => {
     const { message, jsonl } = createClaudeApiErrorFixture();
     const result = extractCliErrorMessage(jsonl);
