@@ -430,12 +430,25 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
+// Memoize alias maps by inputs so the same object reference is returned for
+// identical parameters. jiti's `normalizeAliases` uses a reference-identity
+// sentinel (`if (e[pt]) return e`) to skip its O(N²) normalization — returning
+// the same object lets the sentinel fire on the 2nd+ call instead of repeating
+// the full cycle every time. See #68983.
+const aliasMapCache = new Map<string, Record<string, string>>();
+
 export function buildPluginLoaderAliasMap(
   modulePath: string,
   argv1: string | undefined = STARTUP_ARGV1,
   moduleUrl?: string,
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
 ): Record<string, string> {
+  const cacheKey = `${modulePath}\0${argv1 ?? ""}\0${moduleUrl ?? ""}\0${pluginSdkResolution}`;
+  const cached = aliasMapCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
@@ -445,7 +458,7 @@ export function buildPluginLoaderAliasMap(
     pluginSdkResolution,
   });
   const extensionApiAlias = resolveExtensionApiAlias({ modulePath, pluginSdkResolution });
-  return {
+  const result: Record<string, string> = {
     ...(extensionApiAlias
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
@@ -463,6 +476,8 @@ export function buildPluginLoaderAliasMap(
       ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
     ),
   };
+  aliasMapCache.set(cacheKey, result);
+  return result;
 }
 
 export function resolvePluginRuntimeModulePath(
