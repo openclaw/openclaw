@@ -648,6 +648,49 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 }
 ```
 
+### Anthropic proxy (aiusage example)
+
+If you want to route your Claude API traffic through an Anthropic-compatible
+proxy (for cost optimization, shared team keys, caching, or audit logging),
+override the bundled `anthropic` provider's `baseUrl`. Any proxy that speaks
+the Anthropic `/v1/messages` protocol and passes through the `x-api-key`
+header works.
+
+[aiusage](https://aiusage.ai) is one such proxy — it BYOK-routes Claude
+traffic at a significantly lower effective cost than direct Anthropic. You
+can also use LiteLLM, Helicone, an in-house gateway, or any other
+Anthropic-compatible endpoint.
+
+- Provider: `anthropic` (bundled, unchanged)
+- Auth mode: **API key only** (OAuth / Claude CLI reuse bypasses `baseUrl`
+  because it talks to `api.anthropic.com` natively)
+- Auth: `ANTHROPIC_API_KEY` (your normal Claude key, passed through the proxy)
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      anthropic: {
+        baseUrl: "https://aiusage.ai/v1",
+        apiKey: "${ANTHROPIC_API_KEY}",
+        api: "anthropic-messages",
+      },
+    },
+  },
+}
+```
+
+OpenClaw's Anthropic transport automatically appends `/v1/messages` to the
+`baseUrl` when the path doesn't already end in `/v1`, so both
+`https://aiusage.ai/v1` and `https://aiusage.ai` resolve to the same request
+URL. If you skip the override, OpenClaw talks to `https://api.anthropic.com`
+as usual — this only kicks in when `models.providers.anthropic.baseUrl` is
+set.
+
 ### MiniMax
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
