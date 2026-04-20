@@ -143,26 +143,6 @@ function resolveSessionMessagesStoreContext(
   return { sessionsDir };
 }
 
-function listExistingTranscriptVariantsForSessionId(
-  sessionId: string,
-  sessionsDir: string,
-): string[] {
-  if (!sessionsDir || !SAFE_SESSION_ID_RE.test(sessionId)) {
-    return [];
-  }
-  const jsonlName = `${sessionId}.jsonl`;
-  const resetPrefix = `${sessionId}.jsonl.reset.`;
-  try {
-    return fs
-      .readdirSync(sessionsDir)
-      .filter((name) => name === jsonlName || name.startsWith(resetPrefix))
-      .map((name) => path.join(sessionsDir, name))
-      .filter((filePath) => fs.existsSync(filePath));
-  } catch {
-    return [];
-  }
-}
-
 function resolveMainSessionTranscriptFiles(
   sessionId: string,
   storePath: string | undefined,
@@ -199,10 +179,8 @@ function resolveMainSessionTranscriptFiles(
     new Set([...checkpointSessionIds, sessionId].filter((value) => SAFE_SESSION_ID_RE.test(value))),
   );
   for (const chainedSessionId of orderedSessionIds) {
-    for (const filePath of listExistingTranscriptVariantsForSessionId(
-      chainedSessionId,
-      context.sessionsDir,
-    )) {
+    const filePath = path.join(context.sessionsDir, `${chainedSessionId}.jsonl`);
+    if (fs.existsSync(filePath)) {
       pushFile(filePath);
     }
   }
@@ -226,7 +204,7 @@ function resolveMainSessionTranscriptFiles(
   return files.toSorted((a, b) => {
     const da = getMtime(a);
     const db = getMtime(b);
-    if (da !== null && db !== null) {
+    if (da !== null && db !== null && da !== db) {
       return da - db;
     }
     return a.localeCompare(b);
