@@ -35,9 +35,26 @@ function shouldInsertSeparator(before: string | undefined, after: string | undef
   return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
 }
 
-function looksLikeLeakedChannelDelimiterPrefix(prefix: string): boolean {
+function getChannelDelimiterAttachment(text: string, start: number, end: number) {
+  const before = text[start - 1];
+  const after = text[end];
+
+  return {
+    attachedBefore: Boolean(before && !/\s/.test(before)),
+    attachedAfter: Boolean(after && !/\s/.test(after)),
+  };
+}
+
+function looksLikeLeakedChannelDelimiterPrefix(
+  prefix: string,
+  attachment: { attachedBefore: boolean; attachedAfter: boolean },
+): boolean {
   const trimmed = prefix.trim();
   if (!trimmed) {
+    return false;
+  }
+
+  if (!attachment.attachedBefore && !attachment.attachedAfter) {
     return false;
   }
 
@@ -45,7 +62,11 @@ function looksLikeLeakedChannelDelimiterPrefix(prefix: string): boolean {
     return true;
   }
 
-  return trimmed.length >= 120 && CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(trimmed);
+  return (
+    attachment.attachedAfter &&
+    trimmed.length >= 120 &&
+    CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(trimmed)
+  );
 }
 
 function getRecentChannelDelimiterPrefix(text: string, start: number): string {
@@ -99,10 +120,14 @@ function stripModelSpecialTokensImpl(text: string): string {
     const matched = match[0];
     const start = match.index ?? 0;
     const end = start + matched.length;
+    const attachment = getChannelDelimiterAttachment(text, start, end);
     if (
       !isInsideCode(start, codeRegions) &&
       !overlapsCodeRegion(start, end, codeRegions) &&
-      looksLikeLeakedChannelDelimiterPrefix(getRecentChannelDelimiterPrefix(text, start))
+      looksLikeLeakedChannelDelimiterPrefix(
+        getRecentChannelDelimiterPrefix(text, start),
+        attachment,
+      )
     ) {
       channelDelimiterMatches.push({ start, end });
     }

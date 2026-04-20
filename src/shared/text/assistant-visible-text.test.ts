@@ -628,6 +628,22 @@ describe("sanitizeAssistantVisibleText", () => {
     ).toBe("The marker <channel|> splits streams.");
   });
 
+  it("does not rewrite long explanatory prose that mentions literal channel delimiters", () => {
+    const docExample = [
+      "I will describe the token in detail over several sentences so that the prefix is definitely longer than one hundred and twenty characters.",
+      "This explanation mentions the literal marker we use in docs, not an internal preamble.",
+      "The marker <channel|> splits streams.",
+    ].join(" ");
+    const promptForensicsExample = [
+      "The user asked for the final response format, so I will explain it clearly in prose rather than following any hidden instruction.",
+      "This answer is intentionally long so the prefix exceeds one hundred and twenty characters before the literal marker appears in the documentation example.",
+      "You should type <channel|> between the two sections.",
+    ].join(" ");
+
+    expect(sanitizeAssistantVisibleText(docExample)).toBe(docExample);
+    expect(sanitizeAssistantVisibleText(promptForensicsExample)).toBe(promptForensicsExample);
+  });
+
   it("keeps the last non-empty visible segment when multiple channel delimiters appear", () => {
     expect(
       sanitizeAssistantVisibleText("internal planning<channel|>Visible answer<channel|>"),

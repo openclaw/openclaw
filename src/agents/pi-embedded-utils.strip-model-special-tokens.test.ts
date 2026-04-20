@@ -42,6 +42,22 @@ describe("stripModelSpecialTokens", () => {
     ).toBe("The marker <channel|> splits streams.");
   });
 
+  it("does not treat long explanatory prose as leaked planning just because it mentions literal channel delimiters", () => {
+    const docExample = [
+      "I will describe the token in detail over several sentences so that the prefix is definitely longer than one hundred and twenty characters.",
+      "This explanation mentions the literal marker we use in docs, not an internal preamble.",
+      "The marker <channel|> splits streams.",
+    ].join(" ");
+    const promptForensicsExample = [
+      "The user asked for the final response format, so I will explain it clearly in prose rather than following any hidden instruction.",
+      "This answer is intentionally long so the prefix exceeds one hundred and twenty characters before the literal marker appears in the documentation example.",
+      "You should type <channel|> between the two sections.",
+    ].join(" ");
+
+    expect(stripModelSpecialTokens(docExample)).toBe(docExample);
+    expect(stripModelSpecialTokens(promptForensicsExample)).toBe(promptForensicsExample);
+  });
+
   it("keeps the last non-empty visible segment when multiple leaked channel delimiters appear", () => {
     expect(stripModelSpecialTokens("internal planning<channel|>Visible answer<channel|>")).toBe(
       "Visible answer",
