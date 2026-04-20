@@ -160,6 +160,7 @@ export function resolveSystemPromptUsage(params: {
   }
   if (
     !params.backend.systemPromptArg?.trim() &&
+    !params.backend.systemPromptFileArg?.trim() &&
     !params.backend.systemPromptFileConfigKey?.trim()
   ) {
     return null;
@@ -292,7 +293,10 @@ export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
 }): Promise<{ filePath?: string; cleanup: () => Promise<void> }> {
-  if (!params.backend.systemPromptFileConfigKey?.trim()) {
+  if (
+    !params.backend.systemPromptFileArg?.trim() &&
+    !params.backend.systemPromptFileConfigKey?.trim()
+  ) {
     return { cleanup: async () => {} };
   }
   const tempDir = await fs.mkdtemp(
@@ -369,6 +373,13 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.systemPromptFilePath &&
+    params.backend.systemPromptFileArg
+  ) {
+    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
+  } else if (
     !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
