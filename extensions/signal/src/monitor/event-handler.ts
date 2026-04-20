@@ -674,7 +674,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: isGroup && (dataMessage?.mentions?.length ?? 0) > 0,
+        hasAnyMention: false,
         implicitMentionKinds: [],
       },
       policy: {
