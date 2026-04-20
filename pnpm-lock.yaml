@@ -137,6 +137,9 @@ importers:
       commander:
         specifier: ^14.0.3
         version: 14.0.3
+      cos-nodejs-sdk-v5:
+        specifier: ^2.15.4
+        version: 2.15.4
       croner:
         specifier: ^10.0.1
         version: 10.0.1
@@ -215,6 +218,9 @@ importers:
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
+      protobufjs:
+        specifier: 7.5.5
+        version: 7.5.5
       proxy-agent:
         specifier: ^8.0.1
         version: 8.0.1
