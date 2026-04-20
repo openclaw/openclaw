@@ -7,6 +7,7 @@ import {
   applyConfigOverrides,
   isNixMode,
   readConfigFileSnapshot,
+  recoverConfigFromLastKnownGood,
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -20,6 +21,9 @@ import {
   activateSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { resolveGatewayAuth } from "./auth.js";
+import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
+import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -58,6 +62,26 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     );
   }
   if (configSnapshot.exists) {
+    if (!configSnapshot.valid) {
+      const recovered = await recoverConfigFromLastKnownGood({
+        snapshot: configSnapshot,
+        reason: "startup-invalid-config",
+      });
+      if (recovered) {
+        params.log.warn(
+          `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
+        );
+        configSnapshot = await readConfigFileSnapshot();
+        if (configSnapshot.valid) {
+          enqueueConfigRecoveryNotice({
+            cfg: configSnapshot.config,
+            phase: "startup",
+            reason: "startup-invalid-config",
+            configPath: configSnapshot.path,
+          });
+        }
+      }
+    }
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
 
@@ -114,6 +138,7 @@ export function createRuntimeSecretsActivator(params: {
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
         });
+        assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {
           activateRuntimeSecretsSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
@@ -239,6 +264,16 @@ function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConf
     ...config,
     channels: undefined,
   };
+}
+
+function assertRuntimeGatewayAuthNotKnownWeak(config: OpenClawConfig): void {
+  assertGatewayAuthNotKnownWeak(
+    resolveGatewayAuth({
+      authConfig: config.gateway?.auth,
+      env: process.env,
+      tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
+    }),
+  );
 }
 
 function logGatewayAuthSurfaceDiagnostics(

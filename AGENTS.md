@@ -127,8 +127,23 @@
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
-- TypeScript checks: `pnpm tsgo`
+- TypeScript checks are split by architecture boundary, with four normal lanes:
+  - `pnpm tsgo` / `pnpm tsgo:core`: core production roots (`src/`, `ui/`, `packages/`; no `extensions/` include roots).
+  - `pnpm tsgo:core:test`: core colocated tests.
+  - `pnpm tsgo:extensions`: bundled extension production graph.
+  - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
+  - `pnpm tsgo:core:all`: core production + core test project references (`tsconfig.core.projects.json`).
+  - `pnpm tsgo:extensions:all`: extension production + extension test project references (`tsconfig.extensions.projects.json`).
+  - `pnpm tsgo:all`: every TypeScript graph above through the project-reference root (`tsconfig.projects.json`); this is what `pnpm check` runs.
+  - `pnpm tsgo:profile [core-test|extensions-test|--all]`: profile fresh graph cost into `.artifacts/tsgo-profile/`. Diagnostic-only profile slices (`core-test-agents`, `core-test-non-agents`) exist for investigating agent graph cost; do not treat them as normal user-facing checks.
+  - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
+- Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
+- Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.
 - Lint/format: `pnpm check`
+  - `pnpm lint`: type-aware lint shards for core, extensions, and scripts, run in parallel after shared boundary artifacts are prepared once.
+  - `pnpm lint:core`, `pnpm lint:extensions`, `pnpm lint:scripts`: focused lint shards.
+  - `pnpm lint:all`: legacy single-pass repo-wide oxlint, useful when comparing shard behavior.
+  - `pnpm lint:apps`: app lint surface such as Swift; keep app lint separate from repo TypeScript lint.
 - Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
 - Format check: `pnpm format:check` (oxfmt --check)
 - Format fix: `pnpm format` or `pnpm format:fix` (oxfmt --write)
@@ -137,7 +152,8 @@
   - A local dev gate is the fast default loop, usually `pnpm check` plus any scoped test you actually need.
   - A landing gate is the broader bar before pushing `main`, usually `pnpm check`, `pnpm test`, and `pnpm build` when the touched surface can affect build output, packaging, lazy-loading/module boundaries, or published surfaces.
   - A CI gate is whatever the relevant workflow enforces for that lane (for example `check`, `check-additional`, `build-smoke`, or release validation).
-- Local dev gate: prefer `pnpm check` for the normal edit loop. It keeps the repo-architecture policy guards out of the default local loop.
+- Local dev gate: prefer `pnpm check` for the normal edit loop. It runs typecheck and lint first, then parallelizes independent policy guards. It keeps the repo-architecture policy guards out of the default local loop.
+- Timed local gate: use `pnpm check:timed` to see per-stage cost. Add `:architecture` only when investigating the CI architecture gate locally.
 - CI architecture gate: `check-additional` enforces architecture and boundary policy guards that are intentionally kept out of the default local loop.
 - Formatting gate: the pre-commit hook runs targeted formatting on staged source files before `pnpm check`. If you want a repo-wide formatting-only preflight locally, run `pnpm format:check` explicitly.
 - If you need a fast commit loop, `FAST_COMMIT=1 git commit ...` skips the hook’s repo-wide `pnpm check`; targeted formatting/linting still runs, so use that only when you are deliberately covering the touched surface some other way.
@@ -146,7 +162,7 @@
 - Config schema drift uses `pnpm config:docs:gen` / `pnpm config:docs:check`.
 - Plugin SDK API drift uses `pnpm plugin-sdk:api:gen` / `pnpm plugin-sdk:api:check`.
 - If you change config schema/help or the public Plugin SDK surface, run the matching gen command and commit the updated `.sha256` hash file. Keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
-- When `pnpm tsgo` fails, triage by coherent surface instead of by raw error count: rerun the gate, group failures by package/module/type contract, open the source-of-truth type or export file first, fix the root mismatch, then rerun `pnpm tsgo` before widening into downstream consumers. Check `origin/main` before doing broad cleanup because some apparent type debt is already fixed upstream.
+- When a `tsgo` graph fails, triage by coherent surface instead of by raw error count: rerun the failing graph, group failures by package/module/type contract, open the source-of-truth type or export file first, fix the root mismatch, then rerun the failing graph before widening into downstream consumers. Check `origin/main` before doing broad cleanup because some apparent type debt is already fixed upstream.
 - For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
 - Verification modes for work on `main`:
   - Default mode: `main` is relatively stable. Count pre-commit hook coverage when it already verified the current tree, avoid rerunning the exact same checks just for ceremony, and prefer keeping CI/main green before landing.
@@ -181,7 +197,7 @@
 - New runtime control-flow code should not branch on `error: string` or `reason: string` when a closed code union would be reasonable.
 - Dynamic import guardrail: do not mix `await import("x")` and static `import ... from "x"` for the same module in production code paths. If you need lazy loading, create a dedicated `*.runtime.ts` boundary (that re-exports from `x`) and dynamically import that boundary from lazy callers only.
 - Dynamic import verification: after refactors that touch lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings before submitting.
-- Circular dependencies: keep both `pnpm check:import-cycles` and `pnpm check:madge-import-cycles` green; do not reintroduce runtime import cycles or madge-detected import loops.
+- Circular dependencies: `pnpm check` runs the fast runtime import-cycle guard. `pnpm check:architecture` (and CI `check-additional`) also runs the broader madge import-cycle guard; keep both green before landing architecture-sensitive changes.
 - Extension SDK self-import guardrail: inside an extension package, do not import that same extension via `openclaw/plugin-sdk/<extension>` from production files. Route internal imports through a local barrel such as `./api.ts` or `./runtime-api.ts`, and keep the `plugin-sdk/<extension>` path as the external contract only.
 - Extension package boundary guardrail: inside a bundled plugin package, do not use relative imports/exports that resolve outside that same package root. If shared code belongs in the plugin SDK, import `openclaw/plugin-sdk/<subpath>` instead of reaching into `src/plugin-sdk/**` or other repo paths via `../`.
 - Extension API surface rule: `openclaw/plugin-sdk/<subpath>` is the only public cross-package contract for extension-facing SDK code. If an extension needs a new seam, add a public subpath first; do not reach into `src/plugin-sdk/**` by relative path.

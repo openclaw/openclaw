@@ -27,6 +27,19 @@ export {
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
 
+export function createLazyFacadeValue<TFacade extends object, K extends keyof TFacade>(
+  loadFacadeModule: () => TFacade,
+  key: K,
+): TFacade[K] {
+  return ((...args: unknown[]) => {
+    const value = loadFacadeModule()[key];
+    if (typeof value !== "function") {
+      return value;
+    }
+    return (value as (...innerArgs: unknown[]) => unknown)(...args);
+  }) as TFacade[K];
+}
+
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
@@ -93,6 +106,16 @@ function resolveRegistryPluginModuleLocation(params: {
   });
 }
 
+function resolveFacadeBoundaryRoot(modulePath: string, bundledPluginsDir: string | undefined) {
+  if (!bundledPluginsDir) {
+    return OPENCLAW_PACKAGE_ROOT;
+  }
+  const resolvedBundledPluginsDir = path.resolve(bundledPluginsDir);
+  return modulePath.startsWith(`${resolvedBundledPluginsDir}${path.sep}`)
+    ? resolvedBundledPluginsDir
+    : OPENCLAW_PACKAGE_ROOT;
+}
+
 function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
@@ -116,10 +139,7 @@ function resolveFacadeModuleLocationUncached(params: {
     if (modulePath) {
       return {
         modulePath,
-        boundaryRoot:
-          bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
-            ? path.resolve(bundledPluginsDir)
-            : OPENCLAW_PACKAGE_ROOT,
+        boundaryRoot: resolveFacadeBoundaryRoot(modulePath, bundledPluginsDir),
       };
     }
     return resolveRegistryPluginModuleLocation(params);
@@ -134,10 +154,7 @@ function resolveFacadeModuleLocationUncached(params: {
   if (modulePath) {
     return {
       modulePath,
-      boundaryRoot:
-        bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
-          ? path.resolve(bundledPluginsDir)
-          : OPENCLAW_PACKAGE_ROOT,
+      boundaryRoot: resolveFacadeBoundaryRoot(modulePath, bundledPluginsDir),
     };
   }
   return resolveRegistryPluginModuleLocation(params);
@@ -239,6 +256,7 @@ function buildFacadeActivationCheckParams(
   };
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   params: BundledPluginPublicSurfaceParams,
 ): T {
@@ -269,6 +287,7 @@ export function canLoadActivatedBundledPluginPublicSurface(params: {
   ).allowed;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
@@ -280,6 +299,7 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;

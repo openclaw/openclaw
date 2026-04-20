@@ -37,6 +37,8 @@ OpenClaw has three public release lanes:
 
 ## Release preflight
 
+- Run `pnpm check:architecture` before release preflight so the broader import
+  cycle and architecture boundary checks are green outside the faster local gate
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
