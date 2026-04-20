@@ -1,9 +1,9 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
   type ChannelSetupAdapter,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { resolveDefaultFeishuAccountId } from "./accounts.js";
 import type { FeishuConfig } from "./types.js";
 
 export function setFeishuNamedAccountEnabled(
@@ -31,7 +31,9 @@ export function setFeishuNamedAccountEnabled(
 }
 
 export const feishuSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultFeishuAccountId(cfg),
+  resolveAccountId: ({ accountId }) => {
+    return normalizeAccountId(accountId);
+  },
   applyAccountConfig: ({ cfg, accountId }) => {
     const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
     if (isDefault) {

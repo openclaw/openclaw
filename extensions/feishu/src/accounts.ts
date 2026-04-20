@@ -23,7 +23,7 @@ const { listAccountIds: listFeishuAccountIds, resolveDefaultAccountId } = create
   },
 );
 
-export { listFeishuAccountIds };
+export { listFeishuAccountIds, resolveDefaultAccountId };
 
 type FeishuCredentialResolutionMode = "inspect" | "strict";
 type FeishuResolvedSecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;

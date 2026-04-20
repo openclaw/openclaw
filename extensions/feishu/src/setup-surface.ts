@@ -1,5 +1,6 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
@@ -12,7 +13,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { inspectFeishuCredentials, resolveDefaultFeishuAccountId } from "./accounts.js";
+import { inspectFeishuCredentials, resolveDefaultFeishuAccountId, listFeishuAccountIds } from "./accounts.js";
 import {
   beginAppRegistration,
   getAppOwnerOpenId,
@@ -500,6 +501,80 @@ export async function runFeishuLogin(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Account ID resolution helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Prompt user for a new account ID when adding additional Feishu accounts.
+ * Validates format and checks for duplicates.
+ */
+async function promptNewAccountId(
+  prompter: WizardPrompter,
+  existingAccounts: string[],
+): Promise<string> {
+  const suggestedId = `feishu-${existingAccounts.length + 1}`;
+
+  const newId = await prompter.text({
+    message: "Enter new account ID (lowercase letters, numbers, underscores, hyphens)",
+    initialValue: suggestedId,
+    validate: (value) => {
+      const trimmed = value?.trim();
+      if (!trimmed) {
+        return "Account ID cannot be empty";
+      }
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(trimmed)) {
+        return "Account ID can only contain lowercase letters, numbers, underscores, and hyphens, and must start with a letter or number";
+      }
+      const normalized = trimmed.toLowerCase();
+      if (existingAccounts.includes(normalized)) {
+        return `Account ID "${normalized}" already exists`;
+      }
+      return undefined;
+    },
+  });
+
+  return normalizeAccountId(newId);
+}
+
+/**
+ * Resolve account ID for configuration, prompting user when adding
+ * subsequent accounts.
+ */
+async function resolveAccountIdForConfigureWithPrompt(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  accountOverride: string | undefined;
+  defaultAccountId: string;
+}): Promise<string> {
+  const { cfg, prompter, accountOverride, defaultAccountId } = params;
+
+  // If accountOverride is provided, use it directly
+  if (typeof accountOverride === "string" && accountOverride.trim()) {
+    return normalizeAccountId(accountOverride);
+  }
+
+  const existingAccounts = listFeishuAccountIds(cfg);
+
+  // If no existing accounts, use default
+  if (existingAccounts.length === 0) {
+    return defaultAccountId;
+  }
+
+  // Ask user if they want to create a new account
+  const useNew = await prompter.confirm({
+    message: `You have ${existingAccounts.length} Feishu account(s) (${existingAccounts.join(", ")}). Create a new account?`,
+    initialValue: false,
+  });
+
+  if (useNew) {
+    return promptNewAccountId(prompter, existingAccounts);
+  }
+
+  // Use the default/first existing account
+  return resolveDefaultFeishuAccountId(cfg) ?? defaultAccountId;
+}
+
+// ---------------------------------------------------------------------------
 // Exported wizard
 // ---------------------------------------------------------------------------
 
@@ -507,13 +582,15 @@ export { feishuSetupAdapter } from "./setup-core.js";
 
 export const feishuSetupWizard: ChannelSetupWizard = {
   channel,
-  resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId, cfg }) =>
-    (typeof accountOverride === "string" && accountOverride.trim()
-      ? accountOverride.trim()
-      : undefined) ??
-    resolveDefaultFeishuAccountId(cfg) ??
-    defaultAccountId,
-  resolveShouldPromptAccountIds: () => false,
+  resolveAccountIdForConfigure: async (params) => {
+    return resolveAccountIdForConfigureWithPrompt({
+      cfg: params.cfg,
+      prompter: params.prompter,
+      accountOverride: params.accountOverride,
+      defaultAccountId: params.defaultAccountId,
+    });
+  },
+  resolveShouldPromptAccountIds: () => true,
   status: {
     configuredLabel: "configured",
     unconfiguredLabel: "needs app credentials",
