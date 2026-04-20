@@ -58,7 +58,7 @@ export type SdkModule = {
 
 export type SdkClientInstance = {
   start(): Promise<void>;
-  listModels(): Promise<Array<{ id: string; name?: string }>>;
+  listModels(): Promise<Array<{ id: string; name?: string; capabilities?: unknown }>>;
   createSession(options: {
     model: string;
     onPermissionRequest: (request: unknown) => PermissionResult | Promise<PermissionResult>;
@@ -67,11 +67,31 @@ export type SdkClientInstance = {
   close?(): Promise<void> | void;
 };
 
+/**
+ * Matches the real AssistantMessageEvent shape from @github/copilot-sdk:
+ *   { type: "assistant.message",
+ *     data: { messageId, content, toolRequests?, outputTokens?, requestId?, ... },
+ *     id, timestamp, parentId }
+ */
 export type SdkSession = {
   sendAndWait(
     options: { prompt: string },
     timeoutMs?: number,
-  ): Promise<{ content?: string; message?: { content?: string } } | undefined>;
+  ): Promise<
+    | {
+        type: string;
+        data: {
+          messageId?: string;
+          content: string;
+          toolRequests?: unknown[];
+          outputTokens?: number;
+        };
+        id?: string;
+        timestamp?: string;
+        parentId?: string | null;
+      }
+    | undefined
+  >;
   dispose?(): Promise<void> | void;
   close?(): Promise<void> | void;
 };
@@ -255,7 +275,8 @@ async function buildClient(options: SdkClientOptions): Promise<SdkClient> {
       });
       try {
         const result = await session.sendAndWait({ prompt }, timeoutMs);
-        const content = result?.content ?? result?.message?.content ?? "";
+        // AssistantMessageEvent shape: { type: "assistant.message", data: { content } }
+        const content = result?.data?.content ?? "";
         return { content };
       } finally {
         if (session.dispose) {

@@ -7,6 +7,23 @@ import {
   type SdkModule,
 } from "./sdk-client.js";
 
+/**
+ * Build a fake SDK module whose responses match the real @github/copilot-sdk shapes.
+ *
+ * Evidence (captured 2026-04-20 from real SDK v0.2.2):
+ *
+ *   listModels() → [{ id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6",
+ *     capabilities: { family: "claude-sonnet-4.6", limits: {...}, supports: {...} },
+ *     policy: { state: "enabled", terms: "..." },
+ *     billing: { is_premium: true, multiplier: 1, restricted_to: [...] },
+ *     supportedReasoningEfforts: ["low","medium","high"],
+ *     defaultReasoningEffort: "medium" }, ...]
+ *
+ *   sendAndWait() → { type: "assistant.message", data: { messageId, content,
+ *     toolRequests: [], interactionId, reasoningOpaque?, reasoningText?,
+ *     outputTokens, requestId },
+ *     id: "uuid", timestamp: "iso8601", parentId: "uuid"|null }
+ */
 function buildFakeSdk(): {
   module: SdkModule;
   listModels: ReturnType<typeof vi.fn>;
@@ -14,15 +31,38 @@ function buildFakeSdk(): {
   sessionSendAndWait: ReturnType<typeof vi.fn>;
   sessionDispose: ReturnType<typeof vi.fn>;
 } {
+  // Matches real AssistantMessageEvent shape from @github/copilot-sdk
   const sessionSendAndWait = vi.fn(async ({ prompt }: { prompt: string }) => ({
-    content: `sdk-reply:${prompt}`,
+    type: "assistant.message" as const,
+    data: {
+      messageId: "fake-msg-001",
+      content: `sdk-reply:${prompt}`,
+      toolRequests: [],
+      outputTokens: 10,
+      requestId: "FAKE:000000:0000000:0000000:00000000",
+    },
+    id: "fake-event-001",
+    timestamp: new Date().toISOString(),
+    parentId: null,
   }));
   const sessionDispose = vi.fn(async () => undefined);
   const createSession = vi.fn(async () => ({
     sendAndWait: sessionSendAndWait,
     dispose: sessionDispose,
   }));
-  const listModels = vi.fn(async () => [{ id: "gpt-5", name: "GPT-5" }]);
+  // Matches real ModelInfo shape from @github/copilot-sdk
+  const listModels = vi.fn(async () => [
+    {
+      id: "gpt-5",
+      name: "GPT-5",
+      capabilities: {
+        family: "gpt-5",
+        limits: { max_context_window_tokens: 128000 },
+        supports: { tool_calls: true, streaming: true },
+        type: "chat",
+      },
+    },
+  ]);
 
   const module: SdkModule = {
     CopilotClient: class {
