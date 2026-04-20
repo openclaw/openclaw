@@ -5,6 +5,7 @@
 typedef enum {
     PRODUCT_CONNECTION_MODE_UNSPECIFIED = 0,
     PRODUCT_CONNECTION_MODE_LOCAL = 1,
+    PRODUCT_CONNECTION_MODE_REMOTE = 2,
 } ProductConnectionMode;
 
 typedef struct {
@@ -15,6 +16,7 @@ typedef struct {
 void product_state_init(void);
 void product_state_get_snapshot(ProductStateSnapshot *out);
 ProductConnectionMode product_state_get_connection_mode(void);
+ProductConnectionMode product_state_get_effective_connection_mode(void);
 gboolean product_state_set_connection_mode(ProductConnectionMode mode);
 guint product_state_get_onboarding_seen_version(void);
 gboolean product_state_set_onboarding_seen_version(guint version);

@@ -24,6 +24,11 @@ typedef struct {
 
 static ProductCoordinatorState g_coordinator = {0};
 
+static void product_coordinator_route_remote_guidance(void) {
+    app_window_show();
+    app_window_navigate_to(SECTION_GENERAL);
+}
+
 static void product_coordinator_boot_runtime_lanes(void) {
     state_init();
     product_state_init();
@@ -37,7 +42,12 @@ static void product_coordinator_boot_runtime_lanes(void) {
 
 static ProductStartupPresentationAction product_coordinator_decide_startup_presentation(
     AppState runtime_state,
+    ProductConnectionMode effective_mode,
     guint onboarding_seen_version) {
+    if (effective_mode == PRODUCT_CONNECTION_MODE_REMOTE) {
+        return PRODUCT_STARTUP_PRESENTATION_NOOP;
+    }
+
     OnboardingRoute route = onboarding_routing_decide(runtime_state,
                                                       (int)onboarding_seen_version,
                                                       ONBOARDING_CURRENT_VERSION);
@@ -68,6 +78,7 @@ void product_coordinator_activate(void) {
 void product_coordinator_reconcile_startup_presentation(void) {
     ProductStartupPresentationAction action = product_coordinator_decide_startup_presentation(
         state_get_current(),
+        product_state_get_effective_connection_mode(),
         product_state_get_onboarding_seen_version());
 
     if (action == PRODUCT_STARTUP_PRESENTATION_SHOW_ONBOARDING) {
@@ -76,21 +87,55 @@ void product_coordinator_reconcile_startup_presentation(void) {
 }
 
 void product_coordinator_request_show_main(void) {
+    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
+        product_coordinator_route_remote_guidance();
+        return;
+    }
+
     app_window_show();
 }
 
 void product_coordinator_request_show_section(AppSection section) {
+    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
+        product_coordinator_route_remote_guidance();
+        return;
+    }
+
     app_window_show();
     app_window_navigate_to(section);
 }
 
 void product_coordinator_request_rerun_onboarding(void) {
+    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
+        product_coordinator_route_remote_guidance();
+        return;
+    }
+
     onboarding_show();
 }
 
 void product_coordinator_notify_onboarding_completed(void) {
     (void)product_state_set_onboarding_seen_version(ONBOARDING_CURRENT_VERSION);
     app_window_show();
+}
+
+gboolean product_coordinator_request_set_connection_mode(ProductConnectionMode mode) {
+    if (!product_state_set_connection_mode(mode)) {
+        return FALSE;
+    }
+
+    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
+        product_coordinator_route_remote_guidance();
+        return TRUE;
+    }
+
+    app_window_refresh_snapshot();
+
+    if (product_state_get_onboarding_seen_version() < ONBOARDING_CURRENT_VERSION) {
+        onboarding_show();
+    }
+
+    return TRUE;
 }
 
 void product_coordinator_test_reset(void) {
