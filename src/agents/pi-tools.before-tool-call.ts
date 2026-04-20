@@ -261,6 +261,22 @@ export async function runBeforeToolCallHook(args: {
   // fallback is an explicit "no live data" branch.
   const liveMode = args.ctx?.getLatestPlanMode?.();
   const latestPlanMode = liveMode !== undefined ? liveMode : args.ctx?.planMode;
+  // PR #68939 diagnostic (auto-mode gate investigation): dump the gate
+  // inputs whenever we're about to evaluate plan-mode blocking. Covers
+  // the case where auto-approve fires sessions.patch but the in-turn
+  // tool calls still see `planMode === "plan"` — need to know whether
+  // the fresh disk read is returning "plan", undefined, or something
+  // else. One log line per gate evaluation; trivially filterable in the
+  // gateway log ([plan-mode-gate] prefix).
+  if (latestPlanMode === "plan" || args.ctx?.planMode === "plan") {
+    log.info(
+      `[plan-mode-gate] tool=${toolName} sessionKey=${args.ctx?.sessionKey ?? "<none>"} ` +
+        `cachedCtxPlanMode=${args.ctx?.planMode ?? "<undefined>"} ` +
+        `liveMode=${liveMode ?? "<undefined>"} ` +
+        `latestPlanMode=${latestPlanMode ?? "<undefined>"} ` +
+        `hasGetLatestCallback=${args.ctx?.getLatestPlanMode ? "yes" : "no"}`,
+    );
+  }
   if (latestPlanMode === "plan") {
     let execCommand: string | undefined;
     if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {
