@@ -767,8 +767,31 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Print <channel|>");
   });
 
+  it("does not invent missing characters when a leaked repeated suffix is truncated", () => {
+    const input = [
+      'The user is instructing me to reply with exactly "abc-123" and nothing else.',
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|>abc-1abc-1abc-1",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc-1abc-1abc-1");
+  });
+
   it("does not rewrite explanatory prose down to a single named literal", () => {
     const input = "Examples: `noise-999noise-999`. Final output: noise-999noise-999";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("does not collapse explanatory prose that mentions the quoted target multiple times", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "The previous attempt was wrong, because it first emitted abc-123abc-123, then switched to noise-999, and finally ended with extra trailer text.",
+    ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
