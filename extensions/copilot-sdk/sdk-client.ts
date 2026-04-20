@@ -166,6 +166,36 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
 }
 
 /**
+ * Unref the child process spawned by `@github/copilot-sdk` so it doesn't
+ * prevent Node from exiting in short-lived commands (e.g. `models list`).
+ * The field is private (`cliProcess`) so we access it via the runtime object.
+ */
+function unrefSdkChildProcess(instance: unknown): void {
+  try {
+    const inst = instance as Record<string, unknown>;
+    const cp = inst.cliProcess;
+    if (cp && typeof cp === "object") {
+      const proc = cp as Record<string, unknown>;
+      if (typeof proc.unref === "function") {
+        (proc.unref as () => void)();
+      }
+      // Also unref stdio streams — they can independently keep the loop alive.
+      for (const stream of [proc.stdin, proc.stdout, proc.stderr]) {
+        if (
+          stream &&
+          typeof stream === "object" &&
+          typeof (stream as Record<string, unknown>).unref === "function"
+        ) {
+          ((stream as Record<string, unknown>).unref as () => void)();
+        }
+      }
+    }
+  } catch {
+    // Best-effort; don't crash if the SDK internals change.
+  }
+}
+
+/**
  * Core init logic shared by the singleton (`getSdkClient`) and dedicated
  * (`createDedicatedClient`) paths. Returns a raw `SdkClient` whose `close()`
  * only tears down the underlying SDK instance — callers that need singleton
@@ -201,6 +231,13 @@ async function buildClient(options: SdkClientOptions): Promise<SdkClient> {
     }
     throw startErr;
   }
+
+  // The SDK's spawned CLI subprocess keeps the Node event loop alive,
+  // preventing short-lived commands (e.g. `models list`) from exiting.
+  // Unref the child process so it doesn't block process exit. The
+  // subprocess stays alive as long as we hold a reference and send RPCs;
+  // it's cleaned up by close()/stop() when the client is torn down.
+  unrefSdkChildProcess(instance);
 
   return {
     async listModels() {
