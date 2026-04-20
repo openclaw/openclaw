@@ -181,6 +181,24 @@ function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): st
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }
 
+function resolveFirstConversationTargetForTest(params: {
+  channel?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+  originatingTo?: string;
+}): string | null {
+  for (const rawTarget of [params.originatingTo, params.commandTo, params.fallbackTo]) {
+    const target = rawTarget?.trim();
+    if (!target) {
+      continue;
+    }
+    return params.channel && target.toLowerCase().startsWith(`${params.channel}:`)
+      ? target.slice(params.channel.length + 1)
+      : target;
+  }
+  return null;
+}
+
 function setMinimalAcpCommandRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -339,6 +357,32 @@ function setMinimalAcpCommandRegistryForTests(): void {
           },
         },
       },
+      ...(["bluebubbles", "imessage", "feishu", "line"] as const).map((channelId) => ({
+        pluginId: channelId,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolveFirstConversationTargetForTest({
+                channel: channelId,
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              });
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      })),
     ]),
   );
 }
