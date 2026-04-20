@@ -16,9 +16,9 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+import { renderChatRunControls } from "../chat/run-controls.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
@@ -32,13 +32,13 @@ import {
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
-import { buildSidebarContent, extractToolCards } from "../chat/tool-cards.ts";
+import { buildSidebarContent } from "../chat/tool-cards.ts";
+import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -116,9 +116,6 @@ export type ChatProps = {
 const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
-const initializedToolCardsBySession = new Map<string, Set<string>>();
-const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 function getInputHistory(sessionKey: string): InputHistory {
   return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
@@ -138,14 +135,6 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
     sessionKey,
     () => new DeletedMessages(sessionKey),
   );
-}
-
-function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
-  return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
-}
-
-function getInitializedToolCards(sessionKey: string): Set<string> {
-  return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
 }
 
 interface ChatEphemeralState {
@@ -198,60 +187,6 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-}
-
-function syncToolCardExpansionState(
-  sessionKey: string,
-  items: Array<ChatItem | MessageGroup>,
-  autoExpandToolCalls: boolean,
-) {
-  const expanded = getExpandedToolCards(sessionKey);
-  const initialized = getInitializedToolCards(sessionKey);
-  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
-  const currentToolCardIds = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "group") {
-      continue;
-    }
-    for (const entry of item.messages) {
-      const cards = extractToolCards(entry.message, entry.key);
-      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
-        currentToolCardIds.add(disclosureId);
-        if (initialized.has(disclosureId)) {
-          continue;
-        }
-        expanded.set(disclosureId, autoExpandToolCalls);
-        initialized.add(disclosureId);
-      }
-      const messageRecord = entry.message as Record<string, unknown>;
-      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
-      const normalizedRole = normalizeRoleForGrouping(role);
-      const isToolMessage =
-        isToolResultMessage(entry.message) ||
-        normalizedRole === "tool" ||
-        role.toLowerCase() === "toolresult" ||
-        role.toLowerCase() === "tool_result" ||
-        typeof messageRecord.toolCallId === "string" ||
-        typeof messageRecord.tool_call_id === "string";
-      if (!isToolMessage) {
-        continue;
-      }
-      const disclosureId = `toolmsg:${entry.key}`;
-      currentToolCardIds.add(disclosureId);
-      if (initialized.has(disclosureId)) {
-        continue;
-      }
-      expanded.set(disclosureId, autoExpandToolCalls);
-      initialized.add(disclosureId);
-    }
-  }
-  if (autoExpandToolCalls && !previousAutoExpand) {
-    for (const toolCardId of currentToolCardIds) {
-      expanded.set(toolCardId, true);
-    }
-  }
-  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
 }
 
 function generateAttachmentId(): string {
@@ -1311,58 +1246,19 @@ export function renderChat(props: ChatProps) {
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
-          <div class="agent-chat__toolbar-right">
-            ${nothing /* search hidden for now */}
-            ${canAbort
-              ? nothing
-              : html`
-                  <button
-                    class="btn btn--ghost"
-                    @click=${props.onNewSession}
-                    title="New session"
-                    aria-label="New session"
-                  >
-                    ${icons.plus}
-                  </button>
-                `}
-            <button
-              class="btn btn--ghost"
-              @click=${() => exportMarkdown(props)}
-              title="Export"
-              aria-label="Export chat"
-              ?disabled=${props.messages.length === 0}
-            >
-              ${icons.download}
-            </button>
-
-            ${canAbort
-              ? html`
-                  <button
-                    class="chat-send-btn chat-send-btn--stop"
-                    @click=${props.onAbort}
-                    title="Stop"
-                    aria-label="Stop generating"
-                  >
-                    ${icons.stop}
-                  </button>
-                `
-              : html`
-                  <button
-                    class="chat-send-btn"
-                    @click=${() => {
-                      if (props.draft.trim()) {
-                        inputHistory.push(props.draft);
-                      }
-                      props.onSend();
-                    }}
-                    ?disabled=${!props.connected || props.sending}
-                    title=${isBusy ? "Queue" : "Send"}
-                    aria-label=${isBusy ? "Queue message" : "Send message"}
-                  >
-                    ${icons.send}
-                  </button>
-                `}
-          </div>
+          ${renderChatRunControls({
+            canAbort,
+            connected: props.connected,
+            draft: props.draft,
+            hasMessages: props.messages.length > 0,
+            isBusy,
+            sending: props.sending,
+            onAbort: props.onAbort,
+            onExport: () => exportMarkdown(props),
+            onNewSession: props.onNewSession,
+            onSend: props.onSend,
+            onStoreDraft: (draft) => inputHistory.push(draft),
+          })}
         </div>
       </div>
     </section>

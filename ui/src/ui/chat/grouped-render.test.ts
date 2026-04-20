@@ -1038,4 +1038,61 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).toContain("Inline canvas result.");
     expect(container.textContent).toContain("Inline demo");
   });
+
+  it("opens generic tool details instead of a canvas preview from tool rows", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderBuiltMessageGroups(
+      container,
+      {
+        showToolCalls: true,
+        messages: [
+          {
+            id: "assistant-canvas-sidebar",
+            role: "assistant",
+            content: [{ type: "text", text: "Sidebar canvas result." }],
+            timestamp: Date.now(),
+          },
+        ],
+        toolMessages: [
+          {
+            id: "tool-artifact-sidebar",
+            role: "tool",
+            toolCallId: "call-artifact-sidebar",
+            toolName: "canvas_render",
+            content: JSON.stringify({
+              kind: "canvas",
+              view: {
+                backend: "canvas",
+                id: "cv_sidebar",
+                url: "https://example.com/canvas",
+                title: "Sidebar demo",
+                preferred_height: 420,
+              },
+              presentation: {
+                target: "tool_card",
+              },
+            }),
+            timestamp: Date.now() + 1,
+          },
+        ],
+      },
+      {
+        isToolExpanded: () => true,
+        isToolMessageExpanded: () => true,
+        onOpenSidebar,
+      },
+    );
+
+    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
+    sidebarButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
+    expect(sidebarButton).not.toBeNull();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "markdown",
+      }),
+    );
+  });
 });
