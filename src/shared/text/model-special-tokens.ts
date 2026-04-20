@@ -21,9 +21,12 @@ const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
 const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
 const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
-  /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
+  /\b(?:reply with|reply to|nothing else|output content|output the text directly|direct instruction|current session|i will output|i will reply|i must output|i must reply|i must adhere)\b/i;
 const CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE =
   /^(?:token\b|delimiter\b|marker\b|literal(?:ly)?\b|is\b|means?\b|identif(?:y|ies)\b|splits?\b|between\b|used?\b|inside\b|outside\b|in\b)/i;
+const CHANNEL_DELIMITER_HINT_WINDOW_CHARS = 240;
+const CHANNEL_DELIMITER_TRAILING_LITERAL_HINT_RE =
+  /\b(?:token|delimiter|marker|literal(?:ly)?|use|type|contains?|ending|ends?\s+with)\b/i;
 
 function overlapsCodeRegion(
   start: number,
@@ -55,25 +58,28 @@ function looksLikeLeakedChannelDelimiterPrefix(
   const trimmed = prefix.trim();
   const trimmedSuffix = suffix.trimStart();
   if (!trimmedSuffix) {
-    return CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(trimmed);
+    return CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(
+      trimmed.slice(-CHANNEL_DELIMITER_HINT_WINDOW_CHARS),
+    );
   }
 
   if (!trimmed) {
-    return !CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE.test(trimmedSuffix);
+    return false;
   }
 
-  if (CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(trimmed)) {
+  const recentTrimmed = trimmed.slice(-CHANNEL_DELIMITER_HINT_WINDOW_CHARS);
+  if (CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(recentTrimmed)) {
     return true;
   }
 
-  if (!attachment.attachedBefore && !attachment.attachedAfter) {
+  if (CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE.test(trimmedSuffix)) {
     return false;
   }
 
   return (
-    attachment.attachedAfter &&
     trimmed.length >= 120 &&
-    CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(trimmed)
+    CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(recentTrimmed) &&
+    (attachment.attachedBefore || attachment.attachedAfter || /^\S/.test(trimmedSuffix))
   );
 }
 
@@ -102,6 +108,10 @@ function stripTrailingChannelDelimiters(text: string): string {
       return next;
     }
     if (isInsideCode(start, codeRegions) || overlapsCodeRegion(start, end, codeRegions)) {
+      return next;
+    }
+    const prefix = next.slice(0, start).trimEnd().slice(-80);
+    if (CHANNEL_DELIMITER_TRAILING_LITERAL_HINT_RE.test(prefix)) {
       return next;
     }
     next = next.slice(0, start) + next.slice(end);

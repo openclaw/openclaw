@@ -13,7 +13,9 @@ const INTENTIONAL_REPEAT_INTENT_RE =
 const EXACT_TARGET_HINT_RE =
   /\b(?:specific string|reply with|output the text directly|output content)\b/i;
 const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
+const EXCLUDED_TARGET_HINT_SEGMENT_RE = /\b(?:incorrect|wrong|duplicate|previous|attempt)\b/i;
 const MAX_STRUCTURED_SUFFIX_SCAN_CHARS = 8_192;
+const MAX_DELIMITER_SUFFIX_SCAN_CHARS = 2_048;
 
 type RepeatedPatternMatch = {
   unit: string;
@@ -132,26 +134,12 @@ function findExplicitVisibleSuffixTarget(
     return null;
   }
 
-  const rawVisibleSuffix = buildRawVisibleSuffix(match);
-  if (rawVisibleSuffix && prefix.includes(rawVisibleSuffix)) {
-    return rawVisibleSuffix;
-  }
-
-  for (let repeats = match.fullRepeats; repeats >= 2; repeats -= 1) {
-    const candidate = match.unit.repeat(repeats);
-    if (candidate.length <= match.unit.length || !rawVisibleSuffix.startsWith(candidate)) {
-      continue;
-    }
-    if (prefix.includes(candidate)) {
-      return candidate;
-    }
-  }
-
   const explicitlyNamedLiteral = findExplicitSingleTargetLiteralInPreamble(prefix);
   if (!explicitlyNamedLiteral) {
     return null;
   }
 
+  const rawVisibleSuffix = buildRawVisibleSuffix(match);
   if (
     rawVisibleSuffix.startsWith(explicitlyNamedLiteral) ||
     explicitlyNamedLiteral.startsWith(rawVisibleSuffix) ||
@@ -187,12 +175,30 @@ export function collapseRepeatedVisibleSuffixAfterDelimiter(
   prefix: string,
   suffix: string,
 ): string {
-  const match = matchStructuredRepeatedPrefixPattern(suffix);
+  const scanSuffix =
+    suffix.length > MAX_DELIMITER_SUFFIX_SCAN_CHARS
+      ? suffix.slice(0, MAX_DELIMITER_SUFFIX_SCAN_CHARS)
+      : suffix;
+  const match = matchStructuredRepeatedPrefixPattern(scanSuffix);
   if (!match) {
     return suffix;
   }
 
   return selectVisibleSuffixReplacement({ prefix, match, context: "delimiter" }) ?? suffix;
+}
+
+function splitPreambleHintSegments(text: string): string[] {
+  return text
+    .split(/\r?\n+/)
+    .flatMap((line) => line.match(/[^.!?]+[.!?]?/g) ?? [line])
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+function extractInlineCodeLiterals(text: string): string[] {
+  return [...text.matchAll(INLINE_CODE_LITERAL_RE)]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((literal) => literal.length > 0);
 }
 
 function findExplicitSingleTargetLiteralInPreamble(text: string): string | null {
@@ -205,10 +211,18 @@ function findExplicitSingleTargetLiteralInPreamble(text: string): string | null 
     return null;
   }
 
-  const literals = [...text.matchAll(INLINE_CODE_LITERAL_RE)]
-    .map((match) => match[1]?.trim() ?? "")
-    .filter((literal) => literal.length > 0);
-  const uniqueLiterals = [...new Set(literals)];
+  const hintedSegments = splitPreambleHintSegments(text).filter(
+    (segment) =>
+      (SINGLE_ANSWER_INTENT_RE.test(segment) || EXACT_TARGET_HINT_RE.test(segment)) &&
+      !EXCLUDED_TARGET_HINT_SEGMENT_RE.test(segment),
+  );
+  const hintedLiterals = hintedSegments.flatMap(extractInlineCodeLiterals);
+  const uniqueHintedLiterals = [...new Set(hintedLiterals)];
+  if (uniqueHintedLiterals.length === 1) {
+    return uniqueHintedLiterals[0] ?? null;
+  }
+
+  const uniqueLiterals = [...new Set(extractInlineCodeLiterals(text))];
   if (uniqueLiterals.length !== 1) {
     return null;
   }
@@ -242,6 +256,9 @@ function extractExplicitRepeatedLiteralFromRunawayText(text: string): string | n
 
 export function extractStructuredRepeatedVisibleSuffix(text: string): string {
   if (!text) {
+    return text;
+  }
+  if (!looksLikeInternalPreamble(text)) {
     return text;
   }
 

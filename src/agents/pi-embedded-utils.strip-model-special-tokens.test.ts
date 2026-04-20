@@ -24,8 +24,10 @@ describe("stripModelSpecialTokens", () => {
   });
 
   it("preserves literal channel delimiter mentions when they are part of ordinary prose", () => {
-    expect(stripModelSpecialTokens("<channel|>Visible answer")).toBe("Visible answer");
-    expect(stripModelSpecialTokens("<channel|>\nVisible answer")).toBe("\nVisible answer");
+    expect(stripModelSpecialTokens("<channel|>Visible answer")).toBe("<channel|>Visible answer");
+    expect(stripModelSpecialTokens("<channel|>\nVisible answer")).toBe(
+      "<channel|>\nVisible answer",
+    );
     expect(stripModelSpecialTokens("internal planning <channel|> Visible answer")).toBe(
       " Visible answer",
     );
@@ -50,6 +52,17 @@ describe("stripModelSpecialTokens", () => {
     ).toBe("The marker <channel|> splits streams.");
   });
 
+  it("strips spaced leaked channel delimiters after a long internal-answer preamble", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must output the text directly as the final response.",
+      "<channel|> Visible answer",
+    ].join("\n");
+
+    expect(stripModelSpecialTokens(input)).toBe(" Visible answer");
+  });
+
   it("does not treat long explanatory prose as leaked planning just because it mentions literal channel delimiters", () => {
     const docExample = [
       "I will describe the token in detail over several sentences so that the prefix is definitely longer than one hundred and twenty characters.",
@@ -69,6 +82,12 @@ describe("stripModelSpecialTokens", () => {
   it("keeps the last non-empty visible segment when multiple leaked channel delimiters appear", () => {
     expect(stripModelSpecialTokens("internal planning<channel|>Visible answer<channel|>")).toBe(
       "Visible answer",
+    );
+  });
+
+  it("preserves a literal trailing channel delimiter inside recovered visible text", () => {
+    expect(stripModelSpecialTokens("internal planning<channel|>Use token <channel|>")).toBe(
+      "Use token <channel|>",
     );
   });
 

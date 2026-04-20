@@ -608,8 +608,12 @@ describe("sanitizeAssistantVisibleText", () => {
   });
 
   it("preserves literal channel delimiter mentions in ordinary prose", () => {
-    expect(sanitizeAssistantVisibleText("<channel|>Visible answer")).toBe("Visible answer");
-    expect(sanitizeAssistantVisibleText("<channel|>\nVisible answer")).toBe("Visible answer");
+    expect(sanitizeAssistantVisibleText("<channel|>Visible answer")).toBe(
+      "<channel|>Visible answer",
+    );
+    expect(sanitizeAssistantVisibleText("<channel|>\nVisible answer")).toBe(
+      "<channel|>\nVisible answer",
+    );
     expect(sanitizeAssistantVisibleText("internal planning <channel|> Visible answer")).toBe(
       "Visible answer",
     );
@@ -636,6 +640,28 @@ describe("sanitizeAssistantVisibleText", () => {
     ).toBe("The marker <channel|> splits streams.");
   });
 
+  it("strips spaced leaked channel delimiters after a long internal-answer preamble", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must output the text directly as the final response.",
+      "<channel|> Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("does not preserve a doubled visible suffix merely because the preamble mentioned a wrong duplicate", () => {
+    const input = [
+      'The user is instructing me to reply with a very specific string: "`abc-123` and nothing else."',
+      'A previous incorrect attempt was "`abc-123abc-123`, but that duplicate is wrong."',
+      "I must output the text directly as the final response.",
+      "<channel|>abc-123abc-123",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc-123");
+  });
+
   it("does not rewrite long explanatory prose that mentions literal channel delimiters", () => {
     const docExample = [
       "I will describe the token in detail over several sentences so that the prefix is definitely longer than one hundred and twenty characters.",
@@ -656,6 +682,12 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(
       sanitizeAssistantVisibleText("internal planning<channel|>Visible answer<channel|>"),
     ).toBe("Visible answer");
+  });
+
+  it("preserves a literal trailing channel delimiter inside recovered visible text", () => {
+    expect(sanitizeAssistantVisibleText("internal planning<channel|>Use token <channel|>")).toBe(
+      "Use token <channel|>",
+    );
   });
 
   it("does not rewrite explanatory prose down to a single named literal", () => {
