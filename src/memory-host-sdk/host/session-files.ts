@@ -238,9 +238,12 @@ function splitLongSessionLine(
     }
 
     const limit = cursor + maxChars;
-    let splitAt = normalized.lastIndexOf(" ", limit);
-    if (splitAt <= cursor) {
-      splitAt = limit;
+    let splitAt = limit;
+    for (let index = limit; index > cursor; index -= 1) {
+      if (normalized[index] === " ") {
+        splitAt = index;
+        break;
+      }
     }
     if (
       splitAt < normalized.length &&
