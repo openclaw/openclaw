@@ -6,6 +6,8 @@ import {
   listStagedChangedPaths,
   normalizeChangedPath,
 } from "./changed-lanes.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 
 const ROUTABLE_TEST_PATH_RE = /^(?:src|test|extensions|ui|packages|apps)(?:\/|$)/u;
 
@@ -199,23 +201,7 @@ async function runCommand(command, timings) {
 }
 
 function printSummary(timings, options) {
-  if (!options.timed && timings.every((timing) => timing.status === 0)) {
-    return;
-  }
-  console.error("\n[check:changed] summary");
-  for (const timing of timings) {
-    const status = timing.status === 0 ? "ok" : `failed:${timing.status}`;
-    console.error(
-      `${formatMs(timing.durationMs).padStart(8)}  ${status.padEnd(9)}  ${timing.name}`,
-    );
-  }
-}
-
-function formatMs(durationMs) {
-  if (durationMs < 1000) {
-    return `${Math.round(durationMs)}ms`;
-  }
-  return `${(durationMs / 1000).toFixed(2)}s`;
+  printTimingSummary("check:changed", timings, { skipWhenAllOk: !options.timed });
 }
 
 function parseArgs(argv) {
@@ -227,33 +213,23 @@ function parseArgs(argv) {
     timed: false,
     paths: [],
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--base") {
-      args.base = argv[index + 1] ?? args.base;
-      index += 1;
-      continue;
-    }
-    if (arg === "--head") {
-      args.head = argv[index + 1] ?? args.head;
-      index += 1;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--dry-run") {
-      args.dryRun = true;
-      continue;
-    }
-    if (arg === "--timed") {
-      args.timed = true;
-      continue;
-    }
-    args.paths.push(normalizeChangedPath(arg));
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    args,
+    [
+      stringFlag("--base", "base"),
+      stringFlag("--head", "head"),
+      booleanFlag("--staged", "staged"),
+      booleanFlag("--dry-run", "dryRun"),
+      booleanFlag("--timed", "timed"),
+    ],
+    {
+      onUnhandledArg(arg, target) {
+        target.paths.push(normalizeChangedPath(arg));
+        return "handled";
+      },
+    },
+  );
 }
 
 function isDirectRun() {

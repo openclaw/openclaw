@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 
 export async function main(argv = process.argv.slice(2)) {
   const timed = argv.includes("--timed");
@@ -110,20 +111,7 @@ async function runCommand(command) {
 }
 
 function printSummary(timings) {
-  console.error("\n[check] summary");
-  for (const timing of timings) {
-    const status = timing.status === 0 ? "ok" : `failed:${timing.status}`;
-    console.error(
-      `${formatMs(timing.durationMs).padStart(8)}  ${status.padEnd(9)}  ${timing.name}`,
-    );
-  }
-}
-
-function formatMs(durationMs) {
-  if (durationMs < 1000) {
-    return `${Math.round(durationMs)}ms`;
-  }
-  return `${(durationMs / 1000).toFixed(2)}s`;
+  printTimingSummary("check", timings);
 }
 
 if (import.meta.main) {
