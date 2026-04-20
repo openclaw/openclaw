@@ -88,9 +88,12 @@ export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
-// After reserving the actual marker length, split most of the remaining budget.
+// Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
+// The marker and "\n" separators are already reserved before this split runs; these ratios
+// only divide what's left between head and tail. Ratios sum to 1.0 — the iteration loop,
+// post-loop guard, and final `truncateUtf16Safe` clamp absorb any `Math.floor` residue.
 const BOOTSTRAP_HEAD_RATIO = 0.75;
-const BOOTSTRAP_TAIL_RATIO = 0.24;
+const BOOTSTRAP_TAIL_RATIO = 0.25;
 const BOOTSTRAP_JOIN_SEPARATOR_CHARS = 2;
 const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 
