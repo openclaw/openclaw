@@ -242,9 +242,10 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-subagent-policy-"));
     try {
       const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-      const storePath = storeTemplate.replaceAll("{agentId}", "main");
+      const mainStorePath = storeTemplate.replaceAll("{agentId}", "main");
+      const writerStorePath = storeTemplate.replaceAll("{agentId}", "writer");
       await fs.writeFile(
-        storePath,
+        mainStorePath,
         JSON.stringify(
           {
             "agent:main:acp:child": {
@@ -256,6 +257,26 @@ describe("createOpenClawCodingTools", () => {
               sessionId: "session-acp-plain",
               updatedAt: Date.now(),
               spawnedBy: "agent:main:main",
+            },
+            "agent:main:acp:parent": {
+              sessionId: "session-acp-parent",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:subagent:parent",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(
+        writerStorePath,
+        JSON.stringify(
+          {
+            "agent:writer:acp:child": {
+              sessionId: "session-acp-cross-agent-child",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:acp:parent",
             },
           },
           null,
@@ -303,6 +324,27 @@ describe("createOpenClawCodingTools", () => {
       const plainNames = new Set(plainTools.map((tool) => tool.name));
       expect(plainNames.has("sessions_spawn")).toBe(true);
       expect(plainNames.has("subagents")).toBe(true);
+
+      const crossAgentTools = createOpenClawCodingTools({
+        sessionKey: "agent:writer:acp:child",
+        config: {
+          session: {
+            store: storeTemplate,
+          },
+          agents: {
+            defaults: {
+              subagents: {
+                maxSpawnDepth: 2,
+              },
+            },
+          },
+        },
+      });
+      const crossAgentNames = new Set(crossAgentTools.map((tool) => tool.name));
+      expect(crossAgentNames.has("sessions_spawn")).toBe(false);
+      expect(crossAgentNames.has("sessions_list")).toBe(false);
+      expect(crossAgentNames.has("sessions_history")).toBe(false);
+      expect(crossAgentNames.has("subagents")).toBe(false);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

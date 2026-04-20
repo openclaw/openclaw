@@ -40,6 +40,16 @@ function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
   return isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
 }
 
+function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
+  const leftAgentId = normalizeOptionalLowercaseString(
+    parseAgentSessionKey(leftSessionKey)?.agentId,
+  );
+  const rightAgentId = normalizeOptionalLowercaseString(
+    parseAgentSessionKey(rightSessionKey)?.agentId,
+  );
+  return Boolean(leftAgentId) && leftAgentId === rightAgentId;
+}
+
 function readSessionStore(storePath: string): Record<string, SessionCapabilityEntry> {
   try {
     return loadSessionStore(storePath);
@@ -183,11 +193,14 @@ function isStoredSubagentEnvelopeSession(
   if (!spawnedBy) {
     return false;
   }
+  const parentStore = isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
+    ? params.store
+    : undefined;
   return isStoredSubagentEnvelopeSession(
     {
       sessionKey: spawnedBy,
       cfg: params.cfg,
-      store: params.store,
+      store: parentStore,
     },
     visited,
   );
