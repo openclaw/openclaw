@@ -13,6 +13,8 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
     case planApprovalBlockedBySubagents = "PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS"
     case planApprovalWaitingForSubagentSettle = "PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE"
+    case planApprovalGateStateUnavailable = "PLAN_APPROVAL_GATE_STATE_UNAVAILABLE"
+    case planApprovalExpired = "PLAN_APPROVAL_EXPIRED"
 }
 
 public struct ConnectParams: Codable, Sendable {

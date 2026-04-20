@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { ErrorCodes } from "./protocol/index.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
@@ -664,6 +665,34 @@ describe("PR-10 plan auto-mode patch routing", () => {
     expectPatchError(result, "answer");
   });
 
+  test("Bug B (C1 follow-up): approve/edit/reject on a session with no planMode returns PLAN_APPROVAL_EXPIRED", async () => {
+    // Covers the stale-card case where the session has already
+    // exited plan mode by any route (/plan off, another channel
+    // resolved it, approval timeout, or state lost to compaction).
+    // The UI branches on this code to auto-dismiss the card instead
+    // of leaving the user stuck with a "nothing happened" click.
+    const cases: Array<ApplySessionsPatchArgs["patch"]["planApproval"]> = [
+      { action: "approve", approvalId: "stale-id" },
+      { action: "edit", approvalId: "stale-id" },
+      { action: "reject", approvalId: "stale-id", feedback: "n/a" },
+    ];
+    for (const planApproval of cases) {
+      const result = await runPatch({
+        cfg: planModeEnabledCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval,
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected failure");
+      }
+      expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+      expect(result.error.message).toContain("active plan-mode session");
+    }
+  });
+
   test("M3 fix: pre-arming `/plan auto on` then `/plan on` carries autoApprove forward", async () => {
     // Step 1: user runs /plan auto on while not in plan mode. Server
     // materializes a `mode: "normal"` placeholder with autoApprove=true.
@@ -891,5 +920,142 @@ describe("PR-10 plan auto-mode patch routing", () => {
       },
     });
     expectPatchError(result, "approvalId mismatch");
+  });
+
+  // R5 (C1 follow-up): multi-channel approval dedup.
+  // The gateway applies a sessions.patch serially against the
+  // SessionEntry store, so "concurrent" webchat + Telegram writes
+  // degrade to back-to-back serial writes. The second write sees
+  // the post-first-write state and MUST reject with
+  // PLAN_APPROVAL_EXPIRED so operators don't end up with two
+  // synthetic [PLAN_DECISION] injections landing on the agent's
+  // next turn. This pins the serialization contract.
+  describe("R5: multi-channel approval dedup (C1 follow-up)", () => {
+    const APPROVAL_ID = "plan-approval-multi-channel";
+
+    function makePendingStore(): Record<string, SessionEntry> {
+      return {
+        [MAIN_SESSION_KEY]: {
+          planMode: {
+            mode: "plan",
+            approval: "pending",
+            approvalId: APPROVAL_ID,
+            rejectionCount: 0,
+            updatedAt: 1,
+          },
+        } as unknown as SessionEntry,
+      };
+    }
+
+    test("two approve writes from different channels: first wins, second returns PLAN_APPROVAL_EXPIRED", async () => {
+      const store = makePendingStore();
+      // Webchat approve lands first.
+      const webResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: APPROVAL_ID },
+        },
+      });
+      const webEntry = expectPatchOk(webResult);
+      // Approve transitions planMode → normal, clears the pending
+      // approvalId. Without autoApprove the entry is gone entirely.
+      expect(webEntry.planMode).toBeUndefined();
+
+      // Now simulate Telegram's /plan accept arriving a few ms
+      // later against the mutated store. No planMode state → must
+      // error with PLAN_APPROVAL_EXPIRED (Bug B code).
+      const telegramResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: APPROVAL_ID },
+        },
+      });
+      expect(telegramResult.ok).toBe(false);
+      if (telegramResult.ok) {
+        throw new Error("expected failure on second approve");
+      }
+      expect(telegramResult.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+    });
+
+    test("approve (web) then reject (telegram) on same approvalId: reject also rejected (not double-applied)", async () => {
+      const store = makePendingStore();
+      expectPatchOk(
+        await runPatch({
+          cfg: planModeEnabledCfg(),
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            planApproval: { action: "approve", approvalId: APPROVAL_ID },
+          },
+        }),
+      );
+      const secondResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "reject", approvalId: APPROVAL_ID, feedback: "no" },
+        },
+      });
+      expect(secondResult.ok).toBe(false);
+      if (secondResult.ok) {
+        throw new Error("expected failure on reject-after-approve");
+      }
+      expect(secondResult.error.code).toBe(ErrorCodes.PLAN_APPROVAL_EXPIRED);
+    });
+
+    test("two writes with different approvalIds against same pending approval: first matches, second stale-id rejected", async () => {
+      // Ensures the stale-approvalId branch (resolvePlanApproval
+      // no-op) is still the right fail mode when the second write
+      // is issued against a pending state that has already moved
+      // to a NEW approvalId. Differentiates "session expired" from
+      // "your approvalId was left behind by a newer plan cycle".
+      const store: Record<string, SessionEntry> = {
+        [MAIN_SESSION_KEY]: {
+          planMode: {
+            mode: "plan",
+            approval: "pending",
+            approvalId: "current-approval-v2",
+            rejectionCount: 0,
+            updatedAt: 1,
+            autoApprove: true, // keep the session in plan mode for the 2nd write
+          },
+        } as unknown as SessionEntry,
+      };
+      // First write against the CURRENT approvalId — succeeds.
+      expectPatchOk(
+        await runPatch({
+          cfg: planModeEnabledCfg(),
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            planApproval: { action: "approve", approvalId: "current-approval-v2" },
+          },
+        }),
+      );
+      // Second write using a STALE approvalId from a prior cycle
+      // (symbolically from a slow Telegram delivery). planMode is
+      // now normal (autoApprove carried forward), so the second
+      // write hits "requires a pending approval".
+      const staleResult = await runPatch({
+        cfg: planModeEnabledCfg(),
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          planApproval: { action: "approve", approvalId: "older-stale-v1" },
+        },
+      });
+      expect(staleResult.ok).toBe(false);
+      if (staleResult.ok) {
+        throw new Error("expected failure on stale-approvalId");
+      }
+      // Pending-check fires because planMode still exists (auto carries
+      // forward) but approval is no longer "pending".
+      expect(staleResult.error.message).toContain("pending approval");
+    });
   });
 });
