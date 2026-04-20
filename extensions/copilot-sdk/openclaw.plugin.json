@@ -23,8 +23,8 @@
         "type": "integer",
         "minimum": 0,
         "maximum": 65535,
-        "default": 0,
-        "description": "Local loopback port for the OpenAI-compatible shim server (0 = ephemeral)."
+        "default": 9527,
+        "description": "Local loopback port for the OpenAI-compatible shim server. Must be fixed so the baseUrl stored in models.json is stable across restarts. Falls back to ephemeral on EADDRINUSE."
       },
       "rejectToolRequests": {
         "type": "boolean",

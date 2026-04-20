@@ -188,11 +188,18 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
       }
     },
     async close() {
-      if (instance.dispose) {
+      // The SDK exposes stop()/forceStop() to terminate the CLI subprocess.
+      // Fall back to dispose()/close() for compat with test mocks.
+      const inst = instance as Record<string, unknown>;
+      if (typeof inst.stop === "function") {
+        await Promise.resolve((inst.stop as () => unknown)()).catch(() => undefined);
+      } else if (instance.dispose) {
         await Promise.resolve(instance.dispose()).catch(() => undefined);
       } else if (instance.close) {
         await Promise.resolve(instance.close()).catch(() => undefined);
       }
+      cachedClient = undefined;
+      cachedOptionsFingerprint = "";
     },
   };
 

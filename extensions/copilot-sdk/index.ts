@@ -8,12 +8,16 @@ import {
 } from "./runtime-api.js";
 import { getSdkClient, type SdkClient, type SdkClientOptions } from "./sdk-client.js";
 import type { ModelDefinitionConfig } from "./shared-types.js";
-import { startShimServer, type ShimServerHandle } from "./shim-server.js";
 
 const PROVIDER_ID = "copilot-sdk";
 const CHOICE_ID = "copilot-sdk";
 const METHOD_ID = "sdk";
-const DEFAULT_PORT = 0; // ephemeral — avoids EADDRINUSE from stale processes
+/**
+ * Fixed port for the shim server. Written into models.json so the baseUrl is
+ * stable across process restarts. The shim binds with `server.unref()` and
+ * falls back to ephemeral on EADDRINUSE.
+ */
+const DEFAULT_PORT = 9527;
 const PROFILE_ID = "copilot-sdk:logged-in";
 const PLACEHOLDER_API_KEY = "copilot-sdk";
 
@@ -24,57 +28,12 @@ type PluginConfig = {
 };
 
 type SharedDeps = {
-  startShim: typeof startShimServer;
   getClient: (options: SdkClientOptions) => Promise<SdkClient>;
 };
 
 const DEFAULT_DEPS: SharedDeps = {
-  startShim: startShimServer,
   getClient: getSdkClient,
 };
-
-/** Process-lifetime singleton so we only spin up one shim per config. */
-let runningShim: (ShimServerHandle & { fingerprint: string }) | undefined;
-let pendingShim: Promise<ShimServerHandle & { fingerprint: string }> | undefined;
-
-function shimFingerprint(config: PluginConfig): string {
-  return JSON.stringify({
-    port: config.port ?? DEFAULT_PORT,
-    rejectToolRequests: config.rejectToolRequests ?? true,
-    cliPath: config.cliPath ?? null,
-  });
-}
-
-async function ensureShim(config: PluginConfig, deps: SharedDeps): Promise<ShimServerHandle> {
-  const fingerprint = shimFingerprint(config);
-  if (runningShim && runningShim.fingerprint === fingerprint) {
-    return runningShim;
-  }
-  if (pendingShim) {
-    return pendingShim;
-  }
-
-  pendingShim = (async () => {
-    if (runningShim) {
-      await runningShim.close().catch(() => undefined);
-      runningShim = undefined;
-    }
-    const client = await deps.getClient({ cliPath: config.cliPath });
-    const handle = await deps.startShim({
-      client,
-      port: config.port ?? DEFAULT_PORT,
-      rejectToolRequests: config.rejectToolRequests ?? true,
-    });
-    runningShim = Object.assign(handle, { fingerprint });
-    return runningShim;
-  })();
-
-  try {
-    return await pendingShim;
-  } finally {
-    pendingShim = undefined;
-  }
-}
 
 function readPluginConfig(ctx: ProviderCatalogContext): PluginConfig {
   const raw = (
@@ -86,38 +45,46 @@ function readPluginConfig(ctx: ProviderCatalogContext): PluginConfig {
   return raw;
 }
 
+/**
+ * Catalog hook — discovers available models via the Copilot SDK.
+ *
+ * The shim server is NOT started here. The catalog only needs the model list
+ * which comes from `listModels()`. After discovery the SDK client is stopped
+ * so the CLI subprocess does not prevent process exit (important for
+ * short-lived commands like `models list`).
+ *
+ * The shim starts lazily via `ensureShim()` when the provider is actually
+ * used for inference (the shim server is `unref()`d so it never blocks exit
+ * on its own).
+ */
 async function buildCatalog(
   ctx: ProviderCatalogContext,
   deps: SharedDeps,
 ): Promise<ProviderCatalogResult> {
   const auth = ctx.resolveProviderAuth(PROVIDER_ID);
   if (!auth.apiKey) {
-    console.error("[copilot-sdk] catalog: no auth profile found for provider", PROVIDER_ID);
     return null;
   }
 
   const pluginConfig = readPluginConfig(ctx);
-  let baseUrl: string;
+  const port = pluginConfig.port ?? DEFAULT_PORT;
+  const baseUrl = `http://127.0.0.1:${port}/v1`;
+
   let models: ModelDefinitionConfig[];
+  let client: SdkClient | undefined;
   try {
-    const shim = await ensureShim(pluginConfig, deps);
-    baseUrl = shim.url;
-    try {
-      const client = await deps.getClient({ cliPath: pluginConfig.cliPath });
-      const sdkModels = await client.listModels();
-      models = sdkModels.length
-        ? sdkModels.map((m) => buildModelDefinitionFromSdk(m.id, m.name))
-        : buildFallbackModelCatalog();
-    } catch (innerErr) {
-      console.error(
-        "[copilot-sdk] listModels failed, using fallback:",
-        innerErr instanceof Error ? innerErr.message : innerErr,
-      );
-      models = buildFallbackModelCatalog();
+    client = await deps.getClient({ cliPath: pluginConfig.cliPath });
+    const sdkModels = await client.listModels();
+    models = sdkModels.length
+      ? sdkModels.map((m) => buildModelDefinitionFromSdk(m.id, m.name))
+      : buildFallbackModelCatalog();
+  } catch {
+    models = buildFallbackModelCatalog();
+  } finally {
+    // Stop the SDK subprocess so it does not keep the event loop alive.
+    if (client) {
+      await client.close().catch(() => undefined);
     }
-  } catch (err) {
-    console.error("[copilot-sdk] catalog failed:", err instanceof Error ? err.message : err);
-    return null;
   }
 
   return {
@@ -197,15 +164,6 @@ export function createCopilotSdkPlugin(deps: SharedDeps = DEFAULT_DEPS) {
       });
     },
   });
-}
-
-/** Test-only helper to clear the singleton shim between cases. */
-export async function __resetShimForTests(): Promise<void> {
-  if (runningShim) {
-    await runningShim.close().catch(() => undefined);
-    runningShim = undefined;
-  }
-  pendingShim = undefined;
 }
 
 export default createCopilotSdkPlugin();

@@ -60,6 +60,12 @@ export async function startShimServer(options: ShimServerOptions): Promise<ShimS
     }
   }
 
+  // Allow the process to exit even while the shim is listening. The shim
+  // stays alive as long as the host (agent/gateway) keeps its own event loop
+  // running. For short-lived commands like `models list`, Node can exit
+  // immediately after the catalog completes.
+  server.unref();
+
   const address = server.address() as AddressInfo | null;
   if (!address || typeof address === "string") {
     throw new Error("copilot-sdk shim failed to bind a loopback port");

@@ -1,18 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { createCopilotSdkPlugin, __resetShimForTests } from "./index.js";
+import { createCopilotSdkPlugin } from "./index.js";
 import type { SdkClient } from "./sdk-client.js";
-import type { ShimServerHandle } from "./shim-server.js";
 
 function buildFakeDeps(): {
   deps: Parameters<typeof createCopilotSdkPlugin>[0];
-  startShim: ReturnType<typeof vi.fn>;
   getClient: ReturnType<typeof vi.fn>;
   fakeClient: SdkClient;
-  closeShim: ReturnType<typeof vi.fn>;
 } {
-  const closeShim = vi.fn(async () => undefined);
   const fakeClient: SdkClient = {
     listModels: vi.fn(async () => [
       { id: "gpt-5", name: "GPT-5" },
@@ -21,27 +17,15 @@ function buildFakeDeps(): {
     runPrompt: vi.fn(async () => ({ content: "ok" })),
     close: vi.fn(async () => undefined),
   };
-  const handle: ShimServerHandle = {
-    url: "http://127.0.0.1:9527/v1",
-    port: 9527,
-    close: closeShim,
-  };
-  const startShim = vi.fn(async () => handle);
   const getClient = vi.fn(async () => fakeClient);
   return {
-    deps: { startShim: startShim as never, getClient: getClient as never },
-    startShim,
+    deps: { getClient: getClient as never },
     getClient,
     fakeClient,
-    closeShim,
   };
 }
 
 describe("copilot-sdk provider plugin", () => {
-  afterEach(async () => {
-    await __resetShimForTests();
-  });
-
   it("registers the provider with an SDK auth method and wizard entry", async () => {
     const { deps } = buildFakeDeps();
     const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
@@ -82,7 +66,7 @@ describe("copilot-sdk provider plugin", () => {
   });
 
   it("catalog returns null when no token is resolved", async () => {
-    const { deps, startShim } = buildFakeDeps();
+    const { deps, getClient } = buildFakeDeps();
     const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
     expect(provider.catalog).toBeDefined();
 
@@ -94,11 +78,11 @@ describe("copilot-sdk provider plugin", () => {
     } as never);
 
     expect(result).toBeNull();
-    expect(startShim).not.toHaveBeenCalled();
+    expect(getClient).not.toHaveBeenCalled();
   });
 
-  it("catalog starts the shim and returns a provider pointed at its loopback URL", async () => {
-    const { deps, startShim, getClient } = buildFakeDeps();
+  it("catalog uses SDK client to discover models and stops it afterward", async () => {
+    const { deps, getClient, fakeClient } = buildFakeDeps();
     const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
 
     const catalog = await provider.catalog!.run({
@@ -115,8 +99,9 @@ describe("copilot-sdk provider plugin", () => {
     expect(catalog.provider.api).toBe("openai-completions");
     expect(catalog.provider.baseUrl).toBe("http://127.0.0.1:9527/v1");
     expect(catalog.provider.models?.map((m) => m.id)).toEqual(["gpt-5", "claude-sonnet-4.5"]);
-    expect(startShim).toHaveBeenCalledOnce();
     expect(getClient).toHaveBeenCalled();
+    // SDK client must be stopped after catalog so the subprocess exits
+    expect(fakeClient.close).toHaveBeenCalled();
   });
 
   it("falls back to static model catalog when SDK listModels throws", async () => {
@@ -142,23 +127,28 @@ describe("copilot-sdk provider plugin", () => {
     expect(ids).toContain("gpt-5");
   });
 
-  it("catalog returns null when shim fails to start", async () => {
-    const { deps, startShim } = buildFakeDeps();
-    startShim.mockRejectedValueOnce(new Error("port in use"));
+  it("catalog falls back to static models when getClient fails", async () => {
+    const { deps, getClient } = buildFakeDeps();
+    getClient.mockRejectedValueOnce(new Error("sdk crash"));
     const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
 
-    const result = await provider.catalog!.run({
+    const catalog = await provider.catalog!.run({
       config: {},
       env: {},
       resolveProviderApiKey: () => ({ apiKey: "copilot-sdk" }),
       resolveProviderAuth: () => ({ apiKey: "copilot-sdk", mode: "token", source: "profile" }),
     } as never);
 
-    expect(result).toBeNull();
+    if (!catalog || !("provider" in catalog)) {
+      throw new Error("expected provider catalog");
+    }
+    const ids = catalog.provider.models?.map((m) => m.id) ?? [];
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids).toContain("gpt-5");
   });
 
-  it("reuses the shim across repeated catalog calls with unchanged config", async () => {
-    const { deps, startShim } = buildFakeDeps();
+  it("each catalog call creates and stops a fresh SDK client", async () => {
+    const { deps, getClient, fakeClient } = buildFakeDeps();
     const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
 
     const ctx = {
@@ -174,14 +164,15 @@ describe("copilot-sdk provider plugin", () => {
     await provider.catalog!.run(ctx as never);
     await provider.catalog!.run(ctx as never);
 
-    expect(startShim).toHaveBeenCalledOnce();
+    expect(getClient).toHaveBeenCalledTimes(2);
+    expect(fakeClient.close).toHaveBeenCalledTimes(2);
   });
 
-  it("honors configured port from plugins.entries.copilot-sdk.config.port", async () => {
-    const { deps, startShim } = buildFakeDeps();
+  it("honors configured port in the catalog baseUrl", async () => {
+    const { deps } = buildFakeDeps();
     const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
 
-    await provider.catalog!.run({
+    const catalog = await provider.catalog!.run({
       config: {
         plugins: { entries: { "copilot-sdk": { config: { port: 11111 } } } },
       },
@@ -190,8 +181,9 @@ describe("copilot-sdk provider plugin", () => {
       resolveProviderAuth: () => ({ apiKey: "copilot-sdk", mode: "token", source: "profile" }),
     } as never);
 
-    expect(startShim).toHaveBeenCalledWith(
-      expect.objectContaining({ port: 11111, rejectToolRequests: true }),
-    );
+    if (!catalog || !("provider" in catalog)) {
+      throw new Error("expected provider catalog");
+    }
+    expect(catalog.provider.baseUrl).toBe("http://127.0.0.1:11111/v1");
   });
 });
