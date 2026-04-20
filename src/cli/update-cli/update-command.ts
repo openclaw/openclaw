@@ -76,6 +76,51 @@ import {
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
+// --- Helper Functions ---
+
+/**
+ * Stop the gateway service before running npm install.
+ * This prevents file lock conflicts where npm tries to overwrite files
+ * that are memory-mapped by the running Node.js process.
+ */
+async function stopGatewayServiceBeforeUpdate({
+  json,
+  _gatewayPort,
+}: {
+  json: boolean;
+  _gatewayPort: number;
+}): Promise<boolean> {
+  const service = resolveGatewayService();
+
+  try {
+    const loaded = await service.isLoaded({ env: process.env });
+    if (!loaded) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  if (!json) {
+    defaultRuntime.log(theme.heading("Stopping gateway service before update..."));
+  }
+
+  try {
+    await service.stop({ env: process.env, stdout: process.stdout });
+  } catch (err) {
+    if (!json) {
+      defaultRuntime.log(theme.warn(`Service stop failed: ${String(err)}`));
+      defaultRuntime.log(theme.muted("Continuing update — files may be locked."));
+    }
+    return false;
+  }
+
+  // Wait for the process to fully release file locks
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  return true;
+}
+
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
@@ -1052,6 +1097,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
+  // Stop gateway service before npm install to prevent file lock conflicts
+  if (shouldRestart && updateInstallKind === "package") {
+    const gatewayPort = resolveGatewayPort(
+      configSnapshot.valid ? configSnapshot.config : undefined,
+      process.env,
+    );
+    await stopGatewayServiceBeforeUpdate({
+      json: Boolean(opts.json),
+      _gatewayPort: gatewayPort,
+    });
+  }
+
   const result =
     updateInstallKind === "package"
       ? await runPackageInstallUpdate({
@@ -1198,7 +1255,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
-  const gatewayPort = resolveGatewayPort(
+  const gatewayPortForRestart = resolveGatewayPort(
     postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
     process.env,
   );
@@ -1206,7 +1263,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     try {
       const loaded = await resolveGatewayService().isLoaded({ env: process.env });
       if (loaded) {
-        restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
+        restartScriptPath = await prepareRestartScript(process.env, gatewayPortForRestart);
         refreshGatewayServiceEnv = true;
       }
     } catch {
@@ -1234,7 +1291,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       result,
       opts,
       refreshServiceEnv: refreshGatewayServiceEnv,
-      gatewayPort,
+      gatewayPort: gatewayPortForRestart,
       restartScriptPath,
       invocationCwd,
     });
