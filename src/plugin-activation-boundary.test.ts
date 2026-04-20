@@ -19,6 +19,22 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   }),
 );
 
+const loadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn(() => ({
+    diagnostics: [],
+    plugins: [
+      {
+        channelEnvVars: {
+          discord: ["DISCORD_BOT_TOKEN"],
+          irc: ["IRC_HOST", "IRC_NICK"],
+          slack: ["SLACK_BOT_TOKEN"],
+          telegram: ["TELEGRAM_BOT_TOKEN"],
+        },
+      },
+    ],
+  })),
+);
+
 const facadeMockHelpers = vi.hoisted(() => {
   const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
     new Proxy(
@@ -37,6 +53,10 @@ const facadeMockHelpers = vi.hoisted(() => {
     }) as unknown as T;
   return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
 });
+
+vi.mock("./plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry,
+}));
 
 vi.mock("./plugin-sdk/facade-loader.js", () => ({
   ...facadeMockHelpers,
