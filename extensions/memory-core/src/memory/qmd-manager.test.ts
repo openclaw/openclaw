@@ -2140,11 +2140,20 @@ describe("QmdMemoryManager", () => {
     const searchAndQueryCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search" || args[0] === "query");
-    expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
-    ]);
+    // The initial `search` attempts across both collections run in
+    // parallel, then the unsupported-flag error triggers a `query`-mode
+    // fallback that also runs in parallel. Both parallel waves have
+    // non-deterministic internal ordering, so assert the set of calls
+    // rather than their exact sequence.
+    const byJoined = (a: string[], b: string[]) => a.join("|").localeCompare(b.join("|"));
+    expect(searchAndQueryCalls.toSorted(byJoined)).toEqual(
+      [
+        ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+        ["search", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+        ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
+        ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
+      ].toSorted(byJoined),
+    );
     await manager.close();
   });
 
@@ -4148,6 +4157,84 @@ describe("QmdMemoryManager", () => {
         source: "memory",
       },
     ]);
+    await manager.close();
+  });
+
+  it("runs multi-collection qmd search invocations in parallel", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "alpha" },
+            { path: path.join(workspaceDir, "b"), pattern: "**/*.md", name: "bravo" },
+            { path: path.join(workspaceDir, "c"), pattern: "**/*.md", name: "charlie" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Each per-collection qmd invocation takes 50 ms of wall time to
+    // complete. Serial execution across three collections would take
+    // ~150 ms; parallel execution should finish in ~50 ms. We assert a
+    // generous upper bound well below the serial floor to catch any
+    // future regression that re-introduces the `await` loop.
+    const COLLECTION_DELAY_MS = 50;
+    const SERIAL_FLOOR_MS = COLLECTION_DELAY_MS * 3;
+    const invocationStartTimes: number[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] !== "search") {
+        return createMockChild();
+      }
+      const collection = args.includes("alpha-main")
+        ? "alpha-main"
+        : args.includes("bravo-main")
+          ? "bravo-main"
+          : args.includes("charlie-main")
+            ? "charlie-main"
+            : undefined;
+      if (!collection) {
+        return createMockChild();
+      }
+      invocationStartTimes.push(Date.now());
+      const child = createMockChild({ autoClose: false });
+      setTimeout(() => {
+        child.stdout.emit(
+          "data",
+          JSON.stringify([
+            {
+              file: `qmd://${collection}/hit.md`,
+              score: 0.5,
+              snippet: `@@ -1,1\n${collection} hit`,
+            },
+          ]),
+        );
+        child.closeWith(0);
+      }, COLLECTION_DELAY_MS);
+      return child;
+    });
+
+    const { manager } = await createManager();
+    const startedAt = Date.now();
+    const results = await manager.search("hit", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(results).toHaveLength(3);
+    expect(invocationStartTimes).toHaveLength(3);
+    // All three qmd invocations should kick off within a tight window of
+    // each other (the event-loop dispatch of Promise.all). If they are
+    // awaited serially, the second invocation cannot start before the
+    // first finishes COLLECTION_DELAY_MS later.
+    const startSpreadMs = Math.max(...invocationStartTimes) - Math.min(...invocationStartTimes);
+    expect(startSpreadMs).toBeLessThan(COLLECTION_DELAY_MS);
+    // And total wall time should be well below the serial floor.
+    expect(elapsedMs).toBeLessThan(SERIAL_FLOOR_MS);
+
     await manager.close();
   });
 

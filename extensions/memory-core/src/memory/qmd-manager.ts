@@ -2753,14 +2753,26 @@ export class QmdMemoryManager implements MemorySearchManager {
     command: "query" | "search" | "vsearch",
   ): Promise<QmdQueryResult[]> {
     log.debug(
-      `qmd ${command} multi-collection workaround active (${collectionNames.length} collections)`,
+      `qmd ${command} multi-collection workaround active (${collectionNames.length} collections, parallel)`,
+    );
+    // Fire all per-collection qmd invocations in parallel. Each qmd spawn is
+    // an independent subprocess with no shared state, and each invocation
+    // incurs ~500ms of Node/SQLite startup cost on top of a sub-millisecond
+    // BM25 query. Serializing the loop multiplies that startup cost by the
+    // number of collections (5+ in typical setups), dominating memory_search
+    // latency. Parallelizing collapses it to a single invocation's worth of
+    // wall time while preserving the per-collection merge+dedup semantics.
+    const perCollectionResults = await Promise.all(
+      collectionNames.map(async (collectionName) => {
+        const args = this.buildSearchArgs(command, query, limit);
+        args.push("-c", collectionName);
+        const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+        const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+        return { collectionName, parsed };
+      }),
     );
     const bestByResultKey = new Map<string, QmdQueryResult>();
-    for (const collectionName of collectionNames) {
-      const args = this.buildSearchArgs(command, query, limit);
-      args.push("-c", collectionName);
-      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+    for (const { collectionName, parsed } of perCollectionResults) {
       for (const entry of parsed) {
         const normalizedHints = this.normalizeDocHints({
           preferredCollection: entry.collection ?? collectionName,
