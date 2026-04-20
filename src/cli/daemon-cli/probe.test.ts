@@ -223,8 +223,9 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
+      kind: "connect",
       error: "scope upgrade pending approval (requestId: req-123)",
     });
   });
