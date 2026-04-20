@@ -284,4 +284,33 @@ describe("handleCommands reset hooks", () => {
       }),
     );
   });
+
+  it("does not send the ACP reset reply when bound session key is non-ACP", async () => {
+    // resolveBoundAcpThreadSessionKey may return a non-ACP key because it
+    // calls resolveEffectiveResetTargetSessionKey with allowNonAcpBindingSessionKey: true.
+    // The ACP reply branch must stay gated behind isAcpSessionKey (regression guard for #69290).
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+      "agent:system-architect:telegram:direct:6689123501",
+    );
+    const params = buildResetParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "telegram",
+        Surface: "telegram",
+        CommandSource: "native",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+    expect(triggerInternalHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
+  });
 });
