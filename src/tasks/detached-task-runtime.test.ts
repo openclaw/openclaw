@@ -17,6 +17,24 @@ import {
 } from "./detached-task-runtime.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+const { mockLogWarn } = vi.hoisted(() => ({
+  mockLogWarn: vi.fn(),
+}));
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "tasks/detached-runtime",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockLogWarn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
+
 function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
   return {
     taskId: "task-fake",
@@ -37,6 +55,7 @@ function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
 describe("detached-task-runtime", () => {
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
+    mockLogWarn.mockClear();
   });
 
   it("dispatches lifecycle operations through the installed runtime", async () => {
@@ -200,6 +219,10 @@ describe("detached-task-runtime", () => {
         task,
       });
       expect(result).toEqual({ recovered: false });
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        "onBeforeMarkLost hook threw, proceeding with markTaskLost",
+        expect.objectContaining({ taskId: "task-throw", runtime: "acp" }),
+      );
     });
   });
 });

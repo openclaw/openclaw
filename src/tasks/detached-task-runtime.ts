@@ -119,7 +119,11 @@ export async function onBeforeMarkLost(params: {
     return { recovered: false };
   }
   try {
-    return await hook(params);
+    const result = await hook(params);
+    if (result && typeof result.recovered === "boolean") {
+      return result;
+    }
+    return { recovered: false };
   } catch (err) {
     log.warn("onBeforeMarkLost hook threw, proceeding with markTaskLost", {
       taskId: params.taskId,

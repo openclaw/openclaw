@@ -252,6 +252,9 @@ export function reconcileTaskLookupToken(token: string): TaskRecord | undefined 
   return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }
 
+// Preview is synchronous and cannot call the async onBeforeMarkLost hook,
+// so recovered tasks are counted under reconciled here. The real sweep
+// in runTaskRegistryMaintenance splits them into reconciled vs recovered.
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
@@ -314,18 +317,23 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         runtime: current.runtime,
         task: current,
       });
-      if (recovery.recovered) {
-        const fresh = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
-        if (fresh && isActiveTask(fresh)) {
-          recovered += 1;
-        }
+      const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
+      if (!freshAfterHook || !shouldMarkLost(freshAfterHook, now)) {
         processed += 1;
         if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
           await yieldToEventLoop();
         }
         continue;
       }
-      const next = markTaskLost(current, now);
+      if (recovery.recovered) {
+        recovered += 1;
+        processed += 1;
+        if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+          await yieldToEventLoop();
+        }
+        continue;
+      }
+      const next = markTaskLost(freshAfterHook, now);
       if (next.status === "lost") {
         reconciled += 1;
       }
