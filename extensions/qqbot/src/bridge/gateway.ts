@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerVersionResolver,
   registerPluginVersion,
+  registerApproveRuntimeGetter,
 } from "../engine/commands/slash-commands-impl.js";
 import {
   startGateway as coreStartGateway,
@@ -40,6 +41,17 @@ initSender({
   openclawVersion: resolveRuntimeServiceVersion(),
 });
 registerPluginVersion(_pluginVersion);
+
+// Register runtime getter for /bot-approve config management.
+registerApproveRuntimeGetter(() => {
+  const rt = getQQBotRuntimeForEngine();
+  return {
+    config: rt.config as {
+      loadConfig: () => Record<string, unknown>;
+      writeConfigFile: (cfg: unknown) => Promise<void>;
+    },
+  };
+});
 
 export interface GatewayContext {
   account: ResolvedQQBotAccount;
