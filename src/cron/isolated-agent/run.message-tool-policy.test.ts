@@ -166,6 +166,72 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("does not resolve implicit last-target context for delivery.mode none with only accountId", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+      accountId: "ops",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        id: "message-tool-policy",
+        name: "Message Tool Policy",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "none", accountId: "ops" },
+      } as never,
+    });
+
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      messageChannel: undefined,
+      messageTo: undefined,
+      messageThreadId: undefined,
+      currentChannelId: undefined,
+      agentAccountId: undefined,
+    });
+  });
+
+  it("does not resolve implicit last-target context for delivery.mode none with only threadId", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+      threadId: 42,
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        id: "message-tool-policy",
+        name: "Message Tool Policy",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "send a message" },
+        delivery: { mode: "none", threadId: 42 },
+      } as never,
+    });
+
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      messageChannel: undefined,
+      messageTo: undefined,
+      messageThreadId: undefined,
+      currentChannelId: undefined,
+      agentAccountId: undefined,
+    });
+  });
+
   it("forwards explicit message targets into the embedded run", async () => {
     mockRunCronFallbackPassthrough();
     const executor = createCronPromptExecutor({
