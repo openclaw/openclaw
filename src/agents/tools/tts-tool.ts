@@ -25,7 +25,13 @@ const TtsToolSchema = Type.Object({
  * changing the visible text.
  */
 function sanitizeTranscriptForToolContent(text: string): string {
-  return text.replace(/^([ \t]*)MEDIA:/gim, "$1\u2060MEDIA:").replace(/\[\[/g, "[\u2060[");
+  return text
+    .replace(/^([ \t]*)MEDIA:/gim, "$1\u2060MEDIA:")
+    .replace(/\[\[/g, "[\u2060[")
+    .replace(/^([ \t]*)(`{3,})/gm, (_match, indent: string, fence: string) => {
+      const [first = "", ...rest] = fence;
+      return `${indent}${first}\u2060${rest.join("")}`;
+    });
 }
 
 export function createTtsTool(opts?: {
