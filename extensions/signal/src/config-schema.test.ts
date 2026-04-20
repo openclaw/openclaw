@@ -16,6 +16,43 @@ function expectInvalidSignalConfig(config: unknown) {
 }
 
 describe("signal groups schema", () => {
+  it('rejects dmPolicy="open" without allowFrom "*"', () => {
+    const issues = expectInvalidSignalConfig({
+      dmPolicy: "open",
+      allowFrom: ["+15555550123"],
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("allowFrom");
+  });
+
+  it('accepts dmPolicy="open" with allowFrom "*"', () => {
+    const res = SignalConfigSchema.safeParse({ dmPolicy: "open", allowFrom: ["*"] });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults dm/group policy", () => {
+    const res = SignalConfigSchema.safeParse({});
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("pairing");
+      expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("accepts historyLimit", () => {
+    const res = SignalConfigSchema.safeParse({ historyLimit: 6 });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.historyLimit).toBe(6);
+    }
+  });
+
   it("accepts textChunkLimit", () => {
     const res = SignalConfigSchema.safeParse({
       enabled: true,

@@ -64,6 +64,18 @@ describe("discord config schema", () => {
     expect(cfg.maxLinesPerMessage).toBe(17);
   });
 
+  it("defaults groupPolicy to allowlist", () => {
+    const cfg = expectValidDiscordConfig({});
+
+    expect(cfg.groupPolicy).toBe("allowlist");
+  });
+
+  it("accepts historyLimit", () => {
+    const cfg = expectValidDiscordConfig({ historyLimit: 3 });
+
+    expect(cfg.historyLimit).toBe(3);
+  });
+
   it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,

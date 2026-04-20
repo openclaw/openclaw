@@ -15,6 +15,28 @@ function expectSlackConfigIssue(config: unknown, path: string) {
 }
 
 describe("slack config schema", () => {
+  it("defaults groupPolicy to allowlist", () => {
+    const res = SlackConfigSchema.safeParse({});
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("accepts historyLimit overrides per account", () => {
+    const res = SlackConfigSchema.safeParse({
+      historyLimit: 7,
+      accounts: { ops: { historyLimit: 2 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.historyLimit).toBe(7);
+      expect(res.data.accounts?.ops?.historyLimit).toBe(2);
+    }
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     expectSlackConfigIssue(
       {

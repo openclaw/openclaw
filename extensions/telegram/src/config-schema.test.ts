@@ -14,6 +14,45 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
 }
 
 describe("telegram custom commands schema", () => {
+  it('rejects dmPolicy="open" without allowFrom "*"', () => {
+    expectTelegramConfigIssue(
+      { dmPolicy: "open", allowFrom: ["123456789"], botToken: "fake" },
+      "allowFrom",
+    );
+  });
+
+  it('accepts dmPolicy="open" with allowFrom "*"', () => {
+    const res = TelegramConfigSchema.safeParse({ dmPolicy: "open", allowFrom: ["*"] });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults dm/group policy", () => {
+    const res = TelegramConfigSchema.safeParse({});
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("pairing");
+      expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("accepts historyLimit overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      historyLimit: 8,
+      accounts: { ops: { historyLimit: 3 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.historyLimit).toBe(8);
+      expect(res.data.accounts?.ops?.historyLimit).toBe(3);
+    }
+  });
+
   it("accepts textChunkLimit", () => {
     const res = TelegramConfigSchema.safeParse({
       enabled: true,

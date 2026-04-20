@@ -8,6 +8,50 @@ function expectWhatsAppConfigValid(config: unknown) {
 }
 
 describe("whatsapp config schema", () => {
+  it('rejects dmPolicy="open" without allowFrom "*"', () => {
+    const res = WhatsAppConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: ["+15555550123"],
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("allowFrom");
+    }
+  });
+
+  it('accepts dmPolicy="open" with allowFrom "*"', () => {
+    const res = WhatsAppConfigSchema.safeParse({ dmPolicy: "open", allowFrom: ["*"] });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults dm/group policy", () => {
+    const res = WhatsAppConfigSchema.safeParse({});
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dmPolicy).toBe("pairing");
+      expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("accepts historyLimit overrides per account", () => {
+    const res = WhatsAppConfigSchema.safeParse({
+      historyLimit: 9,
+      accounts: { work: { historyLimit: 4 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.historyLimit).toBe(9);
+      expect(res.data.accounts?.work?.historyLimit).toBe(4);
+    }
+  });
+
   it("accepts textChunkLimit", () => {
     const res = expectWhatsAppConfigValid({
       allowFrom: ["+15555550123"],
