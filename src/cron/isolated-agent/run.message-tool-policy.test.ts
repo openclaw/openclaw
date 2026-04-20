@@ -5,6 +5,7 @@ import {
   dispatchCronDeliveryMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
@@ -14,6 +15,7 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const { createCronPromptExecutor } = await import("./run-executor.js");
 
 function makeParams() {
   return {
@@ -81,6 +83,91 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await expectMessageToolEnabledForPlan({
       requested: false,
       mode: "none",
+    });
+  });
+
+  it("preserves explicit delivery targets for agent-initiated messaging when delivery.mode is none", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "telegram",
+      to: "123:topic:42",
+      threadId: 42,
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "123:topic:42",
+      threadId: 42,
+      accountId: undefined,
+      error: undefined,
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        ...makeParams().job,
+        delivery: { mode: "none", channel: "telegram", to: "123:topic:42", threadId: 42 },
+      } as never,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      messageChannel: "telegram",
+      messageTo: "123:topic:42",
+      messageThreadId: 42,
+      currentChannelId: "123:topic:42",
+    });
+  });
+
+  it("forwards explicit message targets into the embedded run", async () => {
+    mockRunCronFallbackPassthrough();
+    const executor = createCronPromptExecutor({
+      cfg: {},
+      cfgWithAgentDefaults: {},
+      job: makeParams().job,
+      agentId: "default",
+      agentDir: "/tmp/agent-dir",
+      agentSessionKey: "cron:message-tool-policy",
+      workspaceDir: "/tmp/workspace",
+      resolvedVerboseLevel: "off",
+      thinkLevel: undefined,
+      timeoutMs: 60_000,
+      messageChannel: "telegram",
+      resolvedDelivery: {
+        accountId: "ops",
+        to: "123:topic:42",
+        threadId: 42,
+      },
+      toolPolicy: {
+        requireExplicitMessageTarget: false,
+        disableMessageTool: false,
+      },
+      skillsSnapshot: {
+        prompt: "",
+        resolvedSkills: [],
+        version: 1,
+      },
+      agentPayload: null,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      cronSession: makeCronSession(),
+      abortReason: () => "aborted",
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      agentAccountId: "ops",
+      messageTo: "123:topic:42",
+      messageThreadId: 42,
+      currentChannelId: "123:topic:42",
     });
   });
 
