@@ -22,6 +22,10 @@ import {
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
@@ -654,14 +658,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerUniqueProviderLike = <
-    T extends { id: string },
-    R extends PluginOwnedProviderRegistration<T>,
-  >(params: {
+  const registerUniqueProviderLike = <T extends { id: string }>(params: {
     record: PluginRecord;
     provider: T;
     kindLabel: string;
-    registrations: R[];
+    registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
   }) => {
     const id = params.provider.id.trim();
@@ -694,7 +695,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       provider: params.provider,
       source: record.source,
       rootDir: record.rootDir,
-    } as R);
+    });
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -1172,6 +1173,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerDetachedTaskRuntime: (runtime) => {
+                const existing = getDetachedTaskLifecycleRuntimeRegistration();
+                if (existing && existing.pluginId !== record.id) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `detached task runtime already registered by ${existing.pluginId}`,
+                  });
+                  return;
+                }
+                registerDetachedTaskLifecycleRuntime(record.id, runtime);
+              },
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
               registerRealtimeTranscriptionProvider: (provider) =>
                 registerRealtimeTranscriptionProvider(record, provider),

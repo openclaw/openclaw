@@ -22,6 +22,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import {
+  clearDetachedTaskLifecycleRuntimeRegistration,
+  getDetachedTaskLifecycleRuntimeRegistration,
+  restoreDetachedTaskLifecycleRuntimeRegistration,
+} from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
@@ -187,6 +192,7 @@ export class PluginLoadReentryError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
@@ -225,6 +231,7 @@ export function clearPluginLoaderCache(): void {
   openAllowlistWarningCache.clear();
   clearAgentHarnesses();
   clearCompactionProviders();
+  clearDetachedTaskLifecycleRuntimeRegistration();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
 }
@@ -1545,6 +1552,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       restoreRegisteredAgentHarnesses(cached.agentHarnesses);
       restoreRegisteredCompactionProviders(cached.compactionProviders);
+      restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
         capability: cached.memoryCapability,
@@ -1586,6 +1594,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           cacheKey,
         });
       }
+      clearDetachedTaskLifecycleRuntimeRegistration();
       clearMemoryPluginState();
     }
 
@@ -2326,6 +2335,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const registrySnapshot = snapshotPluginRegistry(registry);
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
+      const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
       const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
@@ -2339,6 +2349,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         if (!shouldActivate) {
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
+          restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             corpusSupplements: previousMemoryCorpusSupplements,
@@ -2355,6 +2366,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restorePluginRegistry(registry, registrySnapshot);
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
+        restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           corpusSupplements: previousMemoryCorpusSupplements,
@@ -2411,6 +2423,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (cacheEnabled) {
       setCachedPluginRegistry(cacheKey, {
+        detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
         memoryCapability: getMemoryCapabilityRegistration(),
         memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,
