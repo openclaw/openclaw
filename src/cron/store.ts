@@ -99,7 +99,12 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
       return null;
     }
     const record = parsed as Record<string, unknown>;
-    if (record.version !== 1 || typeof record.jobs !== "object" || record.jobs === null) {
+    if (
+      record.version !== 1 ||
+      typeof record.jobs !== "object" ||
+      record.jobs === null ||
+      Array.isArray(record.jobs)
+    ) {
       return null;
     }
     return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };

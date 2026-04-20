@@ -296,6 +296,44 @@ describe("cron store", () => {
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
   });
 
+  it("ignores array-shaped state sidecars when migrating legacy inline state", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    // Numeric-looking IDs catch accidental array indexing in invalid sidecars.
+    const legacy = makeStore("0", true);
+    legacy.jobs[0].state = {
+      lastRunAtMs: legacy.jobs[0].createdAtMs + 30_000,
+      nextRunAtMs: legacy.jobs[0].createdAtMs + 60_000,
+    };
+    const staleSidecar = {
+      ...legacy,
+      jobs: [
+        {
+          ...legacy.jobs[0],
+          updatedAtMs: legacy.jobs[0].updatedAtMs + 10_000,
+          state: {
+            nextRunAtMs: legacy.jobs[0].createdAtMs + 120_000,
+          },
+        },
+      ],
+    };
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
+    await fs.writeFile(statePath, JSON.stringify(staleSidecar, null, 2), "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+    await saveCronStore(store.storePath, loaded);
+
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
+    expect(Array.isArray(stateFile.jobs)).toBe(false);
+    expect(stateFile.jobs["0"].updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
+    expect(stateFile.jobs["0"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
+  });
+
   it("treats a corrupt state sidecar as absent", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
