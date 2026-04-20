@@ -9,16 +9,12 @@ inputs:
     description: Suffix appended to the cache key.
     required: false
     default: "node24"
-  use-sticky-disk:
-    description: Deprecated no-op. Kept for workflow input compatibility; pnpm store caching uses actions/cache.
-    required: false
-    default: "false"
   use-restore-keys:
     description: Whether to use restore-keys fallback for actions/cache.
     required: false
     default: "true"
   use-actions-cache:
-    description: Whether to restore/save pnpm store with actions/cache, including pull_request fallback when sticky disks are disabled.
+    description: Whether to restore/save pnpm store with actions/cache.
     required: false
     default: "true"
 runs:
