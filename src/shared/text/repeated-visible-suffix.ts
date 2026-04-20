@@ -14,7 +14,7 @@ const EXACT_TARGET_HINT_RE =
   /\b(?:specific string|reply with|output the text directly|output content)\b/i;
 const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
 const DOUBLE_QUOTED_LITERAL_RE = /"([^"\r\n]{1,400})"/g;
-const SINGLE_QUOTED_LITERAL_RE = /'([^'\r\n]{1,400})'/g;
+const SINGLE_QUOTED_LITERAL_RE = /(?<![A-Za-z0-9_])'([^'\r\n]{1,400})'(?![A-Za-z0-9_])/g;
 const EXCLUDED_TARGET_HINT_SEGMENT_RE = /\b(?:incorrect|wrong|duplicate|previous|attempt)\b/i;
 const EXCLUDED_TRAILING_COLLAPSE_CONTEXT_RE =
   /\b(?:mistaken|example|examples|incorrect|wrong|previous attempt|doubled output|duplicate(?:d)? output)\b/i;
@@ -192,16 +192,19 @@ export function collapseRepeatedVisibleSuffixAfterDelimiter(
   prefix: string,
   suffix: string,
 ): string {
+  const leadingWhitespace = suffix.match(/^\s*/)?.[0] ?? "";
+  const normalizedSuffix = suffix.slice(leadingWhitespace.length);
   const scanSuffix =
-    suffix.length > MAX_DELIMITER_SUFFIX_SCAN_CHARS
-      ? suffix.slice(0, MAX_DELIMITER_SUFFIX_SCAN_CHARS)
-      : suffix;
+    normalizedSuffix.length > MAX_DELIMITER_SUFFIX_SCAN_CHARS
+      ? normalizedSuffix.slice(0, MAX_DELIMITER_SUFFIX_SCAN_CHARS)
+      : normalizedSuffix;
   const match = matchStructuredRepeatedPrefixPattern(scanSuffix);
   if (!match) {
     return suffix;
   }
 
-  return selectVisibleSuffixReplacement({ prefix, match, context: "delimiter" }) ?? suffix;
+  const replacement = selectVisibleSuffixReplacement({ prefix, match, context: "delimiter" });
+  return replacement ? `${leadingWhitespace}${replacement}` : suffix;
 }
 
 function splitPreambleHintSegments(text: string): string[] {
@@ -262,10 +265,19 @@ function extractExplicitRepeatedLiteralFromRunawayText(text: string): string | n
     return null;
   }
 
-  const runawaySuffixMatch = text.match(
-    new RegExp(`(?:${escapeRegex(literal)}){3,}([^\\s][\\s\\S]*)$`),
-  );
+  const runawaySuffixMatches = [
+    ...text.matchAll(new RegExp(`(?:${escapeRegex(literal)}){3,}([^\\s][\\s\\S]*)$`, "g")),
+  ];
+  const runawaySuffixMatch = runawaySuffixMatches.at(-1);
   if (!runawaySuffixMatch) {
+    return null;
+  }
+  const matchStart = runawaySuffixMatch.index ?? -1;
+  if (matchStart < 0) {
+    return null;
+  }
+  const prefix = text.slice(0, matchStart);
+  if (!looksLikeInternalPreamble(prefix) || !endsAtVisibleSuffixBoundary(prefix)) {
     return null;
   }
 
