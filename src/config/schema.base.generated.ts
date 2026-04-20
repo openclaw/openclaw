@@ -274,6 +274,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
           },
+          sessionTracing: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              headers: {
+                type: "object",
+                properties: {
+                  sessionId: {
+                    type: "string",
+                  },
+                  sessionName: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              sessionName: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
         title: "Diagnostics",
