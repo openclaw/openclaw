@@ -143,6 +143,54 @@ const DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES = [
 
 type PackageJsonRequire = (id: string) => unknown;
 
+type PluginConfigIssuePathSegment = string | number;
+
+type PluginConfigIssue = {
+  path: PluginConfigIssuePathSegment[];
+  message: string;
+};
+
+type PluginConfigIssueMessageOptions = {
+  invalidConfigMessage?: string;
+  unknownKeyMessage?: (key: string) => string;
+  rootInvalidTypeMessage?: string;
+};
+
+export function formatPluginConfigIssue(
+  issue: z.ZodIssue | undefined,
+  options?: PluginConfigIssueMessageOptions,
+): string {
+  if (!issue) {
+    return options?.invalidConfigMessage ?? "invalid config";
+  }
+  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
+    return options?.unknownKeyMessage?.(issue.keys[0]) ?? `unknown config key: ${issue.keys[0]}`;
+  }
+  if (issue.code === "invalid_type" && issue.path.length === 0) {
+    return options?.rootInvalidTypeMessage ?? "expected config object";
+  }
+  return issue.message;
+}
+
+export function normalizePluginConfigIssuePath(
+  path: readonly unknown[],
+): PluginConfigIssuePathSegment[] {
+  return path.filter((segment): segment is PluginConfigIssuePathSegment => {
+    const kind = typeof segment;
+    return kind === "string" || kind === "number";
+  });
+}
+
+export function mapPluginConfigIssues(
+  issues: readonly z.ZodIssue[],
+  options?: PluginConfigIssueMessageOptions,
+): PluginConfigIssue[] {
+  return issues.map((issue) => ({
+    path: normalizePluginConfigIssuePath(issue.path),
+    message: formatPluginConfigIssue(issue, options),
+  }));
+}
+
 export function readPluginPackageVersion(params: {
   require: PackageJsonRequire;
   candidates?: readonly string[];
