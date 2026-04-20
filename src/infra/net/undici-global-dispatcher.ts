@@ -9,6 +9,17 @@ const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrap = false;
+let lastAppliedTimeoutMs: number | null = null;
+
+/**
+ * Return the last applied stream timeout in milliseconds, or null if no
+ * explicit timeout has been configured yet. Pinned dispatchers built outside
+ * the global scope (for example SSRF-guarded fetch flows) should apply this
+ * value when the caller has not set its own `headersTimeout`/`bodyTimeout`.
+ */
+export function getEffectiveUndiciStreamTimeoutMs(): number | null {
+  return lastAppliedTimeoutMs;
+}
 
 type DispatcherKind = "agent" | "env-proxy" | "unsupported";
 
@@ -144,6 +155,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
       );
     }
     lastAppliedTimeoutKey = nextKey;
+    lastAppliedTimeoutMs = timeoutMs;
   } catch {
     // Best-effort hardening only.
   }
@@ -152,4 +164,5 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrap = false;
+  lastAppliedTimeoutMs = null;
 }

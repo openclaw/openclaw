@@ -72,6 +72,7 @@ import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
+let getEffectiveUndiciStreamTimeoutMs: typeof import("./undici-global-dispatcher.js").getEffectiveUndiciStreamTimeoutMs;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
@@ -80,6 +81,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
+      getEffectiveUndiciStreamTimeoutMs,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = await import("./undici-global-dispatcher.js"));
   });
@@ -170,6 +172,29 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
     });
+  });
+
+  it("exposes the last applied stream timeout via getEffectiveUndiciStreamTimeoutMs (#69390)", () => {
+    // Pinned dispatchers built outside the global scope (SSRF-guarded fetch
+    // flows, per-request Agents) need the effective stream timeout to avoid
+    // falling back to undici's 300_000 ms headers timeout on slow local
+    // providers like Ollama.
+    expect(getEffectiveUndiciStreamTimeoutMs()).toBeNull();
+
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 900_000 });
+    expect(getEffectiveUndiciStreamTimeoutMs()).toBe(900_000);
+
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_800_000 });
+    expect(getEffectiveUndiciStreamTimeoutMs()).toBe(1_800_000);
+  });
+
+  it("leaves getEffectiveUndiciStreamTimeoutMs untouched when dispatcher kind is unsupported (#69390)", () => {
+    setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
+
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 900_000 });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getEffectiveUndiciStreamTimeoutMs()).toBeNull();
   });
 });
 

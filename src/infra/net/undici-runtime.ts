@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { getEffectiveUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 
 export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -65,16 +66,56 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
   } as (T extends object ? T : Record<never, never>) & { allowH2: false };
 }
 
+/**
+ * Pinned dispatchers (SSRF-guarded flows, per-request Agents) do not inherit
+ * the global dispatcher's `headersTimeout`/`bodyTimeout`, so by default they
+ * fall back to undici's 300 000 ms headers timeout. Mirror the effective
+ * global stream timeout onto pinned options when the caller has not provided
+ * explicit values, so slow local providers (Ollama, embedded runners) honor
+ * the same run-level timeout ceiling as the global dispatcher. (#69390)
+ */
+function withEffectiveStreamTimeouts<T extends Record<string, unknown> | undefined>(
+  options?: T,
+): T {
+  const effective = getEffectiveUndiciStreamTimeoutMs();
+  if (effective === null) {
+    return options as T;
+  }
+  const hasHeadersTimeout =
+    options && Object.prototype.hasOwnProperty.call(options, "headersTimeout");
+  const hasBodyTimeout = options && Object.prototype.hasOwnProperty.call(options, "bodyTimeout");
+  if (hasHeadersTimeout && hasBodyTimeout) {
+    return options as T;
+  }
+  return {
+    ...options,
+    ...(hasHeadersTimeout ? {} : { headersTimeout: effective }),
+    ...(hasBodyTimeout ? {} : { bodyTimeout: effective }),
+  } as T;
+}
+
 export function createHttp1Agent(options?: UndiciAgentOptions): import("undici").Agent {
   const { Agent } = loadUndiciRuntimeDeps();
-  return new Agent(withHttp1OnlyDispatcherOptions(options));
+  return new Agent(
+    withHttp1OnlyDispatcherOptions(
+      withEffectiveStreamTimeouts(options as Record<string, unknown> | undefined) as
+        | UndiciAgentOptions
+        | undefined,
+    ),
+  );
 }
 
 export function createHttp1EnvHttpProxyAgent(
   options?: UndiciEnvHttpProxyAgentOptions,
 ): import("undici").EnvHttpProxyAgent {
   const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-  return new EnvHttpProxyAgent(withHttp1OnlyDispatcherOptions(options));
+  return new EnvHttpProxyAgent(
+    withHttp1OnlyDispatcherOptions(
+      withEffectiveStreamTimeouts(options as Record<string, unknown> | undefined) as
+        | UndiciEnvHttpProxyAgentOptions
+        | undefined,
+    ),
+  );
 }
 
 export function createHttp1ProxyAgent(
