@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { sendMessageSlack } from "./send.js";
+import type { SlackSendIdentity } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
@@ -20,6 +21,7 @@ export function createSlackDraftStream(params: {
   target: string;
   token: string;
   accountId?: string;
+  identity?: SlackSendIdentity;
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
@@ -63,12 +65,14 @@ export function createSlackDraftStream(params: {
         await edit(streamChannelId, streamMessageId, trimmed, {
           token: params.token,
           accountId: params.accountId,
+          identity: params.identity,
         });
         return;
       }
       const sent = await send(params.target, trimmed, {
         token: params.token,
         accountId: params.accountId,
+        identity: params.identity,
         threadTs: params.resolveThreadTs?.(),
       });
       streamChannelId = sent.channelId || streamChannelId;

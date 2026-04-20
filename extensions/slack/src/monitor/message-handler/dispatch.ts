@@ -7,7 +7,7 @@ import {
   removeAckReactionAfterReply,
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";  
 import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingNativeTransport,
@@ -20,7 +20,7 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import {
@@ -607,7 +607,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             messageId: draftMessageId,
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-            threadTs: finalThreadTs,
+            threadTs: usedReplyThreadTs ?? statusThreadTs,
+            identity: finalThreadTs,
           });
           observedReplyDelivery = true;
           deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
@@ -622,12 +623,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           const statusChannelId = draftStream?.channelId();
           const statusMessageId = draftStream?.messageId();
           if (statusChannelId && statusMessageId) {
-            await ctx.app.client.chat.update({
-              token: ctx.botToken,
-              channel: statusChannelId,
-              ts: statusMessageId,
-              text: "Status: complete. Final answer posted below.",
-            });
+            await editSlackMessage(
+              statusChannelId,
+              statusMessageId,
+              "Status: complete. Final answer posted below.",
+              {
+                token: ctx.botToken,
+                accountId: account.accountId,
+                client: ctx.app.client,
+                identity: slackIdentity,
+              },
+            );
           }
         } catch (err) {
           logVerbose(`slack: status_final completion update failed (${formatErrorMessage(err)})`);
@@ -650,6 +656,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         target: prepared.replyTarget,
         token: ctx.botToken,
         accountId: account.accountId,
+        identity: slackIdentity,
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {
           const ts = replyPlan.nextThreadTs();
