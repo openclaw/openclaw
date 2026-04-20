@@ -376,10 +376,14 @@ export async function createModelSelectionState(params: {
   // the regular session/parent model override behavior.
   const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
 
-  // Auto-failover overrides are transient: on the next turn, retry the configured
+  // Auto-failover overrides are transient: on this turn, retry the configured
   // primary so the session self-heals when the primary recovers. The fallback loop
   // in runWithModelFallback will re-set the override if the primary is still down.
   // User-selected overrides (/model command) are preserved across turns.
+  //
+  // Note: channel model overrides (channels.modelByChannel) are skipped when
+  // hasSessionModelOverride was true at get-reply-directives preload time. They
+  // resume on the following turn once the session state is clear.
   const isAutoSessionOverride =
     storedOverride?.source === "session" && sessionEntry?.modelOverrideSource === "auto";
   if (isAutoSessionOverride && sessionEntry && sessionStore && sessionKey && !resetModelOverride) {
@@ -396,7 +400,15 @@ export async function createModelSelectionState(params: {
           store[sessionKey] = sessionEntry;
         });
       }
-      resetModelOverride = true;
+      // Reset in-memory selection to the configured primary. The caller-provided
+      // provider/model were already set to the fallback by the stored-override
+      // preload in get-reply-directives.ts; updating them here ensures this turn
+      // retries the primary rather than incurring one extra fallback call.
+      provider = defaultProvider;
+      model = defaultModel;
+      // Do NOT set resetModelOverride — that flag triggers a "Model override not
+      // allowed for this agent" system event, which is incorrect for auto-heal.
+      // The override was valid; it just expired after the primary recovered.
     }
   }
 
