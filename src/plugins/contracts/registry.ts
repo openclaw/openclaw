@@ -18,7 +18,10 @@ import type {
   WebSearchProviderPlugin,
 } from "../types.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit.js";
-import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
+import {
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+  type BundledPluginContractSnapshot,
+} from "./inventory/bundled-capability-metadata.js";
 import { uniqueStrings } from "./shared.js";
 import {
   loadVitestImageGenerationProviderContractRegistry,
@@ -53,21 +56,7 @@ type ImageGenerationProviderContractEntry = CapabilityContractEntry<ImageGenerat
 type VideoGenerationProviderContractEntry = CapabilityContractEntry<VideoGenerationProviderPlugin>;
 type MusicGenerationProviderContractEntry = CapabilityContractEntry<MusicGenerationProviderPlugin>;
 
-type PluginRegistrationContractEntry = {
-  pluginId: string;
-  cliBackendIds: string[];
-  providerIds: string[];
-  speechProviderIds: string[];
-  realtimeTranscriptionProviderIds: string[];
-  realtimeVoiceProviderIds: string[];
-  mediaUnderstandingProviderIds: string[];
-  imageGenerationProviderIds: string[];
-  videoGenerationProviderIds: string[];
-  musicGenerationProviderIds: string[];
-  webFetchProviderIds: string[];
-  webSearchProviderIds: string[];
-  toolNames: string[];
-};
+type PluginRegistrationContractEntry = BundledPluginContractSnapshot;
 
 type ManifestContractKey =
   | "speechProviders"
