@@ -214,6 +214,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        sendTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
         chunkMode: {
           type: "string",
           enum: ["length", "newline"],
@@ -516,6 +521,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 maximum: 9007199254740991,
               },
               textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              sendTimeoutMs: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
