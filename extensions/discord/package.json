@@ -9,7 +9,7 @@
     "@snazzah/davey": "^0.1.11",
     "discord-api-types": "^0.38.47",
     "https-proxy-agent": "^9.0.0",
-    "opusscript": "^0.1.1"
+    "opusscript": "^0.0.8"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -22,9 +22,6 @@
     "openclaw": {
       "optional": true
     }
-  },
-  "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
   },
   "openclaw": {
     "extensions": [
