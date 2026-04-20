@@ -11,7 +11,11 @@ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { sanitizeLogRecordForSink } from "./redact-sink.js";
-import { resolveRedactOptions, type ResolvedRedactOptions } from "./redact.js";
+import {
+  resolveRedactOptions,
+  getDefaultRedactPatterns,
+  type ResolvedRedactOptions,
+} from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -41,6 +45,25 @@ function resolveDefaultLogFile(defaultLogDir: string): string {
   return canUseNodeFs()
     ? path.join(defaultLogDir, "openclaw.log")
     : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+}
+
+/**
+ * Resolve sink-level redaction options without triggering a mutating config load.
+ *
+ * `resolveRedactOptions()` with no arguments falls through to
+ * `resolveConfigRedaction()`, which calls `loadConfig()` directly and can
+ * persist `ownerDisplaySecret` as a side effect. This helper takes the safer
+ * path: it reads logging config via `readLoggingConfig()` (which already
+ * honours `shouldSkipMutatingLoggingConfigRead()`), then forwards the result
+ * as an *explicit* `RedactOptions` argument so `resolveRedactOptions` never
+ * reaches `resolveConfigRedaction()` during `openclaw config schema|validate`.
+ */
+function resolveSinkRedactOptions(): ResolvedRedactOptions {
+  const cfg = readLoggingConfig();
+  return resolveRedactOptions({
+    mode: cfg?.redactSensitive ?? undefined,
+    patterns: cfg?.redactPatterns ?? getDefaultRedactPatterns(),
+  });
 }
 
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
@@ -167,7 +190,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   // file-sink hot path and all external transports share a single resolution.
   let cachedRedaction: ResolvedRedactOptions | undefined;
   const getSinkRedaction = (): ResolvedRedactOptions =>
-    (cachedRedaction ??= resolveRedactOptions());
+    (cachedRedaction ??= resolveSinkRedactOptions());
 
   // Silent logging does not write files; skip all filesystem setup in this path.
   if (settings.level === "silent") {
@@ -333,7 +356,7 @@ export function registerLogTransport(transport: LogTransport): () => void {
   externalTransports.add(transport);
   const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   if (logger) {
-    attachExternalTransport(logger, transport, resolveRedactOptions());
+    attachExternalTransport(logger, transport, resolveSinkRedactOptions());
   }
   return () => {
     externalTransports.delete(transport);
