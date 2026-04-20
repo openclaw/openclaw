@@ -97,10 +97,6 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
-    "./plugin-sdk/runtime-logger": {
-      "types": "./dist/plugin-sdk/runtime-logger.d.ts",
-      "default": "./dist/plugin-sdk/runtime-logger.js"
-    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
@@ -997,10 +993,6 @@
       "types": "./dist/plugin-sdk/qa-channel.d.ts",
       "default": "./dist/plugin-sdk/qa-channel.js"
     },
-    "./plugin-sdk/qa-channel-protocol": {
-      "types": "./dist/plugin-sdk/qa-channel-protocol.d.ts",
-      "default": "./dist/plugin-sdk/qa-channel-protocol.js"
-    },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
@@ -1157,10 +1149,6 @@
       "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
       "default": "./dist/plugin-sdk/telegram-command-config.js"
     },
-    "./plugin-sdk/telegram-command-ui": {
-      "types": "./dist/plugin-sdk/telegram-command-ui.d.ts",
-      "default": "./dist/plugin-sdk/telegram-command-ui.js"
-    },
     "./plugin-sdk/text-autolink-runtime": {
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
@@ -1252,12 +1240,9 @@
     "canon:check:json": "node scripts/canon.mjs check --json",
     "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
-    "changed:lanes": "node scripts/changed-lanes.mjs",
-    "check": "node scripts/check.mjs",
-    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles",
+    "check": "pnpm check:no-conflict-markers && pnpm tool-display:check && pnpm check:host-env-policy:swift && pnpm tsgo:all && pnpm lint && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:import-cycles && pnpm check:madge-import-cycles",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
-    "check:changed": "node scripts/check-changed.mjs",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
@@ -1265,11 +1250,6 @@
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
-    "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
-    "check:test-types": "pnpm tsgo:test",
-    "check:timed": "node scripts/check-timed.mjs",
-    "check:timed:all-types": "node scripts/check-timed.mjs --include-test-types",
-    "check:timed:architecture": "node scripts/check-timed.mjs --include-architecture",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",
@@ -1322,16 +1302,13 @@
     "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
     "ios:version:pin": "node --import tsx scripts/ios-pin-version.ts",
     "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
-    "lint": "node scripts/run-oxlint-shards.mjs",
+    "lint": "node scripts/run-oxlint.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
-    "lint:all": "node scripts/run-oxlint.mjs",
-    "lint:apps": "pnpm lint:swift",
+    "lint:all": "pnpm lint && pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",
-    "lint:core": "node scripts/run-oxlint.mjs --tsconfig tsconfig.oxlint.core.json src ui packages",
     "lint:docs": "pnpm dlx markdownlint-cli2",
     "lint:docs:fix": "pnpm dlx markdownlint-cli2 --fix",
-    "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig tsconfig.oxlint.extensions.json extensions",
     "lint:extensions:bundled": "node scripts/run-bundled-extension-oxlint.mjs",
     "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",
     "lint:extensions:no-plugin-sdk-internal": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal",
@@ -1344,7 +1321,6 @@
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/check-no-register-http-handler.mjs",
     "lint:plugins:plugin-sdk-subpaths-exported": "node scripts/check-plugin-sdk-subpath-exports.mjs",
-    "lint:scripts": "node scripts/run-oxlint.mjs --tsconfig tsconfig.oxlint.scripts.json scripts",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:tmp:channel-agnostic-boundaries": "node scripts/check-channel-agnostic-boundaries.mjs",
     "lint:tmp:dynamic-import-warts": "node scripts/check-dynamic-import-warts.mjs",
@@ -1445,7 +1421,7 @@
     "test:e2e": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",
-    "test:extensions": "node scripts/test-projects.mjs extensions",
+    "test:extensions": "node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts",
     "test:extensions:batch": "node scripts/test-extension-batch.mjs",
     "test:extensions:memory": "node scripts/profile-extension-memory.mjs",
     "test:extensions:package-boundary": "node scripts/check-extension-package-tsc-boundary.mjs",
@@ -1483,6 +1459,9 @@
     "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs --changed origin/main",
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
+    "test:plan-mode:coverage": "node scripts/run-vitest.mjs run --config test/vitest/vitest.plan-mode.config.ts --coverage",
+    "test:plan-mode:hardening": "node scripts/run-vitest.mjs run --config test/vitest/vitest.plan-mode.config.ts",
+    "test:plan-mode:perf": "OPENCLAW_TEST_PERF_BASELINE_WALL_MS=20000 OPENCLAW_TEST_PERF_MAX_REGRESSION_PCT=10 node scripts/test-perf-budget.mjs --config test/vitest/vitest.plan-mode.config.ts",
     "test:sectriage": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
@@ -1503,12 +1482,10 @@
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
     "tsgo": "pnpm tsgo:core",
-    "tsgo:all": "node scripts/run-tsgo.mjs -b tsconfig.projects.json",
+    "tsgo:all": "pnpm tsgo:core && pnpm tsgo:core:test && pnpm tsgo:extensions && pnpm tsgo:extensions:test",
     "tsgo:core": "node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo",
-    "tsgo:core:all": "node scripts/run-tsgo.mjs -b tsconfig.core.projects.json",
     "tsgo:core:test": "node scripts/run-tsgo.mjs -p tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo",
     "tsgo:extensions": "node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo",
-    "tsgo:extensions:all": "node scripts/run-tsgo.mjs -b tsconfig.extensions.projects.json",
     "tsgo:extensions:test": "node scripts/run-tsgo.mjs -p tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo",
     "tsgo:prod": "pnpm tsgo:core && pnpm tsgo:extensions",
     "tsgo:profile": "node scripts/profile-tsgo.mjs",
@@ -1528,8 +1505,18 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.19.0",
     "@anthropic-ai/vertex-sdk": "^0.16.0",
+    "@aws-sdk/client-bedrock": "3.1032.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1032.0",
+    "@aws-sdk/credential-provider-node": "3.972.32",
+    "@aws/bedrock-token-generator": "^1.1.0",
+    "@buape/carbon": "0.16.0",
     "@clack/prompts": "^1.2.0",
+    "@google/genai": "^1.50.1",
+    "@grammyjs/runner": "^2.0.3",
+    "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.6",
+    "@lancedb/lancedb": "^0.27.2",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.68.1",
     "@mariozechner/pi-ai": "0.68.1",
@@ -1537,30 +1524,45 @@
     "@mariozechner/pi-tui": "0.68.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "@pierre/diffs": "1.1.15",
     "@sinclair/typebox": "0.34.49",
+    "@slack/bolt": "^4.7.0",
+    "@slack/web-api": "^7.15.1",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
     "cli-highlight": "^2.1.11",
     "commander": "^14.0.3",
     "croner": "^10.0.1",
+    "discord-api-types": "^0.38.47",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "file-type": "22.0.1",
     "gaxios": "7.1.4",
+    "google-auth-library": "^10.6.2",
+    "grammy": "^1.42.0",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
+    "jimp": "^1.6.1",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
+    "matrix-js-sdk": "41.3.0",
+    "mpg123-decoder": "^1.0.3",
+    "node-edge-tts": "^1.2.10",
+    "nostr-tools": "^2.23.3",
     "openai": "^6.34.0",
+    "opusscript": "^0.1.1",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.6.205",
+    "playwright-core": "1.59.1",
     "proxy-agent": "^8.0.1",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
+    "silk-wasm": "^3.7.1",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
@@ -1570,7 +1572,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@copilotkit/aimock": "1.14.3",
+    "@copilotkit/aimock": "1.14.0",
     "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
@@ -1591,7 +1593,7 @@
     "signal-utils": "0.21.1",
     "tsdown": "0.21.9",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
+    "typescript": "^6.0.2",
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
@@ -1602,6 +1604,12 @@
     "node-llama-cpp": {
       "optional": true
     }
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.10.0",
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "fake-indexeddb": "^6.2.5",
+    "music-metadata": "^11.12.3"
   },
   "overrides": {
     "axios": "1.15.0",
@@ -1637,6 +1645,7 @@
       "protobufjs": "7.5.5"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
