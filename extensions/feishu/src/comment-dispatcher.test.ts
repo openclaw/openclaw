@@ -124,7 +124,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
     createTestCommentReplyDispatcher();
 
     const options = latestReplyDispatcherOptions();
-    const deliverPromise = options.deliver({ text: "hello world" }, { kind: "final" });
+    const deliverPromise = Promise.resolve(
+      options.deliver({ text: "hello world" }, { kind: "final" }),
+    );
     const status = await Promise.race([
       deliverPromise.then(() => "done"),
       new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
