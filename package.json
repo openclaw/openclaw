@@ -1516,7 +1516,7 @@
     "@mariozechner/pi-ai": "0.67.68",
     "@mariozechner/pi-coding-agent": "0.67.68",
     "@mariozechner/pi-tui": "0.67.68",
-    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@pierre/diffs": "1.1.15",
@@ -1569,7 +1569,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@copilotkit/aimock": "1.14.0",
+    "@copilotkit/aimock": "1.14.3",
     "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
@@ -1591,7 +1591,7 @@
     "signal-utils": "0.21.1",
     "tsdown": "0.21.9",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.4"
   },
   "peerDependencies": {
