@@ -29,6 +29,25 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+const silentReasoningTrailingRegexByToken = new Map<string, RegExp>();
+
+function getSilentReasoningTrailingRegex(token: string): RegExp {
+  const cached = silentReasoningTrailingRegexByToken.get(token);
+  if (cached) {
+    return cached;
+  }
+  const escaped = escapeRegExp(token);
+  // Dedicated, more tolerant trailing match for the reasoning-prefaced silent
+  // reply check: allows whitespace, asterisks, or common sentence punctuation
+  // to precede the trailing token so concluding model prose like
+  // "Therefore, I should output NO_REPLY.NO_REPLY" collapses cleanly. Kept
+  // separate from `getSilentTrailingRegex` to preserve the long-standing
+  // `stripSilentToken("interject.NO_REPLY")` no-op contract.
+  const regex = new RegExp(`(?:^|[\\s.:;,!?*]+)${escaped}\\s*$`, "i");
+  silentReasoningTrailingRegexByToken.set(token, regex);
+  return regex;
+}
+
 export function isSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -75,7 +94,11 @@ export function isSilentReplyPayloadText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
-  return isSilentReplyText(text, token) || isSilentReplyEnvelopeText(text, token);
+  return (
+    isSilentReplyText(text, token) ||
+    isSilentReplyEnvelopeText(text, token) ||
+    isReasoningPrefacedSilentReply(text, token)
+  );
 }
 
 /**
@@ -85,6 +108,70 @@ export function isSilentReplyPayloadText(
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
   return text.replace(getSilentTrailingRegex(token), "").trim();
+}
+
+function stripTrailingSilentTokensTolerant(text: string, token: string): string {
+  const regex = getSilentReasoningTrailingRegex(token);
+  let current = text;
+  // Iterate so doubled/tripled trailing forms (for example
+  // "NO_REPLY.NO_REPLY" or "NO_REPLY NO_REPLY") collapse cleanly. Capped at 8
+  // iterations — in practice the loop exits after 1-3 passes.
+  for (let i = 0; i < 8; i++) {
+    const next = current.replace(regex, "").trim();
+    if (next === current) {
+      return current;
+    }
+    current = next;
+  }
+  return current;
+}
+
+// Matches a bare reasoning preamble at the start of the message: a word like
+// "think", "thinking", "thought", "reasoning", or "analysis" on its own line
+// (optionally followed by a colon) with nothing else on that line. Reasoning
+// models occasionally leak their chain-of-thought as plain text content when
+// structured thinking stream events are not produced; those messages must not
+// be treated as substantive replies when they are followed by a silent-reply
+// sentinel like NO_REPLY. The proper XML-tag stripper in
+// src/shared/text/reasoning-tags.ts cannot catch this form because there are
+// no tags to match.
+const BARE_REASONING_PREAMBLE_RE =
+  /^\s*(?:think(?:ing)?|thought|reasoning|analysis)\s*:?\s*(?:\r?\n|$)/i;
+
+/**
+ * Whether `text` is a reasoning-prefaced silent reply — a message that ends
+ * with the silent-reply token and whose preceding content is a bare reasoning
+ * preamble (not substantive user-visible content).
+ *
+ * Preserves the #19537 semantics: substantive replies that happen to end with
+ * NO_REPLY are still delivered. Only messages where the non-token content is
+ * a reasoning preamble are suppressed.
+ */
+export function isReasoningPrefacedSilentReply(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  // Use the tolerant trailing strip so concluding model prose like
+  // "...I should output NO_REPLY.NO_REPLY" collapses even with inner
+  // punctuation between doubled tokens.
+  const withoutToken = stripTrailingSilentTokensTolerant(trimmed, token);
+  // Must actually end with the silent token (stripping changed the text).
+  if (withoutToken === trimmed) {
+    return false;
+  }
+  // All content was silent tokens → nothing left to classify.
+  if (!withoutToken) {
+    return true;
+  }
+  // The remaining content must start with a bare reasoning preamble.
+  return BARE_REASONING_PREAMBLE_RE.test(withoutToken);
 }
 
 const silentLeadingRegexByToken = new Map<string, RegExp>();
