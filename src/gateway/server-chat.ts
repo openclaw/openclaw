@@ -198,9 +198,16 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
+  /** Per-clientRunId reasoning text buffer (mirrors `buffers`/`rawBuffers`).
+   *  Populated from `stream: "thinking"` agent events so chat deltas can carry
+   *  a thinking block alongside the assistant text block. */
+  thinkingBuffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
+  /** Length of thinking text at last broadcast — combined with deltaLastBroadcastLen
+   *  so thinking-only deltas still get flushed past the throttle. */
+  deltaLastBroadcastThinkingLen: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -209,16 +216,20 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
+  const thinkingBuffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
+  const deltaLastBroadcastThinkingLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     rawBuffers.clear();
     buffers.clear();
+    thinkingBuffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
+    deltaLastBroadcastThinkingLen.clear();
     abortedRuns.clear();
   };
 
@@ -226,8 +237,10 @@ export function createChatRunState(): ChatRunState {
     registry,
     rawBuffers,
     buffers,
+    thinkingBuffers,
     deltaSentAt,
     deltaLastBroadcastLen,
+    deltaLastBroadcastThinkingLen,
     abortedRuns,
     clear,
   };
@@ -489,8 +502,10 @@ export function createAgentEventHandler({
   const clearBufferedChatState = (clientRunId: string) => {
     chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.thinkingBuffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+    chatRunState.deltaLastBroadcastThinkingLen.delete(clientRunId);
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
@@ -680,6 +695,39 @@ export function createAgentEventHandler({
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
   };
 
+  /**
+   * Build the `message.content` array for a chat broadcast, merging the
+   * assistant text block with the current thinking buffer (if any). The
+   * thinking block uses the shape that `acp/translator.ts:handleDeltaEvent`
+   * already understands (`{type: "thinking", thinking: <text>}`), so ACP
+   * clients receive `agent_thought_chunk` updates without further changes.
+   */
+  const buildAssistantContent = (clientRunId: string, mergedText: string) => {
+    const thinkingText = chatRunState.thinkingBuffers.get(clientRunId) ?? "";
+    const blocks: Array<{ type: string; text?: string; thinking?: string }> = [];
+    if (thinkingText) {
+      blocks.push({ type: "thinking", thinking: thinkingText });
+    }
+    blocks.push({ type: "text", text: mergedText });
+    return blocks;
+  };
+
+  const accumulateThinking = (clientRunId: string, text: string, delta?: unknown) => {
+    const cleanedText = typeof text === "string" ? text : "";
+    const cleanedDelta = typeof delta === "string" ? delta : "";
+    const previous = chatRunState.thinkingBuffers.get(clientRunId) ?? "";
+    const merged = resolveMergedAssistantText({
+      previousText: previous,
+      nextText: cleanedText,
+      nextDelta: cleanedDelta,
+    });
+    if (!merged) {
+      return previous;
+    }
+    chatRunState.thinkingBuffers.set(clientRunId, merged);
+    return merged;
+  };
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -729,6 +777,8 @@ export function createAgentEventHandler({
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
+    const thinkingText = chatRunState.thinkingBuffers.get(clientRunId) ?? "";
+    chatRunState.deltaLastBroadcastThinkingLen.set(clientRunId, thinkingText.length);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -736,7 +786,56 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: mergedText }],
+        content: buildAssistantContent(clientRunId, mergedText),
+        timestamp: now,
+      },
+    };
+    broadcast("chat", payload, { dropIfSlow: true });
+    nodeSendToSession(sessionKey, "chat", payload);
+  };
+
+  /**
+   * Broadcasts a chat delta whose `content` carries a thinking block (and the
+   * current assistant text, if any). Triggered by `stream: "thinking"` agent
+   * events so ACP/webchat clients can render reasoning live instead of waiting
+   * for the final result. Throttled with the same 150 ms window as text deltas.
+   */
+  const emitChatThinkingDelta = (
+    sessionKey: string,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    text: string,
+    delta?: unknown,
+  ) => {
+    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
+      return;
+    }
+    const merged = accumulateThinking(clientRunId, text, delta);
+    if (!merged) {
+      return;
+    }
+    const lastThinkingLen = chatRunState.deltaLastBroadcastThinkingLen.get(clientRunId) ?? 0;
+    if (merged.length <= lastThinkingLen) {
+      return;
+    }
+    const now = Date.now();
+    const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
+    if (now - last < 150) {
+      return;
+    }
+    chatRunState.deltaSentAt.set(clientRunId, now);
+    chatRunState.deltaLastBroadcastThinkingLen.set(clientRunId, merged.length);
+    const assistantText = chatRunState.buffers.get(clientRunId) ?? "";
+    chatRunState.deltaLastBroadcastLen.set(clientRunId, assistantText.length);
+    const payload = {
+      runId: clientRunId,
+      sessionKey,
+      seq,
+      state: "delta" as const,
+      message: {
+        role: "assistant",
+        content: buildAssistantContent(clientRunId, assistantText),
         timestamp: now,
       },
     };
@@ -781,7 +880,11 @@ export function createAgentEventHandler({
     }
 
     const lastBroadcastLen = chatRunState.deltaLastBroadcastLen.get(clientRunId) ?? 0;
-    if (text.length <= lastBroadcastLen) {
+    const thinkingText = chatRunState.thinkingBuffers.get(clientRunId) ?? "";
+    const lastThinkingLen = chatRunState.deltaLastBroadcastThinkingLen.get(clientRunId) ?? 0;
+    const textGrew = text.length > lastBroadcastLen;
+    const thinkingGrew = thinkingText.length > lastThinkingLen;
+    if (!textGrew && !thinkingGrew) {
       return;
     }
 
@@ -793,13 +896,14 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: buildAssistantContent(clientRunId, text),
         timestamp: now,
       },
     };
     broadcast("chat", flushPayload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", flushPayload);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
+    chatRunState.deltaLastBroadcastThinkingLen.set(clientRunId, thinkingText.length);
     chatRunState.deltaSentAt.set(clientRunId, now);
   };
 
@@ -819,25 +923,41 @@ export function createAgentEventHandler({
     // suppressed the most recent chunk, leaving the client with stale text.
     // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
+    const finalThinkingText = chatRunState.thinkingBuffers.get(clientRunId) ?? "";
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+    chatRunState.deltaLastBroadcastThinkingLen.delete(clientRunId);
     chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.thinkingBuffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      const hasVisibleText = Boolean(text) && !shouldSuppressSilent;
+      const hasThinking = finalThinkingText.length > 0;
+      let finalContent:
+        | Array<{ type: string; text?: string; thinking?: string }>
+        | undefined;
+      if (hasVisibleText || hasThinking) {
+        finalContent = [];
+        if (hasThinking) {
+          finalContent.push({ type: "thinking", thinking: finalThinkingText });
+        }
+        if (hasVisibleText) {
+          finalContent.push({ type: "text", text });
+        }
+      }
       const payload = {
         runId: clientRunId,
         sessionKey,
         seq,
         state: "final" as const,
         ...(stopReason && { stopReason }),
-        message:
-          text && !shouldSuppressSilent
-            ? {
-                role: "assistant",
-                content: [{ type: "text", text }],
-                timestamp: Date.now(),
-              }
-            : undefined,
+        message: finalContent
+          ? {
+              role: "assistant",
+              content: finalContent,
+              timestamp: Date.now(),
+            }
+          : undefined,
       };
       broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
@@ -982,6 +1102,19 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+      }
+      // Surface streamed reasoning as a thinking block on the chat broadcast so
+      // ACP clients (translator.ts → agent_thought_chunk) and webchat UI can
+      // render the agent's thought process live, not just after the run ends.
+      if (!isAborted && evt.stream === "thinking" && typeof evt.data?.text === "string") {
+        emitChatThinkingDelta(
+          sessionKey,
+          clientRunId,
+          evt.runId,
+          evt.seq,
+          evt.data.text,
+          evt.data.delta,
+        );
       }
     }
 
