@@ -297,6 +297,33 @@ describe("sanitizeSessionMessagesImages", () => {
     }
   });
 
+  it("preserves legacy read-tool HEIF content during transcript replay when metadata is missing", async () => {
+    const heif = createIsoBmffImage("heic", ["mif1"]);
+    const input = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "image", data: heif.toString("base64"), mimeType: "image/heic" }],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("toolResult");
+    if (out[0]?.role === "toolResult") {
+      expect(out[0].content).not.toEqual([
+        {
+          type: "text",
+          text: "[test] omitted image payload: Error: unsupported image format",
+        },
+      ]);
+    }
+  });
+
   it("preserves read-tool HEIF opt-outs during transcript replay sanitization", async () => {
     const heif = createIsoBmffImage("heic", ["mif1"]);
     const input = castAgentMessages([

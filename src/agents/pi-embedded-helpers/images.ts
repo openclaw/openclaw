@@ -7,24 +7,32 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
-function readToolImageSanitizationDetails(details: unknown): Pick<
-  ImageSanitizationLimits,
-  "maxDimensionPx" | "maxBytes"
-> & {
+const LEGACY_HEIF_ALLOWED_TOOL_NAMES = new Set(["read"]);
+
+function readToolImageSanitizationDetails(
+  details: unknown,
+  toolName: unknown,
+): Pick<ImageSanitizationLimits, "maxDimensionPx" | "maxBytes"> & {
   rejectHeifFamily?: boolean;
 } {
-  if (!details || typeof details !== "object") {
+  const record =
+    details && typeof details === "object"
+      ? (((details as { imageSanitization?: unknown }).imageSanitization ?? undefined) as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+  const hasSanitizationRecord = !!record && typeof record === "object" && !Array.isArray(record);
+  if (!hasSanitizationRecord) {
+    // Legacy sessions were persisted before the replay guard existed and do
+    // not carry imageSanitization metadata. Preserve historical replay for
+    // tools that were known to pass HEIF-family content through (the read
+    // tool); leave other legacy tool results under the default reject path so
+    // untrusted MCP-style legacy content is not retroactively trusted.
+    if (typeof toolName === "string" && LEGACY_HEIF_ALLOWED_TOOL_NAMES.has(toolName)) {
+      return { rejectHeifFamily: false };
+    }
     return {};
   }
-  const imageSanitization = (details as { imageSanitization?: unknown }).imageSanitization;
-  if (
-    !imageSanitization ||
-    typeof imageSanitization !== "object" ||
-    Array.isArray(imageSanitization)
-  ) {
-    return {};
-  }
-  const record = imageSanitization as Record<string, unknown>;
   return {
     maxDimensionPx: typeof record.maxDimensionPx === "number" ? record.maxDimensionPx : undefined,
     maxBytes: typeof record.maxBytes === "number" ? record.maxBytes : undefined,
@@ -107,7 +115,10 @@ export async function sanitizeSessionMessagesImages(
     const role = (msg as { role?: unknown }).role;
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
-      const toolImageSanitization = readToolImageSanitizationDetails(toolMsg.details);
+      const toolImageSanitization = readToolImageSanitizationDetails(
+        toolMsg.details,
+        (toolMsg as { toolName?: unknown }).toolName,
+      );
       const sanitized = await sanitizeToolResultImages(
         {
           content: Array.isArray(toolMsg.content) ? toolMsg.content : [],
