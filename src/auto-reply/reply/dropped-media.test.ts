@@ -46,6 +46,24 @@ describe("DroppedMedia types and helpers", () => {
       expect(result).not.toContain("/secret");
       expect(result).not.toContain("/internal");
     });
+
+    it("strips URL query parameters to avoid leaking signed tokens", () => {
+      expect(
+        sanitizeMediaDisplayName(
+          "https://bucket.s3.amazonaws.com/image.png?X-Amz-Signature=abc123&Expires=999",
+        ),
+      ).toBe("image.png");
+    });
+
+    it("strips URL fragment identifiers", () => {
+      expect(sanitizeMediaDisplayName("https://example.com/doc.pdf#page=3")).toBe("doc.pdf");
+    });
+
+    it("strips query and fragment combined", () => {
+      expect(
+        sanitizeMediaDisplayName("https://cdn.example.com/path/photo.jpg?token=secret#anchor"),
+      ).toBe("photo.jpg");
+    });
   });
 
   describe("resolveDroppedMediaCode", () => {
