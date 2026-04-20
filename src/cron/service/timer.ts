@@ -1277,8 +1277,26 @@ async function executeDetachedCronJob(
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
+  // bash-kind route (feat/bash-kind) — direct subprocess execution, no agent turn.
+  if (job.payload.kind === "bash") {
+    if (!state.deps.runBashJob) {
+      return { status: "skipped", error: "runBashJob dep not wired" };
+    }
+    if (abortSignal?.aborted) return resolveAbortError();
+    const res = await state.deps.runBashJob({ job, abortSignal });
+    if (abortSignal?.aborted) {
+      return { status: "error", error: timeoutErrorMessage() };
+    }
+    return {
+      status: res.status,
+      error: res.error,
+      summary: res.summary,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
+    };
+  }
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn or bash" };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();
