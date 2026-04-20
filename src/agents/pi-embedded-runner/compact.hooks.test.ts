@@ -971,6 +971,7 @@ describe("compactEmbeddedPiSession harness compaction", () => {
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
       compacted: true,
+      reason: undefined,
       result: { summary: "engine-summary", tokensAfter: 50 },
     });
 
