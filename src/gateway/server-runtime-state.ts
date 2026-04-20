@@ -210,6 +210,7 @@ export async function createGatewayRuntimeState(params: {
         preauthConnectionBudget,
         resolvedAuth: params.resolvedAuth,
         getResolvedAuth: params.getResolvedAuth,
+        getClientIpConfig: params.getHookClientIpConfig,
         rateLimiter: params.rateLimiter,
         log: params.log,
       });

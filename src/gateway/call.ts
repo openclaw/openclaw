@@ -36,6 +36,13 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import {
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  GATEWAY_HANDSHAKE_CLOSE_GRACE_MS,
+  GATEWAY_HANDSHAKE_TIMEOUT_CLOSE_REASON,
+  getPreauthHandshakeTimeoutMsFromEnv,
+} from "./handshake-timeouts.js";
+import { isLoopbackHost } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
 
@@ -163,6 +170,11 @@ export function buildGatewayConnectionDetails(
 }
 
 export const __testing = {
+  /** Nominal delay between handshake-timeout retries (capped by remaining deadline at runtime). */
+  gatewayConnectRetryDelayMs,
+  capGatewayConnectRetryWaitMs(attempt: number, remainingMs: number): number {
+    return Math.min(gatewayConnectRetryDelayMs(attempt), Math.max(0, remainingMs));
+  },
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
@@ -434,6 +446,106 @@ function formatGatewayTimeoutError(
   return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
 }
 
+class GatewayCloseTransportError extends Error {
+  readonly closeCode: number;
+  readonly closeReason: string;
+
+  constructor(params: {
+    code: number;
+    reason: string;
+    connectionDetails: GatewayConnectionDetails;
+  }) {
+    super(formatGatewayCloseError(params.code, params.reason, params.connectionDetails));
+    this.name = "GatewayCloseTransportError";
+    this.closeCode = params.code;
+    this.closeReason = normalizeOptionalString(params.reason) || "no close reason";
+  }
+}
+
+function canRetryGatewayHandshakeClose(params: {
+  allowHandshakeCloseRetry: boolean;
+  url: string;
+}): boolean {
+  if (!params.allowHandshakeCloseRetry) {
+    return false;
+  }
+  if (process.platform !== "win32") {
+    return false;
+  }
+  try {
+    const parsed = new URL(params.url);
+    return isLoopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function shouldRetryGatewayHandshakeClose(params: {
+  allowHandshakeCloseRetry: boolean;
+  url: string;
+  err: unknown;
+}): boolean {
+  if (!(params.err instanceof GatewayCloseTransportError)) {
+    return false;
+  }
+  if (!canRetryGatewayHandshakeClose(params)) {
+    return false;
+  }
+  if (params.err.closeCode !== 1000) {
+    return false;
+  }
+  if (params.err.closeReason !== GATEWAY_HANDSHAKE_TIMEOUT_CLOSE_REASON) {
+    return false;
+  }
+  return true;
+}
+
+function resolveGatewayConnectAttempts(params: {
+  shouldRetryHandshakeClose: boolean;
+}): number {
+  if (!params.shouldRetryHandshakeClose) {
+    return 1;
+  }
+  const raw = process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS?.trim();
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) {
+      const n = Math.floor(parsed);
+      if (n >= 1 && n <= 10) {
+        return n;
+      }
+    }
+  }
+  return 3;
+}
+
+function gatewayConnectRetryDelayMs(attempt: number): number {
+  return Math.min(750, 250 * attempt);
+}
+
+function resolveGatewayConnectRetryBudgetMs(params: {
+  shouldRetryHandshakeClose: boolean;
+  connectAttempts: number;
+}): number {
+  if (!params.shouldRetryHandshakeClose || params.connectAttempts <= 1) {
+    return 0;
+  }
+  const handshakeTimeoutMs =
+    getPreauthHandshakeTimeoutMsFromEnv() || DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+  let budgetMs = 0;
+  for (let attempt = 1; attempt < params.connectAttempts; attempt += 1) {
+    budgetMs += handshakeTimeoutMs;
+    budgetMs += gatewayConnectRetryDelayMs(attempt);
+  }
+  return budgetMs;
+}
+
+function resolveGatewayHandshakeCloseGraceMs(params: {
+  shouldRetryHandshakeClose: boolean;
+}): number {
+  return params.shouldRetryHandshakeClose ? GATEWAY_HANDSHAKE_CLOSE_GRACE_MS : 0;
+}
+
 function ensureGatewaySupportsRequiredMethods(params: {
   requiredMethods: string[] | undefined;
   methods: string[] | undefined;
@@ -463,7 +575,7 @@ function ensureGatewaySupportsRequiredMethods(params: {
   }
 }
 
-async function executeGatewayRequestWithScopes<T>(params: {
+async function runSingleGatewayConnectAttempt<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[];
   url: string;
@@ -472,24 +584,30 @@ async function executeGatewayRequestWithScopes<T>(params: {
   tlsFingerprint?: string;
   timeoutMs: number;
   safeTimerTimeoutMs: number;
+  handshakeCloseGraceMs: number;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
   const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
     params;
-  // Yield to the event loop before starting the WebSocket connection.
-  // On Windows with large dist bundles, heavy synchronous module loading
-  // can starve the event loop, preventing timely processing of the
-  // connect.challenge frame and causing handshake timeouts (#48736).
-  await new Promise<void>((r) => setImmediate(r));
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
+    let timeoutExpired = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const stopWithTimeoutError = () => {
+      ignoreClose = true;
+      client.stop();
+      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+    };
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+      }
       void stopGatewayClient(client).finally(() => {
         if (err) {
           reject(err);
@@ -519,6 +637,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
+        if (timeoutExpired) {
+          stopWithTimeoutError();
+          return;
+        }
         try {
           ensureGatewaySupportsRequiredMethods({
             requiredMethods: opts.requiredMethods,
@@ -529,10 +651,20 @@ async function executeGatewayRequestWithScopes<T>(params: {
             expectFinal: opts.expectFinal,
             timeoutMs: opts.timeoutMs,
           });
+          // The caller watchdog can fire while `request` is in flight; during handshake-close
+          // grace we must not return success after the configured deadline has elapsed.
+          if (timeoutExpired) {
+            stopWithTimeoutError();
+            return;
+          }
           ignoreClose = true;
           stop(undefined, result);
         } catch (err) {
           ignoreClose = true;
+          if (timeoutExpired && params.handshakeCloseGraceMs > 0) {
+            stopWithTimeoutError();
+            return;
+          }
           stop(err as Error);
         }
       },
@@ -540,23 +672,136 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled || ignoreClose) {
           return;
         }
+        const normalizedReason = normalizeOptionalString(reason) ?? "";
+        const isHandshakeTimeoutClose =
+          code === 1000 && normalizedReason === GATEWAY_HANDSHAKE_TIMEOUT_CLOSE_REASON;
+
+        // After the watchdog fires we enter a short grace window for the explicit
+        // handshake-timeout close (retry path). Any other close during grace must not
+        // override the caller timeout — surface timeout instead (Codex #66297).
+        if (
+          timeoutExpired &&
+          params.handshakeCloseGraceMs > 0 &&
+          !isHandshakeTimeoutClose
+        ) {
+          ignoreClose = true;
+          client.stop();
+          stopWithTimeoutError();
+          return;
+        }
+
         ignoreClose = true;
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        stop(
+          new GatewayCloseTransportError({
+            code,
+            reason,
+            connectionDetails: params.connectionDetails,
+          }),
+        );
       },
     });
 
     const timer = setTimeout(() => {
-      ignoreClose = true;
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      if (params.handshakeCloseGraceMs <= 0) {
+        stopWithTimeoutError();
+        return;
+      }
+      timeoutExpired = true;
+      graceTimer = setTimeout(() => {
+        stopWithTimeoutError();
+      }, params.handshakeCloseGraceMs);
     }, safeTimerTimeoutMs);
 
     client.start();
   });
 }
 
+async function executeGatewayRequestWithScopes<T>(params: {
+  opts: CallGatewayBaseOptions;
+  allowHandshakeCloseRetry: boolean;
+  scopes: OperatorScope[];
+  url: string;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+  timeoutMs: number;
+  safeTimerTimeoutMs: number;
+  connectionDetails: GatewayConnectionDetails;
+}): Promise<T> {
+  // Yield to the event loop before starting the WebSocket connection.
+  // On Windows with large dist bundles, heavy synchronous module loading
+  // can starve the event loop, preventing timely processing of the
+  // connect.challenge frame and causing handshake timeouts (#48736).
+  await new Promise<void>((r) => setImmediate(r));
+
+  const shouldRetryHandshakeClose = canRetryGatewayHandshakeClose({
+    allowHandshakeCloseRetry: params.allowHandshakeCloseRetry,
+    url: params.url,
+  });
+  const connectAttempts = resolveGatewayConnectAttempts({ shouldRetryHandshakeClose });
+  const retryBudgetMs = resolveGatewayConnectRetryBudgetMs({
+    shouldRetryHandshakeClose,
+    connectAttempts,
+  });
+  const handshakeCloseGraceMs = resolveGatewayHandshakeCloseGraceMs({
+    shouldRetryHandshakeClose,
+  });
+  const deadline =
+    Date.now() +
+    params.safeTimerTimeoutMs +
+    retryBudgetMs +
+    handshakeCloseGraceMs * connectAttempts;
+
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= connectAttempts; attempt++) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw (
+        lastError ??
+        new Error(formatGatewayTimeoutError(params.timeoutMs, params.connectionDetails))
+      );
+    }
+    const cappedTimeoutMs = Math.min(params.timeoutMs, remainingMs);
+    const cappedSafeTimerMs = Math.max(1, Math.min(params.safeTimerTimeoutMs, remainingMs));
+    const cappedHandshakeCloseGraceMs = Math.max(
+      0,
+      Math.min(handshakeCloseGraceMs, remainingMs - cappedSafeTimerMs),
+    );
+    try {
+      return await runSingleGatewayConnectAttempt<T>({
+        ...params,
+        timeoutMs: cappedTimeoutMs,
+        safeTimerTimeoutMs: cappedSafeTimerMs,
+        handshakeCloseGraceMs: cappedHandshakeCloseGraceMs,
+      });
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (
+        attempt >= connectAttempts ||
+        !shouldRetryGatewayHandshakeClose({
+          allowHandshakeCloseRetry: params.allowHandshakeCloseRetry,
+          url: params.url,
+          err: lastError,
+        })
+      ) {
+        throw lastError;
+      }
+      const waitMs = Math.min(
+        gatewayConnectRetryDelayMs(attempt),
+        Math.max(0, deadline - Date.now()),
+      );
+      if (waitMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+  }
+  throw lastError ?? new Error("gateway connect failed");
+}
+
 async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
+  runtime: { allowHandshakeCloseRetry: boolean } = { allowHandshakeCloseRetry: false },
 ): Promise<T> {
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
@@ -581,6 +826,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const { token, password } = resolvedCredentials;
   return await executeGatewayRequestWithScopes<T>({
     opts,
+    allowHandshakeCloseRetry: runtime.allowHandshakeCloseRetry,
     scopes,
     url,
     token,
@@ -602,7 +848,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
   const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
-  return await callGatewayWithScopes(opts, scopes);
+  return await callGatewayWithScopes(opts, scopes, { allowHandshakeCloseRetry: true });
 }
 
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(

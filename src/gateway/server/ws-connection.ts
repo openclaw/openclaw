@@ -9,15 +9,21 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
+import type { GatewayControlUiConfig } from "../../config/types.gateway.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
-import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
+import {
+  GATEWAY_HANDSHAKE_TIMEOUT_CLOSE_REASON,
+  getPreauthHandshakeTimeoutMsFromEnv,
+} from "../handshake-timeouts.js";
 import { isLoopbackAddress } from "../net.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
+import type { HookClientIpConfig } from "../server-http.js";
 import { clearNodeWakeState } from "../server-methods/nodes.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
+import { truncateCloseReason } from "./close-reason.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -131,6 +137,8 @@ export type GatewayWsSharedHandlerParams = {
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
+  getClientIpConfig?: () => HookClientIpConfig;
+  getControlUiConfig?: () => GatewayControlUiConfig | undefined;
   gatewayMethods: string[];
   events: string[];
 };
@@ -166,6 +174,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       resolveSharedGatewaySessionGeneration(getResolvedAuth()),
     rateLimiter,
     browserRateLimiter,
+    getClientIpConfig,
+    getControlUiConfig,
     gatewayMethods,
     events,
     logGateway,
@@ -374,7 +384,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         logWsControl.warn(
           `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
         );
-        close();
+        close(1000, truncateCloseReason(GATEWAY_HANDSHAKE_TIMEOUT_CLOSE_REASON));
       }
     }, handshakeTimeoutMs);
 
@@ -394,6 +404,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       requestUserAgent,
       canvasHostUrl,
       connectNonce,
+      getClientIpConfig,
+      getControlUiConfig,
       getResolvedAuth,
       getRequiredSharedGatewaySessionGeneration,
       rateLimiter,

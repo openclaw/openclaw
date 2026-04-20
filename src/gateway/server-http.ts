@@ -1190,6 +1190,7 @@ export function attachGatewayUpgradeHandler(opts: {
   preauthConnectionBudget: PreauthConnectionBudget;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
+  getClientIpConfig?: () => HookClientIpConfig;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
@@ -1202,15 +1203,16 @@ export function attachGatewayUpgradeHandler(opts: {
     clients,
     preauthConnectionBudget,
     resolvedAuth,
+    getClientIpConfig,
     rateLimiter,
     log,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
-      const configSnapshot = loadConfig();
-      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const clientIpConfig = getClientIpConfig?.();
+      const trustedProxies = clientIpConfig?.trustedProxies ?? [];
+      const allowRealIpFallback = clientIpConfig?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });

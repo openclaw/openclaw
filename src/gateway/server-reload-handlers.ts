@@ -30,6 +30,7 @@ import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-rel
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import type { HookClientIpConfig } from "./server-http.js";
+import type { GatewayControlUiConfig } from "../config/types.gateway.js";
 import {
   type GatewayChannelManager,
   startGatewayChannelHealthMonitor,
@@ -47,6 +48,7 @@ import { resolveHookClientIpConfig } from "./server/hooks.js";
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
+  controlUiConfig: GatewayControlUiConfig | undefined;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -126,6 +128,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
+    nextState.controlUiConfig = nextConfig.gateway?.controlUi;
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);

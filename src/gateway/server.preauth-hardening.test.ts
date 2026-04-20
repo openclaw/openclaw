@@ -1,6 +1,7 @@
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import * as configModule from "../config/config.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -84,6 +85,61 @@ async function requestUpgradeRejection(port: number): Promise<{ status: number; 
 }
 
 describe("gateway pre-auth hardening", () => {
+  it("uses runtime client-ip config for upgrades without reloading config from disk", async () => {
+    const loadConfigSpy = vi.spyOn(configModule, "loadConfig").mockImplementation(() => {
+      throw new Error("upgrade path should not reload config");
+    });
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const httpServer = createGatewayHttpServer({
+      canvasHost: null,
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      canvasHost: null,
+      clients,
+      preauthConnectionBudget: createPreauthConnectionBudget(1),
+      resolvedAuth,
+      getClientIpConfig: () => ({
+        trustedProxies: ["127.0.0.1"],
+        allowRealIpFallback: false,
+      }),
+    });
+
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    try {
+      await expect(requestUpgradeRejection(port)).resolves.toEqual({
+        status: 503,
+        body: "Gateway websocket handlers unavailable",
+      });
+      expect(loadConfigSpy).not.toHaveBeenCalled();
+    } finally {
+      loadConfigSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+      });
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -137,13 +193,16 @@ describe("gateway pre-auth hardening", () => {
     try {
       const ws = await harness.openWs();
       await readConnectChallengeNonce(ws);
-      const close = await new Promise<{ code: number; elapsedMs: number }>((resolve) => {
-        const startedAt = Date.now();
-        ws.once("close", (code) => {
-          resolve({ code, elapsedMs: Date.now() - startedAt });
-        });
-      });
+      const close = await new Promise<{ code: number; elapsedMs: number; reason: string }>(
+        (resolve) => {
+          const startedAt = Date.now();
+          ws.once("close", (code, reason) => {
+            resolve({ code, elapsedMs: Date.now() - startedAt, reason: reason.toString() });
+          });
+        },
+      );
       expect(close.code).toBe(1000);
+      expect(close.reason).toContain("openclaw:handshake-timeout");
       expect(close.elapsedMs).toBeGreaterThan(0);
       expect(close.elapsedMs).toBeLessThan(PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS);
     } finally {

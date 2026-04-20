@@ -59,6 +59,17 @@ describe("attachGatewayWsConnectionHandler", () => {
     };
     const initialAuth = createResolvedAuth("token-before");
     let currentAuth = initialAuth;
+    let currentClientIpConfig = { trustedProxies: ["127.0.0.1"], allowRealIpFallback: false };
+    const initialControlUiConfig = {
+      allowedOrigins: ["https://control-before.example"],
+      dangerouslyAllowHostHeaderOriginFallback: false,
+    };
+    let currentControlUiConfig:
+      | {
+          allowedOrigins?: string[];
+          dangerouslyAllowHostHeaderOriginFallback?: boolean;
+        }
+      | undefined = initialControlUiConfig;
 
     attachGatewayWsConnectionHandler({
       wss,
@@ -68,6 +79,8 @@ describe("attachGatewayWsConnectionHandler", () => {
       canvasHostEnabled: false,
       resolvedAuth: initialAuth,
       getResolvedAuth: () => currentAuth,
+      getClientIpConfig: () => currentClientIpConfig,
+      getControlUiConfig: () => currentControlUiConfig,
       gatewayMethods: [],
       events: [],
       logGateway: createLogger() as never,
@@ -90,12 +103,24 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(attachGatewayWsMessageHandlerMock).toHaveBeenCalledTimes(1);
     const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
       getResolvedAuth: () => ResolvedGatewayAuth;
+      getClientIpConfig?: () => {
+        trustedProxies?: string[];
+        allowRealIpFallback?: boolean;
+      };
+      getControlUiConfig?: () => {
+        allowedOrigins?: string[];
+        dangerouslyAllowHostHeaderOriginFallback?: boolean;
+      };
       getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
     };
 
     currentAuth = createResolvedAuth("token-after");
+    currentClientIpConfig = { trustedProxies: ["10.0.0.1"], allowRealIpFallback: true };
+    currentControlUiConfig = undefined;
 
     expect(passed.getResolvedAuth()).toMatchObject({ token: "token-after" });
+    expect(passed.getClientIpConfig?.()).toEqual(currentClientIpConfig);
+    expect(passed.getControlUiConfig?.()).toBeUndefined();
     expect(passed.getRequiredSharedGatewaySessionGeneration?.()).toBe(
       resolveSharedGatewaySessionGeneration(currentAuth),
     );

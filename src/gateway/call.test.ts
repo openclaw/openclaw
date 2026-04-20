@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { GATEWAY_HANDSHAKE_CLOSE_GRACE_MS } from "./handshake-timeouts.js";
 import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
@@ -20,6 +21,19 @@ const deviceIdentityState = vi.hoisted(() => ({
     privateKeyPem: "test-private-key",
   } satisfies DeviceIdentity,
   throwOnLoad: false,
+}));
+
+const gatewayHandshakeRetryTestState = vi.hoisted(() => ({
+  startCount: 0,
+  /** When > 0, the first N `start()` calls emit a gateway handshake-timeout close. */
+  failHandshakeTimeoutFirstStarts: 0,
+  handshakeTimeoutCloseDelayMs: 0,
+  /** When > 0, `request()` resolves after this delay (fake-timer ms). */
+  requestResolveDelayMs: 0,
+  /** With requestResolveDelayMs: fire onClose at this offset while the request is in flight. */
+  closeDuringRequestAtMs: undefined as number | undefined,
+  closeDuringRequestCode: 1008,
+  closeDuringRequestReason: "policy",
 }));
 
 let lastClientOptions: {
@@ -38,6 +52,7 @@ let lastRequestOptions: {
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
+let requestErrorMessage: string | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
@@ -71,10 +86,42 @@ vi.mock("./client.js", () => ({
       params: unknown,
       opts?: { expectFinal?: boolean; timeoutMs?: number | null },
     ) {
+      const delayMs = gatewayHandshakeRetryTestState.requestResolveDelayMs;
+      const closeDuringAt = gatewayHandshakeRetryTestState.closeDuringRequestAtMs;
+      if (delayMs > 0 && closeDuringAt !== undefined) {
+        setTimeout(() => {
+          lastClientOptions?.onClose?.(
+            gatewayHandshakeRetryTestState.closeDuringRequestCode,
+            gatewayHandshakeRetryTestState.closeDuringRequestReason,
+          );
+        }, closeDuringAt);
+      }
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+      if (requestErrorMessage) {
+        throw new Error(requestErrorMessage);
+      }
       lastRequestOptions = { method, params, opts };
       return { ok: true };
     }
     start() {
+      gatewayHandshakeRetryTestState.startCount += 1;
+      const failUntil = gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts;
+      if (
+        failUntil > 0 &&
+        gatewayHandshakeRetryTestState.startCount <= failUntil
+      ) {
+        const closeDelayMs = gatewayHandshakeRetryTestState.handshakeTimeoutCloseDelayMs;
+        if (closeDelayMs > 0) {
+          setTimeout(() => {
+            lastClientOptions?.onClose?.(1000, "openclaw:handshake-timeout");
+          }, closeDelayMs);
+        } else {
+          lastClientOptions?.onClose?.(1000, "openclaw:handshake-timeout");
+        }
+        return;
+      }
       if (startMode === "hello") {
         void lastClientOptions?.onHelloOk?.({
           features: {
@@ -109,10 +156,39 @@ class StubGatewayClient {
     params: unknown,
     opts?: { expectFinal?: boolean; timeoutMs?: number | null },
   ) {
+    const delayMs = gatewayHandshakeRetryTestState.requestResolveDelayMs;
+    const closeDuringAt = gatewayHandshakeRetryTestState.closeDuringRequestAtMs;
+    if (delayMs > 0 && closeDuringAt !== undefined) {
+      setTimeout(() => {
+        lastClientOptions?.onClose?.(
+          gatewayHandshakeRetryTestState.closeDuringRequestCode,
+          gatewayHandshakeRetryTestState.closeDuringRequestReason,
+        );
+      }, closeDuringAt);
+    }
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    if (requestErrorMessage) {
+      throw new Error(requestErrorMessage);
+    }
     lastRequestOptions = { method, params, opts };
     return { ok: true };
   }
   start() {
+    gatewayHandshakeRetryTestState.startCount += 1;
+    const failUntil = gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts;
+    if (failUntil > 0 && gatewayHandshakeRetryTestState.startCount <= failUntil) {
+      const closeDelayMs = gatewayHandshakeRetryTestState.handshakeTimeoutCloseDelayMs;
+      if (closeDelayMs > 0) {
+        setTimeout(() => {
+          lastClientOptions?.onClose?.(1000, "openclaw:handshake-timeout");
+        }, closeDelayMs);
+      } else {
+        lastClientOptions?.onClose?.(1000, "openclaw:handshake-timeout");
+      }
+      return;
+    }
     if (startMode === "hello") {
       void lastClientOptions?.onHelloOk?.({
         features: {
@@ -134,10 +210,18 @@ function resetGatewayCallMocks() {
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
   lastRequestOptions = null;
+  requestErrorMessage = null;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
+  gatewayHandshakeRetryTestState.startCount = 0;
+  gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts = 0;
+  gatewayHandshakeRetryTestState.handshakeTimeoutCloseDelayMs = 0;
+  gatewayHandshakeRetryTestState.requestResolveDelayMs = 0;
+  gatewayHandshakeRetryTestState.closeDuringRequestAtMs = undefined;
+  gatewayHandshakeRetryTestState.closeDuringRequestCode = 1008;
+  gatewayHandshakeRetryTestState.closeDuringRequestReason = "policy";
   const loadConfigForTests = loadConfig as unknown as () => OpenClawConfig;
   const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
     cfg?: OpenClawConfig,
@@ -185,6 +269,7 @@ describe("callGateway url resolution", () => {
     "OPENCLAW_GATEWAY_PORT",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_CONNECT_ATTEMPTS",
     "OPENCLAW_STATE_DIR",
   ]);
 
@@ -195,6 +280,7 @@ describe("callGateway url resolution", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS;
     delete process.env.OPENCLAW_STATE_DIR;
     resetGatewayCallMocks();
   });
@@ -301,6 +387,204 @@ describe("callGateway url resolution", () => {
     expect(loadConfig).not.toHaveBeenCalled();
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
     expect(lastClientOptions?.token).toBe("test-token");
+  });
+
+  it("retries CLI gateway connect when the server closes with openclaw handshake-timeout", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "3";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts = 2;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await callGatewayCli({ method: "health" });
+
+      expect(gatewayHandshakeRetryTestState.startCount).toBe(3);
+      expect(lastRequestOptions?.method).toBe("health");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("does not retry CLI gateway connect on non-handshake-timeout closes", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "3";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    startMode = "close";
+    closeCode = 1008;
+    closeReason = "policy";
+
+    await expect(callGatewayCli({ method: "health" })).rejects.toThrow(/gateway closed/);
+    expect(gatewayHandshakeRetryTestState.startCount).toBe(1);
+  });
+
+  it("does not retry handshake-timeout closes for non-loopback gateway urls", async () => {
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "3";
+    gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts = 2;
+
+    await expect(
+      callGatewayCli({
+        method: "health",
+        url: "wss://remote.example/ws",
+        token: "remote-token",
+      }),
+    ).rejects.toThrow(/handshake-timeout/);
+    expect(gatewayHandshakeRetryTestState.startCount).toBe(1);
+  });
+
+  it("does not retry handshake-timeout closes for scoped non-CLI gateway calls", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "3";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts = 2;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await expect(
+        callGateway({
+          method: "health",
+          scopes: ["operator.read"],
+        }),
+      ).rejects.toThrow(/handshake-timeout/);
+      expect(gatewayHandshakeRetryTestState.startCount).toBe(1);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("does not retry request errors that only mention openclaw handshake-timeout", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "3";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    requestErrorMessage = "server mutation failed: openclaw:handshake-timeout";
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await expect(callGatewayCli({ method: "sessions.delete" })).rejects.toThrow(
+        /server mutation failed/,
+      );
+      expect(gatewayHandshakeRetryTestState.startCount).toBe(1);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("keeps retry budget after a near-timeout handshake close", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "2";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts = 1;
+    gatewayHandshakeRetryTestState.handshakeTimeoutCloseDelayMs = 9;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    vi.useFakeTimers();
+    try {
+      const promise = callGatewayCli({ method: "health", timeoutMs: 10 });
+      await vi.advanceTimersByTimeAsync(9);
+      await vi.advanceTimersByTimeAsync(250);
+      await promise;
+
+      expect(gatewayHandshakeRetryTestState.startCount).toBe(2);
+      expect(lastRequestOptions?.method).toBe("health");
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries when the explicit handshake close lands just after the caller timeout", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "2";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    gatewayHandshakeRetryTestState.failHandshakeTimeoutFirstStarts = 1;
+    gatewayHandshakeRetryTestState.handshakeTimeoutCloseDelayMs = 11;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    vi.useFakeTimers();
+    try {
+      const promise = callGatewayCli({ method: "health", timeoutMs: 10 });
+      await vi.advanceTimersByTimeAsync(11);
+      await vi.advanceTimersByTimeAsync(250);
+      await promise;
+
+      expect(gatewayHandshakeRetryTestState.startCount).toBe(2);
+      expect(lastRequestOptions?.method).toBe("health");
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps each retry-attempt watchdog bounded to the original timeout", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_CONNECT_ATTEMPTS = "3";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    startMode = "silent";
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    vi.useFakeTimers();
+    try {
+      let caught: unknown;
+      const promise = callGatewayCli({ method: "health", timeoutMs: 10 }).catch((err) => {
+        caught = err;
+      });
+      await vi.advanceTimersByTimeAsync(10 + GATEWAY_HANDSHAKE_CLOSE_GRACE_MS);
+      await promise;
+
+      expect(String(caught)).toContain("gateway timeout after 10ms");
+      expect(gatewayHandshakeRetryTestState.startCount).toBe(1);
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not return success when the caller deadline elapses while the RPC is in flight", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    gatewayHandshakeRetryTestState.requestResolveDelayMs = 50;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    vi.useFakeTimers();
+    try {
+      let caught: unknown;
+      const promise = callGatewayCli({ method: "health", timeoutMs: 10 }).catch((err) => {
+        caught = err;
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      await promise;
+      expect(String(caught)).toContain("gateway timeout after 10ms");
+      expect(lastRequestOptions?.method).toBe("health");
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("during handshake-close grace, a non-handshake-timeout close surfaces caller timeout (not gateway closed)", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    gatewayHandshakeRetryTestState.requestResolveDelayMs = 50;
+    gatewayHandshakeRetryTestState.closeDuringRequestAtMs = 15;
+    gatewayHandshakeRetryTestState.closeDuringRequestCode = 1008;
+    gatewayHandshakeRetryTestState.closeDuringRequestReason = "policy";
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    vi.useFakeTimers();
+    try {
+      let caught: unknown;
+      const promise = callGatewayCli({ method: "health", timeoutMs: 10 }).catch((err) => {
+        caught = err;
+      });
+      await vi.advanceTimersByTimeAsync(15);
+      await promise;
+
+      expect(String(caught)).toContain("gateway timeout after 10ms");
+      expect(String(caught)).not.toMatch(/gateway closed/);
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps device identity enabled for local loopback shared-token auth", async () => {
@@ -1460,5 +1744,16 @@ describe("callGateway password resolution", () => {
     });
 
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
+  });
+});
+
+describe("gateway connect retry budget", () => {
+  it("caps inter-attempt wait to remaining deadline (unit)", () => {
+    expect(__testing.gatewayConnectRetryDelayMs(1)).toBe(250);
+    expect(__testing.gatewayConnectRetryDelayMs(2)).toBe(500);
+    expect(__testing.capGatewayConnectRetryWaitMs(1, 10_000)).toBe(250);
+    expect(__testing.capGatewayConnectRetryWaitMs(1, 7)).toBe(7);
+    expect(__testing.capGatewayConnectRetryWaitMs(2, 200)).toBe(200);
+    expect(__testing.capGatewayConnectRetryWaitMs(1, 0)).toBe(0);
   });
 });

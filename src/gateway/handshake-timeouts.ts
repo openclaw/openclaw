@@ -1,4 +1,13 @@
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 10_000;
+/**
+ * Give the explicit handshake-timeout close frame a brief chance to arrive
+ * after the caller watchdog fires so Windows loopback CLI retries can key off
+ * the close reason instead of a generic timeout.
+ */
+export const GATEWAY_HANDSHAKE_CLOSE_GRACE_MS = 100;
+
+/** WebSocket close reason when the gateway drops an idle pre-auth socket (CLI may retry; #50380 / #52424). */
+export const GATEWAY_HANDSHAKE_TIMEOUT_CLOSE_REASON = "openclaw:handshake-timeout";
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 

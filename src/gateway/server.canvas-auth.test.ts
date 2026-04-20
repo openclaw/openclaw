@@ -203,6 +203,7 @@ async function withCanvasGatewayHarness(params: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   listenHost?: string;
   rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
+  getClientIpConfig?: () => { trustedProxies?: string[]; allowRealIpFallback?: boolean };
   handleHttpRequest: CanvasHostHandler["handleHttpRequest"];
   run: (ctx: {
     listener: Awaited<ReturnType<typeof listen>>;
@@ -251,6 +252,7 @@ async function withCanvasGatewayHarness(params: {
     preauthConnectionBudget: createPreauthConnectionBudget(8),
     resolvedAuth: params.resolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
+    getClientIpConfig: params.getClientIpConfig,
     rateLimiter: params.rateLimiter,
   });
 
@@ -295,6 +297,10 @@ describe("gateway canvas host auth", () => {
     await withLoopbackTrustedProxy(async () => {
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
+        getClientIpConfig: () => ({
+          trustedProxies: ["127.0.0.1"],
+          allowRealIpFallback: false,
+        }),
         handleHttpRequest: allowCanvasHostHttp,
         run: async ({ listener, clients }) => {
           const host = "127.0.0.1";
@@ -385,6 +391,10 @@ describe("gateway canvas host auth", () => {
     await withLoopbackTrustedProxy(async () => {
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
+        getClientIpConfig: () => ({
+          trustedProxies: ["127.0.0.1"],
+          allowRealIpFallback: false,
+        }),
         handleHttpRequest: allowCanvasHostHttp,
         run: async ({ listener, clients }) => {
           clients.add(
@@ -508,6 +518,10 @@ describe("gateway canvas host auth", () => {
       await withCanvasGatewayHarness({
         resolvedAuth: tokenResolvedAuth,
         rateLimiter,
+        getClientIpConfig: () => ({
+          trustedProxies: ["127.0.0.1"],
+          allowRealIpFallback: false,
+        }),
         handleHttpRequest: async () => false,
         run: async ({ listener }) => {
           const headers = {

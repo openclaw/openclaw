@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
+import type { GatewayControlUiConfig } from "../../../config/types.gateway.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -126,6 +127,7 @@ import {
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
+import type { HookClientIpConfig } from "../../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -178,6 +180,8 @@ export function attachGatewayWsMessageHandler(params: {
   requestUserAgent?: string;
   canvasHostUrl?: string;
   connectNonce: string;
+  getClientIpConfig?: () => HookClientIpConfig;
+  getControlUiConfig?: () => GatewayControlUiConfig | undefined;
   getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
@@ -218,6 +222,8 @@ export function attachGatewayWsMessageHandler(params: {
     requestUserAgent,
     canvasHostUrl,
     connectNonce,
+    getClientIpConfig,
+    getControlUiConfig,
     getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration,
     rateLimiter,
@@ -252,9 +258,10 @@ export function attachGatewayWsMessageHandler(params: {
       });
     });
 
-  const configSnapshot = loadConfig();
-  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-  const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const clientIpConfig = getClientIpConfig?.();
+  const controlUiConfig = getControlUiConfig?.();
+  const trustedProxies = clientIpConfig?.trustedProxies ?? [];
+  const allowRealIpFallback = clientIpConfig?.allowRealIpFallback === true;
   const clientIp = resolveClientIp({
     remoteAddr,
     forwardedFor,
@@ -472,11 +479,11 @@ export function attachGatewayWsMessageHandler(params: {
         const isWebchat = isWebchatConnect(connectParams);
         if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
-            configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+            controlUiConfig?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,
-            allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
+            allowedOrigins: controlUiConfig?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
             isLocalClient,
           });
@@ -518,7 +525,7 @@ export function attachGatewayWsMessageHandler(params: {
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
         const controlUiAuthPolicy = resolveControlUiAuthPolicy({
           isControlUi,
-          controlUiConfig: configSnapshot.gateway?.controlUi,
+          controlUiConfig,
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
