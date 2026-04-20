@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
-  it("replaces patched default model maps instead of recursively merging them", () => {
+  it("merges patched default model maps with existing models", () => {
     const base = {
       agents: {
         defaults: {
@@ -23,9 +23,8 @@ describe("applyProviderAuthConfigPatch", () => {
       agents: {
         defaults: {
           models: {
-            "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
-            "claude-cli/claude-opus-4-6": { alias: "Opus" },
-            "openai/gpt-5.2": {},
+            "google-gemini/gemini-2.5-pro": { alias: "Gemini Pro" },
+            "openai/gpt-5.2": { alias: "GPT-5.2 Updated" },
           },
         },
       },
@@ -33,7 +32,13 @@ describe("applyProviderAuthConfigPatch", () => {
 
     const next = applyProviderAuthConfigPatch(base, patch);
 
-    expect(next.agents?.defaults?.models).toEqual(patch.agents.defaults.models);
+    // Should merge models, not replace
+    expect(next.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
+      "openai/gpt-5.2": { alias: "GPT-5.2 Updated" },
+      "google-gemini/gemini-2.5-pro": { alias: "Gemini Pro" },
+    });
     expect(next.agents?.defaults?.model).toEqual(base.agents?.defaults?.model);
   });
 
