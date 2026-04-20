@@ -15,6 +15,9 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
+// Pairing scope is for device-pairing handshakes only; chat transcript events
+// require operator-level session access. Pairing-scoped and node-role clients
+// must not passively receive chat-class broadcasts.
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [READ_SCOPE],
   chat: [READ_SCOPE],
