@@ -37,13 +37,13 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
 
 describe("emitResetCommandHooks", () => {
-  async function runBeforeResetContext(sessionKey?: string) {
+  async function runBeforeResetContext(sessionKey?: string, channel = "discord") {
     const command = {
-      surface: "discord",
+      surface: channel,
       senderId: "rai",
-      channel: "discord",
-      from: "discord:rai",
-      to: "discord:bot",
+      channel,
+      from: `${channel}:rai`,
+      to: `${channel}:bot`,
       resetHookTriggered: false,
     } as HandleCommandsParams["command"];
 
@@ -86,6 +86,7 @@ describe("emitResetCommandHooks", () => {
       sessionKey: "agent:navi:main",
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
+      messageProvider: "discord",
     });
   });
 
@@ -96,6 +97,7 @@ describe("emitResetCommandHooks", () => {
       sessionKey: undefined,
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
+      messageProvider: "discord",
     });
   });
 
@@ -106,6 +108,7 @@ describe("emitResetCommandHooks", () => {
       sessionKey: "agent:main:main",
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
+      messageProvider: "discord",
     });
   });
 
@@ -150,6 +153,7 @@ describe("emitResetCommandHooks", () => {
       }),
       expect.objectContaining({
         sessionId: "prev-session",
+        messageProvider: "telegram",
       }),
     );
   });

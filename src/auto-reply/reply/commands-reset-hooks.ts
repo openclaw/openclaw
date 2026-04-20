@@ -155,6 +155,7 @@ export async function emitResetCommandHooks(params: {
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,
+            messageProvider: params.ctx.OriginatingChannel || params.command.channel || undefined,
           },
         );
       } catch (err: unknown) {

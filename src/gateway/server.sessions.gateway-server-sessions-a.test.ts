@@ -3202,6 +3202,61 @@ describe("gateway server sessions", () => {
     });
   });
 
+  test("sessions.reset infers messageProvider for channel-scoped session keys", async () => {
+    const { dir } = await createSessionStoreDir();
+    const transcriptPath = path.join(dir, "sess-feishu.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from feishu transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    const sessionKey = "agent:main:feishu:default:direct:ou_testuser";
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-feishu",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    beforeResetHookState.hasBeforeResetHook = true;
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: sessionKey,
+      reason: "new",
+    });
+    expect(reset.ok).toBe(true);
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = (
+      beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionFile: transcriptPath,
+      reason: "new",
+      messages: [
+        {
+          role: "user",
+          content: "hello from feishu transcript",
+        },
+      ],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey,
+      sessionId: "sess-feishu",
+      messageProvider: "feishu",
+    });
+    ws.close();
+  });
+
   test("sessions.reset emits enriched session_end and session_start hooks", async () => {
     const { dir } = await createSessionStoreDir();
     const transcriptPath = path.join(dir, "sess-main.jsonl");

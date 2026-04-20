@@ -31,6 +31,7 @@ export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext) {
         },
         {
           sessionKey: ctx.params.sessionKey,
+          messageProvider: ctx.params.messageProvider ?? undefined,
         },
       )
       .catch((err) => {
@@ -100,7 +101,10 @@ export function handleCompactionEnd(
             compactedCount: ctx.getCompactionCount(),
             sessionFile: ctx.params.session.sessionFile,
           },
-          { sessionKey: ctx.params.sessionKey },
+          {
+            sessionKey: ctx.params.sessionKey,
+            messageProvider: ctx.params.messageProvider ?? undefined,
+          },
         )
         .catch((err) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);

@@ -37,6 +37,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -52,6 +53,18 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function inferMessageProviderFromSessionKey(sessionKey?: string): string | undefined {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  if (!rest) {
+    return undefined;
+  }
+  const head = rest.split(":")[0]?.trim();
+  if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
+    return undefined;
+  }
+  return normalizeMessageChannel(head);
+}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -474,6 +487,7 @@ function emitGatewayBeforeResetPluginHook(params: {
         sessionKey,
         sessionId,
         workspaceDir,
+        messageProvider: inferMessageProviderFromSessionKey(sessionKey),
       },
     )
     .catch((err) => {
