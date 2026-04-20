@@ -1,18 +1,18 @@
 ---
-summary: "web_fetch 工具 -- 带有可读内容提取的 HTTP 获取"
+summary: "web_fetch 工具 -- 带可读内容提取的 HTTP 获取"
 read_when:
-  - 你想获取 URL 并提取可读内容
-  - 你需要配置 web_fetch 或其 Firecrawl 回退
-  - 你想了解 web_fetch 的限制和缓存
-title: "Web Fetch"
-sidebarTitle: "Web Fetch"
+  - 您希望获取 URL 并提取可读内容
+  - 您需要配置 web_fetch 或其 Firecrawl 回退
+  - 您希望了解 web_fetch 限制和缓存
+title: "网络获取"
+sidebarTitle: "网络获取"
 ---
 
-# Web Fetch
+# 网络获取
 
-`web_fetch` 工具执行纯 HTTP GET 并提取可读内容（HTML 到 markdown 或文本）。它**不**执行 JavaScript。
+`web_fetch` 工具执行普通的 HTTP GET 并提取可读内容（HTML 转 markdown 或文本）。它**不**执行 JavaScript。
 
-对于重 JS 网站或登录保护的页面，请改用 [Web 浏览器](/tools/browser)。
+对于 JS 密集型站点或受登录保护的页面，请改用 [Web 浏览器](/tools/browser)。
 
 ## 快速开始
 
@@ -24,11 +24,11 @@ await web_fetch({ url: "https://example.com/article" });
 
 ## 工具参数
 
-| 参数          | 类型     | 描述                                |
-| ------------- | -------- | ----------------------------------- |
-| `url`         | `string` | 要获取的 URL（必需，仅 http/https） |
-| `extractMode` | `string` | `"markdown"`（默认）或 `"text"`     |
-| `maxChars`    | `number` | 将输出截断到此字符数                |
+| 参数 | 类型 | 描述 |
+| --- | --- | --- |
+| `url` | `string` | 要获取的 URL（必需，仅 http/https） |
+| `extractMode` | `string` | `"markdown"`（默认）或 `"text"` |
+| `maxChars` | `number` | 将输出截断到此字符数 |
 
 ## 工作原理
 
@@ -43,7 +43,7 @@ await web_fetch({ url: "https://example.com/article" });
     如果 Readability 失败且配置了 Firecrawl，则通过 Firecrawl API 以机器人规避模式重试。
   </Step>
   <Step title="缓存">
-    结果缓存 15 分钟（可配置）以减少对同一 URL 的重复获取。
+    结果缓存 15 分钟（可配置），以减少对同一 URL 的重复获取。
   </Step>
 </Steps>
 
@@ -54,10 +54,10 @@ await web_fetch({ url: "https://example.com/article" });
   tools: {
     web: {
       fetch: {
-        enabled: true, // 默认: true
+        enabled: true, // 默认：true
         provider: "firecrawl", // 可选；省略以自动检测
         maxChars: 50000, // 最大输出字符数
-        maxCharsCap: 50000, // maxChars 参数的硬限制
+        maxCharsCap: 50000, // maxChars 参数的硬上限
         maxResponseBytes: 2000000, // 截断前的最大下载大小
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
@@ -72,7 +72,7 @@ await web_fetch({ url: "https://example.com/article" });
 
 ## Firecrawl 回退
 
-如果 Readability 提取失败，`web_fetch` 可以回退到 [Firecrawl](/tools/firecrawl) 以进行机器人规避和更好的提取：
+如果 Readability 提取失败，`web_fetch` 可以回退到 [Firecrawl](/tools/firecrawl) 进行机器人规避和更好的提取：
 
 ```json5
 {
@@ -102,7 +102,8 @@ await web_fetch({ url: "https://example.com/article" });
 }
 ```
 
-`plugins.entries.firecrawl.config.webFetch.apiKey` 支持 SecretRef 对象。旧的 `tools.web.fetch.firecrawl.*` 配置由 `openclaw doctor --fix` 自动迁移。
+`plugins.entries.firecrawl.config.webFetch.apiKey` 支持 SecretRef 对象。
+旧版 `tools.web.fetch.firecrawl.*` 配置由 `openclaw doctor --fix` 自动迁移。
 
 <Note>
   如果 Firecrawl 已启用且其 SecretRef 未解析且没有 `FIRECRAWL_API_KEY` 环境回退，网关启动会快速失败。
@@ -114,33 +115,33 @@ await web_fetch({ url: "https://example.com/article" });
 
 当前运行时行为：
 
-- `tools.web.fetch.provider` 明确选择获取回退提供商。
-- 如果省略 `provider`，OpenClaw 会从可用凭据中自动检测第一个就绪的 web-fetch 提供商。今天捆绑的提供商是 Firecrawl。
-- 如果 Readability 被禁用，`web_fetch` 直接跳到选定的提供商回退。如果没有可用的提供商，它会失败关闭。
+- `tools.web.fetch.provider` 显式选择获取回退提供者。
+- 如果省略 `provider`，OpenClaw 会从可用凭据自动检测第一个就绪的网络获取提供者。今天的捆绑提供者是 Firecrawl。
+- 如果禁用了 Readability，`web_fetch` 会直接跳转到选定的提供者回退。如果没有可用的提供者，它会关闭失败。
 
 ## 限制和安全
 
 - `maxChars` 被限制为 `tools.web.fetch.maxCharsCap`
-- 响应体在解析前被限制为 `maxResponseBytes`；过大的响应会被截断并显示警告
+- 响应体在解析前被限制为 `maxResponseBytes`；超大响应会被截断并显示警告
 - 私有/内部主机名被阻止
-- 重定向受 `maxRedirects` 检查和限制
-- `web_fetch` 是尽力而为的 -- 有些站点需要 [Web 浏览器](/tools/browser)
+- 重定向被检查并受 `maxRedirects` 限制
+- `web_fetch` 是尽力而为的 -- 某些站点需要 [Web 浏览器](/tools/browser)
 
 ## 工具配置文件
 
-如果你使用工具配置文件或允许列表，添加 `web_fetch` 或 `group:web`：
+如果您使用工具配置文件或允许列表，请添加 `web_fetch` 或 `group:web`：
 
 ```json5
 {
   tools: {
     allow: ["web_fetch"],
-    // 或: allow: ["group:web"] （包括 web_fetch、web_search 和 x_search）
+    // 或：allow: ["group:web"] （包括 web_fetch、web_search 和 x_search）
   },
 }
 ```
 
 ## 相关
 
-- [网络搜索](/tools/web) -- 使用多个提供商搜索网络
-- [Web 浏览器](/tools/browser) -- 用于重 JS 网站的完整浏览器自动化
+- [网络搜索](/tools/web) -- 使用多个提供者搜索网络
+- [Web 浏览器](/tools/browser) -- 针对 JS 密集型站点的完整浏览器自动化
 - [Firecrawl](/tools/firecrawl) -- Firecrawl 搜索和抓取工具
