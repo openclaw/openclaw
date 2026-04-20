@@ -76,7 +76,7 @@ const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "ls",
 ]);
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
-const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
+const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 3;
 // Allow one immediate continuation plus one follow-up continuation before
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
@@ -129,12 +129,18 @@ const ACTIONABLE_PROMPT_REQUEST_RE =
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
+export const PLANNING_ONLY_RETRY_INSTRUCTION_FIRM =
+  "CRITICAL: You have described the plan multiple times without acting. You MUST call a tool in this turn. No more planning or narration. If a real blocker prevents action, state the exact blocker in one sentence. Otherwise, call the first tool NOW.";
+export const PLANNING_ONLY_RETRY_INSTRUCTION_FINAL =
+  "Final reminder: this is the third planning-only turn. Please call a tool now to make progress. If a real blocker prevents action, state the exact blocker in one sentence so the user can unblock you.";
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
+export const AUTO_CONTINUE_FAST_PATH_INSTRUCTION =
+  "The system is auto-continuing. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
@@ -297,6 +303,8 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  /** When true, planning-only is the desired state — skip retry pressure. */
+  planModeActive?: boolean;
 }): string | null {
   if (shouldSkipPlanningOnlyRetry(params)) {
     return null;
@@ -306,6 +314,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      planModeActive: params.planModeActive,
     })
   ) {
     return null;
@@ -332,6 +341,8 @@ export function resolveEmptyResponseRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  /** When true, planning-only is the desired state — skip retry pressure. */
+  planModeActive?: boolean;
 }): string | null {
   if (shouldSkipPlanningOnlyRetry(params)) {
     return null;
@@ -341,6 +352,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      planModeActive: params.planModeActive,
     })
   ) {
     return null;
@@ -361,7 +373,16 @@ export function resolveEmptyResponseRetryInstruction(params: {
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
+  /**
+   * When plan mode is active, planning-only IS the correct state — the agent
+   * is supposed to produce a plan and call exit_plan_mode for review. Do not
+   * apply the act-now retry pressure in that case.
+   */
+  planModeActive?: boolean;
 }): boolean {
+  if (params.planModeActive) {
+    return false;
+  }
   return isStrictAgenticSupportedProviderModel({
     provider: params.provider,
     modelId: params.modelId,
@@ -401,11 +422,14 @@ export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
   prompt: string;
+  /** Plan mode disables ack fast-path: a "do it" reply is the approval signal, not a planning skip. */
+  planModeActive?: boolean;
 }): string | null {
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      planModeActive: params.planModeActive,
     }) ||
     !isLikelyExecutionAckPrompt(params.prompt)
   ) {
@@ -515,6 +539,20 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Returns an escalating retry instruction based on the current attempt number.
+ * Attempt 0 = first retry (standard), 1 = firm, 2+ = final warning.
+ */
+export function resolveEscalatingPlanningRetryInstruction(attemptIndex: number): string {
+  if (attemptIndex <= 0) {
+    return PLANNING_ONLY_RETRY_INSTRUCTION;
+  }
+  if (attemptIndex === 1) {
+    return PLANNING_ONLY_RETRY_INSTRUCTION_FIRM;
+  }
+  return PLANNING_ONLY_RETRY_INSTRUCTION_FINAL;
+}
+
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -522,6 +560,12 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
+  /**
+   * When plan mode is active, planning IS the desired state — return null
+   * to skip the act-now retry pressure. The agent should produce a thorough
+   * plan and call exit_plan_mode for approval.
+   */
+  planModeActive?: boolean;
 }): string | null {
   const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
   const singleActionNarrative = isSingleActionThenNarrativePattern({
@@ -534,6 +578,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
       modelId: params.modelId,
+      planModeActive: params.planModeActive,
     }) ||
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||

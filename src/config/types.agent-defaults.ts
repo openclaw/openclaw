@@ -277,6 +277,38 @@ export type AgentDefaultsConfig = {
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
     executionContract?: EmbeddedPiExecutionContract;
+    /**
+     * Auto-continuation for planning-only turns. When enabled, the runner
+     * automatically injects an ACK fast-path instruction instead of surfacing
+     * the plan to the user, up to `maxCycles` consecutive auto-continue cycles.
+     * Each cycle = 1 ACK injection + up to 3 planning retries = ~4 API calls.
+     */
+    autoContinue?: {
+      /** Enable auto-continuation. Default: false. */
+      enabled?: boolean;
+      /**
+       * Max auto-continue cycles before pausing for user review. Default: 3.
+       * Total worst-case API calls = 1 + (maxCycles x 4). Default 3 = ~13 calls max.
+       */
+      maxCycles?: number;
+      /** Pause when any attempt in the run produces mutating tool calls. Default: true. */
+      stopOnMutation?: boolean;
+    };
+  };
+  /**
+   * Plan mode toggle (PR-8 integration). Default OFF — opt-in.
+   *
+   * When enabled, the runtime registers `enter_plan_mode` and
+   * `exit_plan_mode` tools and activates the mutation gate so a
+   * session in `planMode.mode === "plan"` blocks write/edit/exec/etc
+   * until the user approves the proposed plan via the approval flow.
+   *
+   * Read-only tools (read, web_search, web_fetch, update_plan) remain
+   * available so the agent can investigate before proposing changes.
+   */
+  planMode?: {
+    /** Master switch. Default: false. */
+    enabled?: boolean;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
@@ -458,7 +490,7 @@ export type AgentCompactionConfig = {
    */
   truncateAfterCompaction?: boolean;
   /**
-   * Send brief compaction notices to the user when compaction starts and completes.
+   * Send a "🧹 Compacting context..." notice to the user when compaction starts.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

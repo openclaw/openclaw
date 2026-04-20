@@ -1759,6 +1759,9 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
+    public let planmode: AnyCodable?
+    public let planapproval: AnyCodable?
+    public let lastplansteps: [[String: AnyCodable]]?
 
     public init(
         key: String,
@@ -1781,7 +1784,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
-        groupactivation: AnyCodable?)
+        groupactivation: AnyCodable?,
+        planmode: AnyCodable?,
+        planapproval: AnyCodable?,
+        lastplansteps: [[String: AnyCodable]]?)
     {
         self.key = key
         self.label = label
@@ -1804,6 +1810,9 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
+        self.planmode = planmode
+        self.planapproval = planapproval
+        self.lastplansteps = lastplansteps
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1828,6 +1837,9 @@ public struct SessionsPatchParams: Codable, Sendable {
         case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+        case planmode = "planMode"
+        case planapproval = "planApproval"
+        case lastplansteps = "lastPlanSteps"
     }
 }
 
@@ -2478,24 +2490,6 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case channels
         case channelaccounts = "channelAccounts"
         case channeldefaultaccountid = "channelDefaultAccountId"
-    }
-}
-
-public struct ChannelsStartParams: Codable, Sendable {
-    public let channel: String
-    public let accountid: String?
-
-    public init(
-        channel: String,
-        accountid: String?)
-    {
-        self.channel = channel
-        self.accountid = accountid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case channel
-        case accountid = "accountId"
     }
 }
 

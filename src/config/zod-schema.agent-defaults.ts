@@ -205,6 +205,29 @@ export const AgentDefaultsSchema = z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+        autoContinue: z
+          .object({
+            /** Enable auto-continuation for planning-only turns. Default: false. */
+            enabled: z.boolean().optional(),
+            /**
+             * Max auto-continue cycles before pausing for user review. Default: 3.
+             * Each cycle = 1 ACK injection + up to 3 planning retries = ~4 API calls.
+             * Total worst-case calls = 1 + (maxCycles × 4). Default 3 = ~13 calls max.
+             */
+            maxCycles: z.number().int().min(1).max(10).optional(),
+            /** Pause auto-continue when any attempt in the run produces mutating tool calls. Default: true. */
+            stopOnMutation: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    // PR-8: plan-mode integration. Default OFF — opt-in feature.
+    planMode: z
+      .object({
+        /** Master switch. Registers enter_plan_mode/exit_plan_mode tools and arms the runtime mutation gate. Default: false. */
+        enabled: z.boolean().optional(),
       })
       .strict()
       .optional(),
