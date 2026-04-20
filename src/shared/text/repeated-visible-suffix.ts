@@ -102,23 +102,25 @@ function matchStructuredRepeatedPrefixPattern(text: string): RepeatedPatternMatc
   return null;
 }
 
+function hasIntentionalRepeatRequest(prefix: string): boolean {
+  return looksLikeInternalPreamble(prefix) && INTENTIONAL_REPEAT_INTENT_RE.test(prefix);
+}
+
 function shouldCollapseRepeatedSuffix(params: {
   prefix: string;
   match: RepeatedPatternMatch;
   context: "delimiter" | "no-delimiter";
 }): boolean {
   const { prefix, match, context } = params;
-  const hasIntentionalRepeatRequest =
-    looksLikeInternalPreamble(prefix) &&
-    INTENTIONAL_REPEAT_INTENT_RE.test(prefix) &&
-    !SINGLE_ANSWER_INTENT_RE.test(prefix);
+  const hasRepeatIntent = hasIntentionalRepeatRequest(prefix);
   const hasSingleAnswerIntent =
     looksLikeInternalPreamble(prefix) && SINGLE_ANSWER_INTENT_RE.test(prefix);
 
+  if (hasRepeatIntent) {
+    return false;
+  }
+
   if (match.tail.length > 0 || match.fullRepeats >= 3) {
-    if (hasIntentionalRepeatRequest) {
-      return false;
-    }
     if (match.tail.length > 0) {
       return context === "delimiter"
         ? looksLikeDelimiterLeakPrefix(prefix)
@@ -163,6 +165,10 @@ function selectVisibleSuffixReplacement(params: {
   context: "delimiter" | "no-delimiter";
 }): string | null {
   const { prefix, match, context } = params;
+
+  if (hasIntentionalRepeatRequest(prefix)) {
+    return null;
+  }
 
   const explicitTarget = findExplicitVisibleSuffixTarget(prefix, match);
   if (explicitTarget) {

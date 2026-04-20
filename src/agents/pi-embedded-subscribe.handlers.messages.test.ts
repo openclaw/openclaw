@@ -639,4 +639,32 @@ describe("handleMessageEnd", () => {
 
     expect(onAgentEvent).not.toHaveBeenCalled();
   });
+
+  it("marks chunked message_end drains as final delivery", () => {
+    const emitBlockChunk = vi.fn();
+    const reset = vi.fn();
+    const ctx = createMessageEndContext({
+      state: {
+        blockReplyBreak: "message_end",
+      },
+    });
+    ctx.emitBlockChunk = emitBlockChunk;
+    ctx.blockChunker = {
+      hasBuffered: () => true,
+      drain: ({ emit }: { emit: (chunk: string) => void }) => emit("chunked reply"),
+      reset,
+    } as never;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Need send." }],
+        usage: {},
+      },
+    } as never);
+
+    expect(emitBlockChunk).toHaveBeenCalledWith("chunked reply", { finalDelivery: true });
+    expect(reset).toHaveBeenCalled();
+  });
 });

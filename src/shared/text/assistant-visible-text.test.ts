@@ -614,6 +614,18 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("abc-123abc-123");
   });
 
+  it("preserves explicitly requested repeated output when the prompt says to repeat the named unit exactly twice", () => {
+    const input = [
+      'The user is instructing me to reply with exactly "ABCD-1234" repeated twice and nothing else.',
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|>ABCD-1234ABCD-1234",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("ABCD-1234ABCD-1234");
+  });
+
   it("extracts the explicitly named final string when no delimiter was emitted and runaway junk followed", () => {
     const input = [
       "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
@@ -662,6 +674,11 @@ describe("sanitizeAssistantVisibleText", () => {
         "internal planning<channel|>The marker <channel|> splits streams.",
       ),
     ).toBe("The marker <channel|> splits streams.");
+    expect(
+      sanitizeAssistantVisibleText(
+        "internal planning<channel|>The phrase internal planning<channel|> is sometimes leaked.",
+      ),
+    ).toBe("The phrase internal planning<channel|> is sometimes leaked.");
   });
 
   it("strips spaced leaked channel delimiters after a long internal-answer preamble", () => {
@@ -673,6 +690,30 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("drops a leaked trailing channel delimiter after a long internal-answer preamble even when no visible suffix arrived", () => {
+    const input = [
+      "The user is instructing me to reply with exactly one short sentence only.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("");
+  });
+
+  it("still strips a real leaked delimiter when the internal preamble previously mentioned the literal token", () => {
+    const input = [
+      "The user is instructing me to reply with exactly abc and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely and mention the literal marker `<channel|>` in my thinking.",
+      "I will output the text directly as the final response.",
+      "<channel|>abc",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc");
   });
 
   it("does not preserve a doubled visible suffix merely because the preamble mentioned a wrong duplicate", () => {

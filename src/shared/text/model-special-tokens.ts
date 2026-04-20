@@ -26,7 +26,9 @@ const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
 const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
   /\b(?:reply with|reply to|nothing else|output content|output the text directly|direct instruction|current session|i will output|i will reply|i must output|i must reply|i must adhere)\b/i;
 const CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE =
-  /^(?:token\b|delimiter\b|marker\b|literal(?:ly)?\b|is\b|means?\b|identif(?:y|ies)\b|splits?\b|between\b|used?\b|inside\b|outside\b|in\b)/i;
+  /^(?:token\b|delimiter\b|marker\b|literal(?:ly)?\b|means?\b|identif(?:y|ies)\b|splits?\b|between\b|inside\b|outside\b)/i;
+const CHANNEL_DELIMITER_LITERAL_PREFIX_HINT_RE =
+  /\b(?:phrase|token|delimiter|marker|literal(?:ly)?)\b[^\n]{0,40}$/i;
 const CHANNEL_DELIMITER_HINT_WINDOW_CHARS = 240;
 const CHANNEL_DELIMITER_TRAILING_LITERAL_HINT_RE =
   /\b(?:token|delimiter|marker|literal(?:ly)?|use|type|contains?|ending|ends?\s+with)\b/i;
@@ -60,23 +62,27 @@ function looksLikeLeakedChannelDelimiterPrefix(
 ): boolean {
   const trimmed = prefix.trim();
   const trimmedSuffix = suffix.trimStart();
-  if (!trimmedSuffix) {
-    return CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(
-      trimmed.slice(-CHANNEL_DELIMITER_HINT_WINDOW_CHARS),
-    );
-  }
-
   if (!trimmed) {
     return false;
   }
 
   const recentTrimmed = trimmed.slice(-CHANNEL_DELIMITER_HINT_WINDOW_CHARS);
-  if (CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(recentTrimmed)) {
-    return true;
+  if (
+    CHANNEL_DELIMITER_LITERAL_PREFIX_HINT_RE.test(recentTrimmed) ||
+    CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE.test(trimmedSuffix)
+  ) {
+    return false;
   }
 
-  if (CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE.test(trimmedSuffix)) {
-    return false;
+  if (!trimmedSuffix) {
+    return (
+      CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(recentTrimmed) ||
+      (trimmed.length >= 120 && CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(recentTrimmed))
+    );
+  }
+
+  if (CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(recentTrimmed)) {
+    return true;
   }
 
   return (
@@ -87,10 +93,7 @@ function looksLikeLeakedChannelDelimiterPrefix(
 }
 
 function getRecentChannelDelimiterPrefix(text: string, start: number): string {
-  const previousDelimiterIndex = text.toLowerCase().lastIndexOf("<channel|>", start - 1);
-  const previousDelimiterEnd =
-    previousDelimiterIndex >= 0 ? previousDelimiterIndex + "<channel|>".length : 0;
-  return text.slice(previousDelimiterEnd, start);
+  return text.slice(0, start);
 }
 
 function stripTrailingChannelDelimiters(text: string): string {

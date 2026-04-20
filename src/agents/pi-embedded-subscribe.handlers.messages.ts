@@ -699,11 +699,7 @@ export function handleMessageEnd(
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
       ctx.blockChunker.drain({
         force: true,
-        emit: (chunk) =>
-          ctx.emitBlockChunk(
-            chunk,
-            ctx.state.blockReplyBreak === "text_end" ? { finalDelivery: true } : undefined,
-          ),
+        emit: (chunk) => ctx.emitBlockChunk(chunk, { finalDelivery: true }),
       });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
