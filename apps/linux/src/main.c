@@ -18,23 +18,10 @@
 
 #include "log.h"
 #include "gateway_client.h"
-#include "onboarding.h"
-#include "device_pair_prompter.h"
-
-extern void tray_init(void);
-extern void systemd_init(void);
-extern void systemd_refresh(void);
-extern void state_init(void);
-extern void notify_init(void);
+#include "product_coordinator.h"
 
 void state_on_gateway_refresh_requested(void) {
     gateway_client_refresh();
-}
-
-static gboolean onboarding_check_timeout_cb(gpointer user_data) {
-    (void)user_data;
-    onboarding_check_and_show();
-    return G_SOURCE_REMOVE;
 }
 
 static void on_activate(GtkApplication *app, gpointer user_data) {
@@ -49,37 +36,8 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     // The app has 2 distinct asynchronous runtime lanes:
     // Lane 1: Real-time systemd D-Bus event subscription (service lifecycle context)
     // Lane 2: Native gateway client (HTTP health polling + persistent WebSocket)
-
-    // Startup Sequence:
-    // 1. Initialize app state and notifications
-    state_init();
-    notify_init();
-    
-    // 2. Initialize tray first so the UI helper exists to receive early state broadcasts
-    tray_init();
-    
-    // 3. Initialize systemd D-Bus lane (which may immediately publish 'User Systemd Unavailable')
-    systemd_init();
-    
-    // 4. Perform the initial systemd state fetch so we don't start with a blank UI
-    systemd_refresh();
-
-    // 5. Initialize native gateway client (HTTP health polling + WebSocket)
-    // The gateway client manages its own internal timers for health polling
-    // and WebSocket reconnection with exponential backoff.
-    gateway_client_init();
-
-    // 5b. Initialize the pairing-approval prompter so pairing events that
-    // arrive on the very first WS handshake are captured. Parent remains
-    // NULL here; app_window wires the real parent when the main window
-    // exists.
-    device_pair_prompter_init(NULL);
-
-    // 6. Schedule onboarding check after a short delay so the initial
-    // health probe has time to complete and state is meaningful.
-    // Tray-first: after onboarding is completed, steady-state launches
-    // do NOT auto-open the main window.
-    g_timeout_add_seconds(2, onboarding_check_timeout_cb, NULL);
+ 
+    product_coordinator_activate();
 }
 
 int main(int argc, char **argv) {

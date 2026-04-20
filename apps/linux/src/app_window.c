@@ -23,7 +23,6 @@
 #include "gateway_config.h"
 #include "gateway_client.h"
 #include "diagnostics.h"
-#include "onboarding.h"
 #include "device_pair_prompter.h"
 #include "gateway_ws.h"
 #include "chat_window.h"
@@ -45,6 +44,7 @@
 #include "ui_model_utils.h"
 #include "runtime_paths.h"
 #include "log.h"
+#include "product_coordinator.h"
 
 /* ── Section metadata ── */
 
@@ -915,7 +915,7 @@ static void on_gen_open_dashboard(GtkButton *b, gpointer d) {
 
 static void on_gen_rerun_onboarding(GtkButton *b, gpointer d) {
     (void)b; (void)d;
-    onboarding_show();
+    product_coordinator_request_rerun_onboarding();
 }
 
 static void on_gen_quit(GtkButton *b, gpointer d) {
@@ -2383,7 +2383,7 @@ static void on_dbg_restart_gw(GtkButton *b, gpointer d) {
 
 static void on_dbg_rerun_onboarding(GtkButton *b, gpointer d) {
     (void)b; (void)d;
-    onboarding_show();
+    product_coordinator_request_rerun_onboarding();
 }
 
 static void on_dbg_reveal_config(GtkButton *b, gpointer d) {

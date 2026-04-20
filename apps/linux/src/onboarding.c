@@ -15,57 +15,27 @@
 #include <gtk/gtk.h>
 #include <adwaita.h>
 #include <stdio.h>
-#include <sys/stat.h>
-#include <errno.h>
 #include <string.h>
-#include <glib/gstdio.h>
 
 #include "onboarding.h"
 #include "display_model.h"
 #include "gateway_config.h"
 #include "gateway_client.h"
+#include "product_coordinator.h"
+#include "product_state.h"
 #include "state.h"
 #include "readiness.h"
-#include "app_window.h"
 #include "runtime_paths.h"
 #include "test_seams.h"
-#include "log.h"
 
 /* ── Version marker persistence ── */
 
-static gchar* get_marker_path(void) {
-    const gchar *state_dir = g_get_user_state_dir(); /* XDG_STATE_HOME or ~/.local/state */
-    return g_build_filename(state_dir, "openclaw-companion", "onboarding_version", NULL);
-}
-
 int onboarding_get_seen_version(void) {
-    g_autofree gchar *path = get_marker_path();
-    g_autofree gchar *contents = NULL;
-    if (!g_file_get_contents(path, &contents, NULL, NULL)) {
-        return 0;
-    }
-    g_strstrip(contents);
-    gint64 v = g_ascii_strtoll(contents, NULL, 10);
-    return (int)v;
-}
-
-static void write_seen_version(int version) {
-    g_autofree gchar *path = get_marker_path();
-    g_autofree gchar *dir = g_path_get_dirname(path);
-
-    g_mkdir_with_parents(dir, 0755);
-
-    g_autofree gchar *text = g_strdup_printf("%d\n", version);
-    g_autoptr(GError) err = NULL;
-    if (!g_file_set_contents(path, text, -1, &err)) {
-        OC_LOG_WARN(OPENCLAW_LOG_CAT_STATE, "Failed to write onboarding marker: %s",
-                    err->message);
-    }
+    return (int)product_state_get_onboarding_seen_version();
 }
 
 void onboarding_reset(void) {
-    g_autofree gchar *path = get_marker_path();
-    g_unlink(path);
+    (void)product_state_reset_onboarding_seen_version();
 }
 
 /* ── Onboarding window ── */
@@ -84,10 +54,13 @@ static GtkWidget *onboard_gateway_stage_connection_icon = NULL;
 static GtkWidget *onboard_gateway_stage_connection_detail = NULL;
 static GtkWidget *onboard_gateway_next_action_box = NULL;
 static GtkWidget *onboard_gateway_next_action_value = NULL;
-
 static GtkWidget *onboard_whats_next_guidance_label = NULL;
 static GtkWidget *onboard_whats_next_dashboard_button = NULL;
 static GtkWidget *onboard_environment_checks_box = NULL;
+
+static GtkWidget* build_gateway_page(GtkWidget *carousel);
+static GtkWidget* build_environment_page(GtkWidget *carousel);
+static GtkWidget* build_whats_next_page(GtkWidget *carousel);
 
 typedef struct {
     AppState state;
@@ -107,11 +80,6 @@ typedef struct {
 
 static gboolean onboard_has_render_snapshot = FALSE;
 static OnboardingRenderSnapshot onboard_last_snapshot = {0};
-
-static void onboarding_refresh_live_content(void);
-static GtkWidget* build_gateway_page(GtkWidget *carousel);
-static GtkWidget* build_environment_page(GtkWidget *carousel);
-static GtkWidget* build_whats_next_page(GtkWidget *carousel);
 
 static void onboarding_snapshot_to_input(const OnboardingRenderSnapshot *snap,
                                          OnboardingRefreshSnapshotInput *out) {
@@ -213,11 +181,10 @@ static void on_onboard_destroy(GtkWindow *window, gpointer user_data) {
 
 static void on_finish_clicked(GtkButton *btn, gpointer data) {
     (void)btn; (void)data;
-    write_seen_version(ONBOARDING_CURRENT_VERSION);
     if (onboard_window) {
         gtk_window_destroy(GTK_WINDOW(onboard_window));
     }
-    app_window_show();
+    product_coordinator_notify_onboarding_completed();
 }
 
 static void on_open_dashboard_clicked(GtkButton *btn, gpointer data) {
@@ -809,19 +776,7 @@ void onboarding_show(void) {
 }
 
 void onboarding_check_and_show(void) {
-    AppState current = state_get_current();
-    OnboardingRoute route = onboarding_routing_decide(
-        current, onboarding_get_seen_version(), ONBOARDING_CURRENT_VERSION);
-
-    if (route == ONBOARDING_SKIP) {
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "onboarding: skip (seen=%d current=%d)",
-                     onboarding_get_seen_version(), ONBOARDING_CURRENT_VERSION);
-        return;
-    }
-
-    OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE, "onboarding: showing %s flow",
-                route == ONBOARDING_SHOW_FULL ? "full" : "shortened");
-    onboarding_show();
+    product_coordinator_reconcile_startup_presentation();
 }
 
 gboolean onboarding_is_visible(void) {
@@ -862,11 +817,10 @@ void onboarding_refresh(void) {
     readiness_build_onboarding_progress(current, health, sys, &progress);
 
     if (progress.operational_ready) {
-        write_seen_version(ONBOARDING_CURRENT_VERSION);
         if (onboard_window) {
             gtk_window_destroy(GTK_WINDOW(onboard_window));
         }
-        app_window_show();
+        product_coordinator_notify_onboarding_completed();
         g_free(profile);
         g_free(state_dir);
         g_free(config_path);

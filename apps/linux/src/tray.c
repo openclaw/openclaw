@@ -17,12 +17,12 @@
 #include <string.h>
 #include "state.h"
 #include "log.h"
-#include "app_window.h"
 #include "chat_window.h"
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "display_model.h"
 #include "onboarding.h"
+#include "product_coordinator.h"
 #include "test_seams.h"
 
 static GSubprocess *helper_process = NULL;
@@ -60,16 +60,14 @@ static void handle_helper_action(const gchar *action);
 static void handle_open_settings_request(void) {
     TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, onboarding_is_visible());
     if (action == TRAY_UI_ACTION_SHOW_SETTINGS) {
-        app_window_show();
-        app_window_navigate_to(SECTION_GENERAL);
+        product_coordinator_request_show_section(SECTION_GENERAL);
     }
 }
 
 static void handle_open_diagnostics_request(void) {
     TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_DIAGNOSTICS, onboarding_is_visible());
     if (action == TRAY_UI_ACTION_SHOW_DIAGNOSTICS) {
-        app_window_show();
-        app_window_navigate_to(SECTION_DIAGNOSTICS);
+        product_coordinator_request_show_section(SECTION_DIAGNOSTICS);
     }
 }
 
@@ -95,7 +93,7 @@ static void handle_helper_action(const gchar *action) {
         // Trigger an immediate gateway client health check
         gateway_client_refresh();
     } else if (g_strcmp0(action, "OPEN_MAIN") == 0) {
-        app_window_show();
+        product_coordinator_request_show_main();
     } else if (g_strcmp0(action, "OPEN_CHAT") == 0) {
         /* Standalone chat window — lives independently of the main
          * settings / diagnostics window (see chat_window.{c,h}). */
