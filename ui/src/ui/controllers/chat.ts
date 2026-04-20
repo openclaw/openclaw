@@ -16,6 +16,7 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const LOCAL_ONLY_MESSAGE_FLAG = "__optimistic";
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
@@ -73,6 +74,67 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
 
 function shouldHideHistoryMessage(message: unknown): boolean {
   return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+function isOptimisticLocalMessage(message: unknown): message is Record<string, unknown> {
+  return isRecord(message) && message[LOCAL_ONLY_MESSAGE_FLAG] === true;
+}
+
+function toVisibleChatHistory(messages: unknown[]): unknown[] {
+  return messages.filter((message) => !shouldHideHistoryMessage(message));
+}
+
+function messageSignature(message: unknown): string | null {
+  if (!isRecord(message)) {
+    return null;
+  }
+  const role = normalizeLowercaseStringOrEmpty(message.role);
+  if (!role) {
+    return null;
+  }
+  const text = extractText(message);
+  const content = "content" in message ? JSON.stringify(message.content) : "";
+  return `${role}:${text ?? ""}:${content}`;
+}
+
+function mergeHistoryWithOptimisticMessages(
+  serverMessages: unknown[],
+  localMessages: unknown[],
+): unknown[] {
+  const optimisticLocals = localMessages.filter(isOptimisticLocalMessage);
+  if (optimisticLocals.length === 0) {
+    return serverMessages;
+  }
+
+  const serverSignatureCounts = new Map<string, number>();
+  for (const message of serverMessages) {
+    const signature = messageSignature(message);
+    if (!signature) {
+      continue;
+    }
+    serverSignatureCounts.set(signature, (serverSignatureCounts.get(signature) ?? 0) + 1);
+  }
+
+  const preservedOptimisticMessages: unknown[] = [];
+  for (const message of optimisticLocals) {
+    const signature = messageSignature(message);
+    if (!signature) {
+      preservedOptimisticMessages.push(message);
+      continue;
+    }
+    const remaining = serverSignatureCounts.get(signature) ?? 0;
+    if (remaining > 0) {
+      serverSignatureCounts.set(signature, remaining - 1);
+      continue;
+    }
+    preservedOptimisticMessages.push(message);
+  }
+
+  return [...serverMessages, ...preservedOptimisticMessages];
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
@@ -177,7 +239,8 @@ export async function loadChatHistory(state: ChatState) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const visibleMessages = toVisibleChatHistory(messages);
+    state.chatMessages = mergeHistoryWithOptimisticMessages(visibleMessages, state.chatMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -328,6 +391,7 @@ export async function sendChatMessage(
       role: "user",
       content: contentBlocks,
       timestamp: now,
+      [LOCAL_ONLY_MESSAGE_FLAG]: true,
     },
   ];
 
