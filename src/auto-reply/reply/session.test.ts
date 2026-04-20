@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import * as sessionStoreRuntime from "../../config/sessions/store.js";
 import {
   __testing as sessionMcpTesting,
   getOrCreateSessionMcpRuntime,
@@ -3170,6 +3171,55 @@ describe("initSessionState internal channel routing preservation", () => {
       to: "user:ou_sender_1",
       accountId: "default",
     });
+  });
+
+  it("does not let a system-event write rewind lastInteractionAt", async () => {
+    const storePath = await createStorePath("system-event-preserve-last-interaction-");
+    const sessionKey = "agent:main:main";
+    const initialLastInteractionAt = Date.now() - 60_000;
+    const newerLastInteractionAt = Date.now();
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-activity",
+        updatedAt: initialLastInteractionAt,
+        lastInteractionAt: initialLastInteractionAt,
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    let persistedEntry: SessionEntry | undefined;
+    const updateSessionStoreSpy = vi
+      .spyOn(sessionStoreRuntime, "updateSessionStore")
+      .mockImplementation(async (_storePath, updater, _opts) => {
+        const store = {
+          [sessionKey]: {
+            sessionId: "sess-system-event-activity",
+            updatedAt: newerLastInteractionAt,
+            lastInteractionAt: newerLastInteractionAt,
+          },
+        } as Record<string, SessionEntry>;
+        await updater(store);
+        persistedEntry = store[sessionKey];
+        return persistedEntry;
+      });
+
+    try {
+      const result = await initSessionState({
+        ctx: {
+          Body: "heartbeat tick",
+          SessionKey: sessionKey,
+          Provider: "heartbeat",
+          From: "heartbeat",
+          To: "heartbeat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.sessionStore?.[sessionKey]?.lastInteractionAt).toBe(newerLastInteractionAt);
+      expect(persistedEntry?.lastInteractionAt).toBe(newerLastInteractionAt);
+    } finally {
+      updateSessionStoreSpy.mockRestore();
+    }
   });
 
   it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {

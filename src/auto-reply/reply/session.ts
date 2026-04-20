@@ -145,6 +145,20 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   return Boolean(provider && getCliSessionBinding(entry, provider));
 }
 
+function preserveLatestLastInteractionAt(
+  existing: SessionEntry | undefined,
+  next: SessionEntry,
+): SessionEntry {
+  const existingLastInteractionAt = existing?.lastInteractionAt;
+  if (existingLastInteractionAt == null) {
+    return next;
+  }
+  if (next.lastInteractionAt == null || existingLastInteractionAt > next.lastInteractionAt) {
+    return { ...next, lastInteractionAt: existingLastInteractionAt };
+  }
+  return next;
+}
+
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -756,15 +770,22 @@ export async function initSessionState(params: {
     sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(
+  sessionStore[sessionKey] = preserveLatestLastInteractionAt(sessionStore[sessionKey], {
+    ...sessionStore[sessionKey],
+    ...sessionEntry,
+  });
+  const persistedSessionEntry = await updateSessionStore(
     storePath,
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      store[sessionKey] = preserveLatestLastInteractionAt(store[sessionKey], {
+        ...store[sessionKey],
+        ...sessionEntry,
+      });
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }
+      return store[sessionKey];
     },
     {
       activeSessionKey: sessionKey,
@@ -778,6 +799,8 @@ export async function initSessionState(params: {
         }),
     },
   );
+  sessionStore[sessionKey] = persistedSessionEntry;
+  sessionEntry = persistedSessionEntry;
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   let previousSessionTranscript: {
