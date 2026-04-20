@@ -466,6 +466,40 @@ describe("resolveModel", () => {
     });
   });
 
+  it("matches agents.defaults params even when modelId carries a provider prefix", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom/model-a": {
+              params: { num_ctx: 4096 },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                contextWindow: 262144,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "custom/model-a", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { params?: Record<string, unknown> }).params).toEqual({
+      num_ctx: 4096,
+    });
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {

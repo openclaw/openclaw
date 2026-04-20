@@ -278,7 +278,8 @@ function resolveConfiguredProviderConfig(
 
 /**
  * Merge per-model `params` from both config sources into a single record.
- * Precedence (later overrides earlier): agents.defaults.models[].params → providerConfig.models[].params → existing model.params.
+ * Precedence (later overrides earlier): discovery → agents.defaults.models[].params → providerConfig.models[].params.
+ * User-supplied config always wins over discovered params so explicit overrides cannot be silently clobbered.
  * Returns `undefined` when no source contributes any entry, so unrelated models stay `params`-free.
  */
 function mergeConfiguredModelParams(params: {
@@ -289,7 +290,11 @@ function mergeConfiguredModelParams(params: {
   configuredParams?: Record<string, unknown>;
 }): Record<string, unknown> | undefined {
   const agentDefaultsModels = params.cfg?.agents?.defaults?.models;
-  const lookupKey = normalizeLowercaseStringOrEmpty(`${params.provider}/${params.modelId}`);
+  const providerPrefix = `${params.provider}/`;
+  const bareModelId = params.modelId.startsWith(providerPrefix)
+    ? params.modelId.slice(providerPrefix.length)
+    : params.modelId;
+  const lookupKey = normalizeLowercaseStringOrEmpty(`${params.provider}/${bareModelId}`);
   let defaultsParams: Record<string, unknown> | undefined;
   if (agentDefaultsModels) {
     for (const [rawKey, entry] of Object.entries(agentDefaultsModels)) {
@@ -303,9 +308,9 @@ function mergeConfiguredModelParams(params: {
     }
   }
   const merged: Record<string, unknown> = {
+    ...params.discoveredParams,
     ...defaultsParams,
     ...params.configuredParams,
-    ...params.discoveredParams,
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }

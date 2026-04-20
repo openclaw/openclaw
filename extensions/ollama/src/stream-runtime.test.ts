@@ -1276,6 +1276,39 @@ describe("num_ctx params override (issue #44550)", () => {
     );
   });
 
+  it("createOllamaStreamFn: treats sub-unit fractional params.num_ctx as invalid", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await streamFn(
+          {
+            id: "qwen3-coder:30b",
+            api: "ollama",
+            provider: "ollama",
+            contextWindow: 32768,
+            // 0.5 passes the "> 0" check but floors to 0, which would be
+            // forwarded to Ollama as an invalid num_ctx. Must fall back instead.
+            params: { num_ctx: 0.5 },
+          } as never,
+          { messages: [{ role: "user", content: "hi" }] } as never,
+          {} as never,
+        );
+
+        await collectStreamEvents(stream);
+
+        const request = getGuardedFetchCall(fetchMock);
+        const body = JSON.parse((request.init?.body as string) ?? "{}") as {
+          options: { num_ctx?: number };
+        };
+        expect(body.options.num_ctx).toBe(32768);
+      },
+    );
+  });
+
   it("createConfiguredOllamaCompatStreamWrapper: params.num_ctx overrides contextWindow on compat path", async () => {
     let patchedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn((_model, _context, options) => {

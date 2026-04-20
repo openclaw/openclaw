@@ -183,10 +183,14 @@ function resolveOllamaNumCtxFromParams(model: unknown): number | undefined {
     return undefined;
   }
   const numCtx = (params as { num_ctx?: unknown }).num_ctx;
-  if (typeof numCtx !== "number" || !Number.isFinite(numCtx) || numCtx <= 0) {
+  if (typeof numCtx !== "number" || !Number.isFinite(numCtx)) {
     return undefined;
   }
-  return Math.floor(numCtx);
+  const floored = Math.floor(numCtx);
+  if (floored < 1) {
+    return undefined;
+  }
+  return floored;
 }
 
 function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
