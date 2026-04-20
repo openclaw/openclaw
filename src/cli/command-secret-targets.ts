@@ -1,7 +1,6 @@
-import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
+import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/session-key.js";
-import { loadBundledChannelSecretContractApi } from "../secrets/channel-contract-api.js";
 import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
@@ -69,37 +68,28 @@ type CommandSecretTargets = {
 
 let cachedCommandSecretTargets: CommandSecretTargets | undefined;
 let cachedChannelSecretTargetIds: string[] | undefined;
-const cachedBundledChannelSecretTargetIds = new Map<string, string[] | null>();
 
 function getChannelSecretTargetIds(): string[] {
   cachedChannelSecretTargetIds ??= idsByPrefix(["channels."]);
   return cachedChannelSecretTargetIds;
 }
 
-function getBundledChannelSecretTargetIds(channelId: string): string[] {
-  const normalizedChannelId = channelId.trim();
-  if (!normalizedChannelId) {
-    return [];
-  }
-  if (cachedBundledChannelSecretTargetIds.has(normalizedChannelId)) {
-    return cachedBundledChannelSecretTargetIds.get(normalizedChannelId) ?? [];
-  }
-  const targetIds =
-    loadBundledChannelSecretContractApi(normalizedChannelId)
-      ?.secretTargetRegistryEntries?.map((entry) => entry.id)
-      .filter((id) => id.startsWith(`channels.${normalizedChannelId}.`))
-      .toSorted() ?? null;
-  cachedBundledChannelSecretTargetIds.set(normalizedChannelId, targetIds);
-  return targetIds ?? [];
-}
-
 function getConfiguredChannelSecretTargetIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  return listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false })
-    .toSorted()
-    .flatMap((channelId) => getBundledChannelSecretTargetIds(channelId));
+  const targetIds = new Set<string>();
+  for (const plugin of listReadOnlyChannelPluginsForConfig(config, {
+    env,
+    includePersistedAuthState: false,
+  })) {
+    for (const entry of plugin.secrets?.secretTargetRegistryEntries ?? []) {
+      if (entry.id.startsWith(`channels.${plugin.id}.`)) {
+        targetIds.add(entry.id);
+      }
+    }
+  }
+  return [...targetIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 function buildCommandSecretTargets(): CommandSecretTargets {

@@ -32,32 +32,33 @@ describe("command secret targets module import", () => {
     const listSecretTargetRegistryEntries = vi.fn(() => {
       throw new Error("registry touched too early");
     });
-    const loadBundledChannelSecretContractApi = vi.fn((channelId: string) =>
-      channelId === "telegram"
-        ? {
-            secretTargetRegistryEntries: [
-              {
-                id: "channels.telegram.botToken",
-                targetType: "channels.telegram.botToken",
-                configFile: "openclaw.json",
-                pathPattern: "channels.telegram.botToken",
-                secretShape: "secret_input",
-                expectedResolvedValue: "string",
-                includeInPlan: true,
-                includeInConfigure: true,
-                includeInAudit: true,
-              },
-            ],
-          }
-        : undefined,
-    );
+    const listReadOnlyChannelPluginsForConfig = vi.fn(() => [
+      {
+        id: "telegram",
+        secrets: {
+          secretTargetRegistryEntries: [
+            {
+              id: "channels.telegram.botToken",
+              targetType: "channels.telegram.botToken",
+              configFile: "openclaw.json",
+              pathPattern: "channels.telegram.botToken",
+              secretShape: "secret_input",
+              expectedResolvedValue: "string",
+              includeInPlan: true,
+              includeInConfigure: true,
+              includeInAudit: true,
+            },
+          ],
+        },
+      },
+    ]);
 
     vi.doMock("../secrets/target-registry.js", () => ({
       discoverConfigSecretTargetsByIds: vi.fn(() => []),
       listSecretTargetRegistryEntries,
     }));
-    vi.doMock("../secrets/channel-contract-api.js", () => ({
-      loadBundledChannelSecretContractApi,
+    vi.doMock("../channels/plugins/read-only.js", () => ({
+      listReadOnlyChannelPluginsForConfig,
     }));
 
     const mod = await import("./command-secret-targets.js");
@@ -67,7 +68,10 @@ describe("command secret targets module import", () => {
 
     expect(targets.has("channels.telegram.botToken")).toBe(true);
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
-    expect(loadBundledChannelSecretContractApi).toHaveBeenCalledWith("telegram");
+    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ includePersistedAuthState: false }),
+    );
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
   });
 });

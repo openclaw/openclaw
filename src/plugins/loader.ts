@@ -134,6 +134,7 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
   /**
    * Prefer `setupEntry` for configured channel plugins that explicitly opt in
    * via package metadata because their setup entry covers the pre-listen startup surface.
@@ -505,6 +506,7 @@ function buildCacheKey(params: {
   env: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
@@ -534,6 +536,8 @@ function buildCacheKey(params: {
   );
   const scopeKey = serializePluginIdScope(params.onlyPluginIds);
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
+  const setupOnlyModeKey =
+    params.forceSetupOnlyChannelPlugins === true ? "force-setup" : "normal-setup";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
@@ -544,7 +548,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${moduleLoadMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${startupChannelMode}::${moduleLoadMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -619,6 +623,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
+    options.forceSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
     options.loadModules === false
   );
@@ -634,6 +639,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   });
   const onlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
+  const forceSetupOnlyChannelPlugins = options.forceSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
@@ -648,6 +654,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     env,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
+    forceSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     loadModules: options.loadModules,
     runtimeSubagentMode,
@@ -663,6 +670,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     autoEnabledReasons: options.autoEnabledReasons ?? {},
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
+    forceSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
@@ -1410,6 +1418,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     autoEnabledReasons,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
+    forceSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
     shouldLoadModules,
@@ -1740,25 +1749,28 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
       }
 
-      const registrationMode = enableState.enabled
-        ? shouldLoadModules &&
-          !validateOnly &&
-          shouldLoadChannelPluginInSetupRuntime({
-            manifestChannels: manifestRecord.channels,
-            setupSource: manifestRecord.setupSource,
-            startupDeferConfiguredChannelFullLoadUntilAfterListen:
-              manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-            cfg,
-            env,
-            preferSetupRuntimeForChannelPlugins,
-          })
-          ? "setup-runtime"
-          : "full"
-        : includeSetupOnlyChannelPlugins &&
+      const canLoadScopedSetupOnlyChannelPlugin =
+        includeSetupOnlyChannelPlugins &&
+        !validateOnly &&
+        onlyPluginIdSet &&
+        manifestRecord.channels.length > 0 &&
+        (!enableState.enabled || forceSetupOnlyChannelPlugins);
+      const registrationMode = canLoadScopedSetupOnlyChannelPlugin
+        ? "setup-only"
+        : enableState.enabled
+          ? shouldLoadModules &&
             !validateOnly &&
-            onlyPluginIdSet &&
-            manifestRecord.channels.length > 0
-          ? "setup-only"
+            shouldLoadChannelPluginInSetupRuntime({
+              manifestChannels: manifestRecord.channels,
+              setupSource: manifestRecord.setupSource,
+              startupDeferConfiguredChannelFullLoadUntilAfterListen:
+                manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+              cfg,
+              env,
+              preferSetupRuntimeForChannelPlugins,
+            })
+            ? "setup-runtime"
+            : "full"
           : null;
 
       if (!registrationMode) {
