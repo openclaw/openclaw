@@ -1,0 +1,39 @@
+{
+  "id": "puter",
+  "enabledByDefault": true,
+  "providers": ["puter"],
+  "providerAuthEnvVars": {
+    "puter": ["PUTER_AUTH_TOKEN"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "puter",
+      "method": "browser",
+      "choiceId": "puter-browser",
+      "choiceLabel": "Puter browser sign-in",
+      "choiceHint": "User-pays browser login",
+      "groupId": "puter",
+      "groupLabel": "Puter",
+      "groupHint": "Browser sign-in + auth token"
+    },
+    {
+      "provider": "puter",
+      "method": "auth-token",
+      "choiceId": "puter-auth-token",
+      "choiceLabel": "Puter auth token",
+      "choiceHint": "Paste a token from puter.com/dashboard",
+      "groupId": "puter",
+      "groupLabel": "Puter",
+      "groupHint": "Browser sign-in + auth token",
+      "optionKey": "puterAuthToken",
+      "cliFlag": "--puter-auth-token",
+      "cliOption": "--puter-auth-token <token>",
+      "cliDescription": "Puter auth token"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
