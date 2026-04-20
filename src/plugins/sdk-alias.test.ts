@@ -1056,3 +1056,95 @@ export const syntheticRuntimeMarker = {
     expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
   });
 });
+
+describe("buildPluginLoaderAliasMap memoization", () => {
+  it("returns the same object reference for identical inputs (jiti sentinel safety)", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("memo-demo", "src/index.ts"),
+    );
+
+    const first = buildPluginLoaderAliasMap(sourcePluginEntry);
+    const second = buildPluginLoaderAliasMap(sourcePluginEntry);
+
+    // Reference identity is critical: jiti's normalizeAliases uses a
+    // reference-identity sentinel to skip O(N²) re-processing.
+    expect(second).toBe(first);
+  });
+
+  it("returns different references for different modulePath inputs", () => {
+    const fixtureA = createPluginSdkAliasFixture();
+    const fixtureB = createPluginSdkAliasFixture();
+    fs.writeFileSync(
+      path.join(fixtureA.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixtureB.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    const entryA = writePluginEntry(fixtureA.root, bundledPluginFile("a", "src/index.ts"));
+    const entryB = writePluginEntry(fixtureB.root, bundledPluginFile("b", "src/index.ts"));
+
+    const aliasA = buildPluginLoaderAliasMap(entryA);
+    const aliasB = buildPluginLoaderAliasMap(entryB);
+
+    expect(aliasA).not.toBe(aliasB);
+    expect(aliasA["openclaw/plugin-sdk"]).not.toBe(aliasB["openclaw/plugin-sdk"]);
+  });
+
+  it("returns different references when pluginSdkResolution differs", () => {
+    const fixture = createPluginSdkAliasFixture();
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("res", "src/index.ts"));
+
+    const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
+    const dist = buildPluginLoaderAliasMap(entry, undefined, undefined, "dist");
+
+    expect(auto).not.toBe(dist);
+  });
+
+  it("returns different references when argv1 differs", () => {
+    const fixture = createPluginSdkAliasFixture();
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("argv", "src/index.ts"));
+
+    const a = buildPluginLoaderAliasMap(entry, "/path/to/cli-a.mjs");
+    const b = buildPluginLoaderAliasMap(entry, "/path/to/cli-b.mjs");
+
+    expect(a).not.toBe(b);
+  });
+
+  it("memoized result has identical content to a freshly computed map", () => {
+    const fixture = createPluginSdkAliasFixture();
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("eq", "src/index.ts"));
+
+    const first = buildPluginLoaderAliasMap(entry);
+    const second = buildPluginLoaderAliasMap(entry);
+
+    // Same reference (cache hit)
+    expect(second).toBe(first);
+    // Same content
+    expect(second).toEqual(first);
+    // Same key set
+    expect(Object.keys(second).toSorted()).toEqual(Object.keys(first).toSorted());
+  });
+});
