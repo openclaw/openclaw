@@ -47,6 +47,8 @@ sources = [
   'src/gateway_data.c',
   'src/gateway_mutations.c',
   'src/gateway_client.c',
+  'src/product_state.c',
+  'src/product_coordinator.c',
   'src/state.c',
   'src/runtime_mode.c',
   'src/readiness.c',
@@ -129,6 +131,16 @@ test_config_exe = executable('test_config',
   ['tests/test_config.c', 'src/gateway_config.c', 'src/config_setup_transform.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('config', test_config_exe)
+
+test_product_state_exe = executable('test_product_state',
+  ['tests/test_product_state.c', 'src/product_state.c'],
+  dependencies : [glib_dep])
+test('product_state', test_product_state_exe)
+
+test_product_coordinator_exe = executable('test_product_coordinator',
+  ['tests/test_product_coordinator.c', 'src/product_coordinator.c'],
+  dependencies : [glib_dep, gtk4_dep, json_glib_dep])
+test('product_coordinator', test_product_coordinator_exe)
 
 test_seams_exe = executable('test_seams',
   ['tests/test_seams.c', 'src/test_seams.c'],
