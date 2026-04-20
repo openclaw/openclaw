@@ -740,6 +740,30 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
+// Security model for the eval/new-Function calls below.
+//
+// `opts.fn` is a caller-supplied JS function body that the agent wants to run
+// against a DOM element or page — this is the whole point of this tool, so
+// executing agent-authored JS is by design, not an oversight.
+//
+// The `new Function(...)` calls here do NOT eval `opts.fn` on the Node side.
+// The function body string passed to `new Function` is a literal template that
+// Playwright serializes and installs into the browser. The only way user text
+// enters JS execution is the `eval("(" + fnBody + ")")` inside that template,
+// which runs in the page's browser context — not in this process.
+//
+// Defenses around the browser-side eval:
+//   - Runs inside the Playwright-managed browser, isolated from this process.
+//   - `ssrfPolicy` is threaded through and enforced on any navigation the
+//     evaluated code triggers (see `assertInteractionNavigationCompletedSafely`).
+//   - Execution is bounded by an in-browser `Promise.race` timeout so async
+//     evaluates cannot hang the CDP command queue.
+//   - `signal` hooks `forceDisconnectPlaywrightForTarget` so aborts actually
+//     kill the browser session, not just drop our local promise.
+//
+// Do NOT widen the Node-side `new Function` body to interpolate caller input
+// without revisiting this comment — that would move the threat boundary from
+// the browser back into this process.
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -783,7 +807,7 @@ export async function evaluateViaPlaywright(opts: {
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
       const previousUrl = page.url();
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- browser-context eval; threat model documented on evaluateViaPlaywright
       const elementEvaluator = new Function(
         "el",
         "args",
