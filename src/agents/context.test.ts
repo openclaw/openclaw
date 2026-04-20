@@ -258,6 +258,66 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(200_000);
   });
 
+  it("returns 1M context when context1m is enabled on an Anthropic-capable model proxied through github-copilot (#69353)", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "github-copilot": {
+              baseUrl: "https://api.enterprise.githubcopilot.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/claude-opus-4-6": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "github-copilot",
+      model: "claude-opus-4-6",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("still gates 1M context on the claude-opus/claude-sonnet prefix when proxied (#69353)", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "github-copilot": {
+              baseUrl: "https://api.enterprise.githubcopilot.com",
+              models: [testModelContextWindow("claude-haiku-3-5", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/claude-haiku-3-5": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "github-copilot",
+      model: "claude-haiku-3-5",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it("prefers per-model contextTokens config over contextWindow", () => {
     const result = resolveContextTokensForModel({
       cfg: {

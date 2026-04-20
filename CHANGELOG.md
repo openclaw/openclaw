@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/context: honor `agents.defaults.models.*.params.context1m = true` on proxied Anthropic 1M-capable models (Claude Opus 4 / Sonnet 4 prefixes), so GitHub Copilot and other providers that route to the same underlying models unlock the 1M token context window when the operator opts in. Non-matching model prefixes still cap at the configured/fallback window. (#69353) [AI-assisted]
 - fix(security): block MINIMAX_API_HOST workspace env injection and remove env-driven URL routing [AI-assisted]. (#67300) Thanks @pgondhi987.
 - Cron/delivery: treat explicit `delivery.mode: "none"` runs as not requested even if the runner reports `delivered: false`, so no-delivery cron jobs no longer persist false delivery failures or errors. (#69285) Thanks @matsuri1987.
 - Plugins/install: repair active and default-enabled bundled plugin runtime dependencies before import in packaged installs, so bundled Discord, WhatsApp, Slack, Telegram, and provider plugins work without putting their dependency trees in core.
