@@ -19,6 +19,7 @@ export {
   createLegacyPrivateNetworkDoctorContract,
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
+  mergeSsrFPolicies,
   migrateLegacyFlatAllowPrivateNetworkAlias,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
