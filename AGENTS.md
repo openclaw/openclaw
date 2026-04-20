@@ -125,6 +125,12 @@ Scoped guides:
 - Example models in tests: `sonnet-4.6`, `gpt-5.4`.
 - Clean up timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` must stay safe.
 - Hot tests: avoid per-test `vi.resetModules()` + fresh heavy imports; prefer static or `beforeAll` imports and reset state directly.
+- Measure first: `pnpm test:perf:imports <file>` for import drag; `pnpm test:perf:hotspots --limit N` for suite targets.
+- Keep tests at seam depth: unit-test pure helpers/contracts; one integration smoke per boundary, not per branch.
+- Mock expensive runtime seams directly: scanners, manifests, package registries, filesystem crawls, provider SDKs, network/process launch.
+- Prefer injected deps over module mocks; if mocking modules, mock narrow local `*.runtime.ts` seams, not broad barrels.
+- Share fixtures/builders; do not recreate temp dirs, package manifests, or plugin workspaces in every case unless state isolation needs it.
+- Delete duplicate assertions when another test owns the boundary; assert only the behavior that can regress here.
 - Avoid broad `importOriginal()` / broad `openclaw/plugin-sdk/*` partial mocks in hot tests. Add narrow local `*.runtime.ts` seam and mock it.
 - Use existing deps/callback/runtime injection seams before module mocks.
 - Import-dominated test time is a boundary smell; shrink import surface before adding cases.
