@@ -314,4 +314,34 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(result.itemLifecycle).toMatchObject({ compactionCount: 1 });
   });
+
+  it("continues projecting turn completion when an event consumer throws", async () => {
+    const onAgentEvent = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const projector = createProjector({
+      ...createParams(),
+      onAgentEvent,
+    });
+
+    await expect(
+      projector.handleNotification(
+        turnCompleted([
+          { type: "plan", id: "plan-1", text: "step one\nstep two" },
+          { type: "agentMessage", id: "msg-1", text: "final answer" },
+        ]),
+      ),
+    ).resolves.toBeUndefined();
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "plan",
+        data: expect.objectContaining({ steps: ["step one", "step two"] }),
+      }),
+    );
+    expect(result.assistantTexts).toEqual(["final answer"]);
+    expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");
+  });
 });
