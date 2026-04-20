@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.types.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
@@ -244,7 +245,7 @@ export async function startGatewaySidecars(params: {
       void import("../hooks/internal-hooks.js").then(
         ({ createInternalHookEvent, triggerInternalHook }) => {
           const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-            cfg: params.cfg,
+            cfg: getRuntimeConfig(),
             deps: params.deps,
             workspaceDir: params.defaultWorkspaceDir,
           });

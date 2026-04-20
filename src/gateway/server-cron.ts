@@ -2,7 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig, loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -150,8 +150,11 @@ export function buildGatewayCronService(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const runtimeCfg = getRuntimeConfig();
+  const storePath = resolveCronStorePath(runtimeCfg.cron?.store ?? params.cfg.cron?.store);
+  const cronEnabled =
+    process.env.OPENCLAW_SKIP_CRON !== "1" &&
+    (runtimeCfg.cron?.enabled ?? params.cfg.cron?.enabled) !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
     Array.isArray(cfg.agents?.list)
