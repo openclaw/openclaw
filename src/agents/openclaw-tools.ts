@@ -9,16 +9,20 @@ import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import {
   collectPresentOpenClawTools,
+  isPlanModeToolsEnabledForOpenClawTools,
   isUpdatePlanToolEnabledForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createAskUserQuestionTool } from "./tools/ask-user-question-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
+import { createEnterPlanModeTool } from "./tools/enter-plan-mode-tool.js";
+import { createExitPlanModeTool } from "./tools/exit-plan-mode-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
@@ -26,6 +30,7 @@ import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createPlanModeStatusTool } from "./tools/plan-mode-status-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -101,6 +106,12 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /**
+     * Stable run identifier for this agent invocation. Threaded into
+     * `update_plan` so its merge mode can persist plan state on
+     * `AgentRunContext` keyed by runId (#67514).
+     */
+    runId?: string;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
@@ -268,7 +279,32 @@ export function createOpenClawTools(
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
     })
-      ? [createUpdatePlanTool()]
+      ? [createUpdatePlanTool({ runId: options?.runId })]
+      : []),
+    // PR-8: plan-mode tools — gated behind agents.defaults.planMode.enabled.
+    // Default OFF; opt-in via config. When enabled, registers the agent-visible
+    // affordances that pair with the runtime mutation gate
+    // (src/agents/plan-mode/mutation-gate.ts) and SessionEntry.planMode state.
+    ...(isPlanModeToolsEnabledForOpenClawTools({ config: resolvedConfig })
+      ? [
+          createEnterPlanModeTool({ runId: options?.runId }),
+          // PR-8 follow-up: pass runId so the tool can read
+          // `AgentRunContext.openSubagentRunIds` and hard-block plan
+          // submission while research subagents are still in flight.
+          createExitPlanModeTool({ runId: options?.runId }),
+          // PR-10: ask_user_question — surfaces a clarifying question
+          // through the same approval-card pipeline as exit_plan_mode.
+          // Plan-mode-safe: doesn't transition out of plan mode.
+          createAskUserQuestionTool({ runId: options?.runId }),
+          // Iter-3 D6: read-only plan-mode introspection. Lets the
+          // agent self-diagnose state ("am I in plan mode? how many
+          // subagents are in flight?") without inferring from tool
+          // errors. Used by /plan self-test (D5) for assertions.
+          createPlanModeStatusTool({
+            runId: options?.runId,
+            sessionKey: options?.agentSessionKey,
+          }),
+        ]
       : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
@@ -310,6 +346,25 @@ export function createOpenClawTools(
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onYield: options?.onYield,
+    }),
+    createSessionsSpawnTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      agentTo: options?.agentTo,
+      agentThreadId: options?.agentThreadId,
+      agentGroupId: options?.agentGroupId,
+      agentGroupChannel: options?.agentGroupChannel,
+      agentGroupSpace: options?.agentGroupSpace,
+      agentMemberRoleIds: options?.agentMemberRoleIds,
+      sandboxed: options?.sandboxed,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      workspaceDir: spawnWorkspaceDir,
+      // PR-8 follow-up: thread runId so the spawn tool can read
+      // AgentRunContext.inPlanMode (for cleanup:keep override) and
+      // add the child runId to AgentRunContext.openSubagentRunIds
+      // (so exit_plan_mode can block on pending children).
+      runId: options?.runId,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

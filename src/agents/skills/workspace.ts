@@ -722,6 +722,24 @@ export function buildWorkspaceSkillSnapshot(
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  // Carry per-skill plan templates so #67541's seeder works in the
+  // snapshot-backed run path. Without this, applySkillPlanTemplateSeed
+  // sees an empty entries list (resolveEmbeddedRunSkillEntries returns
+  // [] when a snapshot is present) and silently no-ops in production.
+  const resolvedPlanTemplates = eligible
+    .filter(
+      (
+        e,
+      ): e is SkillEntry & {
+        metadata: { planTemplate: NonNullable<SkillEntry["metadata"]>["planTemplate"] };
+      } => Array.isArray(e.metadata?.planTemplate) && e.metadata.planTemplate.length > 0,
+    )
+    .map((e) => ({
+      skillName: e.skill.name,
+      // Guaranteed defined by the filter predicate above (TS narrowing
+      // doesn't propagate through .map's project arrow).
+      planTemplate: e.metadata.planTemplate!.slice(),
+    }));
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -731,6 +749,7 @@ export function buildWorkspaceSkillSnapshot(
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
+    ...(resolvedPlanTemplates.length > 0 ? { resolvedPlanTemplates } : {}),
     version: opts?.snapshotVersion,
   };
 }

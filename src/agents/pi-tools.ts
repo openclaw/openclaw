@@ -268,6 +268,36 @@ export function createOpenClawCodingTools(options?: {
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /**
+   * Current plan-mode session state (PR-8). When `"plan"`, the runtime
+   * mutation gate (src/agents/plan-mode/mutation-gate.ts) blocks
+   * write/edit/exec/etc. The embedded runner reads
+   * `SessionEntry.planMode.mode` once when assembling tools and
+   * threads it through to the before-tool-call hook so the gate fires
+   * without re-loading the session store on every call.
+   */
+  planMode?: "plan" | "normal";
+  /**
+   * Bug 3+4 fix: live-read accessor for the session's current planMode.
+   * Returns the LATEST mode from the in-memory SessionEntry on every
+   * tool-call (O(1) map lookup, no disk I/O). Threaded through to the
+   * before-tool-call hook's HookContext so the mutation gate can
+   * detect mid-turn approval transitions where the cached
+   * `planMode` snapshot is stale (sessions.patch flipped mode →
+   * "normal" but the runtime still has "plan" cached for the rest of
+   * the current run).
+   */
+  getLatestPlanMode?: () => "plan" | "normal" | undefined;
+  /**
+   * Cherry-pick of b6b2783ba3 (acceptEdits gate): live-read accessor
+   * for the session's `postApprovalPermissions.acceptEdits` flag.
+   * Returns `true` only when the user approved the plan with
+   * "Accept, allow edits" (granting acceptEdits permission); `false`
+   * otherwise. Threaded to the before-tool-call HookContext so the
+   * acceptEdits constraint gate can run on post-approval tool calls
+   * without re-reading the session store on each call.
+   */
+  getLatestAcceptEdits?: () => boolean;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -627,6 +657,7 @@ export function createOpenClawCodingTools(options?: {
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
+      runId: options?.runId,
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),
@@ -708,6 +739,21 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      // PR-8: thread plan-mode state into the before-tool-call hook so
+      // the mutation gate fires without re-loading the session store
+      // on every tool call.
+      ...(options?.planMode ? { planMode: options.planMode } : {}),
+      // Bug 3+4 fix: also forward the live-read accessor so the gate
+      // can re-check after mid-turn approval transitions (cached
+      // planMode goes stale; getLatestPlanMode reads fresh).
+      ...(options?.getLatestPlanMode ? { getLatestPlanMode: options.getLatestPlanMode } : {}),
+      // Cherry-pick of b6b2783ba3 (acceptEdits gate): mirror
+      // getLatestPlanMode for the postApprovalPermissions.acceptEdits
+      // flag. Paired so the gate activates post-approval without a
+      // session store re-read per tool call.
+      ...(options?.getLatestAcceptEdits
+        ? { getLatestAcceptEdits: options.getLatestAcceptEdits }
+        : {}),
     }),
   );
   const withAbort = options?.abortSignal

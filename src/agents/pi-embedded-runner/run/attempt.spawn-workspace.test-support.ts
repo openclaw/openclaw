@@ -263,6 +263,9 @@ vi.mock("../skills-runtime.js", () => ({
     shouldLoadSkillEntries: false,
     skillEntries: undefined,
   }),
+  // Stub the skill-template seeder — tests using this support module
+  // don't need plan-template emission to fire (#67541).
+  applySkillPlanTemplateSeed: () => null,
 }));
 
 vi.mock("../context-engine-maintenance.js", () => ({
