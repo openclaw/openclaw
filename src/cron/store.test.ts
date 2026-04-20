@@ -238,6 +238,40 @@ describe("cron store", () => {
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(payload.jobs[0].createdAtMs + 60_000);
   });
 
+  it("recreates a missing config file without rewriting unchanged state", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const payload = makeStore("job-1", true);
+    payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
+
+    await saveCronStore(store.storePath, payload);
+    await loadCronStore(store.storePath);
+    const stateRawBefore = await fs.readFile(statePath, "utf-8");
+    await fs.rm(store.storePath);
+
+    const renamedDestinations: string[] = [];
+    const origRename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
+      renamedDestinations.push(String(dest));
+      return origRename(src, dest);
+    });
+
+    try {
+      await saveCronStore(store.storePath, payload);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const config = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
+    const stateRawAfter = await fs.readFile(statePath, "utf-8");
+
+    expect(config.jobs[0].id).toBe("job-1");
+    expect(config.jobs[0].state).toEqual({});
+    expect(stateRawAfter).toBe(stateRawBefore);
+    expect(renamedDestinations).toContain(store.storePath);
+    expect(renamedDestinations).not.toContain(statePath);
+  });
+
   it("migrates legacy inline state into the state sidecar", async () => {
     const store = await makeStorePath();
     const statePath = store.storePath.replace(/\.json$/, "-state.json");

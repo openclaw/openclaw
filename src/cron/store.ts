@@ -232,6 +232,25 @@ async function atomicWrite(filePath: string, content: string, dirMode = 0o700): 
   await setSecureFileMode(filePath);
 }
 
+async function serializedFileNeedsWrite(
+  filePath: string,
+  expectedJson: string,
+  contentChanged: boolean,
+): Promise<boolean> {
+  if (contentChanged) {
+    return true;
+  }
+  try {
+    const diskJson = await fs.promises.readFile(filePath, "utf-8");
+    return diskJson !== expectedJson;
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return true;
+    }
+    throw err;
+  }
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
@@ -247,22 +266,10 @@ export async function saveCronStore(
   const configChanged = cache?.configJson !== configJson;
   const stateChanged = cache?.stateJson !== stateJson;
   const migrating = cache?.needsSplitMigration === true;
-  let stateNeedsWrite = stateChanged;
+  const configNeedsWrite = await serializedFileNeedsWrite(storePath, configJson, configChanged);
+  const stateNeedsWrite = await serializedFileNeedsWrite(statePath, stateJson, stateChanged);
 
-  if (!stateNeedsWrite) {
-    try {
-      const diskStateJson = await fs.promises.readFile(statePath, "utf-8");
-      stateNeedsWrite = diskStateJson !== stateJson;
-    } catch (err) {
-      if ((err as { code?: unknown })?.code === "ENOENT") {
-        stateNeedsWrite = true;
-      } else {
-        throw err;
-      }
-    }
-  }
-
-  if (!configChanged && !stateNeedsWrite && !migrating) {
+  if (!configNeedsWrite && !stateNeedsWrite && !migrating) {
     return;
   }
 
@@ -274,7 +281,7 @@ export async function saveCronStore(
     updatedCache.stateJson = stateJson;
   }
 
-  if (configChanged || migrating) {
+  if (configNeedsWrite || migrating) {
     // Determine backup need: only when config actually changed (not migration-only).
     const skipBackup = opts?.skipBackup === true || !configChanged;
     if (!skipBackup) {
