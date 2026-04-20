@@ -472,8 +472,22 @@ function expectRegistryErrorDiagnostic(params: {
 function createWarningLogger(warnings: string[]) {
   return {
     info: () => {},
-    warn: (msg: string) => warnings.push(msg),
+    warn: (msg: string, _meta?: Record<string, unknown>) => warnings.push(msg),
     error: () => {},
+  };
+}
+
+function createStructuredWarningLogger() {
+  const calls: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+  return {
+    calls,
+    logger: {
+      info: () => {},
+      warn: (message: string, meta?: Record<string, unknown>) => {
+        calls.push({ message, meta });
+      },
+      error: () => {},
+    },
   };
 }
 
@@ -1677,6 +1691,96 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ]);
 
     clearPluginCommands();
+  });
+
+  it("sanitizes plugin scope debug caller metadata while preserving scope diagnostics", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "debug-scope-plugin",
+      filename: "debug-scope-plugin.cjs",
+      body: `module.exports = { id: "debug-scope-plugin", register() {} };`,
+    });
+    const { calls, logger } = createStructuredWarningLogger();
+
+    loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      logger,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["debug-scope-plugin"],
+        },
+      },
+      onlyPluginIds: ["debug-scope-plugin"],
+    });
+    expect(calls).toEqual([]);
+
+    withEnv({ OPENCLAW_DEBUG_PLUGIN_SCOPE: "1" }, () => {
+      loadOpenClawPlugins({
+        cache: false,
+        activate: false,
+        logger,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["debug-scope-plugin"],
+          },
+        },
+        onlyPluginIds: ["debug-scope-plugin"],
+      });
+
+      loadOpenClawPlugins({
+        cache: false,
+        logger,
+        workspaceDir: plugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: ["debug-scope-plugin"],
+          },
+        },
+        onlyPluginIds: ["debug-scope-plugin"],
+      });
+    });
+
+    const debugCalls = calls.filter((call) => call.message === "[plugin-scope-debug]");
+    expect(debugCalls).toHaveLength(3);
+
+    const pluginLoadCalls = debugCalls.filter((call) => call.meta?.tag === "plugin-load");
+    const memoryStateClearCalls = debugCalls.filter(
+      (call) => call.meta?.tag === "memory-state-clear",
+    );
+
+    expect(pluginLoadCalls).toHaveLength(2);
+    expect(memoryStateClearCalls).toHaveLength(1);
+
+    for (const call of debugCalls) {
+      expect(call.meta).toEqual(
+        expect.objectContaining({
+          onlyPluginIds: ["debug-scope-plugin"],
+          memorySlotInScope: false,
+          shouldActivate: expect.any(Boolean),
+          cacheKey: expect.any(String),
+          caller: expect.any(Array),
+        }),
+      );
+      expect(call.meta?.cacheKey).toContain("debug-scope-plugin");
+      expect(Array.isArray(call.meta?.caller)).toBe(true);
+      const callerFrames = call.meta?.caller as unknown[];
+      expect(callerFrames.length).toBeGreaterThan(0);
+      for (const frame of callerFrames) {
+        expect(typeof frame).toBe("string");
+        expect(frame).not.toMatch(/\/[^\s)]+\.(?:ts|js):\d+:\d+/);
+        expect(frame).not.toMatch(/[A-Za-z]:\\[^\s)]+\.(?:ts|js):\d+:\d+/);
+        expect(frame).not.toMatch(/:\d+:\d+/);
+      }
+    }
+
+    expect(pluginLoadCalls.map((call) => call.meta?.shouldActivate)).toEqual([false, true]);
+    expect(memoryStateClearCalls.map((call) => call.meta?.shouldActivate)).toEqual([true]);
   });
 
   it("clears plugin agent harnesses during activating reloads", () => {
