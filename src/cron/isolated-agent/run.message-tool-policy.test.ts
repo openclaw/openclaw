@@ -120,6 +120,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   function createMessageToolExecutor(
     overrides: Partial<Parameters<typeof createCronPromptExecutor>[0]>,
   ) {
+    const resolvedDelivery = overrides.resolvedDelivery ?? {};
+
     return createCronPromptExecutor({
       cfg: {},
       cfgWithAgentDefaults: {},
@@ -145,6 +147,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       cronSession: makeCronSession() as MutableCronSession,
       abortReason: () => "aborted",
       ...overrides,
+      resolvedDelivery,
     });
   }
 
