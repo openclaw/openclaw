@@ -403,6 +403,8 @@ git push
 gh pr create --fill
 ```
 
+**OAuth fallback (no GitHub App installed)**: if `blink github clone` reports "No Blink GitHub App installation", it automatically falls back to the OAuth GitHub connector and pulls files via the Git Data API. You get all the source files (with binaries decoded correctly), but **no `.git` directory and no commit history** — `git push` and `gh pr create` will not work from the result. To get the full git workflow, install the Blink GitHub App at `blink.new/settings?tab=connectors`.
+
 For reading specific files without cloning, use the API:
 
 ```bash

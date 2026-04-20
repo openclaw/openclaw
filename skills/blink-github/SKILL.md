@@ -113,8 +113,11 @@ blink connector exec github /search/code GET '{"q":"function+repo:{owner}/{repo}
   not included in the workspace's GitHub App installation. Add it at
   `https://blink.new/settings?tab=connectors` → GitHub → Configure.
 - **`Please install the Blink GitHub App`** or `NO_INSTALLATION` error →
-  the workspace has never completed the App install. Run
-  `blink github status` for details; install at
+  the workspace has never completed the App install. `blink github clone`
+  will auto-fall-back to the OAuth GitHub connector and pull files via the
+  Git Data API (files only, **no `.git` history** — `git push` and
+  `gh pr create` won't work from the result). For full git workflow, run
+  `blink github status` and install the App at
   `https://blink.new/settings?tab=connectors`.
 - **Token in a URL shows up in history** → use `blink github clone` (which
   strips the token post-clone) instead of manual `git clone https://x-access-token:...`.
