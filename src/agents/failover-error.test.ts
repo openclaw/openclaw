@@ -375,6 +375,13 @@ describe("failover-error", () => {
     });
     expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
     expect(isTimeoutError(wrappedLockError)).toBe(false);
+
+    const abortWrappedLockError = Object.assign(new Error("request was aborted"), {
+      name: "AbortError",
+      cause: new Error(sessionLockMessage),
+    });
+    expect(resolveFailoverReasonFromError(abortWrappedLockError)).toBeNull();
+    expect(isTimeoutError(abortWrappedLockError)).toBe(false);
   });
 
   it("classifies provider-scoped generic upstream errors for failover", () => {
