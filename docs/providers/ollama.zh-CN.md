@@ -189,7 +189,8 @@ ollama pull mistral
     ```bash
 
 export OLLAMA_API_KEY="ollama-local"
-```
+
+````
 
     <Tip>
     如果设置了 `OLLAMA_API_KEY`，你可以在提供商条目中省略 `apiKey`，OpenClaw 会为可用性检查填充它。
@@ -266,7 +267,7 @@ export OLLAMA_API_KEY="ollama-local"
     },
   },
 }
-```
+````
 
 ## Ollama 网络搜索
 

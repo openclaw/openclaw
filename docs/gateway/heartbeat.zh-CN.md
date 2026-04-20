@@ -312,12 +312,12 @@ channels:
 
 ### 常见模式
 
-| 目标                                     | 配置                                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 默认行为（静默 OK，警报开启） | _(无需配置)_                                                                     |
-| 完全静默（无消息，无指示器） | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| 仅指示器（无消息）             | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| 仅在一个通道中显示 OK                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| 目标                          | 配置                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| 默认行为（静默 OK，警报开启） | _(无需配置)_                                                                             |
+| 完全静默（无消息，无指示器）  | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
+| 仅指示器（无消息）            | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| 仅在一个通道中显示 OK         | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md（可选）
 
