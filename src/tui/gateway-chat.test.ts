@@ -425,6 +425,10 @@ describe("resolveGatewayConnection", () => {
 });
 
 describe("GatewayChatClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
