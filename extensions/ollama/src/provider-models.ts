@@ -55,6 +55,21 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   }
 }
 
+// Stricter SSRF policy used by the web-search runtime path. The web-search
+// base URL is user-/config-controlled and forwards an attacker-influenced
+// query body, so we refuse private/loopback/link-local targets even when
+// allowed for local-daemon paths. See issue #69132 review.
+export function buildOllamaWebSearchSsrFPolicy(baseUrl: string) {
+  const base = buildOllamaBaseUrlSsrFPolicy(baseUrl);
+  if (!base) {
+    return undefined;
+  }
+  return {
+    ...base,
+    allowPrivateNetwork: false,
+  };
+}
+
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   if (!configuredBaseUrl) {
     return OLLAMA_DEFAULT_BASE_URL;

@@ -84,6 +84,12 @@ Optional web-search base URL override (for custom proxies that mirror the
 
 If no override is set, OpenClaw calls `https://ollama.com/api/web_search`.
 
+The web-search path uses a stricter SSRF policy than the local-daemon path:
+requests may only leave to the hostname you configured, and private / loopback
+/ link-local targets are refused even when the `baseUrl` resolves to them.
+Run your custom proxy on a publicly routable hostname; the local-daemon
+`models.providers.ollama.baseUrl` setting is unaffected by this policy.
+
 OpenClaw reads the API key from `models.providers.ollama.apiKey` or the
 `OLLAMA_API_KEY` environment variable. `ollama signin` writes this key for
 you on the local host.
@@ -102,8 +108,12 @@ at setup time confirming that queries will be sent to
 
 - No web-search-specific API key field is required; the provider reuses the
   normal Ollama credential only when calling Ollama Cloud.
-- OpenClaw warns during setup if `ollama signin` has not been completed, but
-  it does not block selection.
+- Setup probes `/api/me` using the resolved Ollama credential. If you have
+  `OLLAMA_API_KEY` (or `models.providers.ollama.apiKey`) set, OpenClaw will
+  treat you as signed in without requiring a local `ollama signin` artifact.
+- When Ollama Cloud is the target and no credential is configured,
+  `runOllamaWebSearch` fails fast with an actionable error before the
+  network round-trip.
 - Runtime auto-detect can fall back to Ollama Web Search when no higher-priority
   credentialed provider is configured.
 - The provider uses Ollama Cloud's `/api/web_search` endpoint.

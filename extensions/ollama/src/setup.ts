@@ -120,13 +120,23 @@ function formatOllamaPullStatus(status: string): { text: string; hidePercent: bo
 
 export async function checkOllamaCloudAuth(
   baseUrl: string,
+  options?: { apiKey?: string },
 ): Promise<{ signedIn: boolean; signinUrl?: string }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
+    const headers: Record<string, string> = {};
+    // Attach the Ollama API key when provided so the preflight uses the same
+    // credential path as the caller's runtime request. Without this, a user
+    // who has a valid `OLLAMA_API_KEY` but no local `ollama signin` artifact
+    // would be falsely told to sign in during setup.
+    if (options?.apiKey) {
+      headers.Authorization = `Bearer ${options.apiKey}`;
+    }
     const { response, release } = await fetchWithSsrFGuard({
       url: `${apiBase}/api/me`,
       init: {
         method: "POST",
+        headers,
         signal: AbortSignal.timeout(5000),
       },
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),

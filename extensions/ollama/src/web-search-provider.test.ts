@@ -149,7 +149,7 @@ describe("ollama web search provider", () => {
 
     const provider = createOllamaWebSearchProvider();
     const tool = provider.createTool({
-      config: createOllamaConfig(),
+      config: createOllamaConfig({ apiKey: "cloud-key" }),
     } as never);
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -191,9 +191,27 @@ describe("ollama web search provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    await expect(runOllamaWebSearch({ query: "latest openclaw release" })).rejects.toThrow(
-      "ollama signin",
-    );
+    await expect(
+      runOllamaWebSearch({
+        config: createOllamaConfig({ apiKey: "cloud-key" }),
+        query: "latest openclaw release",
+      }),
+    ).rejects.toThrow("ollama signin");
+  });
+
+  it("fails fast when Ollama Cloud is the target and no credential is configured", async () => {
+    const original = process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_API_KEY;
+    try {
+      await expect(
+        runOllamaWebSearch({ config: createOllamaConfig(), query: "q" }),
+      ).rejects.toThrow(/ollama signin|OLLAMA_API_KEY/);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      if (original !== undefined) {
+        process.env.OLLAMA_API_KEY = original;
+      }
+    }
   });
 
   it("warns when Ollama is not reachable during setup for custom self-hosted bases", async () => {
@@ -332,5 +350,49 @@ describe("ollama web search provider", () => {
         process.env.OLLAMA_API_KEY = original;
       }
     }
+  });
+
+  it("emits the cloud-routing notice for ollama.com variants (port, mixed case)", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ name: "user@example.com" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    for (const variant of [
+      "https://ollama.com:443",
+      "https://OLLAMA.COM/",
+      "https://ollama.com/v1",
+    ]) {
+      const config = createOllamaConfigWithWebSearchBaseUrl(variant);
+      const { notes, prompter } = createSetupNotes();
+      await testing.warnOllamaWebSearchPrereqs({ config, prompter });
+      expect(notes[0]?.title).toBe("Ollama Web Search (Cloud)");
+    }
+  });
+
+  it("treats the user as signed in when a cloud API key is resolved", async () => {
+    // /api/me returns 200 when the preflight attaches the bearer token.
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ name: "user@example.com" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    const config = createOllamaConfig({ apiKey: "resolved-cloud-key" });
+    const { notes, prompter } = createSetupNotes();
+
+    await testing.warnOllamaWebSearchPrereqs({ config, prompter });
+
+    // Only the cloud-routing notice; no signin-missing warning.
+    expect(notes.map((n) => n.title)).toEqual(["Ollama Web Search (Cloud)"]);
+    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
+      init?: { headers?: Record<string, string> };
+    };
+    expect(call.init?.headers?.Authorization).toBe("Bearer resolved-cloud-key");
   });
 });

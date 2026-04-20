@@ -21,7 +21,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import {
-  buildOllamaBaseUrlSsrFPolicy,
+  buildOllamaWebSearchSsrFPolicy,
   fetchOllamaModels,
   resolveOllamaApiBase,
 } from "./provider-models.js";
@@ -118,6 +118,14 @@ export async function runOllamaWebSearch(params: {
 
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
   const apiKey = resolveOllamaWebSearchApiKey(params.config);
+  // Fail fast when the provider is routed at Ollama Cloud without a usable
+  // credential. Otherwise the request always 401s on the server and the user
+  // sees the generic signin error only after a network round-trip.
+  if (isOllamaCloudHost(baseUrl) && !apiKey) {
+    throw new Error(
+      "Ollama web search requires an Ollama Cloud credential. Run `ollama signin` or set OLLAMA_API_KEY.",
+    );
+  }
   const count = resolveSearchCount(params.count, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
   const startedAt = Date.now();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -132,7 +140,7 @@ export async function runOllamaWebSearch(params: {
       body: JSON.stringify({ query, max_results: count }),
       signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
     },
-    policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
+    policy: buildOllamaWebSearchSsrFPolicy(baseUrl),
     auditContext: "ollama-web-search.search",
   });
 
@@ -191,7 +199,12 @@ async function warnOllamaWebSearchPrereqs(params: {
   };
 }): Promise<OpenClawConfig> {
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
-  if (baseUrl === OLLAMA_CLOUD_BASE_URL) {
+  const apiKey = resolveOllamaWebSearchApiKey(params.config);
+  // Use the host-aware cloud check so `https://ollama.com:443`, mixed-case
+  // hostnames, trailing slashes, etc. all match the same notice/allowance
+  // as the runtime path instead of falling through a strict string compare.
+  const routesToCloud = isOllamaCloudHost(baseUrl);
+  if (routesToCloud) {
     await params.prompter.note(
       [
         "Ollama Web Search sends your search queries to Ollama Cloud:",
@@ -218,7 +231,11 @@ async function warnOllamaWebSearchPrereqs(params: {
     }
   }
 
-  const auth = await checkOllamaCloudAuth(baseUrl);
+  // Pass the runtime credential into the preflight so a user with a valid
+  // OLLAMA_API_KEY (but no local `ollama signin` artifact) isn't falsely
+  // warned to sign in. Only attach on the cloud path; custom proxies never
+  // see the Ollama API key.
+  const auth = await checkOllamaCloudAuth(baseUrl, routesToCloud ? { apiKey } : undefined);
   if (!auth.signedIn) {
     await params.prompter.note(
       [

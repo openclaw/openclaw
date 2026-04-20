@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
+import { buildOllamaBaseUrlSsrFPolicy, buildOllamaWebSearchSsrFPolicy } from "./provider-models.js";
 
 describe("buildOllamaBaseUrlSsrFPolicy", () => {
   it("pins requests to the configured Ollama hostname for HTTP(S) URLs", () => {
@@ -37,5 +37,28 @@ describe("buildOllamaBaseUrlSsrFPolicy", () => {
     expect(buildOllamaBaseUrlSsrFPolicy("ftp://ollama.example.com")).toBeUndefined();
     expect(buildOllamaBaseUrlSsrFPolicy("not-a-url")).toBeUndefined();
     expect(buildOllamaBaseUrlSsrFPolicy("http://metadata.google.internal")).toBeUndefined();
+  });
+});
+
+describe("buildOllamaWebSearchSsrFPolicy", () => {
+  it("pins to the host and refuses private-network targets", () => {
+    expect(buildOllamaWebSearchSsrFPolicy("https://ollama.com")).toEqual({
+      hostnameAllowlist: ["ollama.com"],
+      allowPrivateNetwork: false,
+    });
+    expect(buildOllamaWebSearchSsrFPolicy("https://proxy.example.com")).toEqual({
+      hostnameAllowlist: ["proxy.example.com"],
+      allowPrivateNetwork: false,
+    });
+    expect(buildOllamaWebSearchSsrFPolicy("http://127.0.0.1:11434")).toEqual({
+      hostnameAllowlist: ["127.0.0.1"],
+      allowPrivateNetwork: false,
+    });
+  });
+
+  it("returns no allowlist for invalid or blocked hosts", () => {
+    expect(buildOllamaWebSearchSsrFPolicy("")).toBeUndefined();
+    expect(buildOllamaWebSearchSsrFPolicy("ftp://ollama.example.com")).toBeUndefined();
+    expect(buildOllamaWebSearchSsrFPolicy("http://metadata.google.internal")).toBeUndefined();
   });
 });
