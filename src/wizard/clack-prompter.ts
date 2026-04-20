@@ -42,6 +42,16 @@ function buildOptionSearchText<T>(option: Option<T>): string {
   return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
 }
 
+function normalizePromptOptionLabel<T>(option: { label?: string; value?: T }): string {
+  const rawLabel = typeof option.label === "string" ? option.label : undefined;
+  const label = rawLabel?.trim() ?? "";
+  if (rawLabel !== undefined && label.length > 0) {
+    return rawLabel;
+  }
+  const fallback = option.value == null ? "" : String(option.value).trim();
+  return fallback.length > 0 ? fallback : "Unnamed option";
+}
+
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
   const tokens = normalizeSearchTokens(search);
   if (tokens.length === 0) {
@@ -67,7 +77,7 @@ export function createClackPrompter(): WizardPrompter {
         await select({
           message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
-            const base = { value: opt.value, label: opt.label };
+            const base = { value: opt.value, label: normalizePromptOptionLabel(opt) };
             return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValue: params.initialValue,
@@ -75,7 +85,7 @@ export function createClackPrompter(): WizardPrompter {
       ),
     multiselect: async (params) => {
       const options = params.options.map((opt) => {
-        const base = { value: opt.value, label: opt.label };
+        const base = { value: opt.value, label: normalizePromptOptionLabel(opt) };
         return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
       }) as Option<(typeof params.options)[number]["value"]>[];
 
