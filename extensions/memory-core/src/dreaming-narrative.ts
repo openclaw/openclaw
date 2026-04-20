@@ -932,9 +932,21 @@ export async function generateAndAppendDreamNarrative(params: {
     try {
       await params.subagent.deleteSession({ sessionKey });
     } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
+      const errMessage = formatErrorMessage(cleanupErr);
+      // `sessions.delete` requires operator.admin. When dreaming runs from a
+      // background cron (no inherited operator scope) the plugin subagent
+      // falls through to a synthetic operator client that intentionally
+      // defaults to [operator.write] and does not mint admin — see
+      // `rejects fallback session deletion without minting admin scope` in
+      // src/gateway/server-plugins.test.ts. That path is guaranteed to reject
+      // delete with "missing scope: operator.admin" on every cycle, so treat
+      // it as an expected no-op rather than emitting noise. Genuine failures
+      // (any other error) are still surfaced as warn.
+      if (!errMessage.includes("missing scope: operator.admin")) {
+        params.logger.warn(
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${errMessage}`,
+        );
+      }
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {

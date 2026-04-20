@@ -678,6 +678,31 @@ describe("generateAndAppendDreamNarrative", () => {
     );
   });
 
+  it("does not warn when cleanup fails with missing operator.admin scope (background cron fallback path)", async () => {
+    // The plugin subagent running from a background cron falls through to a
+    // synthetic operator client without admin scope (see
+    // `rejects fallback session deletion without minting admin scope` in
+    // src/gateway/server-plugins.test.ts). `sessions.delete` requires
+    // operator.admin, so this error fires on every dreaming cycle and is
+    // expected — it should not surface as a user-visible warning.
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.deleteSession.mockRejectedValue(new Error("missing scope: operator.admin"));
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["some memory"] },
+      logger,
+    });
+
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
+  });
+
   it("handles subagent error gracefully", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
