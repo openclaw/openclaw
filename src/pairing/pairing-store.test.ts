@@ -3,7 +3,16 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -64,7 +73,9 @@ import {
 
 let fixtureRoot = "";
 let caseId = 0;
-let randomIntSpy: ReturnType<typeof vi.spyOn<typeof crypto, "randomInt">>;
+type RandomIntSync = (minOrMax: number, max?: number) => number;
+
+let randomIntSpy: MockInstance<RandomIntSync>;
 let nextRandomInt = 0;
 
 beforeAll(async () => {
@@ -80,7 +91,7 @@ afterAll(async () => {
 beforeEach(() => {
   clearPairingAllowFromReadCacheForTest();
   nextRandomInt = 0;
-  randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as typeof randomIntSpy;
+  randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as MockInstance<RandomIntSync>;
   setDefaultRandomIntMock();
 });
 
@@ -89,12 +100,12 @@ afterAll(() => {
 });
 
 function setDefaultRandomIntMock() {
-  randomIntSpy.mockImplementation(((minOrMax: number, max?: number) => {
+  randomIntSpy.mockImplementation((minOrMax: number, max?: number) => {
     const min = max === undefined ? 0 : minOrMax;
     const upper = max === undefined ? minOrMax : max;
     const span = Math.max(upper - min, 1);
     return min + (nextRandomInt++ % span);
-  }) as typeof crypto.randomInt);
+  });
 }
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
@@ -240,9 +251,7 @@ async function withMockRandomInt(params: {
 
     if (params.sequence) {
       let idx = 0;
-      randomIntSpy.mockImplementation(
-        (() => params.sequence?.[idx++] ?? params.fallbackValue ?? 1) as typeof crypto.randomInt,
-      );
+      randomIntSpy.mockImplementation(() => params.sequence?.[idx++] ?? params.fallbackValue ?? 1);
     }
 
     await params.run();

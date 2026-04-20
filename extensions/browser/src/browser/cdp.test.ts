@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import "./browser-security-runtime.test-helper.js";
+import "../../test-support/browser-security-runtime.mock.js";
 import { isDirectCdpWebSocketEndpoint, isWebSocketUrl } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import { parseHttpUrl } from "./config.js";

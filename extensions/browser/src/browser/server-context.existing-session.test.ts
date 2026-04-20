@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./browser-security-runtime.test-helper.js";
+import "../../test-support/browser-security-runtime.mock.js";
 import type { BrowserServerState } from "./server-context.js";
 
 vi.mock("./chrome-mcp.js", () => ({

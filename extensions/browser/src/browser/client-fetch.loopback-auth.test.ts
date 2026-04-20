@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./browser-security-runtime.test-helper.js";
+import "../../test-support/browser-security-runtime.mock.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {

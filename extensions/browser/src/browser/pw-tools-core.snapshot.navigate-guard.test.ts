@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import "./browser-security-runtime.test-helper.js";
+import "../../test-support/browser-security-runtime.mock.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
