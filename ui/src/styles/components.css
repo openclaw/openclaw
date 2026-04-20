@@ -2594,8 +2594,8 @@ td.data-table-key-col {
 .chat-bubble {
   border: 1px solid transparent;
   background: var(--card);
-  border-radius: var(--radius-lg);
-  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  padding: 3px 4px;
   min-width: 0;
 }
 
@@ -4709,7 +4709,7 @@ details[open] > .ov-expandable-toggle::after {
 }
 
 .chat-bubble:has(.chat-tool-msg-collapse:not([open])) {
-  padding: 2px !important;
+  padding: 0px !important;
   border: 2px solid var(--border) !important;
   background: var(--card) !important;
 }
