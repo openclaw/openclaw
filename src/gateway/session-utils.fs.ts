@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
-import { SAFE_SESSION_ID_RE } from "../config/sessions/paths.js";
+import { resolveMainSessionKeyFromConfig } from "../config/sessions/main-session.runtime.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -149,7 +149,26 @@ function resolveMainSessionTranscriptFiles(
   sessionFile?: string,
 ): string[] | null {
   const context = resolveSessionMessagesStoreContext(sessionId, storePath, sessionFile);
-  if (!context?.sessionsDir || context.key !== "agent:main:main") {
+  if (!context?.sessionsDir || !context.key) {
+    return null;
+  }
+  // Activate the chained read only for the configured main session key, not a hardcoded
+  // literal. `resolveMainSessionKeyFromConfig` returns "global", "agent:<default>:<mainKey>",
+  // etc., depending on `session.scope` / `session.mainKey` / `agents.default`. For any
+  // other session (isolated, subagent, heartbeat, explicit agent session) the legacy
+  // single-file path is correct.
+  let configuredMainKey: string;
+  try {
+    configuredMainKey = resolveMainSessionKeyFromConfig();
+  } catch {
+    return null;
+  }
+  if (context.key !== configuredMainKey) {
+    return null;
+  }
+  const entry = context.entry as Record<string, unknown> | undefined;
+  const rawCheckpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(rawCheckpoints) || rawCheckpoints.length === 0) {
     return null;
   }
   const files: string[] = [];
@@ -162,31 +181,40 @@ function resolveMainSessionTranscriptFiles(
     seen.add(normalized);
     files.push(normalized);
   };
-  const entry = context.entry as Record<string, unknown> | undefined;
-  const rawCheckpoints = entry?.compactionCheckpoints;
-  const checkpointSessionIds = Array.isArray(rawCheckpoints)
-    ? rawCheckpoints
-        .map((checkpoint) => {
-          if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
-            return null;
-          }
-          const checkpointRecord = checkpoint as Record<string, unknown>;
-          return typeof checkpointRecord.sessionId === "string" ? checkpointRecord.sessionId : null;
-        })
-        .filter((value): value is string => typeof value === "string")
-    : [];
-  const orderedSessionIds = Array.from(
-    new Set([...checkpointSessionIds, sessionId].filter((value) => SAFE_SESSION_ID_RE.test(value))),
-  );
-  for (const chainedSessionId of orderedSessionIds) {
-    const filePath = path.join(context.sessionsDir, `${chainedSessionId}.jsonl`);
-    if (fs.existsSync(filePath)) {
-      pushFile(filePath);
+  // Walk the checkpoint chain in recorded order (oldest first). Each entry is a
+  // SessionCompactionCheckpoint whose `preCompaction.sessionFile` points at the actual
+  // pre-compaction snapshot written by session-compaction-checkpoints.ts (named like
+  // `<session>.checkpoint.<uuid>.jsonl`). Never reconstruct `<sessionId>.jsonl` — that
+  // does not match the on-disk convention. No `.reset.*` / `.bak` / `.deleted.*` variant
+  // scanning: `.bak` is a pre-compaction snapshot the chain already represents through
+  // predecessor entries, and replaying `.reset.*` archives would resurface content that
+  // the user explicitly cleared via /reset, breaking reset semantics.
+  for (const checkpoint of rawCheckpoints) {
+    if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+      continue;
     }
+    const checkpointRecord = checkpoint as Record<string, unknown>;
+    const preCompaction = checkpointRecord.preCompaction;
+    if (!preCompaction || typeof preCompaction !== "object" || Array.isArray(preCompaction)) {
+      continue;
+    }
+    const reference = (preCompaction as Record<string, unknown>).sessionFile;
+    if (typeof reference === "string" && reference.trim()) {
+      pushFile(reference.trim());
+    }
+  }
+  // Append the current session's primary transcript as the newest segment, so the chain
+  // ends with live content.
+  const currentSessionFile = entry?.sessionFile;
+  if (typeof currentSessionFile === "string" && currentSessionFile.trim()) {
+    pushFile(currentSessionFile.trim());
   }
   if (files.length === 0) {
     return null;
   }
+  // Deterministic ordering: primary key is mtime (ascending), tie-break is filename
+  // localeCompare. fs.statSync is cached per path so it runs once per file, not
+  // O(N log N) times inside the comparator.
   const mtimeCache = new Map<string, number | null>();
   const getMtime = (filePath: string): number | null => {
     if (mtimeCache.has(filePath)) {
