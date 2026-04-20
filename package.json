@@ -1153,6 +1153,10 @@
       "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
       "default": "./dist/plugin-sdk/telegram-command-config.js"
     },
+    "./plugin-sdk/telegram-command-ui": {
+      "types": "./dist/plugin-sdk/telegram-command-ui.d.ts",
+      "default": "./dist/plugin-sdk/telegram-command-ui.js"
+    },
     "./plugin-sdk/text-autolink-runtime": {
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
