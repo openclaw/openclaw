@@ -55,6 +55,8 @@ export default {
       "@lit-labs/signals/": resolveUiDependency("@lit-labs/signals/"),
       lit: resolveUiDependency("lit"),
       "lit/": resolveUiDependency("lit/"),
+      "signal-polyfill": resolveUiDependency("signal-polyfill"),
+      "signal-polyfill/": resolveUiDependency("signal-polyfill/"),
       "signal-utils/": resolveUiDependency("signal-utils/"),
     },
   },
