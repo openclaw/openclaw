@@ -168,7 +168,7 @@ function makeNativeTelegramCommandMessage(params: {
     Body: params.body,
     ...TELEGRAM_DIRECT_MESSAGE,
     SessionKey: params.slashSessionKey,
-    CommandSource: "native",
+    CommandSource: "native" as const,
     CommandTargetSessionKey: params.targetSessionKey,
     CommandAuthorized: true,
   };
