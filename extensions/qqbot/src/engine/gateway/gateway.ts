@@ -24,6 +24,7 @@ import {
   sendInputNotify as senderSendInputNotify,
   createRawInputNotifyFn,
   accountToCreds,
+  acknowledgeInteraction,
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
 import type { InteractionEvent } from "../types.js";
@@ -237,14 +238,21 @@ async function startTypingForEvent(
 // ============ Interaction handler ============
 
 /**
- * Default INTERACTION_CREATE handler — resolves approval button clicks
- * via the registered PlatformAdapter.
+ * Default INTERACTION_CREATE handler — ACK the interaction and resolve
+ * approval button clicks via the registered PlatformAdapter.
  */
 function createApprovalInteractionHandler(
   account: GatewayAccount,
   log?: EngineLogger,
 ): (event: InteractionEvent) => void {
   return (event) => {
+    const creds = accountToCreds(account);
+
+    // ACK the interaction first to prevent QQ from showing a timeout error.
+    void acknowledgeInteraction(creds, event.id).catch((err) => {
+      log?.error(`Interaction ACK failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
     const buttonData = event.data?.resolved?.button_data ?? "";
     const parsed = parseApprovalButtonData(buttonData);
     if (!parsed) {

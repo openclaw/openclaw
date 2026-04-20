@@ -11069,15 +11069,11 @@ snapshots:
 
   '@telegraf/types@7.1.0': {}
 
-<<<<<<< HEAD
-  '@thi.ng/bitstream@2.4.46':
-=======
   '@tencent-connect/qqbot-connector@1.1.0':
     dependencies:
       qrcode-terminal: 0.12.0
 
-  '@thi.ng/bitstream@2.4.45':
->>>>>>> d5d5db06dc (feat: 支持扫码绑定QQ机器人)
+  '@thi.ng/bitstream@2.4.46':
     dependencies:
       '@thi.ng/errors': 2.6.8
     optional: true
