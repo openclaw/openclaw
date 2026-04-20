@@ -291,7 +291,7 @@ function mergeConfiguredModelParams(params: {
 }): Record<string, unknown> | undefined {
   const agentDefaultsModels = params.cfg?.agents?.defaults?.models;
   const providerPrefix = `${params.provider}/`;
-  const bareModelId = params.modelId.startsWith(providerPrefix)
+  const bareModelId = params.modelId.toLowerCase().startsWith(providerPrefix.toLowerCase())
     ? params.modelId.slice(providerPrefix.length)
     : params.modelId;
   const lookupKey = normalizeLowercaseStringOrEmpty(`${params.provider}/${bareModelId}`);
