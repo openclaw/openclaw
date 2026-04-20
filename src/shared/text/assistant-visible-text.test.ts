@@ -621,6 +621,11 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText("Final response should contain <channel|> token")).toBe(
       "Final response should contain <channel|> token",
     );
+    expect(
+      sanitizeAssistantVisibleText(
+        "internal planning<channel|>The marker <channel|> splits streams.",
+      ),
+    ).toBe("The marker <channel|> splits streams.");
   });
 
   it("keeps the last non-empty visible segment when multiple channel delimiters appear", () => {

@@ -48,10 +48,40 @@ function looksLikeLeakedChannelDelimiterPrefix(prefix: string): boolean {
   return trimmed.length >= 120 && CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(trimmed);
 }
 
-function stripModelSpecialTokensImpl(
-  text: string,
-  options?: { afterLeakedChannelDelimiter?: boolean },
-): string {
+function getRecentChannelDelimiterPrefix(text: string, start: number): string {
+  const previousDelimiterIndex = text.toLowerCase().lastIndexOf("<channel|>", start - 1);
+  const previousDelimiterEnd =
+    previousDelimiterIndex >= 0 ? previousDelimiterIndex + "<channel|>".length : 0;
+  return text.slice(previousDelimiterEnd, start);
+}
+
+function stripTrailingChannelDelimiters(text: string): string {
+  let next = text;
+
+  while (next) {
+    const codeRegions = findCodeRegions(next);
+    let end = next.length;
+    while (end > 0 && /\s/.test(next[end - 1] ?? "")) {
+      end -= 1;
+    }
+    const start = end - "<channel|>".length;
+    if (start < 0) {
+      return next;
+    }
+    const candidate = next.slice(start, end);
+    if (!/^<channel\|>$/i.test(candidate)) {
+      return next;
+    }
+    if (isInsideCode(start, codeRegions) || overlapsCodeRegion(start, end, codeRegions)) {
+      return next;
+    }
+    next = next.slice(0, start) + next.slice(end);
+  }
+
+  return next;
+}
+
+function stripModelSpecialTokensImpl(text: string): string {
   if (!text) {
     return text;
   }
@@ -72,17 +102,16 @@ function stripModelSpecialTokensImpl(
     if (
       !isInsideCode(start, codeRegions) &&
       !overlapsCodeRegion(start, end, codeRegions) &&
-      (options?.afterLeakedChannelDelimiter ||
-        looksLikeLeakedChannelDelimiterPrefix(text.slice(0, start)))
+      looksLikeLeakedChannelDelimiterPrefix(getRecentChannelDelimiterPrefix(text, start))
     ) {
       channelDelimiterMatches.push({ start, end });
     }
   }
   for (let idx = channelDelimiterMatches.length - 1; idx >= 0; idx -= 1) {
     const channelDelimiterMatch = channelDelimiterMatches[idx];
-    const visibleSuffix = stripModelSpecialTokensImpl(text.slice(channelDelimiterMatch.end), {
-      afterLeakedChannelDelimiter: true,
-    });
+    const visibleSuffix = stripTrailingChannelDelimiters(
+      stripModelSpecialTokensImpl(text.slice(channelDelimiterMatch.end)),
+    );
     if (!visibleSuffix.trim()) {
       continue;
     }
@@ -93,9 +122,7 @@ function stripModelSpecialTokensImpl(
     );
   }
   if (channelDelimiterMatches.length > 0) {
-    return options?.afterLeakedChannelDelimiter
-      ? text.slice(0, channelDelimiterMatches[0].start)
-      : "";
+    return "";
   }
 
   let out = "";
