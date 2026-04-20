@@ -1,7 +1,7 @@
 import { vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
-import { setMSTeamsRuntime } from "../runtime.js";
+import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
 
@@ -10,7 +10,7 @@ type MessageHandlerDepsOptions = {
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
-  resolveAgentRoute?: ReturnType<typeof vi.fn>;
+  resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
 };
 
 export function createMessageHandlerDeps(
@@ -33,39 +33,15 @@ export function createMessageHandlerDeps(
       matchedBy: "default" as const,
     }));
 
-  setMSTeamsRuntime({
-    logging: { shouldLogVerbose: () => false },
-    system: { enqueueSystemEvent },
-    channel: {
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
-      },
-      pairing: {
-        readAllowFromStore,
-        upsertPairingRequest,
-      },
-      text: {
-        hasControlCommand: () => false,
-        resolveTextChunkLimit: () => 4000,
-      },
-      routing: { resolveAgentRoute },
-      reply: {
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
-      },
-      session: {
-        recordInboundSession,
-        resolveStorePath: () => "/tmp/test-store",
-      },
-    },
-  } as unknown as PluginRuntime);
+  installMSTeamsTestRuntime({
+    enqueueSystemEvent,
+    readAllowFromStore,
+    upsertPairingRequest,
+    recordInboundSession,
+    resolveAgentRoute,
+    resolveTextChunkLimit: () => 4000,
+    resolveStorePath: () => "/tmp/test-store",
+  });
 
   const conversationStore = {
     get: vi.fn(async () => null),
