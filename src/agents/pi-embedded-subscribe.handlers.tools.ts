@@ -37,7 +37,6 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
-import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import {
   buildToolMutationState,
   isSameToolActionType,
