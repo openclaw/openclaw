@@ -22,10 +22,7 @@ export function mergeTelegramAccountConfig(
     defaultAccount: _ignoredDefaultAccount,
     groups: channelGroups,
     ...base
-  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
+  } = (cfg.channels?.telegram ?? {});
   const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
 
   // Multi-account bots must not inherit channel-level groups unless explicitly set.

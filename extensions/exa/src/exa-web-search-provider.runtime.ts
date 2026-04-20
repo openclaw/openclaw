@@ -386,7 +386,7 @@ export async function executeExaWebSearchProviderTool(
     ctx.searchConfig,
     "exa",
     resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
-  ) as SearchConfigRecord | undefined;
+  );
   const params = args;
   const exaConfig = resolveExaConfig(searchConfig);
   const apiKey = resolveExaApiKey(exaConfig);

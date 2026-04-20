@@ -262,7 +262,7 @@ export async function executeKimiWebSearchProviderTool(
     ctx.searchConfig,
     "kimi",
     resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
-  ) as SearchConfigRecord | undefined;
+  );
   const unsupportedResponse = buildUnsupportedSearchFilterResponse(args, "kimi");
   if (unsupportedResponse) {
     return unsupportedResponse;
