@@ -64,6 +64,28 @@ vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: () => null,
 }));
 
+vi.mock("../agents/sandbox/config.js", () => ({
+  resolveSandboxConfigForAgent: () => ({ mode: "off" }),
+}));
+
+vi.mock("../agents/sandbox/tool-policy.js", () => ({
+  resolveSandboxToolPolicyForAgent: () => undefined,
+}));
+
+vi.mock("../agents/tool-policy-match.js", () => ({
+  isToolAllowedByPolicies: (_tool: string, policies: unknown[]) =>
+    policies.every((policy) => policy == null),
+}));
+
+vi.mock("../agents/tool-policy.js", () => ({
+  resolveToolProfilePolicy: (profile: unknown) =>
+    profile === "coding" || profile === "minimal" ? {} : undefined,
+}));
+
+vi.mock("./audit-tool-policy.js", () => ({
+  pickSandboxToolPolicy: () => undefined,
+}));
+
 describe("security audit install metadata findings", () => {
   let fixtureRoot = "";
   let sharedInstallMetadataStateDir = "";
