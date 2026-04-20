@@ -566,6 +566,89 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+// RFC 7230 token: "!" / "#" / "$" / "%" / "&" / "'" / "*" / "+" / "-" / "."
+//                 / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+const HTTP_HEADER_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function validateCorsHeaderList(
+  values: readonly string[] | undefined,
+  path: "gateway.http.cors.allowedHeaders" | "gateway.http.cors.exposedHeaders",
+): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const value of values ?? []) {
+    if (value.length === 0) {
+      issues.push({ path, message: `${path}: empty string is not a valid header name.` });
+      continue;
+    }
+    if (!HTTP_HEADER_TOKEN_RE.test(value)) {
+      issues.push({
+        path,
+        message: `${path}: "${value}" is not a valid HTTP header name (RFC 7230 token — letters, digits, and !#$%&'*+-.^_\`|~).`,
+      });
+    }
+  }
+  return issues;
+}
+
+function validateGatewayCors(config: OpenClawConfig): ConfigValidationIssue[] {
+  const cors = config.gateway?.http?.cors;
+  if (!cors?.enabled) {
+    return [];
+  }
+
+  if (cors.allowedOrigins?.includes("*") && cors.allowCredentials === true) {
+    return [
+      {
+        path: "gateway.http.cors",
+        message:
+          'gateway.http.cors: allowedOrigins ["*"] with allowCredentials=true is forbidden by the CORS spec. ' +
+          'Remove "*" from allowedOrigins or set allowCredentials=false.',
+      },
+    ];
+  }
+
+  const issues: ConfigValidationIssue[] = [];
+  for (const origin of cors.allowedOrigins ?? []) {
+    if (origin.length === 0) {
+      issues.push({
+        path: "gateway.http.cors.allowedOrigins",
+        message: "gateway.http.cors.allowedOrigins: empty string is not a valid origin.",
+      });
+      continue;
+    }
+    if (origin !== origin.trim()) {
+      issues.push({
+        path: "gateway.http.cors.allowedOrigins",
+        message: `gateway.http.cors.allowedOrigins: "${origin}" must not have leading or trailing whitespace.`,
+      });
+      continue;
+    }
+    if (origin === "*") {
+      continue;
+    }
+    try {
+      const canonical = new URL(origin).origin;
+      if (origin !== canonical) {
+        issues.push({
+          path: "gateway.http.cors.allowedOrigins",
+          message:
+            `gateway.http.cors.allowedOrigins: "${origin}" must be the canonical form "${canonical}" ` +
+            "(lowercase scheme and host, no userinfo, default ports omitted, no path, query, or fragment). " +
+            "Browsers send the canonical Origin header, and allowlist lookup is an exact string match.",
+        });
+      }
+    } catch {
+      issues.push({
+        path: "gateway.http.cors.allowedOrigins",
+        message: `gateway.http.cors.allowedOrigins: "${origin}" is not a valid origin URL.`,
+      });
+    }
+  }
+  issues.push(...validateCorsHeaderList(cors.allowedHeaders, "gateway.http.cors.allowedHeaders"));
+  issues.push(...validateCorsHeaderList(cors.exposedHeaders, "gateway.http.cors.exposedHeaders"));
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -627,6 +710,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const corsIssues = validateGatewayCors(validatedConfig);
+  if (corsIssues.length > 0) {
+    return { ok: false, issues: corsIssues };
   }
   return {
     ok: true,

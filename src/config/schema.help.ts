@@ -133,6 +133,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional HTTP response security headers applied by the gateway process itself. Prefer setting these at your reverse proxy when TLS terminates there.",
   "gateway.http.securityHeaders.strictTransportSecurity":
     "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
+  "gateway.http.cors":
+    "CORS configuration for Gateway HTTP API endpoints. Enables cross-origin browser access to a defined subset of API routes. Default disabled; explicit opt-in required.",
+  "gateway.http.cors.enabled":
+    "Enable CORS on API endpoints (chatCompletions, responses, toolsInvoke, models). Keep disabled unless browser clients need cross-origin access.",
+  "gateway.http.cors.allowedOrigins":
+    'Allowed origins for CORS. Exact match against the browser Origin header. Use ["*"] for wildcard (forces allowCredentials=false). Example: ["https://mysite.com"].',
+  "gateway.http.cors.allowCredentials":
+    'Send Access-Control-Allow-Credentials: true. Forbidden when allowedOrigins contains "*". Default: false.',
+  "gateway.http.cors.allowedHeaders":
+    "Extra request headers the browser may send. Authorization, Content-Type, and X-Request-ID are always implicitly allowed.",
+  "gateway.http.cors.exposedHeaders":
+    "Response headers the browser JS can read via fetch. No defaults.",
+  "gateway.http.cors.maxAge":
+    "Preflight cache duration in seconds (Access-Control-Max-Age). Default: 600.",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.token":
     "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",

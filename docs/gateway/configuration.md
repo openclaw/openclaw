@@ -455,6 +455,48 @@ placeholders such as `***` or shortened token values.
 
   </Accordion>
 
+  <Accordion title="Enable browser access (CORS)">
+    Allow browser clients to call Gateway HTTP API endpoints from a different origin:
+
+    ```json5
+    {
+      gateway: {
+        http: {
+          cors: {
+            enabled: true,
+            allowedOrigins: ["https://mysite.com", "http://localhost:3000"],
+          },
+        },
+      },
+    }
+    ```
+
+    CORS applies to these endpoints (when individually enabled):
+
+    | Path | Method |
+    |---|---|
+    | `/v1/chat/completions` | POST |
+    | `/v1/responses` | POST |
+    | `/tools/invoke` | POST |
+    | `/v1/models` | GET |
+
+    Other surfaces (Control UI, plugin routes, webhooks, health probes) are not CORS-covered.
+
+    Options:
+
+    - `allowedOrigins` — exact origins to allow. Use `["*"]` for public wildcard access.
+    - `allowCredentials` — send `Access-Control-Allow-Credentials: true`. Cannot be combined with `["*"]`.
+    - `allowedHeaders` — extra request headers to allow (Authorization, Content-Type, X-Request-ID are always allowed).
+    - `exposedHeaders` — response headers the browser can read.
+    - `maxAge` — preflight cache duration in seconds (default: 600).
+
+    Security notes:
+    - CORS never weakens auth. Tokens are still checked on every request.
+    - `allowedOrigins: ["*"]` should only be used for genuinely public read-only contexts.
+    - Putting `gateway.auth.token` directly in browser JS makes it a semi-public secret. For multi-user public frontends prefer a server-side proxy or short-lived tickets.
+
+  </Accordion>
+
   <Accordion title="Configure multi-agent routing">
     Run multiple isolated agents with separate workspaces and sessions:
 

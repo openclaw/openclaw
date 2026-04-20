@@ -343,9 +343,35 @@ export type GatewayHttpSecurityHeadersConfig = {
   strictTransportSecurity?: string | false;
 };
 
+export type GatewayHttpCorsConfig = {
+  /** Enable CORS on API endpoints. Default: false. */
+  enabled?: boolean;
+  /**
+   * Allowed origins. Exact match against the browser-sent Origin header.
+   * Use ["*"] for wildcard (forces allowCredentials=false).
+   * Example: ["https://mysite.com", "http://localhost:3000"]
+   */
+  allowedOrigins?: string[];
+  /**
+   * Send Access-Control-Allow-Credentials: true.
+   * Forbidden when allowedOrigins contains "*". Default: false.
+   */
+  allowCredentials?: boolean;
+  /**
+   * Extra request headers the browser may send.
+   * Authorization, Content-Type, X-Request-ID are always implicitly allowed.
+   */
+  allowedHeaders?: string[];
+  /** Response headers the browser JS can read via fetch. */
+  exposedHeaders?: string[];
+  /** Preflight cache in seconds. Default: 600. */
+  maxAge?: number;
+};
+
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
+  cors?: GatewayHttpCorsConfig;
 };
 
 export type GatewayPushApnsRelayConfig = {

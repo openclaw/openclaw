@@ -31,6 +31,7 @@ import {
 } from "./auth.js";
 import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import { applyCorsHeaders, classifyCorsEndpoint, resolveCorsForRequest } from "./cors.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -849,6 +850,7 @@ export function createGatewayHttpServer(opts: {
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  corsConfig?: import("../config/types.gateway.js").GatewayHttpCorsConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
@@ -870,6 +872,7 @@ export function createGatewayHttpServer(opts: {
     openAiChatCompletionsConfig,
     openResponsesEnabled,
     openResponsesConfig,
+    corsConfig,
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
@@ -911,6 +914,40 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+
+      // CORS handling — classify and resolve before request stages.
+      const corsEndpoint = classifyCorsEndpoint(req.method ?? "GET", requestPath, {
+        chatCompletions: openAiChatCompletionsEnabled,
+        responses: openResponsesEnabled,
+        models: openAiCompatEnabled,
+        embeddings: openAiCompatEnabled,
+      });
+      const corsDecision = resolveCorsForRequest({
+        method: req.method ?? "GET",
+        origin: req.headers.origin,
+        accessControlRequestMethod:
+          typeof req.headers["access-control-request-method"] === "string"
+            ? req.headers["access-control-request-method"]
+            : undefined,
+        endpointKey: corsEndpoint,
+        config: corsConfig,
+      });
+      // Preserve Origin variance on every CORS-applicable response (including
+      // origin misses and missing Origin headers) so intermediate caches do
+      // not reuse allow-origin-bearing responses across different origins.
+      if (corsEndpoint !== null && corsConfig?.enabled === true) {
+        res.setHeader("Vary", "Origin");
+      }
+      if (corsDecision?.isPreflight) {
+        applyCorsHeaders(res, corsDecision);
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+      if (corsDecision) {
+        applyCorsHeaders(res, corsDecision);
+      }
+
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(requestPath)
         : null;
