@@ -1,4 +1,4 @@
-import { isMcpConfigRecord, toMcpStringArray, toMcpStringRecord } from "./mcp-config-shared.js";
+import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
 type StdioMcpServerLaunchConfig = {
   command: string;
@@ -35,7 +35,7 @@ export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerL
     config: {
       command: raw.command,
       args: toMcpStringArray(raw.args),
-      env: toMcpStringRecord(raw.env),
+      env: toMcpEnvRecord(raw.env),
       cwd,
     },
   };
