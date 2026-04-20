@@ -188,10 +188,13 @@ jobs:
           const changedExtensionsMatrix = hasChangedExtensions
             ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
             : { include: [] };
+          const extensionTestShardCount = isCanonicalRepository
+            ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
+            : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 24);
           const extensionShardMatrix = createMatrix(
             runNode
               ? createExtensionTestShards({
-                  shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+                  shardCount: extensionTestShardCount,
                 }).map((shard) => ({
                   check_name: shard.checkName,
                   extensions_csv: shard.extensionIds.join(","),
