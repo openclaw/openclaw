@@ -274,6 +274,7 @@
   "state-paths",
   "target-resolver-runtime",
   "telegram-command-config",
+  "telegram-command-ui",
   "text-autolink-runtime",
   "thread-ownership",
   "tlon",
