@@ -119,3 +119,30 @@ export function shouldSuppressDuplicateTerminalDelivery(params: {
   }
   return Boolean(params.preferredTaskId && params.preferredTaskId !== params.task.taskId);
 }
+
+/**
+ * Determines whether an ACP child-session task should bypass user-visible
+ * delivery and instead silently wake the parent session via heartbeat.
+ *
+ * This fires for all non-blocked ACP runs that belong to a child session,
+ * regardless of notifyPolicy — ensuring orchestration continuation even if
+ * notifyPolicy propagation is fixed in the future to set "silent" on these
+ * task records.
+ */
+export function shouldSilentWakeAcpChildSession(task: TaskRecord): boolean {
+  if (task.runtime !== "acp") {
+    return false;
+  }
+  if (!task.childSessionKey?.trim()) {
+    return false;
+  }
+  // Only silence successful, non-blocked completions. Failures, timeouts, and
+  // blocked outcomes may need human attention and must surface visibly.
+  if (task.status !== "succeeded") {
+    return false;
+  }
+  if (task.terminalOutcome === "blocked") {
+    return false;
+  }
+  return true;
+}
