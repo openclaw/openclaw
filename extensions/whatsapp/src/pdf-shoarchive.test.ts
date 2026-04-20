@@ -21,7 +21,7 @@ async function makeWorkspaceRoot() {
 
 afterEach(async () => {
   await Promise.all(
-    tempRoots.splice(0, tempRoots.length).map(async (root) => {
+    tempRoots.splice(0).map(async (root) => {
       await fs.rm(root, { recursive: true, force: true });
     }),
   );

@@ -19053,6 +19053,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             items: {
               type: "string",
             },
+            title: "Media Local Roots",
+            description:
+              "Defines additional local directory paths that agents are allowed to use when sending media attachments. Each entry must be an absolute path. Files under these directories bypass the default sandbox and can be attached to outbound messages.",
           },
         },
         additionalProperties: false,
