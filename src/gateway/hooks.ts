@@ -361,7 +361,7 @@ function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolve
       continue;
     }
     effectiveMappings.push(mapping);
-    if (hasTemplatedHookSessionKey(mapping.sessionKey)) {
+    if (mapping.action === "agent" && hasTemplatedHookSessionKey(mapping.sessionKey)) {
       return true;
     }
   }

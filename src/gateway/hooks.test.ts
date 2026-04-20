@@ -457,6 +457,25 @@ describe("gateway hooks helpers", () => {
       } as OpenClawConfig),
     ).not.toThrow();
   });
+
+  test("resolveHooksConfig ignores templated session keys on wake mappings", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              match: { path: "wake" },
+              action: "wake",
+              textTemplate: "ping",
+              sessionKey: "hook:wake:{{payload.id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
