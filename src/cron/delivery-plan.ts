@@ -59,9 +59,9 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     const resolvedMode = mode ?? "announce";
     return {
       mode: resolvedMode,
-      channel: resolvedMode === "announce" ? channel : undefined,
+      channel: resolvedMode === "webhook" ? undefined : channel,
       to,
-      threadId: resolvedMode === "announce" ? deliveryThreadId : undefined,
+      threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,
       accountId: deliveryAccountId,
       source: "delivery",
       requested: resolvedMode === "announce",
