@@ -11,12 +11,18 @@ export function resolveSessionTracingHeaders(params: {
   diagnostics?: DiagnosticsConfig;
 }): Record<string, string> | undefined {
   const tracing = params.diagnostics?.sessionTracing;
-  if (!tracing?.enabled) return undefined;
+  if (!tracing?.enabled) {
+    return undefined;
+  }
 
   const sessionKey = params.sessionKey;
-  if (!sessionKey) return undefined;
+  if (!sessionKey) {
+    return undefined;
+  }
 
-  if (!parseAgentSessionKey(sessionKey)) return undefined;
+  if (!parseAgentSessionKey(sessionKey)) {
+    return undefined;
+  }
 
   const headers: Record<string, string> = {};
 
@@ -47,7 +53,9 @@ export function wrapStreamFnWithSessionTracing(params: {
     runId: params.runId,
     diagnostics: params.diagnostics,
   });
-  if (!tracingHeaders) return params.streamFn;
+  if (!tracingHeaders) {
+    return params.streamFn;
+  }
 
   const inner = params.streamFn;
   return (model, context, options) => {

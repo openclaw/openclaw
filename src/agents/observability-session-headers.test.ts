@@ -3,7 +3,6 @@ import {
   resolveSessionTracingHeaders,
   wrapStreamFnWithSessionTracing,
 } from "./observability-session-headers.js";
-import type { DiagnosticsConfig } from "../config/types.base.js";
 
 describe("resolveSessionTracingHeaders", () => {
   it("returns undefined when sessionTracing is disabled", () => {
