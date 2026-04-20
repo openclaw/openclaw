@@ -25,7 +25,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs } from "../session.js";
 import { loadConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -284,13 +284,12 @@ export async function monitorWebChannel(
         }),
       );
 
-      const { e164: selfE164 } = readWebSelfId(account.authDir);
       const connectRoute = resolveAgentRoute({
         cfg,
         channel: "whatsapp",
         accountId: account.accountId,
       });
-      enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
+      enqueueSystemEvent("WhatsApp gateway connected.", {
         sessionKey: connectRoute.sessionKey,
       });
 

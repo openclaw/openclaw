@@ -1,6 +1,7 @@
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import * as infraRuntime from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync } from "openclaw/plugin-sdk/testing";
@@ -19,6 +20,17 @@ import {
   setLoadConfigMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
+  return {
+    ...actual,
+    drainPendingDeliveries: vi.fn(async () => undefined),
+    enqueueSystemEvent: vi.fn(),
+  };
+});
 
 installWebAutoReplyTestHomeHooks();
 
@@ -356,6 +368,48 @@ describe("web auto-reply connection", () => {
     expect(content).toMatch(/web-heartbeat/);
     expect(content).toMatch(/connectionId/);
     expect(content).toMatch(/messagesHandled/);
+  });
+
+  it("does not expose the connected WhatsApp phone in agent-visible system events", async () => {
+    const authDir = `/tmp/openclaw-wa-system-event-${crypto.randomUUID()}`;
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(
+      `${authDir}/creds.json`,
+      JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
+    );
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          accounts: {
+            default: {
+              authDir,
+              allowFrom: ["*"],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const enqueueSystemEvent = vi.mocked(infraRuntime.enqueueSystemEvent);
+      await monitorWebChannel(
+        false,
+        async () => createMockWebListener(),
+        false,
+        async () => ({ text: "ok" }),
+      );
+
+      const messages = enqueueSystemEvent.mock.calls.map(([message]) => String(message));
+      expect(messages).toContain("WhatsApp gateway connected.");
+      expect(messages.join("\n")).not.toContain("15551234567");
+      expect(messages.join("\n")).not.toContain("+15551234567");
+      expect(messages).not.toContain("WhatsApp gateway connected as +15551234567.");
+    } finally {
+      resetLoadConfigMock();
+      await fs.rm(authDir, { recursive: true, force: true });
+    }
   });
 
   it("logs outbound replies to file", async () => {
