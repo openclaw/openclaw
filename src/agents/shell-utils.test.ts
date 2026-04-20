@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  getShellConfig,
+  isNonFunctionalShell,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -72,7 +77,43 @@ describe("getShellConfig", () => {
     delete process.env.SHELL;
     process.env.PATH = "";
     const { shell } = getShellConfig();
-    expect(shell).toBe("sh");
+    expect(shell).toBe("/bin/sh");
+  });
+
+  it("falls back to /bin/sh when SHELL is /usr/bin/false", () => {
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = "";
+    const { shell } = getShellConfig();
+    expect(shell).toBe("/bin/sh");
+  });
+
+  it("falls back to /bin/sh when SHELL is /sbin/nologin", () => {
+    process.env.SHELL = "/sbin/nologin";
+    process.env.PATH = "";
+    const { shell } = getShellConfig();
+    expect(shell).toBe("/bin/sh");
+  });
+});
+
+describe("isNonFunctionalShell", () => {
+  it("detects /usr/bin/false", () => {
+    expect(isNonFunctionalShell("/usr/bin/false")).toBe(true);
+  });
+
+  it("detects /sbin/nologin", () => {
+    expect(isNonFunctionalShell("/sbin/nologin")).toBe(true);
+  });
+
+  it("detects /bin/true", () => {
+    expect(isNonFunctionalShell("/bin/true")).toBe(true);
+  });
+
+  it("accepts /bin/bash", () => {
+    expect(isNonFunctionalShell("/bin/bash")).toBe(false);
+  });
+
+  it("accepts /bin/zsh", () => {
+    expect(isNonFunctionalShell("/bin/zsh")).toBe(false);
   });
 });
 

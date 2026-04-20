@@ -38,6 +38,14 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
+// Shells that immediately exit without running commands (service users, nologin).
+const NON_FUNCTIONAL_SHELLS = new Set(["false", "nologin", "true", "shutdown", "halt"]);
+
+export function isNonFunctionalShell(shellPath: string): boolean {
+  const name = path.basename(shellPath.trim());
+  return NON_FUNCTIONAL_SHELLS.has(name);
+}
+
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
@@ -53,8 +61,14 @@ export function getShellConfig(): { shell: string; args: string[] } {
 
   const envShell = process.env.SHELL?.trim();
   const shellName = envShell ? path.basename(envShell) : "";
+
+  // Non-functional shells (e.g. /usr/bin/false, /sbin/nologin) exit immediately
+  // without running commands. Fall back to /bin/sh for service users.
+  const effectiveShell = envShell && !isNonFunctionalShell(envShell) ? envShell : "";
+  const effectiveName = effectiveShell ? shellName : "";
+
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
-  if (shellName === "fish") {
+  if (effectiveName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
       return { shell: bash, args: ["-c"] };
@@ -64,7 +78,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
       return { shell: sh, args: ["-c"] };
     }
   }
-  const shell = envShell && envShell.length > 0 ? envShell : "sh";
+  const shell = effectiveShell && effectiveShell.length > 0 ? effectiveShell : "/bin/sh";
   return { shell, args: ["-c"] };
 }
 
