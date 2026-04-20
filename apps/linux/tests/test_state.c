@@ -88,11 +88,8 @@ static void test_warning_health(void) {
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
     hs.has_wizard_onboard_marker = TRUE;
-    
-    
-    hs.config_audit_ok = FALSE;
-    hs.config_issues_count = 1;
     state_update_health(&hs);
+    state_set_config_audit_fact(TRUE, 1);
 
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
 }
@@ -237,9 +234,31 @@ static void test_precedence_native_connected_with_warning(void) {
     hs.ws_connected = TRUE;
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
-    hs.config_audit_ok = FALSE;
-    hs.config_issues_count = 2;
     state_update_health(&hs);
+    state_set_config_audit_fact(TRUE, 2);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
+}
+
+static void test_native_connected_with_warning_via_facts(void) {
+    state_init();
+
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    state_update_health(&hs);
+
+    state_set_config_audit_fact(TRUE, 1);
 
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING_WITH_WARNING);
 }
@@ -946,6 +965,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/precedence/not_installed_native_connected", test_precedence_not_installed_native_connected);
     g_test_add_func("/state/precedence/native_connected_with_warning", test_precedence_native_connected_with_warning);
     g_test_add_func("/state/precedence/native_connected_auth_fail", test_precedence_native_connected_auth_fail);
+    g_test_add_func("/state/precedence/native_connected_with_warning_via_facts", test_native_connected_with_warning_via_facts);
 
     /* Lifecycle and generation tests */
     g_test_add_func("/state/unit_retarget_bumps_generation", test_unit_retarget_bumps_generation);

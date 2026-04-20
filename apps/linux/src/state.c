@@ -35,6 +35,8 @@ typedef struct {
     gboolean selected_model_resolved;
     gboolean agents_fetch_succeeded;
     guint agents_count;
+    gboolean config_audit_fetch_succeeded;
+    guint config_issues_count;
 } DesktopResolvedFacts;
 
 static DesktopResolvedFacts current_resolved_facts = {0};
@@ -79,6 +81,14 @@ static void recompute_resolved_health_fields(void) {
     current_health_state.agents_available =
         current_resolved_facts.agents_fetch_succeeded &&
         current_resolved_facts.agents_count > 0;
+
+    current_health_state.config_audit_ok =
+        current_resolved_facts.config_audit_fetch_succeeded &&
+        current_resolved_facts.config_issues_count == 0;
+    current_health_state.config_issues_count =
+        current_resolved_facts.config_audit_fetch_succeeded
+            ? (int)current_resolved_facts.config_issues_count
+            : 0;
 }
 
 static void compute_readiness_snapshot(void) {
@@ -173,12 +183,6 @@ static AppState compute_state(void) {
         if (!current_health_state.rpc_ok || !current_health_state.auth_ok) {
             return STATE_DEGRADED;
         }
-        /* TODO(MVP deferral): STATE_RUNNING_WITH_WARNING is intentionally deferred.
-         * The Linux MVP does not yet populate config-audit inputs (config_audit_ok,
-         * config_issues_count). We explicitly retain this branch to preserve the
-         * intended UX shape, but do NOT synthesize warning-state behavior from
-         * unrelated config errors just to make it live.
-         */
         if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
             return STATE_RUNNING_WITH_WARNING;
         }
@@ -472,6 +476,16 @@ void state_set_model_catalog_fact(gboolean fetch_succeeded,
     recompute_resolved_health_fields();
     compute_readiness_snapshot();
     trigger_updates(current_state);
+}
+
+void state_set_config_audit_fact(gboolean fetch_succeeded,
+                                 guint issues_count) {
+    current_resolved_facts.config_audit_fetch_succeeded = fetch_succeeded;
+    current_resolved_facts.config_issues_count = fetch_succeeded ? issues_count : 0;
+
+    recompute_resolved_health_fields();
+    compute_readiness_snapshot();
+    trigger_updates(compute_state());
 }
 
 void state_set_agents_fact(gboolean fetch_succeeded,
