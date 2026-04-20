@@ -171,7 +171,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  it("flags missing root mirrors for bundled plugin deps imported by root dist", () => {
+  it("does not require root mirrors for bundled plugin deps imported by root dist", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -191,9 +191,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; mirror '@slack/web-api: ^7.15.0' in root package.json (declared by slack).",
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -227,7 +225,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags root mirror dependency version mismatches", () => {
+  it("does not compare root mirror dependency versions", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -249,9 +247,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; root package.json has '^7.16.0' but plugin manifest declares '^7.15.0' (slack).",
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
