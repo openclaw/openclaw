@@ -789,6 +789,7 @@ describe("hardenApprovedExecutionPaths", () => {
   ];
 
   it("captures mutable runtime operands in approval plans", () => {
+    const tmp = createFixtureDir("openclaw-approval-script-plan-");
     for (const runtimeCase of mutableOperandCases) {
       runNamedCase(runtimeCase.name, () => {
         if (runtimeCase.skipOnWin32 && process.platform === "win32") {
@@ -800,23 +801,15 @@ describe("hardenApprovedExecutionPaths", () => {
         withFakeRuntimeBins({
           binNames,
           run: () => {
-            withScriptOperandPlanFixture(
-              {
-                tmpPrefix: "openclaw-approval-script-plan-",
-                fixture: runtimeCase,
-                afterWrite: (fixture, tmp) => {
-                  const executablePath = fixture.command[0];
-                  if (executablePath?.endsWith("pnpm.js")) {
-                    const shimPath = path.join(tmp, "pnpm.js");
-                    fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
-                    fs.chmodSync(shimPath, 0o755);
-                  }
-                },
-              },
-              (fixture, tmp) => {
-                expectMutableFileOperandApprovalPlan(fixture, tmp);
-              },
-            );
+            const fixture = createScriptOperandFixture(tmp, runtimeCase);
+            writeScriptOperandFixture(fixture);
+            const executablePath = fixture.command[0];
+            if (executablePath?.endsWith("pnpm.js")) {
+              const shimPath = path.join(tmp, "pnpm.js");
+              fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
+              fs.chmodSync(shimPath, 0o755);
+            }
+            expectMutableFileOperandApprovalPlan(fixture, tmp);
           },
         });
       });
