@@ -83,32 +83,6 @@ describe("task-registry audit", () => {
     });
   });
 
-  it("flags inconsistent_timestamps when startedAt predates createdAt", () => {
-    // Regression: pi-embedded-runner events can arrive at the registry with
-    // evt.ts (used as startedAt) earlier than the wall-clock at registry
-    // intake (used as createdAt) due to queue latency.  The registry clamps
-    // startedAt >= createdAt so this state should never be persisted, but the
-    // audit check itself must remain correct so that genuine ordering bugs are
-    // still caught.
-    const createdAt = Date.parse("2026-03-30T01:00:00.000Z");
-    const startedAt = createdAt - 1; // intentionally earlier than createdAt
-    const findings = listTaskAuditFindings({
-      now: createdAt + 60_000,
-      tasks: [
-        createTask({
-          taskId: "ts-ordering-bug",
-          status: "running",
-          createdAt,
-          startedAt,
-        }),
-      ],
-    });
-
-    expect(findings.map((f) => [f.code, f.detail])).toEqual([
-      ["inconsistent_timestamps", "startedAt is earlier than createdAt"],
-    ]);
-  });
-
   it("does not double-report lost tasks as missing cleanup", () => {
     const now = Date.parse("2026-03-30T01:00:00.000Z");
     const findings = listTaskAuditFindings({

@@ -1543,10 +1543,7 @@ function updateTaskStateByRunId(params: {
       patch.status = normalizeTaskStatus(params.status);
     }
     if (params.startedAt != null) {
-      // Clamp: startedAt cannot predate createdAt (would cause false positive
-      // inconsistent_timestamps audit warnings due to queue/clock skew between
-      // pi-embedded-runner event emission and registry processing).
-      patch.startedAt = Math.max(params.startedAt, current.createdAt);
+      patch.startedAt = params.startedAt;
     }
     if (params.endedAt != null) {
       patch.endedAt = params.endedAt;
