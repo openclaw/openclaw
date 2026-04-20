@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   sync-publish-repo:
+    if: github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source repo
