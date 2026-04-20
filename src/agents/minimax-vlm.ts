@@ -1,6 +1,11 @@
+import { Message } from "@mariozechner/pi-ai";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import {
+  extractAssistantText,
+  extractAssistantThinking,
+} from "../utils/pi-embedded-utils.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -124,4 +129,32 @@ export async function minimaxUnderstandImage(params: {
   }
 
   return content;
+}
+
+export function coerceImageAssistantText(params: {
+  message: Message;
+  provider: string;
+  model: string;
+}) {
+  const stop = params.message.stopReason;
+  const errorMessage = params.message.errorMessage?.trim();
+  if (stop === "error" || stop === "aborted") {
+    throw new Error(
+      `Image model failed (${params.provider}/${params.model})${
+        errorMessage ? `: ${errorMessage}` : ""
+      }`,
+    );
+  }
+  if (errorMessage) {
+    throw new Error(`Image model error (${params.provider}/${params.model}): ${errorMessage}`);
+  }
+
+  const text = extractAssistantText(params.message);
+  if (text.trim()) return text.trim();
+
+  // Fallback: reasoning models may return content in thinking blocks
+  const thinking = extractAssistantThinking(params.message);
+  if (thinking.trim()) return thinking.trim();
+
+  throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }
