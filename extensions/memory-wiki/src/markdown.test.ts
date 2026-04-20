@@ -116,4 +116,35 @@ describe("extractWikiLinks", () => {
     const md = "Jump to [section](#heading).";
     expect(extractWikiLinks(md)).toEqual([]);
   });
+
+  it("ignores links in fenced blocks with longer closing fence", () => {
+    const md = [
+      "```py",
+      "[fake](bad)",
+      "````",
+      "[real](sources/good)",
+    ].join("\n");
+    expect(extractWikiLinks(md)).toEqual(["sources/good"]);
+  });
+
+  it("ignores links in indented fenced blocks", () => {
+    const md = [
+      "  ```py",
+      "  [fake](bad)",
+      "  ```",
+      "[real](sources/good)",
+    ].join("\n");
+    expect(extractWikiLinks(md)).toEqual(["sources/good"]);
+  });
+
+  it("does not swallow real links when fence opener is inside HTML comment", () => {
+    const md = [
+      "<!--",
+      "```",
+      "-->",
+      "[real](sources/good)",
+      "```",
+    ].join("\n");
+    expect(extractWikiLinks(md)).toEqual(["sources/good"]);
+  });
 });
