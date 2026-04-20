@@ -1147,6 +1147,27 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
+  it("returns undefined instead of throwing when an unexpected error escapes the recall path", async () => {
+    runEmbeddedPiAgent.mockRejectedValueOnce(new Error("network reset"));
+    hoisted.updateSessionStore.mockRejectedValueOnce(new Error("store unavailable"));
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what should i eat? escape test", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:escape-test",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    const warnLines = vi
+      .mocked(api.logger.warn)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnLines.some((line: string) => line.includes("before_prompt_build"))).toBe(true);
+  });
+
   it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
     api.pluginConfig = {
       agents: ["main"],
