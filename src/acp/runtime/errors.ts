@@ -6,6 +6,7 @@ export const ACP_ERROR_CODES = [
   "ACP_INVALID_RUNTIME_OPTION",
   "ACP_SESSION_INIT_FAILED",
   "ACP_TURN_FAILED",
+  "SESSION_BUSY",
 ] as const;
 
 export type AcpRuntimeErrorCode = (typeof ACP_ERROR_CODES)[number];
