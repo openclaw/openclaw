@@ -666,6 +666,26 @@
         "cleanup"
       ]
     },
+    "sessions_delegate": {
+      "emoji": "🤝",
+      "title": "Delegate",
+      "detailKeys": [
+        "task",
+        "agentId",
+        "model",
+        "timeoutSeconds",
+        "label"
+      ]
+    },
+    "sessions_delegate_batch": {
+      "emoji": "🤝",
+      "title": "Delegate Batch",
+      "detailKeys": [
+        "tasks",
+        "timeoutSeconds",
+        "failureMode"
+      ]
+    },
     "subagents": {
       "emoji": "🤖",
       "title": "Subagents",

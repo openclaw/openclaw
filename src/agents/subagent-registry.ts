@@ -370,6 +370,17 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   cleanupBrowserSessionsForLifecycleEnd: (args) =>
     subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
+  deleteChildSession: async (childSessionKey) => {
+    await subagentRegistryDeps.callGateway({
+      method: "sessions.delete",
+      params: {
+        key: childSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  },
   warn: (message, meta) => log.warn(message, meta),
 });
 

@@ -35,6 +35,7 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { waitForOutputCaptureGate } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryLifecycleController(params: {
@@ -64,6 +65,9 @@ export function createSubagentRegistryLifecycleController(params: {
   captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd?: typeof cleanupBrowserSessionsForLifecycleEnd;
   runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
+  /** Delete a child session and its transcript. Used by the delegate fast path
+   *  which skips the announce flow (the normal owner of session deletion). */
+  deleteChildSession?(childSessionKey: string): Promise<void>;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -522,6 +526,54 @@ export function createSubagentRegistryLifecycleController(params: {
         params.persist();
       });
     };
+
+    // Skip the announce flow for delegate runs (expectsCompletionMessage: false).
+    // The delegate tool already read and returned the child output as a tool result,
+    // so an auto-announce would cause duplicate or out-of-band parent responses.
+    // Go straight to cleanup completion instead of the deferred-retry path.
+    if (entry.expectsCompletionMessage === false) {
+      void (async () => {
+        try {
+          // Wait for the delegate tool to finish reading the child output
+          // before we delete the session transcript or remove the run entry.
+          // The delegate tool registers a gate before spawning and signals
+          // it after readChildOutput completes. Timeout prevents stalling
+          // if the gate is never signalled (e.g. the delegate tool crashed).
+          await waitForOutputCaptureGate(runId, 30_000);
+
+          const shouldDeleteAttachments =
+            entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+          if (shouldDeleteAttachments) {
+            await safeRemoveAttachmentsDir(entry);
+          }
+          // Delete the child session and transcript for cleanup: "delete" runs.
+          // Normally the announce flow handles this, but delegate runs skip it.
+          if (entry.cleanup === "delete" && params.deleteChildSession) {
+            try {
+              await params.deleteChildSession(entry.childSessionKey);
+            } catch {
+              // Best-effort session deletion only.
+            }
+          }
+          const completionReason = resolveCleanupCompletionReason(entry);
+          await emitCompletionEndedHookIfNeeded(entry, completionReason);
+          completeCleanupBookkeeping({
+            runId,
+            entry,
+            cleanup: entry.cleanup,
+            completedAt: Date.now(),
+          });
+        } catch (err) {
+          defaultRuntime.log(`[warn] delegate cleanup failed (${runId}): ${String(err)}`);
+          const current = params.runs.get(runId);
+          if (current && !current.cleanupCompletedAt) {
+            current.cleanupHandled = false;
+            params.persist();
+          }
+        }
+      })();
+      return true;
+    }
 
     void params
       .runSubagentAnnounceFlow({
