@@ -8,6 +8,7 @@ const childProcessMocks = vi.hoisted(() => ({
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
   realpath: vi.fn(),
+  stat: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async () => {
@@ -18,9 +19,11 @@ vi.mock("node:fs/promises", async () => {
       ...actual,
       access: fsMocks.access,
       realpath: fsMocks.realpath,
+      stat: fsMocks.stat,
     },
     access: fsMocks.access,
     realpath: fsMocks.realpath,
+    stat: fsMocks.stat,
   };
 });
 
@@ -150,6 +153,84 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+
+  it("honors OPENCLAW_WRAPPER when it points at an existing file (#69400)", async () => {
+    const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
+    const previous = process.env.OPENCLAW_WRAPPER;
+    process.env.OPENCLAW_WRAPPER = wrapperPath;
+    try {
+      const result = await resolveGatewayProgramArguments({ port: 18789 });
+      expect(result.programArguments).toEqual([wrapperPath, "gateway", "--port", "18789"]);
+      expect(result.workingDirectory).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_WRAPPER;
+      } else {
+        process.env.OPENCLAW_WRAPPER = previous;
+      }
+    }
+  });
+
+  it("ignores OPENCLAW_WRAPPER when the path does not exist (#69400)", async () => {
+    const wrapperPath = path.resolve("/usr/local/bin/missing-wrapper");
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    fsMocks.stat.mockRejectedValue(new Error("ENOENT"));
+    const previous = process.env.OPENCLAW_WRAPPER;
+    process.env.OPENCLAW_WRAPPER = wrapperPath;
+    try {
+      const result = await resolveGatewayProgramArguments({ port: 18789 });
+      expect(result.programArguments).toEqual([
+        process.execPath,
+        indexPath,
+        "gateway",
+        "--port",
+        "18789",
+      ]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_WRAPPER;
+      } else {
+        process.env.OPENCLAW_WRAPPER = previous;
+      }
+    }
+  });
+
+  it("ignores OPENCLAW_WRAPPER when the path is not a file (#69400)", async () => {
+    const wrapperPath = path.resolve("/etc");
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    fsMocks.stat.mockResolvedValue({ isFile: () => false } as never);
+    const previous = process.env.OPENCLAW_WRAPPER;
+    process.env.OPENCLAW_WRAPPER = wrapperPath;
+    try {
+      const result = await resolveGatewayProgramArguments({ port: 18789 });
+      expect(result.programArguments).toEqual([
+        process.execPath,
+        indexPath,
+        "gateway",
+        "--port",
+        "18789",
+      ]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_WRAPPER;
+      } else {
+        process.env.OPENCLAW_WRAPPER = previous;
+      }
+    }
   });
 
   it("uses src/entry.ts for bun dev mode", async () => {

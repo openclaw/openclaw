@@ -177,12 +177,39 @@ async function resolveBinaryPath(binary: string): Promise<string> {
   }
 }
 
+const WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
+
+async function resolveWrapperProgramArgs(
+  params: { args: string[] },
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GatewayProgramArgs | null> {
+  const raw = env[WRAPPER_ENV_KEY]?.trim();
+  if (!raw) {
+    return null;
+  }
+  const resolved = path.resolve(raw);
+  try {
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return { programArguments: [resolved, ...params.args] };
+}
+
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
   nodePath?: string;
 }): Promise<GatewayProgramArgs> {
+  const wrapperOverride = await resolveWrapperProgramArgs(params);
+  if (wrapperOverride) {
+    return wrapperOverride;
+  }
+
   const execPath = process.execPath;
   const runtime = params.runtime ?? "auto";
 

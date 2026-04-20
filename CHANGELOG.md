@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Plugins/tests: reuse plugin loader alias and Jiti config resolution across repeated same-context loads, reducing import-heavy test overhead. (#69316) Thanks @amknight.
+- Daemon/LaunchAgent: honor `OPENCLAW_WRAPPER` when it points at an existing file so `ProgramArguments` resolution delegates to secrets-manager wrappers (Doppler/SOPS/1Password CLI) instead of spawning node/bun directly, without requiring manual plist repatching after reinstalls. Unset or invalid paths keep the existing Node/Bun entrypoint resolution. (#69400) [AI-assisted]
 
 ### Fixes
 
