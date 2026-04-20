@@ -175,6 +175,9 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     if (lower.startsWith("gemma-4")) {
       patch = { reasoning: true };
     }
+    if (lower === "gemma-4-26b-a4b-it") {
+      patch = { ...patch, contextWindow: 262_144 };
+    }
   } else {
     return undefined;
   }

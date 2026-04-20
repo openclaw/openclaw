@@ -376,13 +376,18 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expect(isModernGoogleModel("gemma-3-4b-it")).toBe(true);
   });
 
-  it("resolves Gemma 4 models with reasoning enabled regardless of template", () => {
+  it("resolves Gemma 4 models with reasoning enabled and correct 256k context window", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google",
       ctx: createContext({
         provider: "google",
         modelId: "gemma-4-26b-a4b-it",
-        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: false })],
+        models: [
+          createTemplateModel("google", "gemini-3-flash-preview", {
+            reasoning: false,
+            contextWindow: 1_048_576,
+          }),
+        ],
       }),
     });
 
@@ -390,6 +395,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google",
       id: "gemma-4-26b-a4b-it",
       reasoning: true,
+      contextWindow: 262_144,
     });
   });
 
