@@ -120,6 +120,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 let cachedClient: SdkClient | undefined;
 let cachedOptionsFingerprint = "";
+let inflightInit: Promise<SdkClient> | undefined;
 
 function fingerprint(options: SdkClientOptions): string {
   return JSON.stringify({
@@ -131,17 +132,37 @@ function fingerprint(options: SdkClientOptions): string {
 /**
  * Returns the singleton SDK client, creating it on first use. A new client is
  * rebuilt when options change (rare; only `cliPath` is mutable today).
+ *
+ * Concurrent callers with the same options share a single in-flight init
+ * promise so only one CLI subprocess is ever spawned.
  */
 export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkClient> {
   const key = fingerprint(options);
   if (cachedClient && cachedOptionsFingerprint === key) {
     return cachedClient;
   }
+
+  // If another caller is already initializing with the same key, coalesce.
+  if (inflightInit && cachedOptionsFingerprint === key) {
+    return inflightInit;
+  }
+
+  // Options changed — tear down old client before rebuilding.
   if (cachedClient) {
     await cachedClient.close().catch(() => undefined);
     cachedClient = undefined;
   }
 
+  cachedOptionsFingerprint = key;
+  inflightInit = initClient(options, key);
+  try {
+    return await inflightInit;
+  } finally {
+    inflightInit = undefined;
+  }
+}
+
+async function initClient(options: SdkClientOptions, key: string): Promise<SdkClient> {
   const sdk = options.sdkFactory
     ? await options.sdkFactory()
     : ((await import("@github/copilot-sdk")) as unknown as SdkModule);
@@ -223,4 +244,5 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
 export function __resetSdkClientForTests(): void {
   cachedClient = undefined;
   cachedOptionsFingerprint = "";
+  inflightInit = undefined;
 }
