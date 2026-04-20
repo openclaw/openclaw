@@ -21,15 +21,15 @@
     "properties": {
       "port": {
         "type": "integer",
-        "minimum": 0,
+        "minimum": 1,
         "maximum": 65535,
         "default": 9527,
         "description": "Local loopback port for the OpenAI-compatible shim server. Must be fixed so the baseUrl stored in models.json is stable across restarts. Falls back to ephemeral on EADDRINUSE."
       },
       "rejectToolRequests": {
         "type": "boolean",
-        "default": true,
-        "description": "When true, reject chat-completion requests that declare `tools`. The Copilot CLI acts as a pure LLM and cannot execute OpenClaw-dispatched tool calls through this path; disabling the reject causes silent degradation."
+        "default": false,
+        "description": "When true, reject chat-completion requests that declare `tools` with HTTP 400. When false (default), tools are silently stripped with a warning. The Copilot CLI cannot execute OpenClaw-dispatched tool calls through this path."
       },
       "cliPath": {
         "type": "string",

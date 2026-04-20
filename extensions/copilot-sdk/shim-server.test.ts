@@ -102,9 +102,9 @@ describe("copilot-sdk shim server", () => {
     expect(text.trim().endsWith("data: [DONE]")).toBe(true);
   });
 
-  it("rejects requests that declare tools with HTTP 400 by default", async () => {
+  it("rejects requests that declare tools with HTTP 400 when rejectToolRequests is true", async () => {
     const client = buildFakeClient();
-    const handle = await startShimServer({ client });
+    const handle = await startShimServer({ client, rejectToolRequests: true });
     handles.push(handle);
 
     const { status, body } = await fetchJson(`${handle.url}/chat/completions`, {
@@ -120,6 +120,51 @@ describe("copilot-sdk shim server", () => {
     expect(status).toBe(400);
     expect((body as { error: { type: string } }).error.type).toBe("tools_not_supported");
     expect(client.runPrompt).not.toHaveBeenCalled();
+  });
+
+  it("strips tools by default (rejectToolRequests defaults to false)", async () => {
+    const client = buildFakeClient();
+    const handle = await startShimServer({ client });
+    handles.push(handle);
+
+    const { status } = await fetchJson(`${handle.url}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ type: "function", function: { name: "x", parameters: {} } }],
+      }),
+    });
+
+    expect(status).toBe(200);
+    expect(client.runPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("logs warning when tools are stripped with rejectToolRequests=false", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const client = buildFakeClient();
+      const handle = await startShimServer({ client, rejectToolRequests: false });
+      handles.push(handle);
+
+      const { status } = await fetchJson(`${handle.url}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5",
+          messages: [{ role: "user", content: "hi" }],
+          tools: [{ type: "function", function: { name: "x", parameters: {} } }],
+        }),
+      });
+
+      expect(status).toBe(200);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "copilot-sdk shim: stripping tools from request (not supported by Copilot CLI)",
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("silently drops tools when rejectToolRequests is false", async () => {

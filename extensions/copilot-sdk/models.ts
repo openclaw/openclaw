@@ -28,6 +28,7 @@ export function buildFallbackModelDefinition(modelId: string): ModelDefinitionCo
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
+    compat: { supportsTools: false },
   };
 }
 
@@ -53,5 +54,6 @@ export function buildModelDefinitionFromSdk(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
+    compat: { supportsTools: false },
   };
 }

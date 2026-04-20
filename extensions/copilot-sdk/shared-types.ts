@@ -13,6 +13,7 @@ export type ModelDefinitionConfig = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  compat?: { supportsTools?: boolean };
 };
 
 /**

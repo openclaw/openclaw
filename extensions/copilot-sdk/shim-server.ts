@@ -134,11 +134,14 @@ async function handle(
       return;
     }
 
-    const reject = options.rejectToolRequests ?? true;
+    const reject = options.rejectToolRequests ?? false;
     if (reject && requestDeclaresTools(body)) {
       const err = new ToolsNotSupportedError();
       writeJson(res, 400, { error: { message: err.message, type: err.code } });
       return;
+    }
+    if (!reject && requestDeclaresTools(body)) {
+      console.warn("copilot-sdk shim: stripping tools from request (not supported by Copilot CLI)");
     }
 
     const prompt = openAiMessagesToPrompt(body.messages);
