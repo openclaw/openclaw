@@ -135,7 +135,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "mattermost",
+      channel: "workspace",
       input: "dthcxgoxhifn3pwh65cut3ud3w",
     });
     expect(result.target).toEqual({
