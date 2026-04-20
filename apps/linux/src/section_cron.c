@@ -32,8 +32,33 @@ static gboolean cron_fetch_in_flight = FALSE;
 static gboolean cron_status_fetch_in_flight = FALSE;
 static gboolean cron_runs_fetch_in_flight = FALSE;
 static gint64 cron_last_fetch_us = 0;
-/* H1: Generation counter for stale response filtering */
-static guint cron_refresh_generation = 0;
+/* UI generation for teardown/rebuild invalidation (mutation callbacks). */
+static guint cron_ui_generation = 1;
+/* Refresh generation for superseded fetch-cycle invalidation (fetch callbacks). */
+static guint cron_refresh_generation = 1;
+
+typedef struct {
+    guint ui_generation;
+    guint refresh_generation;
+} CronFetchContext;
+
+static CronFetchContext* cron_fetch_context_new(guint ui_generation,
+                                                guint refresh_generation) {
+    CronFetchContext *ctx = g_new0(CronFetchContext, 1);
+    ctx->ui_generation = ui_generation;
+    ctx->refresh_generation = refresh_generation;
+    return ctx;
+}
+
+static gboolean cron_fetch_context_is_stale(const CronFetchContext *ctx) {
+    return !ctx ||
+           ctx->ui_generation != cron_ui_generation ||
+           ctx->refresh_generation != cron_refresh_generation;
+}
+
+static void cron_fetch_context_free(gpointer data) {
+    g_free(data);
+}
 
 /* Forward declarations */
 static void cron_rebuild_list(void);
@@ -54,7 +79,11 @@ static void on_open_dashboard(GtkButton *b, gpointer d) {
 /* ── Mutation callbacks ──────────────────────────────────────────── */
 
 static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    guint generation = GPOINTER_TO_UINT(user_data);
+    if (generation != cron_ui_generation) {
+        return;
+    }
+
     if (!cron_status_label) return;
 
     if (!response->ok) {
@@ -75,7 +104,8 @@ static void on_toggle_enable(GtkButton *btn, gpointer user_data) {
     if (!id) return;
 
     gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
-    g_autofree gchar *req = mutation_cron_enable(id, !currently_enabled, on_mutation_done, NULL);
+    guint current_gen = cron_ui_generation;
+    g_autofree gchar *req = mutation_cron_enable(id, !currently_enabled, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req) {
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (cron_status_label)
@@ -92,7 +122,8 @@ static void on_trigger(GtkButton *btn, gpointer user_data) {
     if (cron_status_label)
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Triggering\u2026");
 
-    g_autofree gchar *req = mutation_cron_run(id, on_mutation_done, NULL);
+    guint current_gen = cron_ui_generation;
+    g_autofree gchar *req = mutation_cron_run(id, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req) {
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (cron_status_label)
@@ -114,7 +145,8 @@ static void on_delete_dialog_response(GObject *source, GAsyncResult *result, gpo
     if (cron_status_label)
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Deleting\u2026");
 
-    g_autofree gchar *req = mutation_cron_remove(id, on_mutation_done, NULL);
+    guint current_gen = cron_ui_generation;
+    g_autofree gchar *req = mutation_cron_remove(id, on_mutation_done, GUINT_TO_POINTER(current_gen));
     if (!req && cron_status_label) {
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
     }
@@ -218,7 +250,7 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
     GtkWidget *prompt_entry = g_object_get_data(G_OBJECT(dialog), "prompt-entry");
     GtkWidget *target_combo = g_object_get_data(G_OBJECT(dialog), "target-combo");
     GtkWidget *wake_combo = g_object_get_data(G_OBJECT(dialog), "wake-combo");
-    
+
     if (!job_id || !name_entry || !schedule_entry) return;
 
     const gchar *name = gtk_editable_get_text(GTK_EDITABLE(name_entry));
@@ -240,7 +272,7 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "id");
     json_builder_add_string_value(b, job_id);
-    
+
     json_builder_set_member_name(b, "patch");
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "name");
@@ -254,7 +286,7 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
         json_builder_set_member_name(b, "agentId");
         json_builder_add_string_value(b, agent);
     }
-    
+
     /* schedule patch - contract requires 'kind' and 'expr' for cron type */
     json_builder_set_member_name(b, "schedule");
     json_builder_begin_object(b);
@@ -282,7 +314,7 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
         json_builder_add_string_value(b, prompt);
         json_builder_end_object(b);
     }
-    
+
     json_builder_end_object(b); /* end patch */
     json_builder_end_object(b);
 
@@ -292,9 +324,10 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
     if (cron_status_label)
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Updating job\u2026");
 
-    g_autofree gchar *req = mutation_cron_update(params, on_mutation_done, NULL);
+    guint current_gen = cron_ui_generation;
+    g_autofree gchar *req = mutation_cron_update(params, on_mutation_done, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
-    
+
     if (!req && cron_status_label) {
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
     }
@@ -402,7 +435,7 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
     GtkWidget *agent_entry = g_object_get_data(G_OBJECT(dialog), "agent-entry");
     GtkWidget *target_combo = g_object_get_data(G_OBJECT(dialog), "target-combo");
     GtkWidget *wake_combo = g_object_get_data(G_OBJECT(dialog), "wake-combo");
-    
+
     if (!name_entry || !schedule_entry || !prompt_entry) return;
 
     const gchar *name = gtk_editable_get_text(GTK_EDITABLE(name_entry));
@@ -422,7 +455,7 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
     /* Build JSON params for cron.add */
     JsonBuilder *b = json_builder_new();
     json_builder_begin_object(b);
-    
+
     json_builder_set_member_name(b, "name");
     json_builder_add_string_value(b, name);
 
@@ -434,10 +467,10 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
         json_builder_set_member_name(b, "agentId");
         json_builder_add_string_value(b, agent);
     }
-    
+
     json_builder_set_member_name(b, "enabled");
     json_builder_add_boolean_value(b, TRUE);
-    
+
     /* schedule - contract requires 'kind' and 'expr' for cron type */
     json_builder_set_member_name(b, "schedule");
     json_builder_begin_object(b);
@@ -472,9 +505,10 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
     if (cron_status_label)
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Creating job\u2026");
 
-    g_autofree gchar *req = mutation_cron_add(params, on_mutation_done, NULL);
+    guint current_gen = cron_ui_generation;
+    g_autofree gchar *req = mutation_cron_add(params, on_mutation_done, GUINT_TO_POINTER(current_gen));
     json_node_unref(params);
-    
+
     if (!req && cron_status_label) {
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
     }
@@ -764,7 +798,7 @@ static void cron_rebuild_runs_list(void) {
 
     for (gint i = 0; i < cron_runs_cache->n_entries; i++) {
         GatewayCronRunEntry *run = &cron_runs_cache->entries[i];
-        
+
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         gtk_widget_set_margin_bottom(row, 4);
 
@@ -773,7 +807,7 @@ static void cron_rebuild_runs_list(void) {
         const gchar *dot_class = "dim-label";
         if (g_strcmp0(run->status, "ok") == 0) dot_class = "success";
         else if (g_strcmp0(run->status, "error") == 0) dot_class = "error";
-        
+
         GtkWidget *dot = gtk_label_new(dot_text);
         gtk_widget_add_css_class(dot, dot_class);
         gtk_box_append(GTK_BOX(row), dot);
@@ -832,13 +866,19 @@ static void cron_rebuild_list(void) {
 }
 
 static void on_cron_status_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    guint generation = GPOINTER_TO_UINT(user_data);
+    CronFetchContext *ctx = (CronFetchContext *)user_data;
+    if (!cron_scheduler_banner) {
+        cron_fetch_context_free(ctx);
+        return;
+    }
+
+    if (cron_fetch_context_is_stale(ctx)) {
+        cron_fetch_context_free(ctx);
+        return;
+    }
+    cron_fetch_context_free(ctx);
     cron_status_fetch_in_flight = FALSE;
-    if (!cron_scheduler_banner) return;
-    
-    /* H1: Ignore stale responses from previous refresh cycles */
-    if (generation != cron_refresh_generation) return;
-    
+
     if (response->ok) {
         gateway_cron_status_free(cron_status_cache);
         cron_status_cache = gateway_data_parse_cron_status(response->payload);
@@ -847,13 +887,19 @@ static void on_cron_status_rpc_response(const GatewayRpcResponse *response, gpoi
 }
 
 static void on_cron_runs_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    guint generation = GPOINTER_TO_UINT(user_data);
+    CronFetchContext *ctx = (CronFetchContext *)user_data;
+    if (!cron_runs_box) {
+        cron_fetch_context_free(ctx);
+        return;
+    }
+
+    if (cron_fetch_context_is_stale(ctx)) {
+        cron_fetch_context_free(ctx);
+        return;
+    }
+    cron_fetch_context_free(ctx);
     cron_runs_fetch_in_flight = FALSE;
-    if (!cron_runs_box) return;
-    
-    /* H1: Ignore stale responses from previous refresh cycles */
-    if (generation != cron_refresh_generation) return;
-    
+
     if (response->ok) {
         gateway_cron_runs_data_free(cron_runs_cache);
         cron_runs_cache = gateway_data_parse_cron_runs(response->payload);
@@ -864,13 +910,17 @@ static void on_cron_runs_rpc_response(const GatewayRpcResponse *response, gpoint
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_cron_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    guint generation = GPOINTER_TO_UINT(user_data);
+    CronFetchContext *ctx = (CronFetchContext *)user_data;
+    if (!cron_list_box) {
+        cron_fetch_context_free(ctx);
+        return;
+    }
+    if (cron_fetch_context_is_stale(ctx)) {
+        cron_fetch_context_free(ctx);
+        return;
+    }
+    cron_fetch_context_free(ctx);
     cron_fetch_in_flight = FALSE;
-
-    if (!cron_list_box) return;
-
-    /* H1: Ignore stale responses from previous refresh cycles */
-    if (generation != cron_refresh_generation) return;
 
     if (!response->ok) {
         if (cron_status_label) {
@@ -915,19 +965,29 @@ static void cron_force_refresh(void) {
     if (!cron_list_box) return;
     if (!gateway_rpc_is_ready()) return;
 
-    /* H1: Increment generation to invalidate in-flight responses */
+    /* Start a new fetch epoch so any older in-flight fetch responses
+     * from the previous refresh cycle are dropped. */
     cron_refresh_generation++;
-    guint current_gen = cron_refresh_generation;
+    guint current_ui_gen = cron_ui_generation;
+    guint current_refresh_gen = cron_refresh_generation;
 
     cron_fetch_in_flight = TRUE;
+    CronFetchContext *ctx1 = cron_fetch_context_new(current_ui_gen, current_refresh_gen);
     g_autofree gchar *req_id1 = gateway_rpc_request(
-        "cron.list", NULL, 0, on_cron_rpc_response, GUINT_TO_POINTER(current_gen));
-    if (!req_id1) cron_fetch_in_flight = FALSE;
+        "cron.list", NULL, 0, on_cron_rpc_response, ctx1);
+    if (!req_id1) {
+        cron_fetch_in_flight = FALSE;
+        cron_fetch_context_free(ctx1);
+    }
 
     cron_status_fetch_in_flight = TRUE;
+    CronFetchContext *ctx2 = cron_fetch_context_new(current_ui_gen, current_refresh_gen);
     g_autofree gchar *req_id2 = gateway_rpc_request(
-        "cron.status", NULL, 0, on_cron_status_rpc_response, GUINT_TO_POINTER(current_gen));
-    if (!req_id2) cron_status_fetch_in_flight = FALSE;
+        "cron.status", NULL, 0, on_cron_status_rpc_response, ctx2);
+    if (!req_id2) {
+        cron_status_fetch_in_flight = FALSE;
+        cron_fetch_context_free(ctx2);
+    }
 
     cron_runs_fetch_in_flight = TRUE;
     JsonBuilder *b = json_builder_new();
@@ -937,10 +997,14 @@ static void cron_force_refresh(void) {
     json_builder_end_object(b);
     JsonNode *runs_params = json_builder_get_root(b);
     g_object_unref(b);
-    
+
+    CronFetchContext *ctx3 = cron_fetch_context_new(current_ui_gen, current_refresh_gen);
     g_autofree gchar *req_id3 = gateway_rpc_request(
-        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, GUINT_TO_POINTER(current_gen));
-    if (!req_id3) cron_runs_fetch_in_flight = FALSE;
+        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, ctx3);
+    if (!req_id3) {
+        cron_runs_fetch_in_flight = FALSE;
+        cron_fetch_context_free(ctx3);
+    }
     json_node_unref(runs_params);
 }
 
@@ -1018,22 +1082,28 @@ static void cron_refresh(void) {
         return;
     }
 
-    /* H1: Use current generation so responses are not treated as stale */
-    guint current_gen = cron_refresh_generation;
+    guint current_ui_gen = cron_ui_generation;
+    guint current_refresh_gen = cron_refresh_generation;
 
     cron_fetch_in_flight = TRUE;
+    CronFetchContext *ctx1 = cron_fetch_context_new(current_ui_gen, current_refresh_gen);
     g_autofree gchar *req_id1 = gateway_rpc_request(
-        "cron.list", NULL, 0, on_cron_rpc_response, GUINT_TO_POINTER(current_gen));
+        "cron.list", NULL, 0, on_cron_rpc_response, ctx1);
     if (!req_id1) {
         cron_fetch_in_flight = FALSE;
+        cron_fetch_context_free(ctx1);
         if (cron_status_label)
             gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
     }
 
     cron_status_fetch_in_flight = TRUE;
+    CronFetchContext *ctx2 = cron_fetch_context_new(current_ui_gen, current_refresh_gen);
     g_autofree gchar *req_id2 = gateway_rpc_request(
-        "cron.status", NULL, 0, on_cron_status_rpc_response, GUINT_TO_POINTER(current_gen));
-    if (!req_id2) cron_status_fetch_in_flight = FALSE;
+        "cron.status", NULL, 0, on_cron_status_rpc_response, ctx2);
+    if (!req_id2) {
+        cron_status_fetch_in_flight = FALSE;
+        cron_fetch_context_free(ctx2);
+    }
 
     cron_runs_fetch_in_flight = TRUE;
     JsonBuilder *b = json_builder_new();
@@ -1043,14 +1113,21 @@ static void cron_refresh(void) {
     json_builder_end_object(b);
     JsonNode *runs_params = json_builder_get_root(b);
     g_object_unref(b);
-    
+
+    CronFetchContext *ctx3 = cron_fetch_context_new(current_ui_gen, current_refresh_gen);
     g_autofree gchar *req_id3 = gateway_rpc_request(
-        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, GUINT_TO_POINTER(current_gen));
-    if (!req_id3) cron_runs_fetch_in_flight = FALSE;
+        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, ctx3);
+    if (!req_id3) {
+        cron_runs_fetch_in_flight = FALSE;
+        cron_fetch_context_free(ctx3);
+    }
     json_node_unref(runs_params);
 }
 
 static void cron_destroy(void) {
+    /* Invalidate every in-flight fetch/mutation callback from the old UI epoch. */
+    cron_ui_generation++;
+
     cron_list_box = NULL;
     cron_status_label = NULL;
     cron_scheduler_banner = NULL;
@@ -1058,16 +1135,16 @@ static void cron_destroy(void) {
     cron_fetch_in_flight = FALSE;
     cron_status_fetch_in_flight = FALSE;
     cron_runs_fetch_in_flight = FALSE;
-    
+
     gateway_cron_data_free(cron_data_cache);
     cron_data_cache = NULL;
-    
+
     gateway_cron_status_free(cron_status_cache);
     cron_status_cache = NULL;
-    
+
     gateway_cron_runs_data_free(cron_runs_cache);
     cron_runs_cache = NULL;
-    
+
     cron_last_fetch_us = 0;
 }
 
