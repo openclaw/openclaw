@@ -167,64 +167,28 @@ function isProtectedPathEqual(
     return true;
   }
 
-  const isIdKeyedEntry = (entry: unknown): entry is Record<string, unknown> & { id: string } =>
-    Boolean(
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      typeof (entry as { id?: unknown }).id === "string" &&
-      (entry as { id: string }).id.length > 0,
-    );
-
-  const indexById = (list: unknown): Map<string, Record<string, unknown>> => {
-    const out = new Map<string, Record<string, unknown>>();
-    if (!Array.isArray(list)) {
-      return out;
-    }
-    for (const entry of list) {
-      if (isIdKeyedEntry(entry)) {
-        out.set(entry.id, entry);
-      }
-    }
-    return out;
-  };
-
-  const readUnkeyedValues = (list: unknown): unknown[] => {
+  const readProjectedEntries = (list: unknown): Array<{ id?: string; value: unknown }> => {
     if (!Array.isArray(list)) {
       return [];
     }
-    return list
-      .filter((entry) => !isIdKeyedEntry(entry))
-      .map((entry) => {
-        if (!subPath || !entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return entry;
-        }
-        return getValueAtCanonicalPath(entry as Record<string, unknown>, subPath);
-      });
+    return list.map((entry) => {
+      const id =
+        entry &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        typeof (entry as { id?: unknown }).id === "string" &&
+        (entry as { id: string }).id.length > 0
+          ? (entry as { id: string }).id
+          : undefined;
+      const value =
+        !subPath || !entry || typeof entry !== "object" || Array.isArray(entry)
+          ? entry
+          : getValueAtCanonicalPath(entry as Record<string, unknown>, subPath);
+      return { id, value };
+    });
   };
 
-  const currentEntries = indexById(currentList);
-  const nextEntries = indexById(nextList);
-  const ids = new Set([...currentEntries.keys(), ...nextEntries.keys()]);
-  for (const id of ids) {
-    const currentEntry = currentEntries.get(id);
-    const nextEntry = nextEntries.get(id);
-    const currentVal = subPath
-      ? currentEntry
-        ? getValueAtCanonicalPath(currentEntry, subPath)
-        : undefined
-      : currentEntry;
-    const nextVal = subPath
-      ? nextEntry
-        ? getValueAtCanonicalPath(nextEntry, subPath)
-        : undefined
-      : nextEntry;
-    if (!isDeepStrictEqual(currentVal, nextVal)) {
-      return false;
-    }
-  }
-
-  return isDeepStrictEqual(readUnkeyedValues(currentList), readUnkeyedValues(nextList));
+  return isDeepStrictEqual(readProjectedEntries(currentList), readProjectedEntries(nextList));
 }
 
 function assertGatewayConfigMutationAllowed(params: {

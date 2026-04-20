@@ -228,6 +228,24 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("blocks config.apply duplicate-id protected rewrites", () => {
+    expectBlockedApply(
+      {
+        agents: {
+          list: [{ id: "worker", sandbox: { mode: "all" } }],
+        },
+      },
+      {
+        agents: {
+          list: [
+            { id: "worker", sandbox: { mode: "off" } },
+            { id: "worker", sandbox: { mode: "all" } },
+          ],
+        },
+      },
+    );
+  });
+
   it("still allows benign config.apply replacements", () => {
     expectAllowedApply(
       {
