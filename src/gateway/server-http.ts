@@ -579,13 +579,15 @@ export function createHooksRequestHandler(
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end(
-        "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
+        "Hook token must be provided via Authorization: Bearer *** or X-OpenClaw-Token header (query parameters are not allowed).",
       );
+      logHooks.warn("hook rejected: token in query string");
       return true;
     }
 
     if (req.method !== "POST") {
       res.statusCode = 405;
+      logHooks.warn(`hook rejected: method ${req.method} not allowed`);
       res.setHeader("Allow", "POST");
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Method Not Allowed");
@@ -607,6 +609,7 @@ export function createHooksRequestHandler(
       }
       hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
       res.statusCode = 401;
+      logHooks.warn(`hook rejected: unauthorized from ${clientKey}`);
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Unauthorized");
       return true;
@@ -616,6 +619,7 @@ export function createHooksRequestHandler(
     const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {
       res.statusCode = 404;
+      logHooks.warn("hook rejected: empty path");
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
       return true;
@@ -629,6 +633,7 @@ export function createHooksRequestHandler(
           : body.error === "request body timeout"
             ? 408
             : 400;
+      logHooks.warn(`hook rejected: ${body.error}`);
       sendJson(res, status, { ok: false, error: body.error });
       return true;
     }
@@ -644,6 +649,7 @@ export function createHooksRequestHandler(
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
+        logHooks.warn(`hook rejected (wake): ${normalized.error}`);
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
@@ -655,10 +661,12 @@ export function createHooksRequestHandler(
     if (subPath === "agent") {
       const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
+        logHooks.warn(`hook rejected (agent): ${normalized.error}`);
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
       if (!isHookAgentAllowed(hooksConfig, normalized.value.agentId)) {
+        logHooks.warn(`hook rejected (agent): agent ${normalized.value.agentId} not allowed`);
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
         return true;
       }
@@ -668,6 +676,7 @@ export function createHooksRequestHandler(
         sessionKey: normalized.value.sessionKey,
       });
       if (!sessionKey.ok) {
+        logHooks.warn(`hook rejected (agent): ${sessionKey.error}`);
         sendJson(res, 400, { ok: false, error: sessionKey.error });
         return true;
       }
@@ -705,6 +714,7 @@ export function createHooksRequestHandler(
         allowedPrefixes &&
         !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
       ) {
+        logHooks.warn(`hook rejected (agent): session key prefix not allowed`);
         sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
         return true;
       }
@@ -730,6 +740,7 @@ export function createHooksRequestHandler(
         });
         if (mapped) {
           if (!mapped.ok) {
+            logHooks.warn(`hook rejected (mapping): ${mapped.error}`);
             sendJson(res, 400, { ok: false, error: mapped.error });
             return true;
           }
@@ -748,10 +759,12 @@ export function createHooksRequestHandler(
           }
           const channel = resolveHookChannel(mapped.action.channel);
           if (!channel) {
+            logHooks.warn(`hook rejected (mapping): channel ${mapped.action.channel} not found`);
             sendJson(res, 400, { ok: false, error: getHookChannelError() });
             return true;
           }
           if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
+            logHooks.warn(`hook rejected (mapping): agent ${mapped.action.agentId} not allowed`);
             sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
             return true;
           }
@@ -761,6 +774,7 @@ export function createHooksRequestHandler(
             sessionKey: mapped.action.sessionKey,
           });
           if (!sessionKey.ok) {
+            logHooks.warn(`hook rejected (mapping): ${sessionKey.error}`);
             sendJson(res, 400, { ok: false, error: sessionKey.error });
             return true;
           }
@@ -774,6 +788,7 @@ export function createHooksRequestHandler(
             allowedPrefixes &&
             !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
           ) {
+            logHooks.warn(`hook rejected (mapping): session key prefix not allowed`);
             sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
             return true;
           }
@@ -833,6 +848,7 @@ export function createHooksRequestHandler(
     }
 
     res.statusCode = 404;
+    logHooks.warn(`hook rejected: path ${subPath} not found`);
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("Not Found");
     return true;
