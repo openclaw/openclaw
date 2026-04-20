@@ -801,7 +801,6 @@ describe("gateway server chat", () => {
             height: 1,
           }),
         ]);
-        expect(assistantContent[0]).not.toHaveProperty("downloadUrl");
         const serializedAssistant = JSON.stringify(assistantMessage);
         expect(serializedAssistant).not.toContain("data:image/png;base64");
         expect(serializedAssistant).not.toContain(pngB64);

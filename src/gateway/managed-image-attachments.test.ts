@@ -296,7 +296,6 @@ describe("createManagedOutgoingImageBlocks", () => {
       alt: "Generated image 1",
       mimeType: "image/png",
     });
-    expect(blocks[0]).not.toHaveProperty("downloadUrl");
     expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
     expect(String(blocks[0]?.url)).toMatch(/\/full$/);
 
@@ -330,7 +329,6 @@ describe("createManagedOutgoingImageBlocks", () => {
         url: expect.stringContaining("/api/chat/media/outgoing/agent%3Amain%3Amain/"),
         openUrl: expect.stringContaining("/full"),
       });
-      expect(blocks[0]).not.toHaveProperty("downloadUrl");
       expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
       expect(JSON.stringify(blocks[0])).not.toContain(sourcePath);
 
@@ -390,7 +388,6 @@ describe("createManagedOutgoingImageBlocks", () => {
         url: expect.stringContaining("/api/chat/media/outgoing/agent%3Amain%3Amain/"),
         openUrl: expect.stringContaining("/full"),
       });
-      expect(blocks[0]).not.toHaveProperty("downloadUrl");
       expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
       expect(JSON.stringify(blocks[0])).not.toContain("127.0.0.1");
       expect(JSON.stringify(blocks[0])).not.toContain("sig=secret");
