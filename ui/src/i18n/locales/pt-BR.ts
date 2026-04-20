@@ -638,6 +638,12 @@ export const pt_BR: TranslationMap = {
   login: {
     subtitle: "Painel do Gateway",
     passwordPlaceholder: "opcional",
+    showToken: "Mostrar token",
+    hideToken: "Ocultar token",
+    toggleTokenVisibility: "Alternar visibilidade do token",
+    showPassword: "Mostrar senha",
+    hidePassword: "Ocultar senha",
+    togglePasswordVisibility: "Alternar visibilidade da senha",
   },
   chat: {
     disconnected: "Desconectado do gateway.",

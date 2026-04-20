@@ -627,6 +627,12 @@ export const zh_TW: TranslationMap = {
   login: {
     subtitle: "閘道儀表板",
     passwordPlaceholder: "可選",
+    showToken: "顯示權杖",
+    hideToken: "隱藏權杖",
+    toggleTokenVisibility: "切換權杖可見性",
+    showPassword: "顯示密碼",
+    hidePassword: "隱藏密碼",
+    togglePasswordVisibility: "切換密碼可見性",
   },
   chat: {
     disconnected: "已斷開與網關的連接。",

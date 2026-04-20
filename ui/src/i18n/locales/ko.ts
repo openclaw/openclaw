@@ -632,6 +632,12 @@ export const ko: TranslationMap = {
   login: {
     subtitle: "Gateway 대시보드",
     passwordPlaceholder: "선택 사항",
+    showToken: "토큰 표시",
+    hideToken: "토큰 숨기기",
+    toggleTokenVisibility: "토큰 표시 여부 전환",
+    showPassword: "비밀번호 표시",
+    hidePassword: "비밀번호 숨기기",
+    togglePasswordVisibility: "비밀번호 표시 여부 전환",
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",

@@ -629,6 +629,12 @@ export const en: TranslationMap = {
   login: {
     subtitle: "Gateway Dashboard",
     passwordPlaceholder: "optional",
+    showToken: "Show token",
+    hideToken: "Hide token",
+    toggleTokenVisibility: "Toggle token visibility",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    togglePasswordVisibility: "Toggle password visibility",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

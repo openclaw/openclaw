@@ -643,6 +643,12 @@ export const fr: TranslationMap = {
   login: {
     subtitle: "Tableau de bord Gateway",
     passwordPlaceholder: "facultatif",
+    showToken: "Afficher le jeton",
+    hideToken: "Masquer le jeton",
+    toggleTokenVisibility: "Afficher/masquer la visibilité du jeton",
+    showPassword: "Afficher le mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    togglePasswordVisibility: "Afficher/masquer la visibilité du mot de passe",
   },
   chat: {
     disconnected: "Déconnecté du Gateway.",

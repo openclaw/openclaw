@@ -641,6 +641,12 @@ export const tr: TranslationMap = {
   login: {
     subtitle: "Gateway Kontrol Paneli",
     passwordPlaceholder: "isteğe bağlı",
+    showToken: "Tokenı göster",
+    hideToken: "Tokenı gizle",
+    toggleTokenVisibility: "Token görünürlüğünü değiştir",
+    showPassword: "Parolayı göster",
+    hidePassword: "Parolayı gizle",
+    togglePasswordVisibility: "Parola görünürlüğünü değiştir",
   },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",

@@ -636,6 +636,12 @@ export const id: TranslationMap = {
   login: {
     subtitle: "Dasbor Gateway",
     passwordPlaceholder: "opsional",
+    showToken: "Tampilkan token",
+    hideToken: "Sembunyikan token",
+    toggleTokenVisibility: "Alihkan visibilitas token",
+    showPassword: "Tampilkan kata sandi",
+    hidePassword: "Sembunyikan kata sandi",
+    togglePasswordVisibility: "Alihkan visibilitas kata sandi",
   },
   chat: {
     disconnected: "Terputus dari gateway.",

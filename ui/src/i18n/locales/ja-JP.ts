@@ -639,6 +639,12 @@ export const ja_JP: TranslationMap = {
   login: {
     subtitle: "Gateway ダッシュボード",
     passwordPlaceholder: "任意",
+    showToken: "トークンを表示",
+    hideToken: "トークンを非表示",
+    toggleTokenVisibility: "トークンの表示/非表示を切り替え",
+    showPassword: "パスワードを表示",
+    hidePassword: "パスワードを非表示",
+    togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
   },
   chat: {
     disconnected: "Gateway から切断されました。",

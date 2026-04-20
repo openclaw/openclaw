@@ -626,6 +626,12 @@ export const zh_CN: TranslationMap = {
   login: {
     subtitle: "网关仪表盘",
     passwordPlaceholder: "可选",
+    showToken: "显示令牌",
+    hideToken: "隐藏令牌",
+    toggleTokenVisibility: "切换令牌可见性",
+    showPassword: "显示密码",
+    hidePassword: "隐藏密码",
+    togglePasswordVisibility: "切换密码可见性",
   },
   chat: {
     disconnected: "已断开与网关的连接。",

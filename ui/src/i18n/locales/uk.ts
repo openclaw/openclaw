@@ -640,6 +640,12 @@ export const uk: TranslationMap = {
   login: {
     subtitle: "Панель Gateway",
     passwordPlaceholder: "необов’язково",
+    showToken: "Показати токен",
+    hideToken: "Приховати токен",
+    toggleTokenVisibility: "Перемкнути видимість токена",
+    showPassword: "Показати пароль",
+    hidePassword: "Приховати пароль",
+    togglePasswordVisibility: "Перемкнути видимість пароля",
   },
   chat: {
     disconnected: "Відключено від шлюзу.",
