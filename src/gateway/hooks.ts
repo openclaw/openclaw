@@ -373,10 +373,10 @@ function isHookMappingShadowed(
   earlierMappings: HookMappingResolved[],
 ): boolean {
   return earlierMappings.some((earlier) => {
-    if (earlier.matchPath !== undefined && earlier.matchPath !== mapping.matchPath) {
+    if (earlier.matchPath && earlier.matchPath !== mapping.matchPath) {
       return false;
     }
-    return earlier.matchSource === undefined || earlier.matchSource === mapping.matchSource;
+    return !earlier.matchSource || earlier.matchSource === mapping.matchSource;
   });
 }
 

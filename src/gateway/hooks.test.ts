@@ -476,6 +476,56 @@ describe("gateway hooks helpers", () => {
       } as OpenClawConfig),
     ).not.toThrow();
   });
+
+  test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              match: { path: "/" },
+              action: "agent",
+              messageTemplate: "catch-all",
+              sessionKey: "hook:static",
+            },
+            {
+              match: { path: "gmail" },
+              action: "agent",
+              messageTemplate: "Subject: {{messages[0].subject}}",
+              sessionKey: "hook:gmail:{{messages[0].id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
+
+  test("resolveHooksConfig treats empty match.source as a wildcard for shadowing", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              match: { path: "gmail", source: "" },
+              action: "agent",
+              messageTemplate: "catch-all source",
+              sessionKey: "hook:static",
+            },
+            {
+              match: { path: "gmail", source: "gmail" },
+              action: "agent",
+              messageTemplate: "Subject: {{messages[0].subject}}",
+              sessionKey: "hook:gmail:{{messages[0].id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
