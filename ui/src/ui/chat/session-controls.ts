@@ -8,6 +8,7 @@ import {
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
+import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
@@ -146,24 +147,17 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return;
-    }
-    const key = normalizeLowercaseStringOrEmpty(trimmed);
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    options.push({
-      value: trimmed,
-      label:
+    pushUniqueTrimmedSelectOption(
+      options,
+      seen,
+      value,
+      (trimmed) =>
         label ??
         trimmed
           .split(/[-_]/g)
           .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
           .join(" "),
-    });
+    );
   };
 
   for (const label of listThinkingLevelLabels(provider)) {
