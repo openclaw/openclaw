@@ -86,13 +86,18 @@ function isHeifFamilyImageBuffer(buffer: Buffer): boolean {
   if (buffer.length < 16 || buffer.toString("ascii", 4, 8) !== "ftyp") {
     return false;
   }
+  const boxSize = buffer.readUInt32BE(0);
+  if (boxSize < 16) {
+    return false;
+  }
+  const brandRegionEnd = Math.min(boxSize, buffer.length);
 
   const majorBrand = readIsoBmffBrand(buffer, 8);
   if (majorBrand && HEIF_FAMILY_BRANDS.has(majorBrand)) {
     return true;
   }
 
-  for (let offset = 16; offset + 4 <= buffer.length; offset += 4) {
+  for (let offset = 16; offset + 4 <= brandRegionEnd; offset += 4) {
     const brand = readIsoBmffBrand(buffer, offset);
     if (brand && HEIF_FAMILY_BRANDS.has(brand)) {
       return true;
@@ -348,12 +353,12 @@ export async function sanitizeContentBlocksImages(
     }
 
     try {
-      const buffer = Buffer.from(canonicalData, "base64");
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
       if (mimeType === "image/avif" || mimeType === "image/heic" || mimeType === "image/heif") {
         throw new Error("unsupported image format");
       }
+      const buffer = Buffer.from(canonicalData, "base64");
       if (isHeifFamilyImageBuffer(buffer)) {
         throw new Error("unsupported image format");
       }
