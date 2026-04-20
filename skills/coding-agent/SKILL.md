@@ -307,6 +307,42 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 
 ---
 
+## Recovering from a destructive spawn
+
+Spawned agents run with broad file access — that's the point. Occasionally
+they will delete, overwrite, or mangle files you didn't want touched. Before
+an off-leash spawn (Claude Code with `--permission-mode bypassPermissions`,
+Codex with `--yolo`, any PTY session with write access to the workspace),
+create a filesystem snapshot of the workdir so you can restore it in one
+command if things go sideways.
+
+One zero-dependency tool that does this via native Copy-on-Write (APFS
+`clonefile()` / Linux `FICLONE`) is [cowback](https://github.com/jinbowang1/cowback):
+
+```bash
+# One-time setup in the target project
+cd /path/to/project
+cowback on          # watches + auto-snapshots on file changes
+
+# Now spawn the agent as usual
+bash pty:true workdir:/path/to/project command:"codex --yolo exec 'your task'"
+# or: cd /path/to/project && claude --permission-mode bypassPermissions --print 'your task'
+
+# If the agent broke something:
+cowback undo        # preview → confirm → restore
+```
+
+Snapshots are ~millisecond / ~0-disk-cost on CoW-capable filesystems (APFS,
+BTRFS, XFS with reflink), so leaving protection on has negligible overhead.
+On other filesystems it falls back to a regular copy.
+
+The point isn't the specific tool — any snapshot/restore utility works. The
+point is: once you've passed `bypassPermissions` / `--yolo`, you've given up
+the interactive confirmation safety net. Have an undo button before you do
+that.
+
+---
+
 ## Learnings (Jan 2026)
 
 - **PTY is essential:** Coding agents are interactive terminal apps. Without `pty:true`, output breaks or agent hangs.
