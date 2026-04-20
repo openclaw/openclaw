@@ -19,7 +19,14 @@ vi.mock("../progress.js", () => ({
 describe("probeGatewayStatus", () => {
   it("uses lightweight token-only probing for daemon status", async () => {
     callGatewayMock.mockReset();
-    probeGatewayMock.mockResolvedValueOnce({ ok: true });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
+    });
 
     const result = await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
@@ -29,7 +36,16 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({
+      ok: true,
+      kind: "connect",
+      capability: "write_capable",
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
+    });
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(probeGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
@@ -58,7 +74,12 @@ describe("probeGatewayStatus", () => {
       configPath: "/tmp/openclaw-daemon/openclaw.json",
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: undefined,
+    });
     expect(probeGatewayMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
@@ -78,6 +99,11 @@ describe("probeGatewayStatus", () => {
       ok: false,
       error: null,
       close: { code: 1008, reason: "pairing required" },
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "pairing_pending",
+      },
     });
 
     const result = await probeGatewayStatus({
@@ -87,6 +113,13 @@ describe("probeGatewayStatus", () => {
 
     expect(result).toEqual({
       ok: false,
+      kind: "connect",
+      capability: "pairing_pending",
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "pairing_pending",
+      },
       error: "gateway closed (1008): pairing required",
     });
   });
@@ -98,6 +131,11 @@ describe("probeGatewayStatus", () => {
       ok: false,
       error: "timeout",
       close: { code: 1008, reason: "pairing required" },
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "pairing_pending",
+      },
     });
 
     const result = await probeGatewayStatus({
@@ -107,6 +145,13 @@ describe("probeGatewayStatus", () => {
 
     expect(result).toEqual({
       ok: false,
+      kind: "connect",
+      capability: "pairing_pending",
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "pairing_pending",
+      },
       error: "gateway closed (1008): pairing required",
     });
   });
@@ -125,6 +170,7 @@ describe("probeGatewayStatus", () => {
 
     expect(result).toEqual({
       ok: false,
+      kind: "read",
       error: "missing scope: operator.admin",
     });
     expect(probeGatewayMock).not.toHaveBeenCalled();

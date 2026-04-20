@@ -1,6 +1,8 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
 
+type GatewayStatusProbeKind = "connect" | "read";
+
 function resolveProbeFailureMessage(result: {
   error?: string | null;
   close?: { code: number; reason: string } | null;
@@ -24,6 +26,7 @@ export async function probeGatewayStatus(opts: {
   requireRpc?: boolean;
   configPath?: string;
 }) {
+  const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
     const result = await withProgress(
       {
@@ -58,16 +61,26 @@ export async function probeGatewayStatus(opts: {
         });
       },
     );
+    const auth = "auth" in result ? result.auth : undefined;
     if (result.ok) {
-      return { ok: true } as const;
+      return {
+        ok: true,
+        kind,
+        capability: opts.requireRpc ? "read_only" : auth?.capability,
+        auth,
+      } as const;
     }
     return {
       ok: false,
+      kind,
+      capability: auth?.capability,
+      auth,
       error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {
     return {
       ok: false,
+      kind,
       error: formatErrorMessage(err),
     } as const;
   }
