@@ -7,8 +7,7 @@ import {
   ensureExplicitGatewayAuth,
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
-import { GatewayClient } from "../gateway/client.js";
-import { GatewayClientRequestError } from "../gateway/client.js";
+import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   GATEWAY_CLIENT_CAPS,
