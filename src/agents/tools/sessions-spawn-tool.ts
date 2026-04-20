@@ -34,6 +34,22 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 
+/**
+ * Properties in the sessions_spawn schema that are stripped when
+ * `simplifiedSchemaForGateway` is enabled. These include both ACP-only
+ * and complex subagent properties that cause strict-schema validation
+ * failures on non-native OpenAI-compatible providers.
+ */
+const GATEWAY_STRIPPED_SCHEMA_PROPERTIES = new Set([
+  // ACP-only
+  "streamTo",
+  "resumeSessionId",
+  // Complex subagent properties (nested objects/arrays that strict providers reject)
+  "lightContext",
+  "attachments",
+  "attachAs",
+]);
+
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
 let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
@@ -144,6 +160,32 @@ const SessionsSpawnToolSchema = Type.Object({
   ),
 });
 
+/**
+ * Build a sessions_spawn tool schema, optionally stripping properties that
+ * cause strict-schema validation failures on non-native providers.
+ *
+ * TypeBox computes the `required` array automatically from non-Optional
+ * properties, so we only need to filter the property map.
+ */
+function buildSessionsSpawnSchema(opts?: {
+  stripProperties?: ReadonlySet<string>;
+}): typeof SessionsSpawnToolSchema {
+  const strip = opts?.stripProperties;
+  if (!strip || strip.size === 0) {
+    return SessionsSpawnToolSchema;
+  }
+  const originalProps = SessionsSpawnToolSchema.properties;
+  const filteredProps: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(originalProps)) {
+    if (!strip.has(key)) {
+      filteredProps[key] = value;
+    }
+  }
+  return Type.Object(
+    filteredProps as Parameters<typeof Type.Object>[0],
+  ) as unknown as typeof SessionsSpawnToolSchema;
+}
+
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
@@ -154,6 +196,13 @@ export function createSessionsSpawnTool(
     sandboxed?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /**
+     * When true, strips both ACP-specific and complex subagent properties
+     * (streamTo, resumeSessionId, lightContext, attachments, attachAs) from
+     * the tool schema for proxy-gateway / strict-provider compatibility.
+     * The execute() function still accepts all parameters regardless.
+     */
+    simplifiedSchemaForGateway?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   return {
@@ -161,7 +210,11 @@ export function createSessionsSpawnTool(
     name: "sessions_spawn",
     displaySummary: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     description: describeSessionsSpawnTool(),
-    parameters: SessionsSpawnToolSchema,
+    parameters: buildSessionsSpawnSchema({
+      stripProperties: opts?.simplifiedSchemaForGateway
+        ? GATEWAY_STRIPPED_SCHEMA_PROPERTIES
+        : undefined,
+    }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
