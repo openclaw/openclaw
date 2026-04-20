@@ -27,6 +27,29 @@ describe("elevenlabs tts diagnostics", () => {
     };
   }
 
+  function createDefaultTtsRequest() {
+    return {
+      text: "hello",
+      apiKey: "test-key",
+      baseUrl: "https://api.elevenlabs.io",
+      voiceId: "pMsXgVXv3BLzUgSXRplE",
+      modelId: "eleven_multilingual_v2",
+      outputFormat: "mp3_44100_128",
+      voiceSettings: {
+        stability: 0.5,
+        similarityBoost: 0.75,
+        style: 0,
+        useSpeakerBoost: true,
+        speed: 1.0,
+      },
+      timeoutMs: 5_000,
+    };
+  }
+
+  async function expectDefaultTtsRequestToThrow(message: string | RegExp) {
+    await expect(elevenLabsTTS(createDefaultTtsRequest())).rejects.toThrow(message);
+  }
+
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
@@ -53,24 +76,7 @@ describe("elevenlabs tts diagnostics", () => {
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await expect(
-      elevenLabsTTS({
-        text: "hello",
-        apiKey: "test-key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
-        modelId: "eleven_multilingual_v2",
-        outputFormat: "mp3_44100_128",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0,
-          useSpeakerBoost: true,
-          speed: 1.0,
-        },
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow(
+    await expectDefaultTtsRequestToThrow(
       "ElevenLabs API error (429): Quota exceeded [code=quota_exceeded] [request_id=el_req_456]",
     );
   });
@@ -79,24 +85,7 @@ describe("elevenlabs tts diagnostics", () => {
     const fetchMock = vi.fn(async () => new Response("service unavailable", { status: 503 }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await expect(
-      elevenLabsTTS({
-        text: "hello",
-        apiKey: "test-key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
-        modelId: "eleven_multilingual_v2",
-        outputFormat: "mp3_44100_128",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0,
-          useSpeakerBoost: true,
-          speed: 1.0,
-        },
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow("ElevenLabs API error (503): service unavailable");
+    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503): service unavailable");
   });
 
   it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
@@ -109,24 +98,7 @@ describe("elevenlabs tts diagnostics", () => {
     const fetchMock = vi.fn(async () => streamed.response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await expect(
-      elevenLabsTTS({
-        text: "hello",
-        apiKey: "test-key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
-        modelId: "eleven_multilingual_v2",
-        outputFormat: "mp3_44100_128",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0,
-          useSpeakerBoost: true,
-          speed: 1.0,
-        },
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow("ElevenLabs API error (503)");
+    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503)");
 
     expect(streamed.getReadCount()).toBeLessThan(200);
   });

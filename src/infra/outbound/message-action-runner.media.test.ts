@@ -119,6 +119,35 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
+async function runBlueBubblesRemoteMediaAction(params: {
+  cfg: OpenClawConfig;
+  action: "sendAttachment" | "upload-file";
+}) {
+  return runMessageAction({
+    cfg: params.cfg,
+    action: params.action,
+    params: {
+      channel: "bluebubbles",
+      target: "+15551234567",
+      media: "https://example.com/pic.png",
+      message: "caption",
+    },
+  });
+}
+
+function expectBlueBubblesRemoteMediaPayload(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  expect(result.kind).toBe("action");
+  expect(result.payload).toMatchObject({
+    ok: true,
+    filename: "pic.png",
+    caption: "caption",
+    contentType: "image/png",
+  });
+  expect((result.payload as { buffer?: string }).buffer).toBe(
+    Buffer.from("hello").toString("base64"),
+  );
+}
+
 let actualLoadWebMedia: typeof loadWebMedia;
 
 const slackPlugin: ChannelPlugin = {
@@ -311,27 +340,9 @@ describe("runMessageAction media behavior", () => {
     }
 
     it("hydrates buffer and filename from media for sendAttachment", async () => {
-      const result = await runMessageAction({
-        cfg,
-        action: "sendAttachment",
-        params: {
-          channel: "bluebubbles",
-          target: "+15551234567",
-          media: "https://example.com/pic.png",
-          message: "caption",
-        },
-      });
+      const result = await runBlueBubblesRemoteMediaAction({ cfg, action: "sendAttachment" });
 
-      expect(result.kind).toBe("action");
-      expect(result.payload).toMatchObject({
-        ok: true,
-        filename: "pic.png",
-        caption: "caption",
-        contentType: "image/png",
-      });
-      expect((result.payload as { buffer?: string }).buffer).toBe(
-        Buffer.from("hello").toString("base64"),
-      );
+      expectBlueBubblesRemoteMediaPayload(result);
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[1]).toEqual(
         expect.objectContaining({
@@ -407,27 +418,9 @@ describe("runMessageAction media behavior", () => {
     });
 
     it("hydrates buffer and filename from media for bluebubbles upload-file", async () => {
-      const result = await runMessageAction({
-        cfg,
-        action: "upload-file",
-        params: {
-          channel: "bluebubbles",
-          target: "+15551234567",
-          media: "https://example.com/pic.png",
-          message: "caption",
-        },
-      });
+      const result = await runBlueBubblesRemoteMediaAction({ cfg, action: "upload-file" });
 
-      expect(result.kind).toBe("action");
-      expect(result.payload).toMatchObject({
-        ok: true,
-        filename: "pic.png",
-        caption: "caption",
-        contentType: "image/png",
-      });
-      expect((result.payload as { buffer?: string }).buffer).toBe(
-        Buffer.from("hello").toString("base64"),
-      );
+      expectBlueBubblesRemoteMediaPayload(result);
     });
 
     it("enforces sandboxed attachment paths for attachment actions", async () => {

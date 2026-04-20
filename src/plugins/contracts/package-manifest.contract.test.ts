@@ -8,9 +8,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginId: "discord",
     pluginLocalRuntimeDeps: [
       "@buape/carbon",
-      "@discordjs/opus",
       "@discordjs/voice",
-      "@snazzah/davey",
       "discord-api-types",
       "opusscript",
     ],

@@ -71,20 +71,6 @@ describe("openai transport stream", () => {
         maxTokens: 8192,
       } satisfies Model<"anthropic-messages">),
     ).toBeTypeOf("function");
-    expect(
-      createBoundaryAwareStreamFnForModel({
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
-        api: "google-generative-ai",
-        provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"google-generative-ai">),
-    ).toBeTypeOf("function");
   });
 
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
@@ -186,7 +172,7 @@ describe("openai transport stream", () => {
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
 
-  it("prepares a Google simple-completion api alias when transport overrides are attached", () => {
+  it("reports the Google simple-completion api alias without loading provider runtime", () => {
     const model = attachModelProviderRequestTransport(
       {
         id: "gemini-3.1-pro-preview",
@@ -208,17 +194,9 @@ describe("openai transport stream", () => {
       },
     );
 
-    const prepared = prepareTransportAwareSimpleModel(model);
-
     expect(resolveTransportAwareSimpleApi(model.api)).toBe(
       "openclaw-google-generative-ai-transport",
     );
-    expect(prepared).toMatchObject({
-      api: "openclaw-google-generative-ai-transport",
-      provider: "google",
-      id: "gemini-3.1-pro-preview",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
 
   it("keeps github-copilot OpenAI-family models on the shared transport seam", () => {

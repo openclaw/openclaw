@@ -85,7 +85,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Ensure version is not already published
         env:
@@ -109,6 +108,11 @@ jobs:
         env:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
+
+      - name: Check test types
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: pnpm check:test-types
 
       - name: Check architecture
         env:
@@ -308,7 +312,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Ensure version is not already published
         run: |

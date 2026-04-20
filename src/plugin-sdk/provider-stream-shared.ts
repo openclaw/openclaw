@@ -76,13 +76,14 @@ function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
   });
 }
 
-function wrapStreamDecodeToolCallArgumentHtmlEntities(
+export function wrapStreamMessageObjects(
   stream: ReturnType<typeof streamSimple>,
+  transformMessage: (message: unknown) => void,
 ): ReturnType<typeof streamSimple> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    decodeToolCallArgumentsHtmlEntitiesInMessage(message);
+    transformMessage(message);
     return message;
   };
 
@@ -95,8 +96,8 @@ function wrapStreamDecodeToolCallArgumentHtmlEntities(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as { partial?: unknown; message?: unknown };
-            decodeToolCallArgumentsHtmlEntitiesInMessage(event.partial);
-            decodeToolCallArgumentsHtmlEntitiesInMessage(event.message);
+            transformMessage(event.partial);
+            transformMessage(event.message);
           }
           return result;
         },
@@ -119,10 +120,10 @@ export function createHtmlEntityToolCallArgumentDecodingWrapper(
     const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeToolCallArgumentHtmlEntities(stream),
+        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
       );
     }
-    return wrapStreamDecodeToolCallArgumentHtmlEntities(maybeStream);
+    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
   };
 }
 

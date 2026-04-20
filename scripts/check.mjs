@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 
 export async function main(argv = process.argv.slice(2)) {
   const timed = argv.includes("--timed");
   const includeArchitecture = argv.includes("--include-architecture");
+  const includeTestTypes = argv.includes("--include-test-types");
 
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
+    { name: "temp path guard", args: ["check:temp-path-guardrails"] },
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },
     includeArchitecture
@@ -17,7 +20,7 @@ export async function main(argv = process.argv.slice(2)) {
   const stages = [
     {
       name: "preflight guards",
-      parallel: false,
+      parallel: true,
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
         { name: "tool display", args: ["tool-display:check"] },
@@ -27,7 +30,12 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "typecheck",
       parallel: false,
-      commands: [{ name: "typecheck", args: ["tsgo:all"] }],
+      commands: [
+        {
+          name: includeTestTypes ? "typecheck all" : "typecheck prod",
+          args: [includeTestTypes ? "tsgo:all" : "tsgo:prod"],
+        },
+      ],
     },
     {
       name: "lint",
@@ -104,20 +112,7 @@ async function runCommand(command) {
 }
 
 function printSummary(timings) {
-  console.error("\n[check] summary");
-  for (const timing of timings) {
-    const status = timing.status === 0 ? "ok" : `failed:${timing.status}`;
-    console.error(
-      `${formatMs(timing.durationMs).padStart(8)}  ${status.padEnd(9)}  ${timing.name}`,
-    );
-  }
-}
-
-function formatMs(durationMs) {
-  if (durationMs < 1000) {
-    return `${Math.round(durationMs)}ms`;
-  }
-  return `${(durationMs / 1000).toFixed(2)}s`;
+  printTimingSummary("check", timings);
 }
 
 if (import.meta.main) {

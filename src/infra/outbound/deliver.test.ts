@@ -230,7 +230,7 @@ describe("deliverOutboundPayloads", () => {
       cfg: {},
       channel: "whatsapp",
       to: "+1555",
-      payloads: [{ text: "hello" }],
+      payloads: [{ text: "hello", mediaUrl: "file:///tmp/policy.png" }],
       deps: { whatsapp: sendWhatsApp },
       session: {
         key: "agent:main:whatsapp:group:ops",
@@ -259,7 +259,7 @@ describe("deliverOutboundPayloads", () => {
       cfg: {},
       channel: "whatsapp",
       to: "+1555",
-      payloads: [{ text: "hello" }],
+      payloads: [{ text: "hello", mediaUrl: "file:///tmp/policy.png" }],
       deps: { whatsapp: sendWhatsApp },
       session: {
         key: "agent:main:whatsapp:group:ops",
@@ -293,7 +293,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       accountId: "destination-account",
-      payloads: [{ text: "hello" }],
+      payloads: [{ text: "hello", mediaUrl: "file:///tmp/policy.png" }],
       deps: { whatsapp: sendWhatsApp },
       session: {
         key: "agent:main:whatsapp:group:ops",
@@ -309,6 +309,29 @@ describe("deliverOutboundPayloads", () => {
         requesterSenderId: "attacker",
       }),
     );
+    resolveMediaAccessSpy.mockRestore();
+  });
+
+  it("skips media access policy for text-only delivery", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w4", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+      session: {
+        key: "agent:main:whatsapp:group:ops",
+        requesterSenderId: "attacker",
+      },
+    });
+
+    expect(resolveMediaAccessSpy).not.toHaveBeenCalled();
     resolveMediaAccessSpy.mockRestore();
   });
 
