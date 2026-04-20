@@ -455,6 +455,7 @@ static void build_session_card(GatewaySession *s) {
 
     GtkWidget *model_combo = adw_combo_row_new();
     adw_combo_row_set_model(ADW_COMBO_ROW(model_combo), G_LIST_MODEL(model_dropdown));
+    g_object_unref(model_dropdown);
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(model_combo), "Model");
     gtk_widget_add_css_class(model_combo, "flat");
     adw_combo_row_set_selected(ADW_COMBO_ROW(model_combo), selected_model_idx);
@@ -469,6 +470,7 @@ static void build_session_card(GatewaySession *s) {
     });
     GtkWidget *think_combo = adw_combo_row_new();
     adw_combo_row_set_model(ADW_COMBO_ROW(think_combo), G_LIST_MODEL(think_model));
+    g_object_unref(think_model);
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(think_combo), "Thinking");
     gtk_widget_add_css_class(think_combo, "flat");
     
@@ -488,6 +490,7 @@ static void build_session_card(GatewaySession *s) {
     });
     GtkWidget *verb_combo = adw_combo_row_new();
     adw_combo_row_set_model(ADW_COMBO_ROW(verb_combo), G_LIST_MODEL(verb_model));
+    g_object_unref(verb_model);
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(verb_combo), "Verbose");
     gtk_widget_add_css_class(verb_combo, "flat");
     
