@@ -42,6 +42,13 @@ export async function compactEmbeddedPiSession(
 ): Promise<EmbeddedPiCompactResult> {
   const harnessResult = await maybeCompactAgentHarnessSession(params);
   if (harnessResult) {
+    if (harnessResult.ok && harnessResult.compacted) {
+      await runPostCompactionSideEffects({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+      });
+    }
     return harnessResult;
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
