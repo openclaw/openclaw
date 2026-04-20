@@ -10,7 +10,7 @@ const staleCfg = {
   skills: {
     entries: {
       whisper: {
-        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
       },
     },
   },
