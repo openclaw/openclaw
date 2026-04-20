@@ -85,6 +85,7 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  params?: Record<string, unknown>;
 };
 
 export type ModelProviderConfig = {

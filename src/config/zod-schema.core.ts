@@ -339,6 +339,8 @@ export const ModelDefinitionSchema = z
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    /** Provider-specific API parameters (e.g., Ollama `num_ctx`). Merged onto the runtime Model so native payload builders can read them. */
+    params: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
