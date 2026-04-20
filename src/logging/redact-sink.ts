@@ -78,9 +78,11 @@ function sanitizeFieldValueForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
+  inherited?: { allowDirectMask?: boolean },
 ): unknown {
+  const forceDirectMask = inherited?.allowDirectMask === true || isCredentialFieldName(key);
   if (typeof value === "string") {
-    if (isCredentialFieldName(key)) {
+    if (forceDirectMask) {
       const textSanitized = sanitizeStringForSink(value, resolved, { allowDirectMask: true });
       return textSanitized === value ? maskDirectSecret(value) : textSanitized;
     }
@@ -89,13 +91,14 @@ function sanitizeFieldValueForSink(
     });
   }
   // Propagate credential-key context so that non-string values (e.g. objects
-  // with a toJSON serializer) still receive forced masking after serialization.
+  // with a toJSON serializer, nested records, or array elements) still receive
+  // forced masking after serialization.
   return sanitizeValueForSink(
     value,
     resolved,
     seen,
     depth + 1,
-    isCredentialFieldName(key) ? { allowDirectMask: true } : undefined,
+    forceDirectMask ? { allowDirectMask: true } : undefined,
   );
 }
 
@@ -135,6 +138,7 @@ function sanitizeRecordForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
+  options?: { allowDirectMask?: boolean },
 ): JsonLikeRecord | string {
   if (seen.has(record)) {
     return CIRCULAR_SENTINEL;
@@ -143,7 +147,7 @@ function sanitizeRecordForSink(
   try {
     const out: JsonLikeRecord = {};
     for (const [key, value] of Object.entries(record)) {
-      out[key] = sanitizeFieldValueForSink(key, value, resolved, seen, depth);
+      out[key] = sanitizeFieldValueForSink(key, value, resolved, seen, depth, options);
     }
     return out;
   } finally {
@@ -180,7 +184,7 @@ function sanitizeValueForSink(
     return sanitizeErrorForSink(value, resolved, seen, depth);
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeValueForSink(entry, resolved, seen, depth + 1));
+    return value.map((entry) => sanitizeValueForSink(entry, resolved, seen, depth + 1, options));
   }
   if (typeof value === "object") {
     // Preserve toJSON semantics for objects like URL, Buffer, or custom classes
@@ -201,7 +205,7 @@ function sanitizeValueForSink(
         seen.delete(value);
       }
     }
-    return sanitizeRecordForSink(value as JsonLikeRecord, resolved, seen, depth);
+    return sanitizeRecordForSink(value as JsonLikeRecord, resolved, seen, depth, options);
   }
   return value;
 }

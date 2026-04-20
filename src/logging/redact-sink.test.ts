@@ -129,4 +129,37 @@ describe("redact-sink", () => {
     expect(sanitized.token).toBe(MASKED);
     expect(sanitized.token).not.toContain(SECRET);
   });
+
+  it("forces masking for nested objects under a credential-named parent key", () => {
+    // { token: { value: SECRET } } — the inner string must still be masked even
+    // though the inner key "value" is not itself a credential name. Without
+    // threading options through sanitizeRecordForSink, the nested record walk
+    // would drop the credential-key context and leak the raw secret.
+    const record = {
+      token: { value: SECRET },
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as unknown as {
+      token: { value: string };
+    };
+
+    expect(sanitized.token.value).toBe(MASKED);
+    // Source must not be mutated.
+    expect(record.token.value).toBe(SECRET);
+  });
+
+  it("forces masking for array elements under a credential-named parent key", () => {
+    // { apiKey: [SECRET, SECRET] } — each array element string must be masked,
+    // mirroring the toJSON and nested-object paths.
+    const record = {
+      apiKey: [SECRET, SECRET],
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as unknown as {
+      apiKey: string[];
+    };
+
+    expect(sanitized.apiKey[0]).toBe(MASKED);
+    expect(sanitized.apiKey[1]).toBe(MASKED);
+  });
 });
