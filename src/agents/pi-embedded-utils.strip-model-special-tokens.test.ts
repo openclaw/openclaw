@@ -129,5 +129,21 @@ describe("stripModelSpecialTokens", () => {
 
   it("treats plan-prefixed channel delimiters as leaked scaffolding", () => {
     expect(stripModelSpecialTokens("plan: <channel|>Visible answer")).toBe("Visible answer");
+    expect(stripModelSpecialTokens("planning notes\nplan: <channel|>Visible answer")).toBe(
+      "Visible answer",
+    );
+  });
+
+  it("does not treat ordinary prose with 'plan:' as leaked scaffolding", () => {
+    expect(stripModelSpecialTokens("My plan: <channel|> is the separator token.")).toBe(
+      "My plan: <channel|> is the separator token.",
+    );
+    expect(
+      stripModelSpecialTokens(
+        "Here is the explanation.\nMy plan: <channel|> is the separator token, not hidden scaffolding.",
+      ),
+    ).toBe(
+      "Here is the explanation.\nMy plan: <channel|> is the separator token, not hidden scaffolding.",
+    );
   });
 });

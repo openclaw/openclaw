@@ -3,7 +3,7 @@ const MIN_STRUCTURED_REPEAT_UNIT_LENGTH = 8;
 const VISIBLE_SUFFIX_BOUNDARY_RE = /[.!?:;)\]}>`'"]$/;
 const INTERNAL_PREAMBLE_HINT_RE =
   /\b(?:the user|instruction|output content|reply with|reply to|final response|general instruction|i will|i must|internal planning|plan:)\b/i;
-const DELIMITER_LEAK_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
+const DELIMITER_LEAK_HARD_HINT_RE = /\binternal planning\b|(?:^|[\r\n])\s*plan:\s*$/i;
 const DELIMITER_LEAK_LONG_HINT_RE =
   /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
 const SINGLE_ANSWER_INTENT_RE =

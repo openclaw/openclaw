@@ -834,6 +834,22 @@ describe("sanitizeAssistantVisibleText", () => {
 
   it("strips leaked plan-prefixed channel delimiters", () => {
     expect(sanitizeAssistantVisibleText("plan: <channel|>Visible answer")).toBe("Visible answer");
+    expect(sanitizeAssistantVisibleText("planning notes\nplan: <channel|>Visible answer")).toBe(
+      "Visible answer",
+    );
+  });
+
+  it("does not treat ordinary prose with 'plan:' as leaked scaffolding", () => {
+    expect(sanitizeAssistantVisibleText("My plan: <channel|> is the separator token.")).toBe(
+      "My plan: <channel|> is the separator token.",
+    );
+    expect(
+      sanitizeAssistantVisibleText(
+        "Here is the explanation.\nMy plan: <channel|> is the separator token, not hidden scaffolding.",
+      ),
+    ).toBe(
+      "Here is the explanation.\nMy plan: <channel|> is the separator token, not hidden scaffolding.",
+    );
   });
 
   it("preserves indentation for a leading fenced block while trimming surrounding blank lines", () => {

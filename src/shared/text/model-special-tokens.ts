@@ -22,7 +22,7 @@ import {
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
-const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
+const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\binternal planning\b|(?:^|[\r\n])\s*plan:\s*$/i;
 const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
   /\b(?:reply with|reply to|nothing else|output content|output the text directly|direct instruction|current session|i will output|i will reply|i must output|i must reply|i must adhere)\b/i;
 const CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE =
