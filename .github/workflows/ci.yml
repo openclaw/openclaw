@@ -97,7 +97,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Detect changed extensions
         id: changed_extensions
@@ -337,7 +336,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Setup Python
         id: setup-python
@@ -466,7 +464,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Build dist
         run: pnpm build:ci-artifacts
@@ -560,7 +557,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -643,7 +639,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run protocol check
         run: pnpm protocol:check
@@ -712,7 +707,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run extension shard
         env:
@@ -743,7 +737,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -809,21 +803,23 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Configure Node test resources
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
           TASK: ${{ matrix.task }}
         run: |
-          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
-          if [ "$TASK" = "test" ]; then
-            echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
-          fi
-          if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
-          fi
+          {
+            echo "OPENCLAW_VITEST_MAX_WORKERS=2"
+            if [ "$TASK" = "test" ]; then
+              echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1"
+              echo "OPENCLAW_TEST_PROJECTS_PARALLEL=4"
+              echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1"
+            fi
+            if [ "$TASK" = "channels" ]; then
+              echo "OPENCLAW_VITEST_MAX_WORKERS=1"
+            fi
+          } >> "$GITHUB_ENV"
 
       - name: Download dist artifact
         if: matrix.task == 'test'
@@ -933,7 +929,6 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1082,7 +1077,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run changed extension tests
         env:
@@ -1096,7 +1090,7 @@ jobs:
     name: "check"
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1151,12 +1145,16 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
         env:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
+
+      - name: Check test types
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: pnpm check:test-types
 
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
@@ -1232,7 +1230,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Run additional check shard
         env:
@@ -1289,8 +1286,7 @@ jobs:
                 run_check "ui:i18n:check" pnpm ui:i18n:check
               fi
               run_check "gateway-watch-regression" pnpm test:gateway:watch-regression
-              run_check "check:import-cycles" pnpm check:import-cycles
-              run_check "check:madge-import-cycles" pnpm check:madge-import-cycles
+              run_check "check:architecture" pnpm check:architecture
               ;;
             *)
               echo "Unsupported additional check group: $ADDITIONAL_CHECK_GROUP" >&2
@@ -1387,7 +1383,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Restore dist cache
         id: build-smoke-dist-cache
@@ -1484,7 +1479,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check docs
         run: pnpm check:docs
@@ -1575,11 +1569,6 @@ jobs:
         with:
           pnpm-version: "10.32.1"
           cache-key-suffix: "node24"
-          # Sticky disk mount currently retries/fails on every shard and adds ~50s
-          # before install while still yielding zero pnpm store reuse.
-          # Try exact-key actions/cache restores instead to recover store reuse
-          # without the sticky-disk mount penalty.
-          use-sticky-disk: "false"
           use-restore-keys: "false"
           use-actions-cache: "true"
 
@@ -1590,7 +1579,12 @@ jobs:
           pnpm -v
 
       - name: Capture node path
-        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+        run: |
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          if command -v cygpath >/dev/null 2>&1; then
+            node_bin="$(cygpath -u "$node_bin")"
+          fi
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         env:

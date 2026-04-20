@@ -785,12 +785,12 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes direct channel extension file targets to the channels config", () => {
+  it("routes direct Discord extension file targets to the Discord config", () => {
     expect(
       buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
     ).toEqual([
       {
-        config: "test/vitest/vitest.extension-channels.config.ts",
+        config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
@@ -809,10 +809,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes line extension targets to the extension channel config", () => {
+  it("routes line extension targets to the line config", () => {
     expect(buildVitestRunPlans(["extensions/line/src/send.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.extension-channels.config.ts",
+        config: "test/vitest/vitest.extension-line.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/line/src/send.test.ts"],
         watchMode: false,
@@ -831,10 +831,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes direct provider extension file targets to the extension providers config", () => {
+  it("routes direct OpenAI provider extension file targets to the OpenAI provider config", () => {
     expect(buildVitestRunPlans(["extensions/openai/openai-codex-provider.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.extension-providers.config.ts",
+        config: "test/vitest/vitest.extension-provider-openai.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/openai/openai-codex-provider.test.ts"],
         watchMode: false,
@@ -869,7 +869,7 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
-        config: "test/vitest/vitest.extension-channels.config.ts",
+        config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: ["-t", "mention"],
         includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
@@ -886,7 +886,7 @@ describe("test-projects args", () => {
       ...VITEST_NODE_PREFIX,
       "run",
       "--config",
-      "test/vitest/vitest.extension-channels.config.ts",
+      "test/vitest/vitest.extension-discord.config.ts",
     ]);
     expect(spec?.includePatterns).toEqual([
       "extensions/discord/src/monitor/message-handler.preflight.test.ts",

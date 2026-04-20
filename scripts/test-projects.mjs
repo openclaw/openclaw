@@ -11,6 +11,7 @@ import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
+  listFullExtensionVitestProjectConfigs,
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
@@ -33,7 +34,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.agents.config.ts", 170],
   ["test/vitest/vitest.extension-voice-call.config.ts", 169],
   ["test/vitest/vitest.extensions.config.ts", 168],
-  ["test/vitest/vitest.extension-channels.config.ts", 167],
+  ["test/vitest/vitest.extension-provider-openai.config.ts", 167],
   ["test/vitest/vitest.runtime-config.config.ts", 166],
   ["test/vitest/vitest.contracts.config.ts", 165],
   ["test/vitest/vitest.tasks.config.ts", 165],
@@ -46,6 +47,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.wizard.config.ts", 130],
   ["test/vitest/vitest.unit-src.config.ts", 125],
   ["test/vitest/vitest.extension-matrix.config.ts", 100],
+  ["test/vitest/vitest.extension-discord.config.ts", 98],
   ["test/vitest/vitest.extension-providers.config.ts", 96],
   ["test/vitest/vitest.extension-telegram.config.ts", 94],
   ["test/vitest/vitest.extension-whatsapp.config.ts", 92],
@@ -54,6 +56,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.media.config.ts", 84],
   ["test/vitest/vitest.plugins.config.ts", 82],
   ["test/vitest/vitest.bundled.config.ts", 80],
+  ["test/vitest/vitest.extension-slack.config.ts", 78],
   ["test/vitest/vitest.commands-light.config.ts", 48],
   ["test/vitest/vitest.plugin-sdk.config.ts", 46],
   ["test/vitest/vitest.auto-reply-top-level.config.ts", 45],
@@ -70,6 +73,9 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.extension-feishu.config.ts", 18],
   ["test/vitest/vitest.extension-mattermost.config.ts", 16],
   ["test/vitest/vitest.extension-messaging.config.ts", 14],
+  ["test/vitest/vitest.extension-imessage.config.ts", 13],
+  ["test/vitest/vitest.extension-line.config.ts", 12],
+  ["test/vitest/vitest.extension-signal.config.ts", 11],
   ["test/vitest/vitest.extension-acpx.config.ts", 10],
   ["test/vitest/vitest.extension-diffs.config.ts", 8],
   ["test/vitest/vitest.extension-memory.config.ts", 6],
@@ -160,6 +166,19 @@ function orderFullSuiteSpecsForParallelRun(specs) {
   });
 }
 
+function isFullExtensionsProjectRun(specs) {
+  const fullExtensionProjectConfigs = new Set(listFullExtensionVitestProjectConfigs());
+  return (
+    specs.length > 1 &&
+    specs.every(
+      (spec) =>
+        spec.watchMode === false &&
+        spec.includePatterns === null &&
+        fullExtensionProjectConfigs.has(spec.config),
+    )
+  );
+}
+
 async function runVitestSpecsParallel(specs, concurrency) {
   let nextIndex = 0;
   let exitCode = 0;
@@ -216,6 +235,11 @@ async function main() {
           cwd: process.cwd(),
         });
 
+  if (runSpecs.length === 0) {
+    console.error("[test] no changed test targets; skipping Vitest.");
+    return;
+  }
+
   releaseLock = shouldAcquireLocalHeavyCheckLock(runSpecs, process.env)
     ? acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
@@ -228,7 +252,8 @@ async function main() {
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
     !runSpecs.some((spec) => spec.watchMode);
-  if (isFullSuiteRun) {
+  const isParallelShardRun = isFullSuiteRun || isFullExtensionsProjectRun(runSpecs);
+  if (isParallelShardRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {
       const localFullSuiteProfile = resolveLocalFullSuiteProfile(process.env);

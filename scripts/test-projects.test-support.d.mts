@@ -35,6 +35,8 @@ export function resolveChangedTargetArgs(
   listChangedPaths?: (baseRef: string, cwd: string) => string[],
 ): string[] | null;
 
+export function listFullExtensionVitestProjectConfigs(): string[];
+
 export function createVitestRunSpecs(
   args: string[],
   params?: {
