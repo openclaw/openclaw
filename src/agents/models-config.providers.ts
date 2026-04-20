@@ -494,6 +494,11 @@ function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig 
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
+  env?: NodeJS.ProcessEnv;
+  secretDefaults?: unknown;
+  sourceProviders?: ModelsConfig["providers"];
+  sourceSecretDefaults?: unknown;
+  secretRefManagedProviders?: Set<string>;
 }): ModelsConfig["providers"] {
   const { providers } = params;
   if (!providers) {
@@ -1292,3 +1297,7 @@ export async function resolveImplicitBedrockProvider(params: {
     models,
   } satisfies ProviderConfig;
 }
+
+// New upstream re-exports required by models-config.plan.ts
+export { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
+export { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
