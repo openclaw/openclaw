@@ -29,6 +29,7 @@ export const AgentDefaultsSchema = z
     musicGenerationModel: AgentModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
+    notifyOnModelFallback: z.boolean().optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
     models: z

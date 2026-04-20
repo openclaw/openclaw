@@ -3154,6 +3154,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              notifyOnModelFallback: {
+                type: "boolean",
+                title: "Notify On Model Fallback",
+                description:
+                  "When true, prepend a one-line notice when a reply falls back to another chat model outside verbose mode.",
+              },
               pdfMaxBytesMb: {
                 type: "number",
                 exclusiveMinimum: 0,
@@ -25533,6 +25539,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Model Fallbacks",
       help: "Ordered fallback models (provider/model). Used when the primary model fails.",
       tags: ["reliability", "models"],
+    },
+    "agents.defaults.notifyOnModelFallback": {
+      label: "Notify On Model Fallback",
+      help: "When true, prepend a one-line notice when a reply falls back to another chat model outside verbose mode.",
+      tags: ["reliability"],
     },
     "agents.defaults.imageModel.primary": {
       label: "Image Model",

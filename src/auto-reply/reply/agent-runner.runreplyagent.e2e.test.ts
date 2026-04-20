@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -82,6 +83,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   state.compactEmbeddedPiSessionMock.mockReset();
   state.compactEmbeddedPiSessionMock.mockResolvedValue({
     ok: true,
@@ -619,10 +621,21 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
-  it("announces model fallback only when verbose mode is enabled", async () => {
+  it("announces model fallback when verbose mode or notifyOnFallback is enabled", async () => {
     const cases = [
-      { name: "verbose on", verbose: "on" as const, expectNotice: true },
-      { name: "verbose off", verbose: "off" as const, expectNotice: false },
+      { name: "verbose on", verbose: "on" as const, notifyOnFallback: false, expectNotice: true },
+      {
+        name: "verbose off",
+        verbose: "off" as const,
+        notifyOnFallback: false,
+        expectNotice: false,
+      },
+      {
+        name: "notifyOnFallback on",
+        verbose: "off" as const,
+        notifyOnFallback: true,
+        expectNotice: true,
+      },
     ] as const;
     for (const testCase of cases) {
       const sessionEntry: SessionEntry = {
@@ -656,6 +669,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
       });
+      const runtimeConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude",
+            },
+            ...(testCase.notifyOnFallback ? { notifyOnModelFallback: true } : undefined),
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
       const phases: string[] = [];
       const off = onAgentEvent((evt) => {
         const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
