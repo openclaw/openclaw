@@ -183,6 +183,12 @@ export function createCronPromptExecutor(params: {
           abortSignal: params.abortSignal,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
+          // Isolated cron runs are ephemeral: the session lives only for the
+          // duration of this one agent turn. Dispose the bundled-MCP runtime
+          // when the run completes so long-lived MCP subprocesses (e.g. a
+          // Lightpanda binary spawned via mcp.servers) do not accumulate one
+          // per cron fire. See issue #68623.
+          cleanupBundleMcpOnRunEnd: true,
         });
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
