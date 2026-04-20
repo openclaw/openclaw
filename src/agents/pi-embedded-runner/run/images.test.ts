@@ -13,6 +13,9 @@ import {
   splitPromptAndAttachmentRefs,
 } from "./images.js";
 
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
   expect(result.detectedRefs).toHaveLength(0);
   expect(result.images).toHaveLength(0);
@@ -77,10 +80,11 @@ describe("detectImageReferences", () => {
       1. /home/user/photo1.png
       2. https://mysite.com/photo2.jpg
     `,
-      1,
+      2,
     );
 
     expect(refs.some((r) => r.type === "path")).toBe(true);
+    expect(refs.some((r) => r.type === "remote-url")).toBe(true);
   });
 
   it("handles various image extensions", () => {
@@ -164,15 +168,30 @@ what about these images?`,
     expect(ref?.resolved).toContain("IMG_6430.jpeg");
   });
 
-  it("ignores remote URLs entirely (local-only)", () => {
+  it("detects explicit remote HTTP(S) image urls alongside local paths", () => {
     const refs = expectImageReferenceCount(
       `To send an image: MEDIA:https://example.com/image.jpg
 Here is my actual image: /path/to/real.png
 Also https://cdn.mysite.com/img.jpg`,
-      1,
+      3,
     );
 
-    expect(refs[0]?.raw).toBe("/path/to/real.png");
+    expect(refs).toContainEqual({
+      raw: "/path/to/real.png",
+      resolved: "/path/to/real.png",
+      type: "path",
+    });
+    expect(refs.filter((ref) => ref.type === "remote-url")).toHaveLength(2);
+  });
+
+  it("trims trailing punctuation from explicit remote urls", () => {
+    const ref = expectSingleImageReference("https://example.com/image.png, describe the image");
+
+    expect(ref).toEqual({
+      raw: "https://example.com/image.png",
+      resolved: "https://example.com/image.png",
+      type: "remote-url",
+    });
   });
 
   it("handles single file format with URL (no index)", () => {
@@ -289,6 +308,53 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expectNoPromptImages(result);
+  });
+
+  it("loads explicit remote image urls into the same native vision payload as inline images", async () => {
+    const originalFetch = globalThis.fetch;
+    const tinyPngBuffer = Buffer.from(TINY_PNG_BASE64, "base64");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url !== "https://example.com/image.png") {
+        throw new Error(`unexpected url: ${url}`);
+      }
+      return new Response(tinyPngBuffer, {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "content-length": String(tinyPngBuffer.length),
+        },
+      });
+    }) as typeof fetch;
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "https://example.com/image.png, 这两张图片里有什么",
+        workspaceDir: "/tmp",
+        model: { input: ["text", "image"] },
+        existingImages: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+      });
+
+      expect(result.detectedRefs).toEqual([
+        {
+          raw: "https://example.com/image.png",
+          resolved: "https://example.com/image.png",
+          type: "remote-url",
+        },
+      ]);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(2);
+      expect(result.images[0]).toEqual({
+        type: "image",
+        data: TINY_PNG_BASE64,
+        mimeType: "image/png",
+      });
+      expect(result.images[1]?.type).toBe("image");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
