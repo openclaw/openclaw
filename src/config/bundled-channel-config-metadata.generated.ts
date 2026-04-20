@@ -15175,6 +15175,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
+        silentErrorReplies: {
+          type: "boolean",
+        },
         accounts: {
           type: "object",
           propertyNames: {
@@ -15425,6 +15428,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 additionalProperties: false,
               },
+              silentErrorReplies: {
+                type: "boolean",
+              },
               name: {
                 type: "string",
               },
@@ -15484,6 +15490,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       debounceMs: {
         label: "WhatsApp Message Debounce (ms)",
         help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
+      },
+      silentErrorReplies: {
+        label: "WhatsApp Silent Error Replies",
+        help: "Suppress gateway-synthesized error replies instead of sending them into the WhatsApp chat.",
       },
       configWrites: {
         label: "WhatsApp Config Writes",
