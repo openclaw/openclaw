@@ -5,9 +5,18 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
+const getGlobalHookRunnerMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => getGlobalHookRunnerMock(),
+}));
+
+type SessionsSendHookRunnerMock = {
+  hasHooks: ReturnType<typeof vi.fn>;
+  runSessionsSend: ReturnType<typeof vi.fn>;
+};
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
@@ -164,6 +173,7 @@ describe("sessions tools", () => {
     sessionsSendA2ATesting.setDepsForTest({
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
+    getGlobalHookRunnerMock.mockReturnValue(null);
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
@@ -1087,5 +1097,170 @@ describe("sessions tools", () => {
       message: "announce now",
       threadId: "99",
     });
+  });
+
+  it("sessions_send falls back to core delivery when sessions_send hooks decline", async () => {
+    const hookRunner: SessionsSendHookRunnerMock = {
+      hasHooks: vi.fn((hookName: string) => hookName === "sessions_send"),
+      runSessionsSend: vi.fn(async () => ({ handled: false, reason: "not delegated" })),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(hookRunner);
+    let historyCallCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-1", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyCallCount += 1;
+        return {
+          messages:
+            historyCallCount === 1
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "done" }],
+                    timestamp: 20,
+                  },
+                ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-hook-fallback", {
+      sessionKey: "main",
+      message: "wait",
+      timeoutSeconds: 1,
+      task: { intent: "delegate", instructions: "delegate wait" },
+    });
+
+    expect(result.details).toMatchObject({ status: "ok", reply: "done" });
+    expect(hookRunner.runSessionsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "main",
+        target: { sessionKey: "main", displayKey: "main" },
+        message: "wait",
+        task: expect.objectContaining({
+          intent: "delegate",
+          instructions: "delegate wait",
+        }),
+      }),
+      { requesterSessionKey: "discord:group:req", requesterChannel: "discord" },
+    );
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      ),
+    ).toBe(true);
+  });
+
+  it("sessions_send waits on plugin-produced delegated metadata", async () => {
+    const hookRunner: SessionsSendHookRunnerMock = {
+      hasHooks: vi.fn((hookName: string) => hookName === "sessions_send"),
+      runSessionsSend: vi.fn(async () => ({
+        handled: true,
+        mode: "delegated",
+        dispatch: {
+          kind: "a2a-broker",
+          taskId: "task-123",
+          waitRunId: "wait-123",
+          cancelTarget: { kind: "session_run", sessionKey: "main", runId: "run-9" },
+        },
+      })),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(hookRunner);
+    let historyCallCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent.wait") {
+        return { runId: "wait-123", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyCallCount += 1;
+        return {
+          messages:
+            historyCallCount === 1
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "delegated reply" }],
+                    timestamp: 20,
+                  },
+                ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-hook-delegated", {
+      sessionKey: "main",
+      message: "delegate this",
+      timeoutSeconds: 1,
+      task: {
+        intent: "delegate",
+        instructions: "delegate this",
+        runtime: {
+          roundOneReply: "delegated round one",
+          cancelTarget: { kind: "session_run", sessionKey: "main", runId: "run-9" },
+        },
+        correlationId: "corr-123",
+        parentRunId: "parent-123",
+      },
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      runId: "wait-123",
+      reply: "delegated reply",
+      delivery: { status: "pending", mode: "announce" },
+    });
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      ),
+    ).toBe(false);
+    expect(hookRunner.runSessionsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({
+          correlationId: "corr-123",
+          parentRunId: "parent-123",
+          runtime: expect.objectContaining({
+            cancelTarget: { kind: "session_run", sessionKey: "main", runId: "run-9" },
+          }),
+        }),
+      }),
+      { requesterSessionKey: "discord:group:req", requesterChannel: "discord" },
+    );
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) =>
+          (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
+          (call[0] as { params?: { runId?: string } }).params?.runId === "wait-123",
+      ),
+    ).toBe(true);
   });
 });

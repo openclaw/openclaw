@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -42,6 +43,119 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+type SessionsSendHookTask = {
+  intent?: string;
+  instructions?: string;
+  constraints?: {
+    timeoutSeconds?: number;
+    maxPingPongTurns?: number;
+  };
+  runtime?: {
+    waitRunId?: string;
+    roundOneReply?: string;
+    announceTimeoutMs?: number;
+    maxPingPongTurns?: number;
+    cancelTarget?: {
+      kind?: string;
+      sessionKey?: string;
+      runId?: string;
+    };
+  };
+  requester?: {
+    sessionKey?: string;
+    channel?: string;
+  };
+  correlationId?: string;
+  parentRunId?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readOptionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readSessionsSendHookTask(
+  params: Record<string, unknown>,
+  defaults: {
+    message: string;
+    timeoutSeconds: number;
+    announceTimeoutMs: number;
+    maxPingPongTurns: number;
+    requesterSessionKey?: string;
+    requesterChannel?: string;
+  },
+): SessionsSendHookTask | undefined {
+  const rawTask = isRecord(params.task) ? params.task : undefined;
+  if (!rawTask) {
+    return undefined;
+  }
+  const rawConstraints = isRecord(rawTask.constraints) ? rawTask.constraints : undefined;
+  const rawRuntime = isRecord(rawTask.runtime) ? rawTask.runtime : undefined;
+  const rawRequester = isRecord(rawTask.requester) ? rawTask.requester : undefined;
+  const rawCancelTarget = isRecord(rawRuntime?.cancelTarget) ? rawRuntime.cancelTarget : undefined;
+  return {
+    intent: normalizeOptionalString(
+      typeof rawTask.intent === "string" ? rawTask.intent : undefined,
+    ),
+    instructions:
+      normalizeOptionalString(
+        typeof rawTask.instructions === "string" ? rawTask.instructions : undefined,
+      ) ?? defaults.message,
+    constraints: {
+      timeoutSeconds:
+        readOptionalFiniteNumber(rawConstraints?.timeoutSeconds) ?? defaults.timeoutSeconds,
+      maxPingPongTurns:
+        readOptionalFiniteNumber(rawConstraints?.maxPingPongTurns) ?? defaults.maxPingPongTurns,
+    },
+    runtime: {
+      waitRunId: normalizeOptionalString(
+        typeof rawRuntime?.waitRunId === "string" ? rawRuntime.waitRunId : undefined,
+      ),
+      roundOneReply: normalizeOptionalString(
+        typeof rawRuntime?.roundOneReply === "string" ? rawRuntime.roundOneReply : undefined,
+      ),
+      announceTimeoutMs:
+        readOptionalFiniteNumber(rawRuntime?.announceTimeoutMs) ?? defaults.announceTimeoutMs,
+      maxPingPongTurns:
+        readOptionalFiniteNumber(rawRuntime?.maxPingPongTurns) ?? defaults.maxPingPongTurns,
+      cancelTarget: rawCancelTarget
+        ? {
+            kind: normalizeOptionalString(
+              typeof rawCancelTarget.kind === "string" ? rawCancelTarget.kind : undefined,
+            ),
+            sessionKey: normalizeOptionalString(
+              typeof rawCancelTarget.sessionKey === "string"
+                ? rawCancelTarget.sessionKey
+                : undefined,
+            ),
+            runId: normalizeOptionalString(
+              typeof rawCancelTarget.runId === "string" ? rawCancelTarget.runId : undefined,
+            ),
+          }
+        : undefined,
+    },
+    requester: {
+      sessionKey:
+        normalizeOptionalString(
+          typeof rawRequester?.sessionKey === "string" ? rawRequester.sessionKey : undefined,
+        ) ?? defaults.requesterSessionKey,
+      channel:
+        normalizeOptionalString(
+          typeof rawRequester?.channel === "string" ? rawRequester.channel : undefined,
+        ) ?? defaults.requesterChannel,
+    },
+    correlationId: normalizeOptionalString(
+      typeof rawTask.correlationId === "string" ? rawTask.correlationId : undefined,
+    ),
+    parentRunId: normalizeOptionalString(
+      typeof rawTask.parentRunId === "string" ? rawTask.parentRunId : undefined,
+    ),
+  };
+}
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
@@ -270,6 +384,115 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterChannel = opts?.agentChannel;
+      const maxPingPongTurns = resolvePingPongTurns(cfg);
+      const hookTask = readSessionsSendHookTask(params, {
+        message,
+        timeoutSeconds,
+        announceTimeoutMs,
+        maxPingPongTurns,
+        requesterSessionKey,
+        requesterChannel,
+      });
+      const delivery = { status: "pending", mode: "announce" as const };
+      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+        void runSessionsSendA2AFlow({
+          targetSessionKey: resolvedKey,
+          displayKey,
+          message,
+          announceTimeoutMs,
+          maxPingPongTurns,
+          requesterSessionKey,
+          requesterChannel,
+          roundOneReply,
+          waitRunId,
+        });
+      };
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("sessions_send")) {
+        const hookResult = await hookRunner.runSessionsSend(
+          {
+            sessionKey: resolvedKey,
+            target: {
+              sessionKey: resolvedKey,
+              displayKey,
+            },
+            message,
+            ...(hookTask ? { task: hookTask } : {}),
+            rawParams: params,
+          },
+          {
+            requesterSessionKey,
+            requesterChannel,
+          },
+        );
+        if (hookResult?.handled) {
+          if (hookResult.mode === "direct") {
+            return jsonResult(
+              isRecord(hookResult.result)
+                ? hookResult.result
+                : {
+                    status: "ok",
+                    result: hookResult.result,
+                    sessionKey: displayKey,
+                  },
+            );
+          }
+          const delegatedWaitRunId = normalizeOptionalString(hookResult.dispatch.waitRunId);
+          const delegatedRunId = delegatedWaitRunId ?? hookResult.dispatch.taskId;
+          if (timeoutSeconds === 0) {
+            startA2AFlow(hookTask?.runtime?.roundOneReply, delegatedWaitRunId);
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "accepted",
+              sessionKey: displayKey,
+              delivery,
+            });
+          }
+          if (!delegatedWaitRunId) {
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "error",
+              error: "Delegated sessions_send hook result missing waitRunId for waited send",
+              sessionKey: displayKey,
+            });
+          }
+          const delegatedResult = await waitForAgentRunAndReadUpdatedAssistantReply({
+            runId: delegatedWaitRunId,
+            sessionKey: resolvedKey,
+            timeoutMs,
+            limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+            baseline: baselineReply,
+            callGateway: gatewayCall,
+          });
+          if (delegatedResult.status === "timeout") {
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "timeout",
+              error: delegatedResult.error,
+              sessionKey: displayKey,
+            });
+          }
+          if (delegatedResult.status === "error") {
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "error",
+              error: delegatedResult.error ?? "agent error",
+              sessionKey: displayKey,
+            });
+          }
+          const reply = delegatedResult.replyText;
+          startA2AFlow(hookTask?.runtime?.roundOneReply ?? reply ?? undefined);
+          return jsonResult({
+            runId: delegatedRunId,
+            status: "ok",
+            reply,
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
+      }
       const sendParams = {
         message,
         sessionKey: resolvedKey,
@@ -284,23 +507,6 @@ export function createSessionsSendTool(opts?: {
           sourceChannel: opts?.agentChannel,
           sourceTool: "sessions_send",
         },
-      };
-      const requesterSessionKey = opts?.agentSessionKey;
-      const requesterChannel = opts?.agentChannel;
-      const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
-        void runSessionsSendA2AFlow({
-          targetSessionKey: resolvedKey,
-          displayKey,
-          message,
-          announceTimeoutMs,
-          maxPingPongTurns,
-          requesterSessionKey,
-          requesterChannel,
-          roundOneReply,
-          waitRunId,
-        });
       };
 
       if (timeoutSeconds === 0) {
