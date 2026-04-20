@@ -112,6 +112,7 @@ let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
 let loadScopeCounter = 0;
@@ -205,6 +206,15 @@ function baseParams(
   };
 }
 
+function ownerParams(): Parameters<typeof runPreparedReply>[0] {
+  const params = baseParams();
+  params.command = {
+    ...(params.command as Record<string, unknown>),
+    senderIsOwner: true,
+  } as never;
+  return params;
+}
+
 describe("runPreparedReply media-only handling", () => {
   beforeAll(async () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
@@ -212,6 +222,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
+    ({ buildInboundUserContextPrefix } = await import("./inbound-meta.js"));
     ({ __testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
   });
@@ -291,6 +302,40 @@ describe("runPreparedReply media-only handling", () => {
           Body: "",
           BodyStripped: "",
           Provider: "slack",
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("still skips metadata-only turns when inbound context adds chat_id", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({ chat_id: "paperclip:issue:abc" }, null, 2),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "paperclip",
+          OriginatingChannel: "paperclip",
+          OriginatingTo: "paperclip:issue:abc",
+          ChatType: "direct",
         },
       }),
     );
@@ -716,11 +761,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System (untrusted): [t] External webhook payload.",
     );
-    const params = baseParams();
-    params.command = {
-      ...(params.command as Record<string, unknown>),
-      senderIsOwner: true,
-    } as never;
+    const params = ownerParams();
 
     await runPreparedReply(params);
 
@@ -730,11 +771,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("keeps sender ownership when drained system events are trusted", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
-    const params = baseParams();
-    params.command = {
-      ...(params.command as Record<string, unknown>),
-      senderIsOwner: true,
-    } as never;
+    const params = ownerParams();
 
     await runPreparedReply(params);
 
@@ -746,11 +783,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System: [t] Relay text mentions System (untrusted): but event is trusted.",
     );
-    const params = baseParams();
-    params.command = {
-      ...(params.command as Record<string, unknown>),
-      senderIsOwner: true,
-    } as never;
+    const params = ownerParams();
 
     await runPreparedReply(params);
 

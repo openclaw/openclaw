@@ -955,21 +955,21 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 
 ### `agents.defaults.bootstrapMaxChars`
 
-Max characters per workspace bootstrap file before truncation. Default: `20000`.
+Max characters per workspace bootstrap file before truncation. Default: `12000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapMaxChars: 20000 } },
+  agents: { defaults: { bootstrapMaxChars: 12000 } },
 }
 ```
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
-Max total characters injected across all workspace bootstrap files. Default: `150000`.
+Max total characters injected across all workspace bootstrap files. Default: `60000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
+  agents: { defaults: { bootstrapTotalMaxChars: 60000 } },
 }
 ```
 
@@ -985,6 +985,142 @@ Default: `"once"`.
 ```json5
 {
   agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
+}
+```
+
+### Context budget ownership map
+
+OpenClaw has multiple high-volume prompt/context budgets, and they are
+intentionally split by subsystem instead of all flowing through one generic
+knob.
+
+- `agents.defaults.bootstrapMaxChars` /
+  `agents.defaults.bootstrapTotalMaxChars`:
+  normal workspace bootstrap injection.
+- `agents.defaults.startupContext.*`:
+  one-shot `/new` and `/reset` startup prelude, including recent daily
+  `memory/*.md` files.
+- `skills.limits.*`:
+  the compact skills list injected into the system prompt.
+- `agents.defaults.contextLimits.*`:
+  bounded runtime excerpts and injected runtime-owned blocks.
+- `memory.qmd.limits.*`:
+  indexed memory-search snippet and injection sizing.
+
+Use the matching per-agent override only when one agent needs a different
+budget:
+
+- `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextLimits.*`
+
+#### `agents.defaults.startupContext`
+
+Controls the first-turn startup prelude injected on bare `/new` and `/reset`
+runs.
+
+```json5
+{
+  agents: {
+    defaults: {
+      startupContext: {
+        enabled: true,
+        applyOn: ["new", "reset"],
+        dailyMemoryDays: 2,
+        maxFileBytes: 16384,
+        maxFileChars: 1200,
+        maxTotalChars: 2800,
+      },
+    },
+  },
+}
+```
+
+#### `agents.defaults.contextLimits`
+
+Shared defaults for bounded runtime context surfaces.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        memoryGetDefaultLines: 120,
+        toolResultMaxChars: 16000,
+        postCompactionMaxChars: 1800,
+      },
+    },
+  },
+}
+```
+
+- `memoryGetMaxChars`: default `memory_get` excerpt cap before truncation
+  metadata and continuation notice are added.
+- `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
+  omitted.
+- `toolResultMaxChars`: live tool-result cap used for persisted results and
+  overflow recovery.
+- `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
+  refresh injection.
+
+#### `agents.list[].contextLimits`
+
+Per-agent override for the shared `contextLimits` knobs. Omitted fields inherit
+from `agents.defaults.contextLimits`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        toolResultMaxChars: 16000,
+      },
+    },
+    list: [
+      {
+        id: "tiny-local",
+        contextLimits: {
+          memoryGetMaxChars: 6000,
+          toolResultMaxChars: 8000,
+        },
+      },
+    ],
+  },
+}
+```
+
+#### `skills.limits.maxSkillsPromptChars`
+
+Global cap for the compact skills list injected into the system prompt. This
+does not affect reading `SKILL.md` files on demand.
+
+```json5
+{
+  skills: {
+    limits: {
+      maxSkillsPromptChars: 18000,
+    },
+  },
+}
+```
+
+#### `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Per-agent override for the skills prompt budget.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "tiny-local",
+        skillsLimits: {
+          maxSkillsPromptChars: 6000,
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -1256,7 +1392,7 @@ Periodic heartbeat runs.
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
-        notifyUser: true, // send a brief notice when compaction starts (default: false)
+        notifyUser: true, // send brief notices when compaction starts and completes (default: false)
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -1276,7 +1412,7 @@ Periodic heartbeat runs.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `notifyUser`: when `true`, sends a brief notice to the user when compaction starts (for example, "Compacting context..."). Disabled by default to keep compaction silent.
+- `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
@@ -2764,7 +2900,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 - `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
-- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+- `plugins.entries.memory-core.config.dreaming`: memory dreaming settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
   - `enabled`: master dreaming switch (default `false`).
   - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
   - phase policy and thresholds are implementation details (not user-facing config keys).
@@ -2831,7 +2967,8 @@ See [Plugins](/tools/plugin).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
   when your provider gives you a direct DevTools WebSocket URL.
-- `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
+- `existing-session` profiles use Chrome MCP instead of CDP and can attach on
+  the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
 - `existing-session` profiles keep the current Chrome MCP route limits:

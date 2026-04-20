@@ -1,37 +1,59 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parsePackageRootArg } from "./lib/package-root-args.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mjs";
 
 installProcessWarningFilter();
 
 process.env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK ??= "1";
 
-function parseArgs(argv) {
-  let packageRoot = process.env.OPENCLAW_BUNDLED_CHANNEL_SMOKE_ROOT;
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--package-root") {
-      packageRoot = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (arg?.startsWith("--package-root=")) {
-      packageRoot = arg.slice("--package-root=".length);
-      continue;
-    }
-    throw new Error(`unknown argument: ${arg}`);
-  }
-  return {
-    packageRoot: path.resolve(
-      packageRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
-    ),
-  };
+const { packageRoot } = parsePackageRootArg(
+  process.argv.slice(2),
+  "OPENCLAW_BUNDLED_CHANNEL_SMOKE_ROOT",
+);
+const distExtensionsRoot = path.join(packageRoot, "dist", "extensions");
+const installedLayoutEnv = "OPENCLAW_BUNDLED_CHANNEL_SMOKE_INSTALLED_LAYOUT";
+
+function packageRootLooksInstalled(root) {
+  return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
 }
 
-const { packageRoot } = parseArgs(process.argv.slice(2));
-const distExtensionsRoot = path.join(packageRoot, "dist", "extensions");
+function smokeInInstalledLayoutIfNeeded() {
+  if (process.env[installedLayoutEnv] === "1" || packageRootLooksInstalled(packageRoot)) {
+    return;
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-smoke-"));
+  const nodeModulesRoot = path.join(tempRoot, "node_modules");
+  const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
+  fs.mkdirSync(nodeModulesRoot, { recursive: true });
+  fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--preserve-symlinks",
+        fileURLToPath(import.meta.url),
+        "--package-root",
+        installedPackageRoot,
+      ],
+      {
+        env: { ...process.env, [installedLayoutEnv]: "1" },
+        stdio: "inherit",
+      },
+    );
+    process.exit(result.status ?? 1);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+smokeInInstalledLayoutIfNeeded();
 
 async function importBuiltModule(absolutePath) {
   return import(pathToFileURL(absolutePath).href);

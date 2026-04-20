@@ -743,6 +743,7 @@ async function resolveSteerTarget(
     return { error: "empty" };
   }
   const spaceIdx = trimmed.indexOf(" ");
+  let resolvedSessions: SessionsListResult | undefined;
   if (spaceIdx > 0) {
     const maybeTarget = trimmed.slice(0, spaceIdx);
     const rest = trimmed.slice(spaceIdx + 1).trim();
@@ -751,6 +752,7 @@ async function resolveSteerTarget(
     if (rest && normalizeLowercaseStringOrEmpty(maybeTarget) !== "all") {
       const sessions =
         context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
+      resolvedSessions = sessions;
       const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
         return { key: matched[0], message: rest, label: maybeTarget, sessions };
@@ -760,7 +762,11 @@ async function resolveSteerTarget(
       }
     }
   }
-  return { key: sessionKey, message: trimmed };
+  return {
+    key: sessionKey,
+    message: trimmed,
+    sessions: resolvedSessions ?? context.sessionsResult ?? undefined,
+  };
 }
 
 function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {

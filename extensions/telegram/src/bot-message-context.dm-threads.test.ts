@@ -3,9 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
+
+type SessionRuntimeModule = typeof import("./bot-message-context.session.runtime.js");
+type RecordInboundSessionFn = SessionRuntimeModule["recordInboundSession"];
+type ResolveStorePathFn = SessionRuntimeModule["resolveStorePath"];
+
 const { recordInboundSessionMock, resolveStorePathMock } = vi.hoisted(() => ({
-  recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
-  resolveStorePathMock: vi.fn(() => "/tmp/openclaw-session-store.json"),
+  recordInboundSessionMock: vi.fn<RecordInboundSessionFn>(async () => undefined),
+  resolveStorePathMock: vi.fn<ResolveStorePathFn>(() => "/tmp/openclaw-session-store.json"),
 }));
 
 vi.mock("./bot-message-context.session.runtime.js", async () => {
@@ -14,8 +19,10 @@ vi.mock("./bot-message-context.session.runtime.js", async () => {
   );
   return {
     ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+    recordInboundSession: (...args: Parameters<typeof actual.recordInboundSession>) =>
+      recordInboundSessionMock(...args),
+    resolveStorePath: (...args: Parameters<typeof actual.resolveStorePath>) =>
+      resolveStorePathMock(...args),
   };
 });
 

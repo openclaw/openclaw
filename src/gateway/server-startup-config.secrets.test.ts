@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
+import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
@@ -157,6 +158,56 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
 
+  it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
+    "rejects known weak gateway tokens resolved during secret activation: %s",
+    async (token) => {
+      const sourceConfig = gatewayTokenConfig({
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+          },
+        },
+      });
+      const prepareRuntimeSecretsSnapshot = vi.fn(async () =>
+        preparedSnapshot({
+          ...sourceConfig,
+          gateway: {
+            ...sourceConfig.gateway,
+            auth: {
+              ...sourceConfig.gateway?.auth,
+              token,
+            },
+          },
+        }),
+      );
+      const activateRuntimeSecretsSnapshot = vi.fn();
+      const activateRuntimeSecrets = createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot,
+      });
+
+      await expect(
+        activateRuntimeSecrets(sourceConfig, {
+          reason: "reload",
+          activate: true,
+        }),
+      ).rejects.toThrow(/published example placeholder/);
+      expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+    },
+  );
+
   it("prunes channel refs from startup secret preflight when channels are skipped", async () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
@@ -245,6 +296,38 @@ describe("gateway startup config secret preflight", () => {
       }),
     });
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips inactive gateway auth secret preflight when auth has plain strings", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const result = await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot(gatewayTokenConfig({})),
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot: vi.fn(),
+      }),
+    });
+
+    expect(result.auth).toMatchObject({
+      mode: "token",
+      token: "startup-test-token",
+    });
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          auth: expect.objectContaining({
+            token: "startup-test-token",
+          }),
+        }),
+      }),
+    });
   });
 
   it("uses gateway auth strings resolved during startup preflight for bootstrap auth", async () => {

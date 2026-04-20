@@ -9,8 +9,9 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
-  loadSessionStore,
-  resolveMainSessionKey,
+} from "../config/sessions/artifacts.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,

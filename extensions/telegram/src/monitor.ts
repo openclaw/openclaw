@@ -227,6 +227,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       log,
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
+      setStatus: opts.setStatus,
     });
     await pollingSession.runUntilAbort();
   } finally {

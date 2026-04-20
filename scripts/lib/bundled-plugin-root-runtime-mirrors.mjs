@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 const JS_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
+const CURATED_ROOT_RUNTIME_MIRRORS = new Set([
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@matrix-org/matrix-sdk-crypto-wasm",
+]);
 
 export function collectRuntimeDependencySpecs(packageJson = {}) {
   return new Map(
@@ -115,7 +119,7 @@ function walkJavaScriptFiles(rootDir) {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (fullPath.split(path.sep).includes("extensions")) {
+        if (entry.name === "node_modules") {
           continue;
         }
         queue.push(fullPath);
@@ -152,6 +156,18 @@ export function collectRootDistBundledRuntimeMirrors(params) {
   const bundledSpecs = params.bundledRuntimeDependencySpecs;
   const mirrors = new Map();
 
+  for (const dependencyName of CURATED_ROOT_RUNTIME_MIRRORS) {
+    const bundledSpec = bundledSpecs.get(dependencyName);
+    if (!bundledSpec) {
+      continue;
+    }
+    mirrors.set(dependencyName, {
+      importers: new Set(["<curated root runtime surface>"]),
+      pluginIds: bundledSpec.pluginIds,
+      spec: bundledSpec.spec,
+    });
+  }
+
   for (const filePath of walkJavaScriptFiles(distDir)) {
     const source = fs.readFileSync(filePath, "utf8");
     const relativePath = path.relative(distDir, filePath).replaceAll(path.sep, "/");
@@ -178,33 +194,12 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 }
 
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
-  const rootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
   const errors = [];
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {
       errors.push(
         `bundled runtime dependency '${dependencyName}' has conflicting plugin specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
-      );
-    }
-  }
-
-  for (const [dependencyName, mirror] of params.requiredRootMirrors) {
-    const rootSpec = rootRuntimeDeps.get(dependencyName);
-    const importers = [...mirror.importers].toSorted((left, right) => left.localeCompare(right));
-    const importerLabel = importers.join(", ");
-    const pluginLabel = mirror.pluginIds
-      .toSorted((left, right) => left.localeCompare(right))
-      .join(", ");
-    if (typeof rootSpec !== "string" || rootSpec.length === 0) {
-      errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; mirror '${dependencyName}: ${mirror.spec}' in root package.json (declared by ${pluginLabel}).`,
-      );
-      continue;
-    }
-    if (rootSpec !== mirror.spec) {
-      errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; root package.json has '${rootSpec}' but plugin manifest declares '${mirror.spec}' (${pluginLabel}).`,
       );
     }
   }

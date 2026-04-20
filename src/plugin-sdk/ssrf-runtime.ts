@@ -7,6 +7,7 @@ export {
   isBlockedHostnameOrIp,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";

@@ -137,7 +137,7 @@ describe("non-extension test boundaries", () => {
         if (imports.length === 0) {
           return null;
         }
-        if (allowedNonExtensionTests.has(file) || isAllowedCoreContractSuite(file, imports)) {
+        if (isAllowedCoreContractSuite(file, imports)) {
           return null;
         }
         return {
@@ -171,17 +171,12 @@ describe("non-extension test boundaries", () => {
     expect(imports).toEqual([]);
   });
 
-  it("keeps bundled plugin public-surface imports on an explicit core allowlist", () => {
-    const allowed = new Set([
-      "src/auto-reply/reply.triggers.trigger-handling.test-harness.ts",
-      "src/commands/channel-test-registry.ts",
-      "src/plugin-sdk/testing.ts",
-    ]);
+  it("keeps bundled plugin public-surface imports out of core source", () => {
     const files = walkCode(path.join(repoRoot, "src"));
 
     const offenders = files.filter((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return findBundledPluginPublicSurfaceImports(source).length > 0 && !allowed.has(file);
+      return findBundledPluginPublicSurfaceImports(source).length > 0;
     });
 
     expect(offenders).toEqual([]);
@@ -199,6 +194,31 @@ describe("non-extension test boundaries", () => {
     const offenders = files.filter((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       return source.includes("loadBundledPluginTestApiSync(");
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps bundled channel security collector coverage under extension tests", () => {
+    const files = [...walk(path.join(repoRoot, "src")), ...walk(path.join(repoRoot, "test"))]
+      .filter((file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
+      .filter((file) => !file.startsWith("test/helpers/"))
+      .filter((file) => file !== "test/extension-test-boundary.test.ts");
+
+    const offenders = files.filter((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return source.includes("test/helpers/channels/security-audit-contract.js");
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps extension channel contract helpers on the public testing surface", () => {
+    const files = walkCode(path.join(repoRoot, "extensions"));
+
+    const offenders = files.filter((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return source.includes("src/channels/plugins/contracts/test-helpers.js");
     });
 
     expect(offenders).toEqual([]);
