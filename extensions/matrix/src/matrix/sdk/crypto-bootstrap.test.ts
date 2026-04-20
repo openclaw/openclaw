@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { MatrixCryptoBootstrapper, type MatrixCryptoBootstrapperDeps } from "./crypto-bootstrap.js";
 import type { MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
+
+type BootstrapCrossSigningMock = Mock<MatrixCryptoBootstrapApi["bootstrapCrossSigning"]>;
 
 function createBootstrapperDeps() {
   return {
@@ -81,7 +83,7 @@ async function runExplicitSecretStorageRepairScenario(firstError: string) {
 function expectSecretStorageRepairRetry(
   deps: ReturnType<typeof createBootstrapperDeps>,
   crypto: MatrixCryptoBootstrapApi,
-  bootstrapCrossSigning: ReturnType<typeof vi.fn>,
+  bootstrapCrossSigning: BootstrapCrossSigningMock,
 ) {
   expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledWith(crypto, {
     allowSecretStorageRecreateWithoutRecoveryKey: true,
@@ -90,7 +92,7 @@ function expectSecretStorageRepairRetry(
   expect(bootstrapCrossSigning).toHaveBeenCalledTimes(2);
 }
 
-function createForcedResetHarness(bootstrapCrossSigning: ReturnType<typeof vi.fn>) {
+function createForcedResetHarness(bootstrapCrossSigning: BootstrapCrossSigningMock) {
   return createBootstrapperHarness({
     bootstrapCrossSigning,
     isCrossSigningReady: vi.fn(async () => true),
@@ -100,7 +102,7 @@ function createForcedResetHarness(bootstrapCrossSigning: ReturnType<typeof vi.fn
 }
 
 function expectForcedResetCrossSigningCalls(
-  bootstrapCrossSigning: ReturnType<typeof vi.fn>,
+  bootstrapCrossSigning: BootstrapCrossSigningMock,
   params: { setupNewCall: number; totalCalls: number },
 ) {
   expect(bootstrapCrossSigning).toHaveBeenCalledTimes(params.totalCalls);
