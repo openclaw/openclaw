@@ -10,6 +10,7 @@ OWNER_REPO="${2:?OWNER_REPO is required (e.g. sebbyyyywebbyyy/my-app)}"
 TASK_ID="${3:-$(date +%s)-$(openssl rand -hex 3)}"
 COMPLEXITY="${4:-standard}"
 LINEAR_ISSUE_ID="${LINEAR_ISSUE_ID:-}"
+HANDOFF_COMPLETE=0
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,7 +54,7 @@ discord_notify() {
 
 on_exit() {
   local exit_code=$?
-  if [[ $exit_code -ne 0 && -n "$LINEAR_ISSUE_ID" ]]; then
+  if [[ $exit_code -ne 0 && -n "$LINEAR_ISSUE_ID" && $HANDOFF_COMPLETE -eq 0 ]]; then
     linear_set_status "$LINEAR_ISSUE_ID" "Todo"
     linear_add_comment "$LINEAR_ISSUE_ID" "eng-codex failed ❌\n\nTask returned to Todo for retry.\nError: check task logs for \`${TASK_ID}\`\nRepo: \`${OWNER_REPO}\`"
     discord_notify "eng-codex failed ❌ | Task: ${TASK_ID} | Repo: ${OWNER_REPO} | Check Linear for details"
@@ -81,17 +82,29 @@ except: print('')
 
 linear_set_status() {
   local issue_id="$1" state_name="$2"
-  [[ -z "$LINEAR_API_KEY" || -z "$issue_id" ]] && return 0
+  [[ -z "$LINEAR_API_KEY" || -z "$issue_id" ]] && return 1
   local state_id
   state_id=$(linear_get_state_id "$issue_id" "$state_name")
-  [[ -z "$state_id" ]] && { log "WARN" "Linear state '${state_name}' not found — skipping"; return 0; }
-  curl -s -X POST https://api.linear.app/graphql \
+  [[ -z "$state_id" ]] && { log "WARN" "Linear state '${state_name}' not found — skipping"; return 1; }
+  local response ok
+  response=$(curl -s -X POST https://api.linear.app/graphql \
     -H "Authorization: ${LINEAR_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "{\"query\":\"mutation { issueUpdate(id: \\\"${issue_id}\\\", input: { stateId: \\\"${state_id}\\\" }) { success } }\"}" \
-    > /dev/null \
-    && log "INFO" "Linear issue ${issue_id} → ${state_name}" \
-    || log "WARN" "Linear status update failed"
+    -d "{\"query\":\"mutation { issueUpdate(id: \\\"${issue_id}\\\", input: { stateId: \\\"${state_id}\\\" }) { success } }\"}")
+  ok=$(echo "$response" | python3 -c "
+import json,sys
+try:
+  d = json.load(sys.stdin)
+  if d.get('errors'): print('error'); sys.exit(0)
+  print('ok' if d.get('data',{}).get('issueUpdate',{}).get('success') else 'error')
+except: print('error')
+" 2>/dev/null)
+  if [[ "$ok" == "ok" ]]; then
+    log "INFO" "Linear issue ${issue_id} → ${state_name}"
+    return 0
+  fi
+  log "WARN" "Linear status update failed (GraphQL error): ${response}"
+  return 1
 }
 
 linear_add_comment() {
@@ -447,7 +460,8 @@ GitHub: https://github.com/${OWNER_REPO}/tree/${BRANCH}"
 
 ${REVIEW_BODY}"
     fi
-    linear_set_status "$LINEAR_ISSUE_ID" "In Review"
+    linear_set_status "$LINEAR_ISSUE_ID" "In Review" || log "WARN" "Linear status update to In Review failed"
+    HANDOFF_COMPLETE=1
     linear_add_comment "$LINEAR_ISSUE_ID" "$_COMMENT"
   else
     linear_set_status "$LINEAR_ISSUE_ID" "Todo"

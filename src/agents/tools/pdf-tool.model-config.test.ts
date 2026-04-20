@@ -105,4 +105,21 @@ describe("resolvePdfModelConfigForTool", () => {
       ANTHROPIC_PDF_MODEL,
     );
   });
+
+  it("does not reuse Google image-preview model for native PDF when pdfModel unset", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3-flash-preview" },
+          imageModel: { primary: "google/gemini-3.1-flash-image-preview" },
+          // pdfModel intentionally unset
+        },
+      },
+    };
+    const result = resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR });
+    // image-preview variants return 404 on native PDF endpoints — must not be selected
+    expect(result?.primary).not.toBe("google/gemini-3.1-flash-image-preview");
+    expect(result?.fallbacks ?? []).not.toContain("google/gemini-3.1-flash-image-preview");
+    expect(result?.fallbacks ?? []).not.toContain("google/gemini-3-pro-image-preview");
+  });
 });

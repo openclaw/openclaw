@@ -114,8 +114,11 @@ const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 const ANTHROPIC_OPUS_COST = { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 18.75 };
 const ANTHROPIC_SONNET_COST = { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 };
 const ANTHROPIC_HAIKU_COST = { input: 0.8, output: 4.0, cacheRead: 0.08, cacheWrite: 1.0 };
+const ANTHROPIC_OPUS_47_COST = { input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 6.25 };
 const ANTHROPIC_CONTEXT_WINDOW = 200000;
 const ANTHROPIC_MAX_TOKENS = 16000;
+const ANTHROPIC_OPUS_47_CONTEXT_WINDOW = 1_000_000;
+const ANTHROPIC_OPUS_47_MAX_TOKENS = 128_000;
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
@@ -933,6 +936,15 @@ function buildAnthropicProvider(): ProviderConfig {
     baseUrl: ANTHROPIC_BASE_URL,
     api: "anthropic-messages",
     models: [
+      {
+        id: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: ANTHROPIC_OPUS_47_COST,
+        contextWindow: ANTHROPIC_OPUS_47_CONTEXT_WINDOW,
+        maxTokens: ANTHROPIC_OPUS_47_MAX_TOKENS,
+      },
       {
         id: "claude-opus-4-6",
         name: "Claude Opus 4.6",
