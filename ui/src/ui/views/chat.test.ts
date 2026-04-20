@@ -47,10 +47,6 @@ function createSessions(): SessionsListResult {
   };
 }
 
-function flushTasks() {
-  return new Promise<void>((resolve) => queueMicrotask(resolve));
-}
-
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
     sessionKey: "main",
@@ -320,60 +316,6 @@ describe("chat view", () => {
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
-  it("keeps tool cards collapsed by default and expands them inline on demand", async () => {
-    const container = document.createElement("div");
-    const props = createProps({
-      messages: [
-        {
-          id: "assistant-1",
-          role: "assistant",
-          toolCallId: "call-1",
-          content: [
-            {
-              type: "toolcall",
-              id: "call-1",
-              name: "browser.open",
-              arguments: { url: "https://example.com" },
-            },
-            {
-              type: "toolresult",
-              id: "call-1",
-              name: "browser.open",
-              text: "Opened page",
-            },
-          ],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-
-    const rerender = () => {
-      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
-    };
-    rerender();
-
-    expect(container.textContent).not.toContain("Input");
-    expect(container.textContent).not.toContain("Output");
-
-    container
-      .querySelector<HTMLElement>(".chat-tool-msg-summary")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("https://example.com");
-    expect(container.textContent).toContain("Opened page");
-
-    container
-      .querySelector<HTMLElement>(".chat-tool-msg-summary")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).not.toContain("Tool input");
-    expect(container.textContent).not.toContain("Opened page");
-  });
-
   it("expands already-visible tool cards when auto-expand is turned on", () => {
     const container = document.createElement("div");
     const baseProps = createProps({
@@ -407,99 +349,6 @@ describe("chat view", () => {
     render(renderChat({ ...baseProps, autoExpandToolCalls: true }), container);
     expect(container.textContent).toContain("Tool input");
     expect(container.textContent).toContain("Tool output");
-  });
-
-  it("routes standalone tool-call rows through the same top-level disclosure as tool output", async () => {
-    const container = document.createElement("div");
-    const props = createProps({
-      messages: [
-        {
-          id: "assistant-4b",
-          role: "assistant",
-          toolCallId: "call-4b",
-          content: [
-            {
-              type: "toolcall",
-              id: "call-4b",
-              name: "sessions_spawn",
-              arguments: { mode: "session", thread: true },
-            },
-          ],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-
-    const rerender = () => {
-      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
-    };
-    rerender();
-
-    const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
-    expect(summary?.textContent).toContain("Tool call");
-    expect(container.textContent).not.toContain('"thread": true');
-
-    summary?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-
-    summary?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).not.toContain("Tool input");
-    expect(container.textContent).not.toContain('"thread": true');
-  });
-
-  it("auto-expand opens separate tool output rows and their json content", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "assistant-5",
-              role: "assistant",
-              toolCallId: "call-5",
-              content: [
-                {
-                  type: "toolcall",
-                  id: "call-5",
-                  name: "sessions_spawn",
-                  arguments: { mode: "session", thread: true },
-                },
-              ],
-              timestamp: Date.now(),
-            },
-            {
-              id: "tool-5",
-              role: "tool",
-              toolCallId: "call-5",
-              toolName: "sessions_spawn",
-              content: JSON.stringify(
-                {
-                  status: "error",
-                  error: "Session mode is unavailable for this target.",
-                  childSessionKey: "agent:test:subagent:abc123",
-                },
-                null,
-                2,
-              ),
-              timestamp: Date.now() + 1,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain('"status": "error"');
-    expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
   });
 
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {
@@ -842,54 +691,5 @@ describe("chat view", () => {
         kind: "markdown",
       }),
     );
-  });
-
-  it("lets a tool call collapse while keeping matching tool output visible", async () => {
-    const container = document.createElement("div");
-    const props = createProps({
-      autoExpandToolCalls: true,
-      messages: [
-        {
-          id: "assistant-tool-messages",
-          role: "assistant",
-          toolCallId: "call-tool-messages",
-          content: [
-            {
-              type: "toolcall",
-              id: "call-tool-messages",
-              name: "sessions_spawn",
-              arguments: { mode: "session", thread: true },
-            },
-          ],
-          timestamp: Date.now(),
-        },
-      ],
-      toolMessages: [
-        {
-          id: "tool-tool-messages",
-          role: "tool",
-          toolCallId: "call-tool-messages",
-          toolName: "sessions_spawn",
-          content: JSON.stringify({ status: "error" }, null, 2),
-          timestamp: Date.now() + 1,
-        },
-      ],
-    });
-    const rerender = () => {
-      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
-    };
-    rerender();
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).toContain('"status": "error"');
-
-    const summaries = container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary");
-    expect(summaries.length).toBeGreaterThan(1);
-    summaries[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).not.toContain("Tool input");
-    expect(container.textContent).toContain('"status": "error"');
   });
 });

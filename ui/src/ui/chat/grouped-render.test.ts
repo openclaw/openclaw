@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import {
@@ -66,6 +66,42 @@ function renderGroupedMessage(
   );
 }
 
+function createMessageGroup(message: unknown, role: string): MessageGroup {
+  const timestamp =
+    typeof message === "object" &&
+    message !== null &&
+    typeof (message as { timestamp?: unknown }).timestamp === "number"
+      ? (message as { timestamp: number }).timestamp
+      : Date.now();
+  return {
+    kind: "group",
+    key: `${role}:${timestamp}`,
+    role,
+    messages: [{ key: `${role}:${timestamp}:message`, message }],
+    timestamp,
+    isStreaming: false,
+  };
+}
+
+function renderMessageGroups(
+  container: HTMLElement,
+  groups: MessageGroup[],
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  render(
+    html`${groups.map((group) =>
+      renderMessageGroup(group, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        assistantAvatar: null,
+        ...opts,
+      }),
+    )}`,
+    container,
+  );
+}
+
 async function flushAssistantAttachmentAvailabilityChecks() {
   for (let i = 0; i < 6; i++) {
     await Promise.resolve();
@@ -78,6 +114,180 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("keeps inline tool cards collapsed by default and renders expanded state", () => {
+    const container = document.createElement("div");
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      toolCallId: "call-1",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-1",
+          name: "browser.open",
+          arguments: { url: "https://example.com" },
+        },
+        {
+          type: "toolresult",
+          id: "call-1",
+          name: "browser.open",
+          text: "Opened page",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(container.textContent).not.toContain("Input");
+    expect(container.textContent).not.toContain("Output");
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => true,
+    });
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("https://example.com");
+    expect(container.textContent).toContain("Opened page");
+  });
+
+  it("renders expanded standalone tool-call rows", () => {
+    const container = document.createElement("div");
+    const message = {
+      id: "assistant-4b",
+      role: "assistant",
+      toolCallId: "call-4b",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-4b",
+          name: "sessions_spawn",
+          arguments: { mode: "session", thread: true },
+        },
+      ],
+      timestamp: Date.now(),
+    };
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
+    expect(summary?.textContent).toContain("Tool call");
+    expect(container.textContent).not.toContain('"thread": true');
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => true,
+    });
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+  });
+
+  it("renders expanded tool output rows and their json content", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            id: "assistant-5",
+            role: "assistant",
+            toolCallId: "call-5",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-5",
+                name: "sessions_spawn",
+                arguments: { mode: "session", thread: true },
+              },
+            ],
+            timestamp: Date.now(),
+          },
+          "assistant",
+        ),
+        createMessageGroup(
+          {
+            id: "tool-5",
+            role: "tool",
+            toolCallId: "call-5",
+            toolName: "sessions_spawn",
+            content: JSON.stringify(
+              {
+                status: "error",
+                error: "Session mode is unavailable for this target.",
+                childSessionKey: "agent:test:subagent:abc123",
+              },
+              null,
+              2,
+            ),
+            timestamp: Date.now() + 1,
+          },
+          "tool",
+        ),
+      ],
+      {
+        isToolExpanded: () => true,
+        isToolMessageExpanded: () => true,
+      },
+    );
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain('"status": "error"');
+    expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
+  });
+
+  it("collapses an inline tool call while keeping matching tool output visible", () => {
+    const container = document.createElement("div");
+    const groups = [
+      createMessageGroup(
+        {
+          id: "assistant-tool-messages",
+          role: "assistant",
+          toolCallId: "call-tool-messages",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-tool-messages",
+              name: "sessions_spawn",
+              arguments: { mode: "session", thread: true },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        "assistant",
+      ),
+      createMessageGroup(
+        {
+          id: "tool-tool-messages",
+          role: "tool",
+          toolCallId: "call-tool-messages",
+          toolName: "sessions_spawn",
+          content: JSON.stringify({ status: "error" }, null, 2),
+          timestamp: Date.now() + 1,
+        },
+        "tool",
+      ),
+    ];
+    renderMessageGroups(container, groups, {
+      isToolMessageExpanded: () => true,
+    });
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).toContain('"status": "error"');
+
+    renderMessageGroups(container, groups, {
+      isToolMessageExpanded: (messageId) => !messageId.startsWith("toolmsg:assistant:"),
+    });
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).toContain('"status": "error"');
+  });
+
   it("renders assistant MEDIA attachments, voice-note badge, and reply pill", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
