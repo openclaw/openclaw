@@ -184,7 +184,18 @@ function sanitizeValueForSink(
     return sanitizeErrorForSink(value, resolved, seen, depth);
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeValueForSink(entry, resolved, seen, depth + 1, options));
+    return value.map((entry) => {
+      // When the array is under a credential-named field (allowDirectMask: true),
+      // apply the same forced-masking as sanitizeFieldValueForSink does for
+      // strings: pattern-redact first, then unconditionally mask if unchanged.
+      // This ensures entries with characters outside shouldMaskDirectString
+      // (e.g. "/" in "abcd/efghijklmnopqrstu") are still force-masked.
+      if (options?.allowDirectMask && typeof entry === "string") {
+        const textSanitized = sanitizeStringForSink(entry, resolved, { allowDirectMask: true });
+        return textSanitized === entry ? maskDirectSecret(entry) : textSanitized;
+      }
+      return sanitizeValueForSink(entry, resolved, seen, depth + 1, options);
+    });
   }
   if (typeof value === "object") {
     // Preserve toJSON semantics for objects like URL, Buffer, or custom classes

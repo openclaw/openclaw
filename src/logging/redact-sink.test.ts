@@ -162,4 +162,39 @@ describe("redact-sink", () => {
     expect(sanitized.apiKey[0]).toBe(MASKED);
     expect(sanitized.apiKey[1]).toBe(MASKED);
   });
+
+  it("forces masking for credential array entries with characters outside shouldMaskDirectString", () => {
+    // Regression for Codex CR: entries like "abcd/efghijklmnopqrstu" contain "/"
+    // which falls outside the shouldMaskDirectString charset, so they previously
+    // bypassed forced masking when the array was under a credential-named field.
+    const slashSecret = "abcd/efghijklmnopqrstu";
+    const record = {
+      apiKey: [slashSecret],
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
+      apiKey: string[];
+    };
+
+    // Must be masked regardless of charset — credential-key context must propagate.
+    expect(sanitized.apiKey[0]).not.toBe(slashSecret);
+    expect(sanitized.apiKey[0]).toBe("abcd/e…rstu");
+  });
+
+  it("forces masking when a credential-named field holds a toJSON object", () => {
+    // { secret: { toJSON: () => SECRET } } — the serialized string must be masked.
+    const record = {
+      secret: {
+        toJSON() {
+          return SECRET;
+        },
+      },
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as unknown as {
+      secret: string;
+    };
+
+    expect(sanitized.secret).toBe(MASKED);
+  });
 });
