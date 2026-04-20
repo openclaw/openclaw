@@ -122,6 +122,33 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("does not resolve implicit last-target context for bare delivery.mode none", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: {
+        ...makeParams().job,
+        delivery: { mode: "none" },
+      } as never,
+    });
+
+    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      messageChannel: undefined,
+      messageTo: undefined,
+      messageThreadId: undefined,
+      currentChannelId: undefined,
+    });
+  });
+
   it("forwards explicit message targets into the embedded run", async () => {
     mockRunCronFallbackPassthrough();
     const executor = createCronPromptExecutor({

@@ -144,8 +144,7 @@ async function resolveCronDeliveryContext(params: {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const hasMessageTargetContext =
     deliveryPlan.mode !== "webhook" &&
-    (deliveryPlan.channel !== undefined ||
-      deliveryPlan.to !== undefined ||
+    (deliveryPlan.to !== undefined ||
       deliveryPlan.threadId !== undefined ||
       deliveryPlan.accountId !== undefined);
   if (!deliveryPlan.requested && !hasMessageTargetContext) {
