@@ -532,7 +532,9 @@ function buildServer() {
     "openclaw_wiki_search",
     {
       description:
-        "Search the OpenClaw memory wiki. Returns ranked passages with path, score, excerpt.",
+        "Search the OpenClaw memory wiki. Returns ranked passages with path, score, excerpt. " +
+        "By default, staged dreaming candidates with confidence below min_confidence (default 0.3) " +
+        "are excluded — pass include_staged:true to see them. Raise min_confidence to tighten the floor.",
       inputSchema: {
         query: z.string().min(1).describe("Free-text search query."),
         corpus: z
@@ -544,9 +546,23 @@ function buildServer() {
           .optional()
           .describe("Search backend. Defaults to vault config."),
         limit: z.number().int().min(1).max(50).optional().describe("Max results."),
+        min_confidence: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(
+            "Confidence floor (0..1) for staged dreaming candidates. Defaults to 0.3. Ignored when include_staged is true.",
+          ),
+        include_staged: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, return staged candidates regardless of confidence. Defaults to false.",
+          ),
       },
     },
-    async ({ query, corpus, backend, limit }) => {
+    async ({ query, corpus, backend, limit, min_confidence, include_staged }) => {
       await ensureGatewayUp();
       const params = { query };
       if (corpus) {
@@ -557,6 +573,12 @@ function buildServer() {
       }
       if (limit) {
         params.maxResults = limit;
+      }
+      if (typeof min_confidence === "number") {
+        params.minConfidence = min_confidence;
+      }
+      if (typeof include_staged === "boolean") {
+        params.includeStaged = include_staged;
       }
       const raw = await callGatewayMethod("wiki.search", params);
       return jsonResult(filterSearchResultByManifest(raw));

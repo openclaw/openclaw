@@ -1390,6 +1390,114 @@ function selectRemCandidateTruths(
     .slice(0, limit);
 }
 
+// Emitter-level noise guards for REM reflection themes. Even when a tag made it
+// past the concept-vocabulary stopword list (e.g. pre-existing recall entries
+// or transcript-role words the tokenizer didn't normalize out), don't surface
+// it as a recurring "theme" — these words are statistically true but useless.
+const THEME_EMITTER_STOP_WORDS = new Set<string>([
+  // Standard English determiners/prepositions/pronouns/helpers
+  "the",
+  "and",
+  "for",
+  "nor",
+  "but",
+  "yet",
+  "from",
+  "that",
+  "this",
+  "these",
+  "those",
+  "with",
+  "their",
+  "them",
+  "they",
+  "there",
+  "then",
+  "than",
+  "here",
+  "have",
+  "having",
+  "has",
+  "had",
+  "been",
+  "being",
+  "was",
+  "were",
+  "are",
+  "into",
+  "its",
+  "our",
+  "ours",
+  "about",
+  "what",
+  "when",
+  "where",
+  "which",
+  "while",
+  "would",
+  "could",
+  "should",
+  "some",
+  "many",
+  "most",
+  "much",
+  "other",
+  "another",
+  "each",
+  "every",
+  "very",
+  "just",
+  "also",
+  "will",
+  "can",
+  // Role labels that leak in from chat transcripts / tool-call framing
+  "assistant",
+  "user",
+  "system",
+  "human",
+  "model",
+  "agent",
+  "chat",
+  "message",
+  "messages",
+  "reply",
+  "response",
+  "prompt",
+  "tool",
+  "tools",
+  // Generic vocabulary that dominates when context is sparse
+  "thing",
+  "things",
+  "stuff",
+  "note",
+  "notes",
+  "text",
+  "line",
+  "lines",
+]);
+
+// A theme is emitted only when BOTH its raw TF/entries ratio ("strength") and
+// its TF-IDF-like specificity-weighted count ("weight") clear these floors.
+// - MIN_THEME_WEIGHT penalizes tags that appear in nearly every entry (low
+//   specificity) or barely any (noise).
+// - MIN_THEME_CONFIDENCE_FOR_SYNTHESIS is a hard floor on the strength metric;
+//   applied on top of the config's `minPatternStrength` so a lax config can't
+//   leak weak themes into anything a later synthesis pass picks up.
+const MIN_THEME_WEIGHT = 1.5;
+const MIN_THEME_CONFIDENCE_FOR_SYNTHESIS = 0.5;
+
+function isThemeStopword(tag: string): boolean {
+  return THEME_EMITTER_STOP_WORDS.has(tag.toLowerCase());
+}
+
+function computeThemeWeight(count: number, totalEntries: number): number {
+  if (count <= 0 || totalEntries <= 0) {
+    return 0;
+  }
+  const specificity = 1 - count / totalEntries;
+  return count * Math.max(0, specificity);
+}
+
 function buildRemReflections(
   entries: ShortTermRecallEntry[],
   limit: number,
@@ -1401,6 +1509,9 @@ function buildRemReflections(
       if (!tag) {
         continue;
       }
+      if (isThemeStopword(tag)) {
+        continue;
+      }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
       stat.count += 1;
       stat.evidence.add(`${entry.path}:${entry.startLine}-${entry.endLine}`);
@@ -1408,15 +1519,21 @@ function buildRemReflections(
     }
   }
 
+  const strengthFloor = Math.max(minPatternStrength, MIN_THEME_CONFIDENCE_FOR_SYNTHESIS);
   const ranked = [...tagStats.entries()]
     .map(([tag, stat]) => {
       const strength = Math.min(1, (stat.count / Math.max(1, entries.length)) * 2);
-      return { tag, strength, stat };
+      const weight = computeThemeWeight(stat.count, entries.length);
+      return { tag, strength, weight, stat };
     })
-    .filter((entry) => entry.strength >= minPatternStrength)
+    .filter((entry) => entry.strength >= strengthFloor)
+    .filter((entry) => entry.weight >= MIN_THEME_WEIGHT)
     .toSorted(
       (a, b) =>
-        b.strength - a.strength || b.stat.count - a.stat.count || a.tag.localeCompare(b.tag),
+        b.weight - a.weight ||
+        b.strength - a.strength ||
+        b.stat.count - a.stat.count ||
+        a.tag.localeCompare(b.tag),
     )
     .slice(0, limit);
 
@@ -1734,8 +1851,14 @@ export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
 
 export const __testing = {
   runPhaseIfTriggered,
+  buildRemReflections,
+  isThemeStopword,
+  computeThemeWeight,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,
+    THEME_EMITTER_STOP_WORDS,
+    MIN_THEME_WEIGHT,
+    MIN_THEME_CONFIDENCE_FOR_SYNTHESIS,
   },
 };

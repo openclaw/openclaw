@@ -1861,3 +1861,93 @@ describe("memory-core dreaming phases", () => {
     expect(after2[0]?.dailyCount).toBe(2);
   });
 });
+
+describe("REM reflection emitter filters", () => {
+  type TestEntry = Parameters<typeof __testing.buildRemReflections>[0][number];
+
+  function makeEntry(index: number, conceptTags: string[]): TestEntry {
+    return {
+      key: `k${index}`,
+      path: `memory/2026-04-0${index}.md`,
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet: `snippet ${index}`,
+      recallCount: 1,
+      dailyCount: 1,
+      groundedCount: 0,
+      totalScore: 0,
+      maxScore: 0,
+      firstRecalledAt: "2026-04-01T00:00:00.000Z",
+      lastRecalledAt: "2026-04-01T00:00:00.000Z",
+      queryHashes: [],
+      recallDays: [],
+      conceptTags,
+    };
+  }
+
+  function themesFromLines(lines: string[]): string[] {
+    return lines
+      .filter((line) => line.startsWith("- Theme:"))
+      .map((line) => line.replace(/^- Theme: `([^`]+)`.*/, "$1"));
+  }
+
+  it("skips tags in the emitter stopword list even if they dominate the corpus", () => {
+    const entries = Array.from({ length: 6 }, (_, i) =>
+      makeEntry(i + 1, ["the", "assistant", "user", "system", "gateway"]),
+    );
+    const lines = __testing.buildRemReflections(entries, 10, 0);
+    const themes = themesFromLines(lines);
+    expect(themes).not.toContain("the");
+    expect(themes).not.toContain("assistant");
+    expect(themes).not.toContain("user");
+    expect(themes).not.toContain("system");
+    // "gateway" shows up in every entry — still filtered out by the TF-IDF
+    // specificity weight even though it passes the stopword gate.
+    expect(themes).not.toContain("gateway");
+  });
+
+  it("requires a TF-IDF-like weight, not just raw frequency", () => {
+    // 10 entries total.
+    // "ubiquitous" appears in every entry → specificity 0 → weight 0 (reject).
+    // "rare" appears in 1 entry → specificity 0.9 → weight 0.9 (reject, below 1.5).
+    // "themed" appears in 4 entries → specificity 0.6 → weight 2.4 (accept).
+    const entries = [
+      ...Array.from({ length: 6 }, (_, i) => makeEntry(i + 1, ["ubiquitous"])),
+      ...Array.from({ length: 4 }, (_, i) => makeEntry(i + 7, ["ubiquitous", "themed"])),
+    ];
+    entries[0].conceptTags.push("rare");
+    const lines = __testing.buildRemReflections(entries, 10, 0);
+    const themes = themesFromLines(lines);
+    expect(themes).toContain("themed");
+    expect(themes).not.toContain("ubiquitous");
+    expect(themes).not.toContain("rare");
+  });
+
+  it("enforces a minimum theme confidence of 0.5 for synthesis eligibility", () => {
+    // 10 entries total; "weakly" in 2 of them → strength = min(1, 0.2*2) = 0.4
+    // (below the 0.5 floor enforced for synthesis-bound themes even when the
+    // caller passes a lower minPatternStrength).
+    const entries = [
+      ...Array.from({ length: 2 }, (_, i) => makeEntry(i + 1, ["weakly"])),
+      ...Array.from({ length: 8 }, (_, i) => makeEntry(i + 3, ["other-tag"])),
+    ];
+    const lines = __testing.buildRemReflections(entries, 10, 0);
+    const themes = themesFromLines(lines);
+    expect(themes).not.toContain("weakly");
+  });
+
+  it("computeThemeWeight penalizes ubiquitous and vanishingly-rare tags", () => {
+    expect(__testing.computeThemeWeight(0, 100)).toBe(0);
+    expect(__testing.computeThemeWeight(100, 100)).toBe(0);
+    expect(__testing.computeThemeWeight(50, 100)).toBeCloseTo(25, 5);
+    expect(__testing.computeThemeWeight(10, 100)).toBeCloseTo(9, 5);
+  });
+
+  it("isThemeStopword is case-insensitive", () => {
+    expect(__testing.isThemeStopword("ASSISTANT")).toBe(true);
+    expect(__testing.isThemeStopword("Assistant")).toBe(true);
+    expect(__testing.isThemeStopword("assistant")).toBe(true);
+    expect(__testing.isThemeStopword("kestrel")).toBe(false);
+  });
+});

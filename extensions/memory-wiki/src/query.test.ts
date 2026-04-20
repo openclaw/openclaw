@@ -6,7 +6,13 @@ import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import {
+  DEFAULT_WIKI_SEARCH_MIN_CONFIDENCE,
+  filterStagedLowConfidenceResults,
+  getMemoryWikiPage,
+  searchMemoryWiki,
+  type WikiSearchResult,
+} from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { getActiveMemorySearchManagerMock, resolveDefaultAgentIdMock, resolveSessionAgentIdMock } =
@@ -636,5 +642,124 @@ describe("getMemoryWikiPage", () => {
     expect(result?.corpus).toBe("memory");
     expect(result?.content).toBe("forced memory read");
     expect(manager.readFile).toHaveBeenCalled();
+  });
+});
+
+describe("searchMemoryWiki confidence floor", () => {
+  function makeMemoryResult(overrides: Partial<WikiSearchResult> = {}): WikiSearchResult {
+    return {
+      corpus: "memory",
+      path: "memory/2026-04-08.md",
+      title: "2026-04-08",
+      kind: "memory",
+      score: 1,
+      snippet: "",
+      ...overrides,
+    };
+  }
+
+  const stagedLowConfSnippet =
+    "Candidate: Default to action. confidence: 0.15 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 2 status: staged";
+  const stagedMidConfSnippet =
+    "Candidate: Default to action. confidence: 0.60 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 2 status: staged";
+  const durableSnippet = "Alpha body text with no staged marker.";
+
+  it("drops staged candidates below the default confidence floor (0.3)", () => {
+    expect(DEFAULT_WIKI_SEARCH_MIN_CONFIDENCE).toBe(0.3);
+    const results = [
+      makeMemoryResult({ path: "a.md", snippet: stagedLowConfSnippet }),
+      makeMemoryResult({ path: "b.md", snippet: stagedMidConfSnippet }),
+      makeMemoryResult({ path: "c.md", snippet: durableSnippet }),
+    ];
+    const filtered = filterStagedLowConfidenceResults(results, {
+      minConfidence: DEFAULT_WIKI_SEARCH_MIN_CONFIDENCE,
+      includeStaged: false,
+    });
+    expect(filtered.map((r) => r.path)).toEqual(["b.md", "c.md"]);
+  });
+
+  it("preserves staged candidates when include_staged is true", () => {
+    const results = [
+      makeMemoryResult({ path: "a.md", snippet: stagedLowConfSnippet }),
+      makeMemoryResult({ path: "b.md", snippet: durableSnippet }),
+    ];
+    const filtered = filterStagedLowConfidenceResults(results, {
+      minConfidence: 0.3,
+      includeStaged: true,
+    });
+    expect(filtered.map((r) => r.path)).toEqual(["a.md", "b.md"]);
+  });
+
+  it("raises the floor when a higher minConfidence is passed", () => {
+    const results = [
+      makeMemoryResult({ path: "a.md", snippet: stagedLowConfSnippet }),
+      makeMemoryResult({ path: "b.md", snippet: stagedMidConfSnippet }),
+      makeMemoryResult({ path: "c.md", snippet: durableSnippet }),
+    ];
+    const filtered = filterStagedLowConfidenceResults(results, {
+      minConfidence: 0.75,
+      includeStaged: false,
+    });
+    expect(filtered.map((r) => r.path)).toEqual(["c.md"]);
+  });
+
+  it("drops staged candidates whose confidence is unparseable (fail-closed)", () => {
+    const results = [
+      makeMemoryResult({
+        path: "weird.md",
+        snippet: "Candidate: snippet with status: staged but no confidence marker",
+      }),
+      makeMemoryResult({ path: "durable.md", snippet: durableSnippet }),
+    ];
+    const filtered = filterStagedLowConfidenceResults(results, {
+      minConfidence: 0.3,
+      includeStaged: false,
+    });
+    expect(filtered.map((r) => r.path)).toEqual(["durable.md"]);
+  });
+
+  it("passes min_confidence + include_staged through searchMemoryWiki", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "memory/staged.md",
+          startLine: 1,
+          endLine: 1,
+          score: 10,
+          snippet: stagedLowConfSnippet,
+          source: "memory",
+        },
+        {
+          path: "memory/durable.md",
+          startLine: 1,
+          endLine: 1,
+          score: 8,
+          snippet: durableSnippet,
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const defaultResults = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      query: "default",
+    });
+    expect(defaultResults.map((r) => r.path)).toEqual(["memory/durable.md"]);
+
+    const withStaged = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      query: "default",
+      includeStaged: true,
+    });
+    expect(withStaged.map((r) => r.path).toSorted()).toEqual(
+      ["memory/durable.md", "memory/staged.md"].toSorted(),
+    );
   });
 });

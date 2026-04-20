@@ -66,6 +66,23 @@ function readNumberParam(params: Record<string, unknown>, key: string): number |
   return undefined;
 }
 
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
 function readEnumParam<T extends string>(
   params: Record<string, unknown>,
   key: string,
@@ -277,6 +294,8 @@ export function registerMemoryWikiGatewayMethods(params: {
         const maxResults = readNumberParam(requestParams, "maxResults");
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
         const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
+        const minConfidence = readNumberParam(requestParams, "minConfidence");
+        const includeStaged = readBooleanParam(requestParams, "includeStaged");
         respond(
           true,
           await searchMemoryWiki({
@@ -286,6 +305,8 @@ export function registerMemoryWikiGatewayMethods(params: {
             maxResults,
             searchBackend,
             searchCorpus,
+            ...(minConfidence !== undefined ? { minConfidence } : {}),
+            ...(includeStaged !== undefined ? { includeStaged } : {}),
           }),
         );
       } catch (error) {

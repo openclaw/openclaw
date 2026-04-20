@@ -26,6 +26,12 @@ const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
 const HUMAN_START = "<!-- openclaw:human:start -->";
 const HUMAN_END = "<!-- openclaw:human:end -->";
 
+// A synthesis becomes eligible for promotion to a concept page once it has
+// cleared both a high-confidence bar and repeated recall. This only flags
+// readiness — promotion itself is a separate, explicit operation.
+export const PROMOTION_CONFIDENCE_THRESHOLD = 0.8;
+export const PROMOTION_RECALL_THRESHOLD = 3;
+
 export type CreateSynthesisMemoryWikiMutation = {
   op: "create_synthesis";
   title: string;
@@ -35,6 +41,7 @@ export type CreateSynthesisMemoryWikiMutation = {
   contradictions?: string[];
   questions?: string[];
   confidence?: number;
+  recallCount?: number;
   status?: string;
 };
 
@@ -46,6 +53,7 @@ export type UpdateMetadataMemoryWikiMutation = {
   contradictions?: string[];
   questions?: string[];
   confidence?: number | null;
+  recallCount?: number | null;
   status?: string;
 };
 
@@ -72,6 +80,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     contradictions?: string[];
     questions?: string[];
     confidence?: number | null;
+    recallCount?: number | null;
     status?: string;
   };
   if (params.op === "create_synthesis") {
@@ -93,6 +102,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
       ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
+      ...(typeof params.recallCount === "number" ? { recallCount: params.recallCount } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }
@@ -107,6 +117,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
     ...(params.confidence !== undefined ? { confidence: params.confidence } : {}),
+    ...(params.recallCount !== undefined ? { recallCount: params.recallCount } : {}),
     ...(params.status ? { status: params.status } : {}),
   };
 }
@@ -120,6 +131,43 @@ function normalizeUniqueStrings(values: string[] | undefined): string[] | undefi
     .filter(Boolean)
     .filter((value, index, all) => all.indexOf(value) === index);
   return normalized;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function computePromotionReadiness(params: {
+  confidence: number | null;
+  recallCount: number | null;
+}): boolean {
+  return (
+    params.confidence !== null &&
+    params.recallCount !== null &&
+    params.confidence >= PROMOTION_CONFIDENCE_THRESHOLD &&
+    params.recallCount >= PROMOTION_RECALL_THRESHOLD
+  );
+}
+
+function applyPromotionReadinessFlag(
+  frontmatter: Record<string, unknown>,
+): Record<string, unknown> {
+  if (frontmatter.pageType !== "synthesis") {
+    return frontmatter;
+  }
+  const eligible = computePromotionReadiness({
+    confidence: readFiniteNumber(frontmatter.confidence),
+    recallCount: readFiniteNumber(frontmatter.recallCount),
+  });
+  if (eligible) {
+    return { ...frontmatter, promotion_ready: true };
+  }
+  if ("promotion_ready" in frontmatter) {
+    const next = { ...frontmatter };
+    delete next.promotion_ready;
+    return next;
+  }
+  return frontmatter;
 }
 
 function ensureHumanNotesBlock(body: string): string {
@@ -189,27 +237,31 @@ async function applyCreateSynthesisMutation(params: {
   const pageId =
     (typeof parsed.frontmatter.id === "string" && parsed.frontmatter.id.trim()) ||
     `synthesis.${slug}`;
+  const nextFrontmatter: Record<string, unknown> = {
+    ...parsed.frontmatter,
+    pageType: "synthesis",
+    id: pageId,
+    title: params.mutation.title,
+    sourceIds: normalizeSourceIds(params.mutation.sourceIds),
+    ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
+    ...(normalizeUniqueStrings(params.mutation.contradictions)
+      ? { contradictions: normalizeUniqueStrings(params.mutation.contradictions) }
+      : {}),
+    ...(normalizeUniqueStrings(params.mutation.questions)
+      ? { questions: normalizeUniqueStrings(params.mutation.questions) }
+      : {}),
+    ...(typeof params.mutation.confidence === "number"
+      ? { confidence: params.mutation.confidence }
+      : {}),
+    ...(typeof params.mutation.recallCount === "number"
+      ? { recallCount: params.mutation.recallCount }
+      : {}),
+    status: params.mutation.status?.trim() || "active",
+    updatedAt: new Date().toISOString(),
+  };
   const changed = await writeWikiPage({
     absolutePath,
-    frontmatter: {
-      ...parsed.frontmatter,
-      pageType: "synthesis",
-      id: pageId,
-      title: params.mutation.title,
-      sourceIds: normalizeSourceIds(params.mutation.sourceIds),
-      ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
-      ...(normalizeUniqueStrings(params.mutation.contradictions)
-        ? { contradictions: normalizeUniqueStrings(params.mutation.contradictions) }
-        : {}),
-      ...(normalizeUniqueStrings(params.mutation.questions)
-        ? { questions: normalizeUniqueStrings(params.mutation.questions) }
-        : {}),
-      ...(typeof params.mutation.confidence === "number"
-        ? { confidence: params.mutation.confidence }
-        : {}),
-      status: params.mutation.status?.trim() || "active",
-      updatedAt: new Date().toISOString(),
-    },
+    frontmatter: applyPromotionReadinessFlag(nextFrontmatter),
     body: buildSynthesisBody({
       title: params.mutation.title,
       originalBody: parsed.body,
@@ -259,10 +311,15 @@ function buildUpdatedFrontmatter(params: {
   } else if (typeof params.mutation.confidence === "number") {
     frontmatter.confidence = params.mutation.confidence;
   }
+  if (params.mutation.recallCount === null) {
+    delete frontmatter.recallCount;
+  } else if (typeof params.mutation.recallCount === "number") {
+    frontmatter.recallCount = params.mutation.recallCount;
+  }
   if (params.mutation.status?.trim()) {
     frontmatter.status = params.mutation.status.trim();
   }
-  return frontmatter;
+  return applyPromotionReadinessFlag(frontmatter);
 }
 
 async function applyUpdateMetadataMutation(params: {
