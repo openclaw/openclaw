@@ -49,3 +49,11 @@ export async function mockNodeChildProcessSpawnSync(
     spawnSync: (...args: unknown[]) => spawnSync(...args),
   } as Partial<typeof import("node:child_process")>);
 }
+
+export async function mockNodeChildProcessExecFile(
+  execFile: typeof import("node:child_process").execFile,
+): Promise<typeof import("node:child_process")> {
+  return mockNodeBuiltinModule(() => import("node:child_process"), {
+    execFile,
+  } as Partial<typeof import("node:child_process")>);
+}
