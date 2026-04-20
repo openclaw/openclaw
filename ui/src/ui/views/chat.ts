@@ -1,14 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type {
-  CompactionStatus as CompactionIndicatorStatus,
-  FallbackStatus as FallbackIndicatorStatus,
-} from "../app-tool-stream.ts";
+import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
+import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
@@ -17,23 +15,34 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
+import { extractTextCached } from "../chat/message-extract.ts";
+import {
+  isToolResultMessage,
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import { messageMatchesSearchQuery } from "../chat/search-match.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
+import { renderSideResult } from "../chat/side-result-render.ts";
+import type { ChatSideResult } from "../chat/side-result.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
+  getHiddenCommandCount,
   getSlashCommandCompletions,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
+import { buildSidebarContent, extractToolCards, extractToolPreview } from "../chat/tool-cards.ts";
+import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
+import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -48,9 +57,10 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
-  compactionStatus?: CompactionIndicatorStatus | null;
-  fallbackStatus?: FallbackIndicatorStatus | null;
+  compactionStatus?: CompactionStatus | null;
+  fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
+  sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
@@ -65,11 +75,17 @@ export type ChatProps = {
   sessions: SessionsListResult | null;
   focusMode: boolean;
   sidebarOpen?: boolean;
-  sidebarContent?: string | null;
+  sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
   splitRatio?: number;
+  canvasHostUrl?: string | null;
+  embedSandboxMode?: EmbedSandboxMode;
+  allowExternalEmbedUrls?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
+  localMediaPreviewRoots?: string[];
+  assistantAttachmentAuthToken?: string | null;
+  autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
@@ -82,6 +98,7 @@ export type ChatProps = {
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -92,7 +109,7 @@ export type ChatProps = {
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
-  onOpenSidebar?: (content: string) => void;
+  onOpenSidebar?: (content: SidebarContent) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
@@ -106,6 +123,9 @@ const FALLBACK_TOAST_DURATION_MS = 8000;
 const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
+const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
+const initializedToolCardsBySession = new Map<string, Set<string>>();
+const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 function getInputHistory(sessionKey: string): InputHistory {
   return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
@@ -127,6 +147,143 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
   );
 }
 
+function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
+  return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
+}
+
+function getInitializedToolCards(sessionKey: string): Set<string> {
+  return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
+}
+
+function appendCanvasBlockToAssistantMessage(
+  message: unknown,
+  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
+  rawText: string | null,
+) {
+  const raw = message as Record<string, unknown>;
+  const existingContent = Array.isArray(raw.content)
+    ? [...raw.content]
+    : typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : typeof raw.text === "string"
+        ? [{ type: "text", text: raw.text }]
+        : [];
+  const alreadyHasArtifact = existingContent.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const typed = block as {
+      type?: unknown;
+      preview?: { kind?: unknown; viewId?: unknown; url?: unknown };
+    };
+    return (
+      typed.type === "canvas" &&
+      typed.preview?.kind === "canvas" &&
+      ((preview.viewId && typed.preview.viewId === preview.viewId) ||
+        (preview.url && typed.preview.url === preview.url))
+    );
+  });
+  if (alreadyHasArtifact) {
+    return message;
+  }
+  return {
+    ...raw,
+    content: [
+      ...existingContent,
+      {
+        type: "canvas",
+        preview,
+        ...(rawText ? { rawText } : {}),
+      },
+    ],
+  };
+}
+
+function extractChatMessagePreview(toolMessage: unknown): {
+  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+  text: string | null;
+  timestamp: number | null;
+} | null {
+  const normalized = normalizeMessage(toolMessage);
+  const cards = extractToolCards(toolMessage, "preview");
+  for (let index = cards.length - 1; index >= 0; index--) {
+    const card = cards[index];
+    if (card?.preview?.kind === "canvas") {
+      return {
+        preview: card.preview,
+        text: card.outputText ?? null,
+        timestamp: normalized.timestamp ?? null,
+      };
+    }
+  }
+  const text = extractTextCached(toolMessage) ?? undefined;
+  const toolRecord = toolMessage as Record<string, unknown>;
+  const toolName =
+    typeof toolRecord.toolName === "string"
+      ? toolRecord.toolName
+      : typeof toolRecord.tool_name === "string"
+        ? toolRecord.tool_name
+        : undefined;
+  const preview = extractToolPreview(text, toolName);
+  if (preview?.kind !== "canvas") {
+    return null;
+  }
+  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+}
+
+function findNearestAssistantMessageIndex(
+  items: ChatItem[],
+  toolTimestamp: number | null,
+): number | null {
+  const assistantEntries = items
+    .map((item, index) => {
+      if (item.kind !== "message") {
+        return null;
+      }
+      const message = item.message as Record<string, unknown>;
+      const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+      if (role !== "assistant") {
+        return null;
+      }
+      return {
+        index,
+        timestamp: normalizeMessage(item.message).timestamp ?? null,
+      };
+    })
+    .filter(Boolean) as Array<{ index: number; timestamp: number | null }>;
+  if (assistantEntries.length === 0) {
+    return null;
+  }
+  if (toolTimestamp == null) {
+    return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+  }
+  let previous: { index: number; timestamp: number } | null = null;
+  let next: { index: number; timestamp: number } | null = null;
+  for (const entry of assistantEntries) {
+    if (entry.timestamp == null) {
+      continue;
+    }
+    if (entry.timestamp <= toolTimestamp) {
+      previous = { index: entry.index, timestamp: entry.timestamp };
+      continue;
+    }
+    next = { index: entry.index, timestamp: entry.timestamp };
+    break;
+  }
+  if (previous && next) {
+    const previousDelta = toolTimestamp - previous.timestamp;
+    const nextDelta = next.timestamp - toolTimestamp;
+    return nextDelta < previousDelta ? next.index : previous.index;
+  }
+  if (previous) {
+    return previous.index;
+  }
+  if (next) {
+    return next.index;
+  }
+  return assistantEntries[assistantEntries.length - 1]?.index ?? null;
+}
+
 interface ChatEphemeralState {
   sttRecording: boolean;
   sttInterimText: string;
@@ -136,6 +293,7 @@ interface ChatEphemeralState {
   slashMenuMode: "command" | "args";
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
+  slashMenuExpanded: boolean;
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
@@ -151,6 +309,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     slashMenuMode: "command",
     slashMenuCommand: null,
     slashMenuArgItems: [],
+    slashMenuExpanded: false,
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
@@ -177,11 +336,65 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
-function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
+function syncToolCardExpansionState(
+  sessionKey: string,
+  items: Array<ChatItem | MessageGroup>,
+  autoExpandToolCalls: boolean,
+) {
+  const expanded = getExpandedToolCards(sessionKey);
+  const initialized = getInitializedToolCards(sessionKey);
+  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const currentToolCardIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const entry of item.messages) {
+      const cards = extractToolCards(entry.message, entry.key);
+      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
+        currentToolCardIds.add(disclosureId);
+        if (initialized.has(disclosureId)) {
+          continue;
+        }
+        expanded.set(disclosureId, autoExpandToolCalls);
+        initialized.add(disclosureId);
+      }
+      const messageRecord = entry.message as Record<string, unknown>;
+      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
+      const normalizedRole = normalizeRoleForGrouping(role);
+      const isToolMessage =
+        isToolResultMessage(entry.message) ||
+        normalizedRole === "tool" ||
+        role.toLowerCase() === "toolresult" ||
+        role.toLowerCase() === "tool_result" ||
+        typeof messageRecord.toolCallId === "string" ||
+        typeof messageRecord.tool_call_id === "string";
+      if (!isToolMessage) {
+        continue;
+      }
+      const disclosureId = `toolmsg:${entry.key}`;
+      currentToolCardIds.add(disclosureId);
+      if (initialized.has(disclosureId)) {
+        continue;
+      }
+      expanded.set(disclosureId, autoExpandToolCalls);
+      initialized.add(disclosureId);
+    }
+  }
+  if (autoExpandToolCalls && !previousAutoExpand) {
+    for (const toolCardId of currentToolCardIds) {
+      expanded.set(toolCardId, true);
+    }
+  }
+  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+}
+
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
-  if (status.phase === "active") {
+  if (status.phase === "active" || status.phase === "retrying") {
     return html`
       <div
         class="compaction-indicator compaction-indicator--active"
@@ -192,18 +405,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
       </div>
     `;
   }
-  if (status.phase === "retrying") {
-    return html`
-      <div
-        class="compaction-indicator compaction-indicator--active"
-        role="status"
-        aria-live="polite"
-      >
-        ${icons.loader} Retrying after compaction...
-      </div>
-    `;
-  }
-  if (status.phase === "complete" && status.completedAt) {
+  if (status.completedAt) {
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
@@ -220,7 +422,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   return nothing;
 }
 
-function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefined) {
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -252,107 +454,6 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
       ${icon} ${message}
     </div>
   `;
-}
-
-/**
- * Compact notice when context usage reaches 85%+.
- * Progressively shifts from amber (85%) to red (90%+).
- */
-/** Parse a 6-digit CSS hex color string to [r, g, b] integer components. */
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-let cachedThemeNoticeColors: {
-  warnHex: string;
-  dangerHex: string;
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnHex,
-    dangerHex,
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
-}
-
-function renderContextNotice(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-) {
-  if (session?.totalTokensFresh === false) {
-    return nothing;
-  }
-  const used = session?.totalTokens ?? 0;
-  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (!used || !limit) {
-    return nothing;
-  }
-  const ratio = used / limit;
-  if (ratio < 0.85) {
-    return nothing;
-  }
-  const pct = Math.min(Math.round(ratio * 100), 100);
-  // Read theme semantic tokens so color tracks the active theme (Dash, dark, light …)
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
-  // Blend from --warn at 85% usage to --danger at 95%+ usage
-  const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * t);
-  const g = Math.round(wg + (dg - wg) * t);
-  const b = Math.round(wb + (db - wb) * t);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
-  return html`
-    <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
-      <svg
-        class="context-notice__icon"
-        width="24"
-        height="24"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      <span>${pct}% context used</span>
-      <span class="context-notice__detail"
-        >${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span
-      >
-    </div>
-  `;
-}
-
-/** Format token count compactly (e.g. 128000 → "128k"). */
-function formatTokensCompact(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
 }
 
 function generateAttachmentId(): string {
@@ -489,6 +590,7 @@ function resetSlashMenuState(): void {
   vs.slashMenuCommand = null;
   vs.slashMenuArgItems = [];
   vs.slashMenuItems = [];
+  vs.slashMenuExpanded = false;
 }
 
 function updateSlashMenu(value: string, requestUpdate: () => void): void {
@@ -522,7 +624,7 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Command mode: /partial-command
   const match = value.match(/^\/(\S*)$/);
   if (match) {
-    const items = getSlashCommandCompletions(match[1]);
+    const items = getSlashCommandCompletions(match[1], { showAll: vs.slashMenuExpanded });
     vs.slashMenuItems = items;
     vs.slashMenuOpen = items.length > 0;
     vs.slashMenuIndex = 0;
@@ -871,9 +973,24 @@ function renderSlashMenu(
     `);
   }
 
+  const hiddenCount = vs.slashMenuExpanded ? 0 : getHiddenCommandCount();
+
   return html`
     <div class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
+      ${hiddenCount > 0
+        ? html`<button
+            class="slash-menu-show-more"
+            @click=${(e: Event) => {
+              e.preventDefault();
+              e.stopPropagation();
+              vs.slashMenuExpanded = true;
+              updateSlashMenu(props.draft, requestUpdate);
+            }}
+          >
+            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
+          </button>`
+        : nothing}
       <div class="slash-menu-footer">
         <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
       </div>
@@ -883,7 +1000,7 @@ function renderSlashMenu(
 
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
-  const isBusy = props.sending || props.stream !== null || props.canAbort;
+  const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
@@ -932,6 +1049,12 @@ export function renderChat(props: ChatProps) {
   };
 
   const chatItems = buildChatItems(props);
+  syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
+  const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const toggleToolCardExpanded = (toolCardId: string) => {
+    expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
+    requestUpdate();
+  };
   const isEmpty = chatItems.length === 0 && !props.loading;
 
   const thread = html`
@@ -1019,9 +1142,24 @@ export function renderChat(props: ChatProps) {
                 onOpenSidebar: props.onOpenSidebar,
                 showReasoning,
                 showToolCalls: props.showToolCalls,
+                autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+                isToolMessageExpanded: (messageId: string) =>
+                  expandedToolCards.get(messageId) ?? false,
+                onToggleToolMessageExpanded: (messageId: string) => {
+                  expandedToolCards.set(messageId, !expandedToolCards.get(messageId));
+                  requestUpdate();
+                },
+                isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
+                onToggleToolExpanded: toggleToolCardExpanded,
+                onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
                 basePath: props.basePath,
+                localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+                assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+                canvasHostUrl: props.canvasHostUrl,
+                embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 onDelete: () => {
@@ -1098,6 +1236,12 @@ export function renderChat(props: ChatProps) {
           requestUpdate();
           return;
       }
+    }
+
+    if (e.key === "Escape" && props.sideResult && !vs.searchOpen) {
+      e.preventDefault();
+      props.onDismissSideResult?.();
+      return;
     }
 
     // Input history (only when input is empty)
@@ -1196,12 +1340,25 @@ export function renderChat(props: ChatProps) {
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,
+                  canvasHostUrl: props.canvasHostUrl,
+                  embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                  allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                   onClose: props.onCloseSidebar!,
                   onViewRawText: () => {
                     if (!props.sidebarContent || !props.onOpenSidebar) {
                       return;
                     }
-                    props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
+                    if (props.sidebarContent.kind === "markdown") {
+                      props.onOpenSidebar(
+                        buildSidebarContent(`\`\`\`\n${props.sidebarContent.content}\n\`\`\``),
+                      );
+                      return;
+                    }
+                    if (props.sidebarContent.rawText?.trim()) {
+                      props.onOpenSidebar(
+                        buildSidebarContent(`\`\`\`json\n${props.sidebarContent.rawText}\n\`\`\``),
+                      );
+                    }
                   },
                 })}
               </div>
@@ -1236,6 +1393,7 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
+      ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
@@ -1369,7 +1527,7 @@ export function renderChat(props: ChatProps) {
               ${icons.download}
             </button>
 
-            ${canAbort && (isBusy || props.sending)
+            ${canAbort
               ? html`
                   <button
                     class="chat-send-btn chat-send-btn--stop"
@@ -1501,6 +1659,31 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
+  const liftedCanvasSources = tools
+    .map((tool) => extractChatMessagePreview(tool))
+    .filter((entry) => Boolean(entry)) as Array<{
+    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+    text: string | null;
+    timestamp: number | null;
+  }>;
+  for (const liftedCanvasSource of liftedCanvasSources) {
+    const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
+    if (assistantIndex == null) {
+      continue;
+    }
+    const item = items[assistantIndex];
+    if (!item || item.kind !== "message") {
+      continue;
+    }
+    items[assistantIndex] = {
+      ...item,
+      message: appendCanvasBlockToAssistantMessage(
+        item.message as Record<string, unknown>,
+        liftedCanvasSource.preview,
+        liftedCanvasSource.text,
+      ),
+    };
+  }
   // Interleave stream segments and tool cards in order. Each segment
   // contains text that was streaming before the corresponding tool started.
   // This ensures correct visual ordering: text → tool → text → tool → ...
@@ -1545,7 +1728,20 @@ function messageKey(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   if (toolCallId) {
-    return `tool:${toolCallId}`;
+    const role = typeof m.role === "string" ? m.role : "unknown";
+    const id = typeof m.id === "string" ? m.id : "";
+    if (id) {
+      return `tool:${role}:${toolCallId}:${id}`;
+    }
+    const messageId = typeof m.messageId === "string" ? m.messageId : "";
+    if (messageId) {
+      return `tool:${role}:${toolCallId}:${messageId}`;
+    }
+    const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
+    if (timestamp != null) {
+      return `tool:${role}:${toolCallId}:${timestamp}:${index}`;
+    }
+    return `tool:${role}:${toolCallId}:${index}`;
   }
   const id = typeof m.id === "string" ? m.id : "";
   if (id) {

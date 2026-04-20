@@ -1,5 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
@@ -9,6 +9,7 @@ import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
@@ -59,6 +60,7 @@ function execSecurityRank(value: ExecSecurity): number {
     case "full":
       return 2;
   }
+  throw new Error("Unsupported exec security value");
 }
 
 function execAskRank(value: ExecAsk): number {
@@ -70,6 +72,7 @@ function execAskRank(value: ExecAsk): number {
     case "always":
       return 2;
   }
+  throw new Error("Unsupported exec ask value");
 }
 
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
@@ -183,6 +186,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // Check for dangerous gateway binding configurations
   // that expose the gateway to network without proper auth
 
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
   const customBindHost = cfg.gateway?.customBindHost?.trim();
   const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
@@ -197,10 +201,10 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
     env: process.env,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    tailscaleMode,
   });
-  const authToken = resolvedAuth.token?.trim() ?? "";
-  const authPassword = resolvedAuth.password?.trim() ?? "";
+  const authToken = normalizeOptionalString(resolvedAuth.token) ?? "";
+  const authPassword = normalizeOptionalString(resolvedAuth.password) ?? "";
   const hasToken =
     authToken.length > 0 ||
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);

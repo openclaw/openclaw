@@ -1,5 +1,5 @@
 ---
-summary: "Slack setup and runtime behavior (Socket Mode + HTTP Events API)"
+summary: "Slack setup and runtime behavior (Socket Mode + HTTP Request URLs)"
 read_when:
   - Setting up Slack or debugging Slack socket/HTTP mode
 title: "Slack"
@@ -7,7 +7,7 @@ title: "Slack"
 
 # Slack
 
-Status: production-ready for DMs + channels via Slack app integrations. Default mode is Socket Mode; HTTP Events API mode is also supported.
+Status: production-ready for DMs + channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -26,12 +26,13 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
 <Tabs>
   <Tab title="Socket Mode (default)">
     <Steps>
-      <Step title="Create Slack app and tokens">
-        In Slack app settings:
+      <Step title="Create a new Slack app">
+        In Slack app settings press the **[Create New App](https://api.slack.com/apps/new)** button:
 
-        - enable **Socket Mode**
-        - create **App Token** (`xapp-...`) with `connections:write`
-        - install app and copy **Bot Token** (`xoxb-...`)
+        - choose **from a manifest** and select a workspace for your app
+        - paste the [example manifest](#manifest-and-scope-checklist) from below and continue to create
+        - generate an **App-Level Token** (`xapp-...`) with `connections:write`
+        - install app and copy the **Bot Token** (`xoxb-...`) shown
       </Step>
 
       <Step title="Configure OpenClaw">
@@ -58,19 +59,6 @@ SLACK_BOT_TOKEN=xoxb-...
 
       </Step>
 
-      <Step title="Subscribe app events">
-        Subscribe bot events for:
-
-        - `app_mention`
-        - `message.channels`, `message.groups`, `message.im`, `message.mpim`
-        - `reaction_added`, `reaction_removed`
-        - `member_joined_channel`, `member_left_channel`
-        - `channel_rename`
-        - `pin_added`, `pin_removed`
-
-        Also enable App Home **Messages Tab** for DMs.
-      </Step>
-
       <Step title="Start gateway">
 
 ```bash
@@ -82,17 +70,19 @@ openclaw gateway
 
   </Tab>
 
-  <Tab title="HTTP Events API mode">
+  <Tab title="HTTP Request URLs">
     <Steps>
-      <Step title="Configure Slack app for HTTP">
+      <Step title="Create a new Slack app">
+        In Slack app settings press the **[Create New App](https://api.slack.com/apps/new)** button:
 
-        - set mode to HTTP (`channels.slack.mode="http"`)
-        - copy Slack **Signing Secret**
-        - set Event Subscriptions + Interactivity + Slash command Request URL to the same webhook path (default `/slack/events`)
+        - choose **from a manifest** and select a workspace for your app
+        - paste the [example manifest](#manifest-and-scope-checklist) and update the URLs before create
+        - save the **Signing Secret** for request verification
+        - install app and copy the **Bot Token** (`xoxb-...`) shown
 
       </Step>
 
-      <Step title="Configure OpenClaw HTTP mode">
+      <Step title="Configure OpenClaw">
 
 ```json5
 {
@@ -108,12 +98,20 @@ openclaw gateway
 }
 ```
 
+        <Note>
+        Use unique webhook paths for multi-account HTTP
+
+        Give each account a distinct `webhookPath` (default `/slack/events`) so registrations do not collide.
+        </Note>
+
       </Step>
 
-      <Step title="Use unique webhook paths for multi-account HTTP">
-        Per-account HTTP mode is supported.
+      <Step title="Start gateway">
 
-        Give each account a distinct `webhookPath` so registrations do not collide.
+```bash
+openclaw gateway
+```
+
       </Step>
     </Steps>
 
@@ -122,8 +120,8 @@ openclaw gateway
 
 ## Manifest and scope checklist
 
-<AccordionGroup>
-  <Accordion title="Slack app manifest example" defaultOpen>
+<Tabs>
+  <Tab title="Socket Mode (default)">
 
 ```json
 {
@@ -198,8 +196,371 @@ openclaw gateway
 }
 ```
 
-  </Accordion>
+  </Tab>
 
+  <Tab title="HTTP Request URLs">
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw",
+    "description": "Slack connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "OpenClaw",
+      "always_online": true
+    },
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "slash_commands": [
+      {
+        "command": "/openclaw",
+        "description": "Send a message to OpenClaw",
+        "should_escape": false,
+        "url": "https://gateway-host.example.com/slack/events"
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "assistant:write",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "pins:read",
+        "pins:write",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "bot_events": [
+        "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "message_menu_options_url": "https://gateway-host.example.com/slack/events"
+    }
+  }
+}
+```
+
+  </Tab>
+</Tabs>
+
+### Additional manifest settings
+
+Surface different features that extend the above defaults.
+
+<AccordionGroup>
+  <Accordion title="Optional native slash commands">
+
+    Multiple [native slash commands](#commands-and-slash-behavior) can be used instead of a single configured command with nuance:
+
+    - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
+    - No more than 25 slash commands can be made available at once.
+
+    Replace your existing `features.slash_commands` section with a subset of [available commands](/tools/slash-commands#command-list):
+
+    <Tabs>
+      <Tab title="Socket Mode (default)">
+
+```json
+    "slash_commands": [
+      {
+        "command": "/new",
+        "description": "Start a new session",
+        "usage_hint": "[model]"
+      },
+      {
+        "command": "/reset",
+        "description": "Reset the current session"
+      },
+      {
+        "command": "/compact",
+        "description": "Compact the session context",
+        "usage_hint": "[instructions]"
+      },
+      {
+        "command": "/stop",
+        "description": "Stop the current run"
+      },
+      {
+        "command": "/session",
+        "description": "Manage thread-binding expiry",
+        "usage_hint": "idle <duration|off> or max-age <duration|off>"
+      },
+      {
+        "command": "/think",
+        "description": "Set the thinking level",
+        "usage_hint": "<off|minimal|low|medium|high|xhigh>"
+      },
+      {
+        "command": "/verbose",
+        "description": "Toggle verbose output",
+        "usage_hint": "on|off|full"
+      },
+      {
+        "command": "/fast",
+        "description": "Show or set fast mode",
+        "usage_hint": "[status|on|off]"
+      },
+      {
+        "command": "/reasoning",
+        "description": "Toggle reasoning visibility",
+        "usage_hint": "[on|off|stream]"
+      },
+      {
+        "command": "/elevated",
+        "description": "Toggle elevated mode",
+        "usage_hint": "[on|off|ask|full]"
+      },
+      {
+        "command": "/exec",
+        "description": "Show or set exec defaults",
+        "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>"
+      },
+      {
+        "command": "/model",
+        "description": "Show or set the model",
+        "usage_hint": "[name|#|status]"
+      },
+      {
+        "command": "/models",
+        "description": "List providers or models for a provider",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
+      },
+      {
+        "command": "/help",
+        "description": "Show the short help summary"
+      },
+      {
+        "command": "/commands",
+        "description": "Show the generated command catalog"
+      },
+      {
+        "command": "/tools",
+        "description": "Show what the current agent can use right now",
+        "usage_hint": "[compact|verbose]"
+      },
+      {
+        "command": "/agentstatus",
+        "description": "Show runtime status, including provider usage/quota when available"
+      },
+      {
+        "command": "/tasks",
+        "description": "List active/recent background tasks for the current session"
+      },
+      {
+        "command": "/context",
+        "description": "Explain how context is assembled",
+        "usage_hint": "[list|detail|json]"
+      },
+      {
+        "command": "/whoami",
+        "description": "Show your sender identity"
+      },
+      {
+        "command": "/skill",
+        "description": "Run a skill by name",
+        "usage_hint": "<name> [input]"
+      },
+      {
+        "command": "/btw",
+        "description": "Ask a side question without changing session context",
+        "usage_hint": "<question>"
+      },
+      {
+        "command": "/usage",
+        "description": "Control the usage footer or show cost summary",
+        "usage_hint": "off|tokens|full|cost"
+      }
+    ]
+```
+
+      </Tab>
+      <Tab title="HTTP Request URLs">
+
+```json
+    "slash_commands": [
+      {
+        "command": "/new",
+        "description": "Start a new session",
+        "usage_hint": "[model]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/reset",
+        "description": "Reset the current session",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/compact",
+        "description": "Compact the session context",
+        "usage_hint": "[instructions]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/stop",
+        "description": "Stop the current run",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/session",
+        "description": "Manage thread-binding expiry",
+        "usage_hint": "idle <duration|off> or max-age <duration|off>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/think",
+        "description": "Set the thinking level",
+        "usage_hint": "<off|minimal|low|medium|high|xhigh>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/verbose",
+        "description": "Toggle verbose output",
+        "usage_hint": "on|off|full",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/fast",
+        "description": "Show or set fast mode",
+        "usage_hint": "[status|on|off]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/reasoning",
+        "description": "Toggle reasoning visibility",
+        "usage_hint": "[on|off|stream]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/elevated",
+        "description": "Toggle elevated mode",
+        "usage_hint": "[on|off|ask|full]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/exec",
+        "description": "Show or set exec defaults",
+        "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/model",
+        "description": "Show or set the model",
+        "usage_hint": "[name|#|status]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/models",
+        "description": "List providers or models for a provider",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/help",
+        "description": "Show the short help summary",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/commands",
+        "description": "Show the generated command catalog",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/tools",
+        "description": "Show what the current agent can use right now",
+        "usage_hint": "[compact|verbose]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/agentstatus",
+        "description": "Show runtime status, including provider usage/quota when available",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/tasks",
+        "description": "List active/recent background tasks for the current session",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/context",
+        "description": "Explain how context is assembled",
+        "usage_hint": "[list|detail|json]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/whoami",
+        "description": "Show your sender identity",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/skill",
+        "description": "Run a skill by name",
+        "usage_hint": "<name> [input]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/btw",
+        "description": "Ask a side question without changing session context",
+        "usage_hint": "<question>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/usage",
+        "description": "Control the usage footer or show cost summary",
+        "usage_hint": "off|tokens|full|cost",
+        "url": "https://gateway-host.example.com/slack/events"
+      }
+    ]
+```
+
+      </Tab>
+    </Tabs>
+
+  </Accordion>
+  <Accordion title="Optional authorship scopes (write operations)">
+    Add the `chat:write.customize` bot scope if you want outgoing messages to use the active agent identity (custom username and icon) instead of the default Slack app identity.
+
+    If you use an emoji icon, Slack expects `:emoji_name:` syntax.
+
+  </Accordion>
   <Accordion title="Optional user-token scopes (read operations)">
     If you configure `channels.slack.userToken`, typical read scopes are:
 
@@ -223,7 +584,6 @@ openclaw gateway
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
-- Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
 
 Status snapshot behavior:
 
@@ -311,7 +671,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     - explicit app mention (`<@botId>`)
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - implicit reply-to-bot thread behavior
+    - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
@@ -335,6 +695,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
+- `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
 
 Reply threading controls:
 
@@ -374,9 +735,11 @@ Notes:
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 
-`channels.slack.nativeStreaming` controls Slack native text streaming when `streaming` is `partial` (default: `true`).
+`channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-- A reply thread must be available for native text streaming to appear. Thread selection still follows `replyToMode`. Without one, the normal draft preview is used.
+- A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
+- Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
+- Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
 - Media and non-text payloads fall back to normal delivery.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
@@ -386,8 +749,10 @@ Use draft preview instead of Slack native text streaming:
 {
   channels: {
     slack: {
-      streaming: "partial",
-      nativeStreaming: false,
+      streaming: {
+        mode: "partial",
+        nativeTransport: false,
+      },
     },
   },
 }
@@ -395,8 +760,9 @@ Use draft preview instead of Slack native text streaming:
 
 Legacy keys:
 
-- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
-- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
+- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming.mode`.
+- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
+- legacy `channels.slack.nativeStreaming` is auto-migrated to `channels.slack.streaming.nativeTransport`.
 
 ## Typing reaction fallback
 
@@ -442,30 +808,37 @@ Notes:
 
 ## Commands and slash behavior
 
-- Native command auto-mode is **off** for Slack (`commands.native: "auto"` does not enable Slack native commands).
-- Enable native Slack command handlers with `channels.slack.commands.native: true` (or global `commands.native: true`).
-- When native commands are enabled, register matching slash commands in Slack (`/<command>` names), with one exception:
-  - register `/agentstatus` for the status command (Slack reserves `/status`)
-- If native commands are not enabled, you can run a single configured slash command via `channels.slack.slashCommand`.
-- Native arg menus now adapt their rendering strategy:
-  - up to 5 options: button blocks
-  - 6-100 options: static select menu
-  - more than 100 options: external select with async option filtering when interactivity options handlers are available
-  - if encoded option values exceed Slack limits, the flow falls back to buttons
-- For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
-
-Default slash command settings:
+Slash commands appear in Slack as either a single configured command or multiple native commands. Configure `channels.slack.slashCommand` to change command defaults:
 
 - `enabled: false`
 - `name: "openclaw"`
 - `sessionPrefix: "slack:slash"`
 - `ephemeral: true`
 
-Slash sessions use isolated keys:
+```txt
+/openclaw /help
+```
 
-- `agent:<agentId>:slack:slash:<userId>`
+Native commands require [additional manifest settings](#additional-manifest-settings) in your Slack app and are enabled with `channels.slack.commands.native: true` or `commands.native: true` in global configurations instead.
 
-and still route command execution against the target conversation session (`CommandTargetSessionKey`).
+- Native command auto-mode is **off** for Slack so `commands.native: "auto"` does not enable Slack native commands.
+
+```txt
+/help
+```
+
+Native argument menus use an adaptive rendering strategy that shows a confirmation modal before dispatching a selected option value:
+
+- up to 5 options: button blocks
+- 6-100 options: static select menu
+- more than 100 options: external select with async option filtering when interactivity options handlers are available
+- exceeded Slack limits: encoded option values fall back to buttons
+
+```txt
+/think
+```
+
+Slash sessions use isolated keys like `agent:<agentId>:slack:slash:<userId>` and still route command executions to the target conversation session using `CommandTargetSessionKey`.
 
 ## Interactive replies
 
@@ -598,7 +971,7 @@ Primary reference:
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Troubleshooting

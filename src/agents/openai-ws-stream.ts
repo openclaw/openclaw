@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  StopReason,
+} from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 /**
  * OpenAI WebSocket StreamFn Integration
  *
@@ -20,25 +29,18 @@
  *
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
-
-import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  AssistantMessageEventStream,
-  StopReason,
-} from "@mariozechner/pi-ai";
-import * as piAi from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderTransportTurnStateWithPlugin,
   resolveProviderWebSocketSessionPolicyWithPlugin,
 } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
+import type { ProviderTransportTurnState } from "../plugins/types.js";
 import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,
 } from "../shared/chat-message-content.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
 import {
   getOpenAIWebSocketErrorDetails,
@@ -70,6 +72,7 @@ import { mergeTransportMetadata } from "./transport-stream-shared.js";
 
 interface WsSession {
   manager: OpenAIWebSocketManager;
+  managerConfigSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
   /** True if the connection has been established at least once. */
@@ -335,6 +338,30 @@ function createWsManager(
   });
 }
 
+function stringifyStable(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stringifyStable(entry)).join(",")}]`;
+  }
+  const entries = Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stringifyStable(entry)}`)
+    .join(",")}}`;
+}
+
+function resolveWsManagerConfigSignature(
+  managerOptions: OpenAIWebSocketManagerOptions | undefined,
+  sessionHeaders?: Record<string, string>,
+): string {
+  return stringifyStable({
+    headers: sessionHeaders,
+    request: managerOptions?.request,
+    url: managerOptions?.url,
+  });
+}
+
 const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
@@ -347,7 +374,7 @@ function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
     const url = new URL(trimmed);
     return (
       url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "api.openai.com" &&
+      normalizeLowercaseStringOrEmpty(url.hostname) === "api.openai.com" &&
       /^\/v1\/?$/u.test(url.pathname)
     );
   } catch {
@@ -369,7 +396,7 @@ function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
     return false;
   }
   try {
-    return new URL(trimmed).hostname.toLowerCase().endsWith(".openai.azure.com");
+    return normalizeLowercaseStringOrEmpty(new URL(trimmed).hostname).endsWith(".openai.azure.com");
   } catch {
     return false;
   }
@@ -550,7 +577,7 @@ function normalizeWsRunError(err: unknown): OpenAIWebSocketRuntimeError {
   if (err instanceof OpenAIWebSocketRuntimeError) {
     return err;
   }
-  return new OpenAIWebSocketRuntimeError(err instanceof Error ? err.message : String(err), {
+  return new OpenAIWebSocketRuntimeError(formatErrorMessage(err), {
     kind: "server",
     retryable: false,
   });
@@ -660,10 +687,15 @@ export function createOpenAIWebSocketStreamFn(
 
       while (true) {
         let session = wsRegistry.get(sessionId);
+        const managerConfigSignature = resolveWsManagerConfigSignature(
+          opts.managerOptions,
+          sessionHeaders,
+        );
         if (!session) {
           const manager = createWsManager(opts.managerOptions, sessionHeaders);
           session = {
             manager,
+            managerConfigSignature,
             lastContextLength: 0,
             everConnected: false,
             warmUpAttempted: false,
@@ -672,6 +704,13 @@ export function createOpenAIWebSocketStreamFn(
             degradeCooldownMs: wsSessionPolicy.degradeCooldownMs,
           };
           wsRegistry.set(sessionId, session);
+        } else if (session.managerConfigSignature !== managerConfigSignature) {
+          resetWsSession({
+            session,
+            createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+          });
+          session.managerConfigSignature = managerConfigSignature;
+          session.degradeCooldownMs = wsSessionPolicy.degradeCooldownMs;
         }
 
         if (transport !== "websocket" && isWsSessionDegraded(session)) {
@@ -1042,13 +1081,15 @@ export function createOpenAIWebSocketStreamFn(
                       ? normalizeAssistantPhase((event.item as { phase?: unknown }).phase)
                       : undefined;
                   outputItemPhaseById.set(event.item.id, itemPhase);
-                  for (const key of outputTextByPart.keys()) {
-                    if (key.startsWith(`${event.item.id}:`)) {
-                      const [, contentIndexText] = key.split(":");
-                      emitBufferedTextDelta({
-                        itemId: event.item.id,
-                        contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
-                      });
+                  if (itemPhase !== undefined) {
+                    for (const key of outputTextByPart.keys()) {
+                      if (key.startsWith(`${event.item.id}:`)) {
+                        const [, contentIndexText] = key.split(":");
+                        emitBufferedTextDelta({
+                          itemId: event.item.id,
+                          contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                        });
+                      }
                     }
                   }
                 }
@@ -1059,7 +1100,7 @@ export function createOpenAIWebSocketStreamFn(
                 const key = getOutputTextKey(event.item_id, event.content_index);
                 const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
                 outputTextByPart.set(key, nextText);
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
@@ -1073,7 +1114,7 @@ export function createOpenAIWebSocketStreamFn(
                 if (event.text && event.text !== outputTextByPart.get(key)) {
                   outputTextByPart.set(key, event.text);
                 }
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
@@ -1175,7 +1216,7 @@ export function createOpenAIWebSocketStreamFn(
 
     queueMicrotask(() =>
       run().catch((err) => {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorMessage = formatErrorMessage(err);
         log.warn(`[ws-stream] session=${sessionId} run error: ${errorMessage}`);
         eventStream.push({
           type: "error",

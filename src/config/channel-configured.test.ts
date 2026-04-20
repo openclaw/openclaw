@@ -1,25 +1,43 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
 
-const tempDirs: string[] = [];
-
-function makeTempStateDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-configured-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      fs.rmSync(dir, { recursive: true, force: true });
+vi.mock("../channels/plugins/configured-state.js", () => ({
+  hasBundledChannelConfiguredState: ({
+    channelId,
+    env,
+  }: {
+    channelId: string;
+    env?: NodeJS.ProcessEnv;
+  }) => {
+    if (channelId === "telegram") {
+      return Boolean(env?.TELEGRAM_BOT_TOKEN);
     }
-  }
-});
+    if (channelId === "discord") {
+      return Boolean(env?.DISCORD_BOT_TOKEN);
+    }
+    if (channelId === "slack") {
+      return Boolean(env?.SLACK_BOT_TOKEN);
+    }
+    if (channelId === "irc") {
+      return Boolean(env?.IRC_HOST && env?.IRC_NICK);
+    }
+    return false;
+  },
+}));
+
+vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  hasBundledChannelPersistedAuthState: ({
+    channelId,
+    env,
+  }: {
+    channelId: string;
+    env?: NodeJS.ProcessEnv;
+  }) => channelId === "matrix" && env?.OPENCLAW_STATE_DIR === "state-with-matrix-creds",
+}));
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: () => undefined,
+}));
 
 describe("isChannelConfigured", () => {
   it("detects Telegram env configuration through the package metadata seam", () => {
@@ -61,18 +79,8 @@ describe("isChannelConfigured", () => {
   });
 
   it("detects persisted Matrix credentials through package metadata", () => {
-    const stateDir = makeTempStateDir();
-    fs.mkdirSync(path.join(stateDir, "credentials", "matrix"), { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-      JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@ops:example.org",
-        accessToken: "token",
-      }),
-      "utf8",
-    );
-
-    expect(isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: stateDir })).toBe(true);
+    expect(
+      isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
+    ).toBe(true);
   });
 });

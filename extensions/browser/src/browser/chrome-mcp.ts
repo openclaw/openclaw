@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { asRecord } from "../record-shared.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import type { BrowserTab } from "./client.js";
+import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 type ChromeMcpStructuredPage = {
@@ -40,16 +42,12 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
+const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
+const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
@@ -63,7 +61,7 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
     }
     out.push({
       id: record.id,
-      url: typeof record.url === "string" ? record.url : undefined,
+      url: readStringValue(record.url),
       selected: record.selected === true,
     });
   }
@@ -111,7 +109,7 @@ function extractTextPages(result: ChromeMcpToolResult): ChromeMcpStructuredPage[
       }
       pages.push({
         id: Number.parseInt(match[1] ?? "", 10),
-        url: match[2]?.trim() || undefined,
+        url: normalizeOptionalString(match[2]),
         selected: Boolean(match[3]),
       });
     }
@@ -336,7 +334,7 @@ async function callTool(
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-"));
+  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-chrome-mcp-"));
   const filePath = path.join(dir, randomUUID());
   try {
     return await fn(filePath);
@@ -405,16 +403,33 @@ export async function openChromeMcpTab(
   url: string,
   userDataDir?: string,
 ): Promise<BrowserTab> {
-  const result = await callTool(profileName, userDataDir, "new_page", { url });
+  const targetUrl = url.trim() || "about:blank";
+  const result = await callTool(profileName, userDataDir, "new_page", {
+    url: "about:blank",
+    timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS,
+  });
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
     throw new Error("Chrome MCP did not return the created page.");
   }
+  const targetId = String(chosen.id);
+  const finalUrl =
+    targetUrl === "about:blank"
+      ? (chosen.url ?? targetUrl)
+      : (
+          await navigateChromeMcpPage({
+            profileName,
+            userDataDir,
+            targetId,
+            url: targetUrl,
+            timeoutMs: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+          })
+        ).url;
   return {
-    targetId: String(chosen.id),
+    targetId,
     title: "",
-    url: chosen.url ?? url,
+    url: finalUrl,
     type: "page",
   };
 }

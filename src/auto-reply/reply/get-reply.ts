@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -9,20 +10,33 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
+import type { GetReplyOptions } from "../get-reply-options.types.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
+import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  initFastReplySessionState,
+  buildFastReplyCommandContext,
+  shouldHandleFastReplyTextCommands,
+  shouldUseReplyFastDirectiveExecution,
+  resolveGetReplyConfig,
+  shouldUseReplyFastTestBootstrap,
+  shouldUseReplyFastTestRuntime,
+} from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
+import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
+import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -33,6 +47,13 @@ let sessionResetModelRuntimePromise: Promise<
 let stageSandboxMediaRuntimePromise: Promise<
   typeof import("./stage-sandbox-media.runtime.js")
 > | null = null;
+let mediaUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../media-understanding/apply.runtime.js")
+> | null = null;
+let linkUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../link-understanding/apply.runtime.js")
+> | null = null;
+let commandsCoreRuntimePromise: Promise<typeof import("./commands-core.runtime.js")> | null = null;
 
 function loadSessionResetModelRuntime() {
   sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
@@ -42,6 +63,21 @@ function loadSessionResetModelRuntime() {
 function loadStageSandboxMediaRuntime() {
   stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
   return stageSandboxMediaRuntimePromise;
+}
+
+function loadMediaUnderstandingApplyRuntime() {
+  mediaUnderstandingApplyRuntimePromise ??= import("../../media-understanding/apply.runtime.js");
+  return mediaUnderstandingApplyRuntimePromise;
+}
+
+function loadLinkUnderstandingApplyRuntime() {
+  linkUnderstandingApplyRuntimePromise ??= import("../../link-understanding/apply.runtime.js");
+  return linkUnderstandingApplyRuntimePromise;
+}
+
+function loadCommandsCoreRuntime() {
+  commandsCoreRuntimePromise ??= import("./commands-core.runtime.js");
+  return commandsCoreRuntimePromise;
 }
 
 let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
@@ -87,10 +123,10 @@ function hasInboundMedia(ctx: MsgContext): boolean {
   return Boolean(
     ctx.StickerMediaIncluded ||
     ctx.Sticker ||
-    ctx.MediaPath?.trim() ||
-    ctx.MediaUrl?.trim() ||
-    ctx.MediaPaths?.some((value) => value?.trim()) ||
-    ctx.MediaUrls?.some((value) => value?.trim()) ||
+    normalizeOptionalString(ctx.MediaPath) ||
+    normalizeOptionalString(ctx.MediaUrl) ||
+    ctx.MediaPaths?.some((value) => normalizeOptionalString(value)) ||
+    ctx.MediaUrls?.some((value) => normalizeOptionalString(value)) ||
     ctx.MediaTypes?.length,
   );
 }
@@ -112,7 +148,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   if (!hasInboundMedia(params.ctx)) {
     return false;
   }
-  const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
+  const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
   await applyMediaUnderstanding(params);
   return true;
 }
@@ -124,7 +160,7 @@ async function applyLinkUnderstandingIfNeeded(params: {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
   }
-  const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
+  const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
   await applyLinkUnderstanding(params);
   return true;
 }
@@ -135,12 +171,23 @@ export async function getReplyFromConfig(
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const cfg =
-    configOverride == null
-      ? loadConfig()
-      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
+  const cfg = resolveGetReplyConfig({
+    loadConfig,
+    isFastTestEnv,
+    configOverride,
+  });
+  const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
+    isFastTestEnv,
+    configOverride,
+  });
+  const useFastTestRuntime = shouldUseReplyFastTestRuntime({
+    cfg,
+    isFastTestEnv,
+  });
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+      : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
   const agentId = resolveSessionAgentId({
     sessionKey: agentSessionKey,
@@ -165,7 +212,9 @@ export async function getReplyFromConfig(
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
-      opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
+      normalizeOptionalString(opts.heartbeatModelOverride) ??
+      normalizeOptionalString(agentCfg?.heartbeat?.model) ??
+      "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,
@@ -181,10 +230,12 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-  });
+  const workspace = useFastTestBootstrap
+    ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+    : await ensureAgentWorkspace({
+        dir: workspaceDirRaw,
+        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+      });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
@@ -222,16 +273,19 @@ export async function getReplyFromConfig(
   });
 
   const commandAuthorized = finalized.CommandAuthorized;
-  resolveCommandAuthorization({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
-  const sessionState = await initSessionState({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
+  const sessionState = useFastTestBootstrap
+    ? initFastReplySessionState({
+        ctx: finalized,
+        cfg,
+        agentId,
+        commandAuthorized,
+        workspaceDir,
+      })
+    : await initSessionState({
+        ctx: finalized,
+        cfg,
+        commandAuthorized,
+      });
   let {
     sessionCtx,
     sessionEntry,
@@ -250,8 +304,7 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
-
-  if (resetTriggered && bodyStripped?.trim()) {
+  if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({
       cfg,
@@ -287,8 +340,20 @@ export async function getReplyFromConfig(
     parentSessionKey: sessionCtx.ParentSessionKey,
   });
   const hasSessionModelOverride = Boolean(
-    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
+    normalizeOptionalString(sessionEntry.modelOverride) ||
+    normalizeOptionalString(sessionEntry.providerOverride),
   );
+  const storedModelOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey: sessionEntry.parentSessionKey ?? sessionCtx.ParentSessionKey,
+    defaultProvider,
+  });
+  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+    provider = storedModelOverride.provider ?? defaultProvider;
+    model = storedModelOverride.model;
+  }
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
@@ -299,6 +364,80 @@ export async function getReplyFromConfig(
       provider = resolved.ref.provider;
       model = resolved.ref.model;
     }
+  }
+
+  if (
+    shouldUseReplyFastDirectiveExecution({
+      isFastTestBootstrap: useFastTestRuntime,
+      isGroup,
+      isHeartbeat: opts?.isHeartbeat === true,
+      resetTriggered,
+      triggerBodyNormalized,
+    })
+  ) {
+    const fastCommand = buildFastReplyCommandContext({
+      ctx,
+      cfg,
+      agentId,
+      sessionKey,
+      isGroup,
+      triggerBodyNormalized,
+      commandAuthorized,
+    });
+    return runPreparedReply({
+      ctx,
+      sessionCtx,
+      cfg,
+      agentId,
+      agentDir,
+      agentCfg,
+      sessionCfg,
+      commandAuthorized,
+      command: fastCommand,
+      commandSource: finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+      allowTextCommands: shouldHandleFastReplyTextCommands({
+        cfg,
+        commandSource: finalized.CommandSource,
+      }),
+      directives: clearInlineDirectives(
+        finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+      ),
+      defaultActivation: "always",
+      resolvedThinkLevel: undefined,
+      resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
+      resolvedReasoningLevel: "off",
+      resolvedElevatedLevel: "off",
+      execOverrides: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      blockStreamingEnabled: false,
+      blockReplyChunking: undefined,
+      resolvedBlockStreamingBreak: "text_end",
+      modelState: createFastTestModelSelectionState({
+        agentCfg,
+        provider,
+        model,
+      }),
+      provider,
+      model,
+      perMessageQueueMode: undefined,
+      perMessageQueueOptions: undefined,
+      typing,
+      opts: resolvedOpts,
+      defaultProvider,
+      defaultModel,
+      timeoutMs,
+      isNewSession,
+      resetTriggered,
+      systemSent,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId,
+      storePath,
+      workspaceDir,
+      abortedLastRun,
+    });
   }
 
   const directiveResult = await resolveReplyDirectives({
@@ -371,7 +510,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
+    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
     const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
@@ -434,32 +573,34 @@ export async function getReplyFromConfig(
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
-  const { getGlobalHookRunner } = await loadHookRunnerGlobal();
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_agent_reply")) {
-    const { resolveOriginMessageProvider } = await loadOriginRouting();
-    const hookMessageProvider = resolveOriginMessageProvider({
-      originatingChannel: sessionCtx.OriginatingChannel,
-      provider: sessionCtx.Provider,
-    });
-    const hookResult = await hookRunner.runBeforeAgentReply(
-      { cleanedBody },
-      {
-        agentId,
-        sessionKey: agentSessionKey,
-        sessionId,
-        workspaceDir,
-        messageProvider: hookMessageProvider,
-        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-        channelId: hookMessageProvider,
-      },
-    );
-    if (hookResult?.handled) {
-      return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+  if (!useFastTestBootstrap) {
+    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("before_agent_reply")) {
+      const { resolveOriginMessageProvider } = await loadOriginRouting();
+      const hookMessageProvider = resolveOriginMessageProvider({
+        originatingChannel: sessionCtx.OriginatingChannel,
+        provider: sessionCtx.Provider,
+      });
+      const hookResult = await hookRunner.runBeforeAgentReply(
+        { cleanedBody },
+        {
+          agentId,
+          sessionKey: agentSessionKey,
+          sessionId,
+          workspaceDir,
+          messageProvider: hookMessageProvider,
+          trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+          channelId: hookMessageProvider,
+        },
+      );
+      if (hookResult?.handled) {
+        return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+      }
     }
   }
 
-  if (sessionKey && hasInboundMedia(ctx)) {
+  if (!useFastTestBootstrap && sessionKey && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await stageSandboxMedia({
       ctx,

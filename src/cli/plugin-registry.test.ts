@@ -1,53 +1,142 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing, ensurePluginRegistryLoaded } from "./plugin-registry.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+
+const logger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+};
+
+function withActivatedPluginIdsForTest<T extends Record<string, unknown>>(
+  config: T,
+  pluginIds: string[],
+): T & {
+  plugins: {
+    allow: string[];
+    entries: Record<string, { enabled: true }>;
+  };
+} {
+  return {
+    ...config,
+    plugins: {
+      ...(typeof config.plugins === "object" && config.plugins ? config.plugins : {}),
+      allow: pluginIds,
+      entries: Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+    },
+  };
+}
 
 const mocks = vi.hoisted(() => ({
-  applyPluginAutoEnable: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn(() => "main"),
-  loadConfig: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
-  getActivePluginRegistry: vi.fn(),
+  loadOpenClawPlugins: vi.fn<typeof import("../plugins/loader.js").loadOpenClawPlugins>(),
+  getActivePluginRegistry: vi.fn<typeof import("../plugins/runtime.js").getActivePluginRegistry>(),
+  resolveConfiguredChannelPluginIds:
+    vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
+  resolveChannelPluginIds:
+    vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveChannelPluginIds>(),
+  resolvePluginRuntimeLoadContext:
+    vi.fn<typeof import("../plugins/runtime/load-context.js").resolvePluginRuntimeLoadContext>(),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-}));
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
-}));
-
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
-}));
+let ensurePluginRegistryLoaded: typeof import("./plugin-registry.js").ensurePluginRegistryLoaded;
+let resetPluginRegistryLoadedForTests: typeof import("./plugin-registry.js").__testing.resetPluginRegistryLoadedForTests;
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: mocks.loadOpenClawPlugins,
-}));
-
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+  loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
+    mocks.loadOpenClawPlugins(...args),
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
-  getActivePluginRegistry: mocks.getActivePluginRegistry,
+  getActivePluginRegistry: (...args: Parameters<typeof mocks.getActivePluginRegistry>) =>
+    mocks.getActivePluginRegistry(...args),
+}));
+
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  resolveConfiguredChannelPluginIds: (
+    ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
+  ) => mocks.resolveConfiguredChannelPluginIds(...args),
+  resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
+    mocks.resolveChannelPluginIds(...args),
+}));
+
+vi.mock("../plugins/runtime/load-context.js", () => ({
+  resolvePluginRuntimeLoadContext: (
+    ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
+  ) => mocks.resolvePluginRuntimeLoadContext(...args),
+  buildPluginRuntimeLoadOptionsFromValues: (
+    values: {
+      config: unknown;
+      activationSourceConfig: unknown;
+      autoEnabledReasons: Readonly<Record<string, string[]>>;
+      workspaceDir: string | undefined;
+      env: NodeJS.ProcessEnv;
+      logger: typeof logger;
+    },
+    overrides?: Record<string, unknown>,
+  ) => ({
+    config: values.config,
+    activationSourceConfig: values.activationSourceConfig,
+    autoEnabledReasons: values.autoEnabledReasons,
+    workspaceDir: values.workspaceDir,
+    env: values.env,
+    logger: values.logger,
+    ...overrides,
+  }),
+  buildPluginRuntimeLoadOptions: (
+    context: {
+      config: unknown;
+      activationSourceConfig: unknown;
+      autoEnabledReasons: Readonly<Record<string, string[]>>;
+      workspaceDir: string | undefined;
+      env: NodeJS.ProcessEnv;
+      logger: typeof logger;
+    },
+    overrides?: Record<string, unknown>,
+  ) => ({
+    config: context.config,
+    activationSourceConfig: context.activationSourceConfig,
+    autoEnabledReasons: context.autoEnabledReasons,
+    workspaceDir: context.workspaceDir,
+    env: context.env,
+    logger: context.logger,
+    ...overrides,
+  }),
 }));
 
 describe("ensurePluginRegistryLoaded", () => {
+  beforeAll(async () => {
+    const mod = await import("./plugin-registry.js");
+    ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
+    resetPluginRegistryLoadedForTests = () => mod.__testing.resetPluginRegistryLoadedForTests();
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
-    __testing.resetPluginRegistryLoadedForTests();
-    mocks.getActivePluginRegistry.mockReturnValue({
-      plugins: [],
-      channels: [],
-      tools: [],
+    mocks.loadOpenClawPlugins.mockReset();
+    mocks.getActivePluginRegistry.mockReset();
+    mocks.resolveConfiguredChannelPluginIds.mockReset();
+    mocks.resolveChannelPluginIds.mockReset();
+    mocks.resolvePluginRuntimeLoadContext.mockReset();
+    resetPluginRegistryLoadedForTests();
+
+    mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
+      const rawConfig = (options?.config ?? {}) as Record<string, unknown>;
+      return {
+        rawConfig,
+        config: rawConfig,
+        activationSourceConfig: (options?.activationSourceConfig ?? rawConfig) as Record<
+          string,
+          unknown
+        >,
+        autoEnabledReasons: {},
+        workspaceDir: "/tmp/workspace",
+        env: options?.env ?? process.env,
+        logger,
+      } as never;
     });
   });
 
-  it("uses the auto-enabled config snapshot for configured channel scope", async () => {
+  it("uses the resolved runtime load context for configured channel scope", () => {
     const baseConfig = {
       channels: {
         "demo-chat": {
@@ -56,48 +145,34 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
-    const autoEnabledConfig = {
-      ...baseConfig,
-      plugins: {
-        entries: {
-          "demo-chat": {
-            enabled: true,
-          },
-        },
-      },
-    };
+    const autoEnabledConfig = withActivatedPluginIdsForTest(baseConfig, ["demo-chat"]);
 
-    mocks.loadConfig.mockReturnValue(baseConfig);
-    mocks.applyPluginAutoEnable.mockReturnValue({
+    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+      rawConfig: baseConfig,
       config: autoEnabledConfig,
-      changes: [],
+      activationSourceConfig: baseConfig,
       autoEnabledReasons: {
         "demo-chat": ["demo-chat configured"],
       },
-    });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "demo-chat", channels: ["demo-chat"] }],
-      diagnostics: [],
-    });
+      workspaceDir: "/tmp/workspace",
+      env: process.env,
+      logger,
+    } as never);
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-chat"]);
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: baseConfig,
-      env: process.env,
-    });
-    expect(mocks.resolveDefaultAgentId).toHaveBeenCalledWith(autoEnabledConfig);
-    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(autoEnabledConfig, "main");
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
+    expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        env: process.env,
         workspaceDir: "/tmp/workspace",
       }),
     );
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
-        activationSourceConfig: baseConfig,
+        activationSourceConfig: autoEnabledConfig,
         autoEnabledReasons: {
           "demo-chat": ["demo-chat configured"],
         },
@@ -108,33 +183,23 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("reloads when escalating from configured-channels to channels", async () => {
+  it("reloads when escalating from configured-channels to channels", () => {
     const config = {
       plugins: { enabled: true },
       channels: { "demo-channel-a": { enabled: false } },
     };
 
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        { id: "demo-channel-a", channels: ["demo-channel-a"] },
-        { id: "demo-channel-b", channels: ["demo-channel-b"] },
-        { id: "demo-provider", channels: [] },
-      ],
-      diagnostics: [],
-    });
-    mocks.getActivePluginRegistry
-      .mockReturnValueOnce({
-        plugins: [],
-        channels: [],
-        tools: [],
-      })
-      .mockReturnValue({
-        plugins: [{ id: "demo-channel-a" }],
-        channels: [{ plugin: { id: "demo-channel-a" } }],
-        tools: [],
-      });
+    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/workspace",
+      env: process.env,
+      logger,
+    } as never);
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel-a"]);
+    mocks.resolveChannelPluginIds.mockReturnValue(["demo-channel-a", "demo-channel-b"]);
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
     ensurePluginRegistryLoaded({ scope: "channels" });
@@ -142,7 +207,10 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ onlyPluginIds: [], throwOnLoadError: true }),
+      expect.objectContaining({
+        onlyPluginIds: ["demo-channel-a"],
+        throwOnLoadError: true,
+      }),
     );
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       2,
@@ -153,19 +221,26 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("does not treat a pre-seeded partial registry as all scope", async () => {
+  it("does not treat a pre-seeded partial registry as all scope", () => {
     const config = {
       plugins: { enabled: true },
       channels: { "demo-channel-a": { enabled: true } },
     };
 
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
+    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/workspace",
+      env: process.env,
+      logger,
+    } as never);
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [{ plugin: { id: "demo-channel-a" } }],
       tools: [],
-    });
+    } as never);
 
     ensurePluginRegistryLoaded({ scope: "all" });
 
@@ -179,33 +254,44 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("does not treat a tools-only pre-seeded registry as channel scope", async () => {
+  it("does not treat a tools-only pre-seeded registry as channel scope", () => {
     const config = {
       plugins: { enabled: true },
       channels: { "demo-channel-a": { enabled: true } },
     };
+    const activatedConfig = withActivatedPluginIdsForTest(config, ["demo-channel-a"]);
 
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
+    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/workspace",
+      env: process.env,
+      logger,
+    } as never);
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel-a"]);
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [],
       tools: [{ pluginId: "demo-tool" }],
-    });
+    } as never);
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config,
+        config: activatedConfig,
+        activationSourceConfig: activatedConfig,
+        onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
       }),
     );
   });
 
-  it("reloads when a pre-seeded channel registry is missing the configured channel plugin ids", async () => {
+  it("reloads when a pre-seeded channel registry is missing the configured channel plugin ids", () => {
     const config = {
       plugins: { enabled: true },
       channels: {
@@ -215,30 +301,30 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
+    const activatedConfig = withActivatedPluginIdsForTest(config, ["demo-channel-a"]);
 
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        { id: "demo-channel-a", channels: ["demo-channel-a"] },
-        { id: "demo-channel-b", channels: ["demo-channel-b"] },
-      ],
-      diagnostics: [],
-    });
+    mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
+      rawConfig: config,
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/workspace",
+      env: process.env,
+      logger,
+    } as never);
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel-a"]);
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [{ id: "demo-channel-b" }],
       channels: [{ plugin: { id: "demo-channel-b" } }],
       tools: [],
-    });
-
-    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
-
+    } as never);
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config,
+        config: activatedConfig,
+        activationSourceConfig: activatedConfig,
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",

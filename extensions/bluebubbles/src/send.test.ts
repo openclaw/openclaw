@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import {
+  fetchBlueBubblesServerInfo,
+  getCachedBlueBubblesPrivateApiStatus,
+  isMacOS26OrHigher,
+} from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget, createChatForHandle } from "./send.js";
@@ -14,6 +18,8 @@ import { _setFetchGuardForTesting, type BlueBubblesSendTarget } from "./types.js
 
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
+const fetchServerInfoMock = vi.mocked(fetchBlueBubblesServerInfo);
+const isMacOS26OrHigherMock = vi.mocked(isMacOS26OrHigher);
 const setFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
 
 installBlueBubblesFetchTestHooks({
@@ -378,6 +384,8 @@ describe("send", () => {
   describe("sendMessageBlueBubbles", () => {
     beforeEach(() => {
       mockFetch.mockReset();
+      fetchServerInfoMock.mockReset();
+      fetchServerInfoMock.mockResolvedValue(null);
     });
 
     it("throws when text is empty", async () => {
@@ -453,7 +461,7 @@ describe("send", () => {
       const body = JSON.parse(sendCall[1].body);
       expect(body.chatGuid).toBe("iMessage;-;+15551234567");
       expect(body.message).toBe("Hello world!");
-      expect(body.method).toBeUndefined();
+      expect(body.method).toBe("apple-script");
     });
 
     it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
@@ -613,7 +621,7 @@ describe("send", () => {
       expect(result.messageId).toBe("msg-uuid-plain");
       const sendCall = mockFetch.mock.calls[1];
       const body = JSON.parse(sendCall[1].body);
-      expect(body.method).toBeUndefined();
+      expect(body.method).toBe("apple-script");
       expect(body.selectedMessageGuid).toBeUndefined();
       expect(body.partIndex).toBeUndefined();
     });
@@ -641,6 +649,62 @@ describe("send", () => {
       expect(body.effectId).toBe("com.apple.MobileSMS.expressivesend.invisibleink");
     });
 
+    // macOS 26 Tahoe broke AppleScript Messages.app automation (-1700). When
+    // Private API is available on these hosts, plain text sends should prefer
+    // Private API even without reply/effect features. (#53159 Bug B, #64480)
+    it("forces Private API for plain text on macOS 26 when available", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      isMacOS26OrHigherMock.mockReturnValue(true);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-macos26" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Plain text", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-macos26");
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+      } finally {
+        isMacOS26OrHigherMock.mockReturnValue(false);
+      }
+    });
+
+    // If macOS 26 host has Private API disabled, there is nothing we can do —
+    // the AppleScript path is broken on that OS. We still tag the send
+    // explicitly as apple-script rather than omitting `method`; BB Server's
+    // behavior on an omitted field is version-dependent and silently drops
+    // on some setups, which is the worse failure mode. (#64480)
+    it("falls back to apple-script on macOS 26 when Private API is disabled", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+      );
+      isMacOS26OrHigherMock.mockReturnValue(true);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-macos26-no-pa" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Plain text", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-macos26-no-pa");
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("apple-script");
+      } finally {
+        isMacOS26OrHigherMock.mockReturnValue(false);
+      }
+    });
+
     it("warns and downgrades private-api features when status is unknown", async () => {
       const runtimeLog = vi.fn();
       setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
@@ -663,7 +727,7 @@ describe("send", () => {
 
         const sendCall = mockFetch.mock.calls[1];
         const body = JSON.parse(sendCall[1].body);
-        expect(body.method).toBeUndefined();
+        expect(body.method).toBe("apple-script");
         expect(body.selectedMessageGuid).toBeUndefined();
         expect(body.partIndex).toBeUndefined();
         expect(body.effectId).toBeUndefined();
@@ -825,6 +889,239 @@ describe("send", () => {
       expect(body.tempGuid).toBeDefined();
       expect(typeof body.tempGuid).toBe("string");
       expect(body.tempGuid.length).toBeGreaterThan(0);
+    });
+
+    describe("lazy private API refresh (#43764)", () => {
+      it("does not refresh when cache is populated (cache hit)", async () => {
+        mockBlueBubblesPrivateApiStatusOnce(
+          privateApiStatusMock,
+          BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+        );
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-cached" } });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Replying", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-123",
+        });
+
+        expect(result.messageId).toBe("msg-cached");
+        expect(fetchServerInfoMock).not.toHaveBeenCalled();
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+        expect(body.selectedMessageGuid).toBe("reply-guid-123");
+      });
+
+      it("refreshes cache when expired and reply threading is requested", async () => {
+        // First call returns null (cache expired), after refresh returns enabled
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: true });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-refreshed" } });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Replying", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-456",
+        });
+
+        expect(result.messageId).toBe("msg-refreshed");
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+        expect(fetchServerInfoMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            baseUrl: expect.stringContaining("localhost"),
+            password: "test",
+            accountId: expect.any(String),
+            allowPrivateNetwork: expect.any(Boolean),
+          }),
+        );
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+        expect(body.selectedMessageGuid).toBe("reply-guid-456");
+      });
+
+      it("refreshes cache when expired and effect is requested", async () => {
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: true });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-effect-refreshed" } });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Party!", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          effectId: "confetti",
+        });
+
+        expect(result.messageId).toBe("msg-effect-refreshed");
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("private-api");
+        expect(body.effectId).toBe("com.apple.messages.effect.CKConfettiEffect");
+      });
+
+      it("degrades gracefully when refresh fails", async () => {
+        // Cache expired, refresh throws — should fall back to existing behavior
+        fetchServerInfoMock.mockRejectedValueOnce(new Error("network error"));
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-degraded" } });
+
+        const runtimeLog = vi.fn();
+        setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            replyToMessageGuid: "reply-guid-789",
+          });
+
+          expect(result.messageId).toBe("msg-degraded");
+          expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+          // Should warn about unknown status and send without threading
+          expect(runtimeLog).toHaveBeenCalledTimes(1);
+          expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+          const sendCall = mockFetch.mock.calls[1];
+          const body = JSON.parse(sendCall[1].body);
+          expect(body.method).toBe("apple-script");
+          expect(body.selectedMessageGuid).toBeUndefined();
+        } finally {
+          clearBlueBubblesRuntime();
+        }
+      });
+
+      it("throws for effects when refresh succeeds with private_api: false", async () => {
+        // Cache expired, refresh succeeds but Private API is explicitly disabled
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
+        mockResolvedHandleTarget();
+
+        await expect(
+          sendMessageBlueBubbles("+15551234567", "Party!", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            effectId: "confetti",
+          }),
+        ).rejects.toThrow("Private API");
+
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+      });
+
+      it("degrades reply threading when refresh succeeds with private_api: false", async () => {
+        // Cache expired, refresh succeeds but Private API is explicitly disabled
+        // Should degrade without the "unknown" warning (status is known: disabled)
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-disabled-after-refresh" } });
+
+        const runtimeLog = vi.fn();
+        setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            replyToMessageGuid: "reply-guid-disabled",
+          });
+
+          expect(result.messageId).toBe("msg-disabled-after-refresh");
+          expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+          // No warning — status is known (disabled), not unknown
+          expect(runtimeLog).not.toHaveBeenCalled();
+          const sendCall = mockFetch.mock.calls[1];
+          const body = JSON.parse(sendCall[1].body);
+          expect(body.method).toBe("apple-script");
+          expect(body.selectedMessageGuid).toBeUndefined();
+        } finally {
+          clearBlueBubblesRuntime();
+        }
+      });
+
+      // Plain-text sends also need the cache populated so `isMacOS26OrHigher`
+      // can read `os_version` from the same `serverInfoCache`. Without a
+      // refresh on cold/expired cache, macOS 26 detection would silently
+      // miss and force-route would fall back to broken AppleScript.
+      // (Greptile/Codex PR #69070)
+      it("refreshes cache for plain-text sends when status is unknown", async () => {
+        // First call returns null (cache cold/expired). The refresh path
+        // fetches server info; plain-text send still uses AppleScript when
+        // Private API is disabled on the server — but the refresh ran.
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+        fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-plain-refreshed" } });
+
+        const result = await sendMessageBlueBubbles("+15551234567", "Plain message", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-plain-refreshed");
+        expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBe("apple-script");
+      });
+
+      // Cold cache + macOS 26 + Private API enabled on refresh — the
+      // refresh populates the cache, `isMacOS26OrHigher` returns true, and
+      // plain-text routes through Private API instead of broken AppleScript.
+      // (Greptile/Codex PR #69070)
+      it("force-routes macOS 26 plain-text through Private API after cold-cache refresh", async () => {
+        privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+        fetchServerInfoMock.mockResolvedValueOnce({
+          private_api: true,
+          os_version: "26.0",
+        });
+        isMacOS26OrHigherMock.mockReturnValue(true);
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-macos26-refreshed" } });
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Plain message", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          });
+
+          expect(result.messageId).toBe("msg-macos26-refreshed");
+          expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+          const sendCall = mockFetch.mock.calls[1];
+          const body = JSON.parse(sendCall[1].body);
+          expect(body.method).toBe("private-api");
+        } finally {
+          isMacOS26OrHigherMock.mockReturnValue(false);
+        }
+      });
+
+      it("degrades gracefully when refresh returns null (server unreachable)", async () => {
+        // Cache expired, refresh returns null (server info unavailable)
+        fetchServerInfoMock.mockResolvedValueOnce(null);
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-null-refresh" } });
+
+        const runtimeLog = vi.fn();
+        setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Reply attempt", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            replyToMessageGuid: "reply-guid-000",
+          });
+
+          expect(result.messageId).toBe("msg-null-refresh");
+          expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+          // privateApiStatus still null after failed refresh → warning + degradation
+          expect(runtimeLog).toHaveBeenCalledTimes(1);
+          expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+        } finally {
+          clearBlueBubblesRuntime();
+        }
+      });
     });
   });
 

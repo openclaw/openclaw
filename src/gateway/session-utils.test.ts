@@ -11,10 +11,12 @@ import {
   classifySessionKey,
   deriveSessionTitle,
   listAgentsForGateway,
+  listSessionsFromStore,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
   pruneLegacyStoreKeys,
+  resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
@@ -104,7 +106,34 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:main:main" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:main:work" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "MAIN" })).toBe("agent:ops:work");
+  });
+
+  test("resolveSessionStoreKey preserves non-alias agent:main keys for deleted-agent checks", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:main:discord:direct:u1" })).toBe(
+      "agent:main:discord:direct:u1",
+    );
+  });
+
+  test("resolveDeletedAgentIdFromSessionKey rejects non-alias main keys when main is absent", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const legacyMainAlias = resolveSessionStoreKey({ cfg, sessionKey: "agent:main:main" });
+
+    expect(legacyMainAlias).toBe("agent:ops:work");
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, legacyMainAlias)).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "global")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "unknown")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "main")).toBeNull();
+    expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
@@ -296,6 +325,105 @@ describe("gateway session utils", () => {
 
         expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-retired");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry preserves a listed deleted main session over the live default main", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-deleted-main-entry-", async ({ stateDir }) => {
+        const storeTemplate = path.join(
+          stateDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        );
+        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(liveSessionsDir, { recursive: true });
+        fs.mkdirSync(deletedSessionsDir, { recursive: true });
+        const liveStorePath = path.join(liveSessionsDir, "sessions.json");
+        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          liveStorePath,
+          JSON.stringify({
+            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
+          }),
+          "utf8",
+        );
+        fs.writeFileSync(
+          deletedStorePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: { mainKey: "main", store: storeTemplate },
+          agents: { list: [{ id: "ops", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:main:main" });
+        const loaded = loadSessionEntry("agent:main:main");
+
+        expect(target.canonicalKey).toBe("agent:main:main");
+        expect(target.agentId).toBe("main");
+        expect(target.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.canonicalKey).toBe("agent:main:main");
+        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
+        const storeTemplate = path.join(
+          stateDir,
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        );
+        const liveSessionsDir = path.join(stateDir, "agents", "ops", "sessions");
+        const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(liveSessionsDir, { recursive: true });
+        fs.mkdirSync(deletedSessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(liveSessionsDir, "sessions.json"),
+          JSON.stringify({
+            "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
+          }),
+          "utf8",
+        );
+        const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          deletedStorePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: { mainKey: "work", store: storeTemplate },
+          agents: { list: [{ id: "ops", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntry("agent:main:work");
+
+        expect(loaded.canonicalKey).toBe("agent:main:work");
+        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
       });
     } finally {
       resetConfigRuntimeState();
@@ -569,7 +697,7 @@ describe("gateway session utils", () => {
 });
 
 describe("resolveSessionModelRef", () => {
-  test("prefers runtime model/provider from session entry", () => {
+  test("prefers explicit session overrides ahead of runtime model fields", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",
     });
@@ -583,7 +711,7 @@ describe("resolveSessionModelRef", () => {
       providerOverride: "anthropic",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
@@ -612,6 +740,56 @@ describe("resolveSessionModelRef", () => {
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s2",
       updatedAt: Date.now(),
+      modelOverride: "openai-codex/gpt-5.4",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+  });
+
+  test("keeps nested model ids under the stored provider override", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-nested",
+      updatedAt: Date.now(),
+      providerOverride: "nvidia",
+      modelOverride: "moonshotai/kimi-k2.5",
+    });
+
+    expect(resolved).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.5" });
+  });
+
+  test("preserves explicit wrapper providers for vendor-prefixed override models", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-openrouter-override",
+      updatedAt: Date.now(),
+      providerOverride: "openrouter",
+      modelOverride: "anthropic/claude-haiku-4.5",
+      modelProvider: "openrouter",
+      model: "openrouter/free",
+    });
+
+    expect(resolved).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+    });
+  });
+
+  test("strips a duplicated provider prefix from stored overrides", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-qualified-override",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
       modelOverride: "openai-codex/gpt-5.4",
     });
 
@@ -652,11 +830,35 @@ describe("resolveSessionModelRef", () => {
   });
 });
 
+describe("listSessionsFromStore selected model display", () => {
+  test("shows the selected override model even when a fallback runtime model exists", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+    expect(result.sessions[0]?.model).toBe("claude-opus-4-6");
+  });
+});
+
 describe("resolveSessionModelIdentityRef", () => {
-  const resolveLegacyIdentityRef = (
-    cfg: OpenClawConfig,
-    modelProvider: string | undefined = undefined,
-  ) =>
+  const resolveLegacyIdentityRef = (cfg: OpenClawConfig, modelProvider?: string) =>
     resolveSessionModelIdentityRef(cfg, {
       sessionId: "legacy-session",
       updatedAt: Date.now(),
@@ -903,6 +1105,23 @@ describe("resolveGatewayModelSupportsImages", () => {
             id: "deployment-gpt5",
             name: "gpt-5.4",
             provider: "microsoft-foundry",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("treats claude-cli Claude models as image-capable even when catalog metadata is stale or missing", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "claude-sonnet-4-6",
+        provider: "claude-cli",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            provider: "claude-cli",
             input: ["text"],
           },
         ],

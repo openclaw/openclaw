@@ -1,9 +1,15 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { msteamsActionsAdapter } from "./actions.js";
+import { msteamsPlugin } from "./channel.js";
 
 const {
   editMessageMSTeamsMock,
   deleteMessageMSTeamsMock,
+  getChannelInfoMSTeamsMock,
+  getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
+  listChannelsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -14,7 +20,10 @@ const {
 } = vi.hoisted(() => ({
   editMessageMSTeamsMock: vi.fn(),
   deleteMessageMSTeamsMock: vi.fn(),
+  getChannelInfoMSTeamsMock: vi.fn(),
+  getMemberInfoMSTeamsMock: vi.fn(),
   getMessageMSTeamsMock: vi.fn(),
+  listChannelsMSTeamsMock: vi.fn(),
   listReactionsMSTeamsMock: vi.fn(),
   pinMessageMSTeamsMock: vi.fn(),
   reactMessageMSTeamsMock: vi.fn(),
@@ -28,7 +37,10 @@ vi.mock("./channel.runtime.js", () => ({
   msTeamsChannelRuntime: {
     editMessageMSTeams: editMessageMSTeamsMock,
     deleteMessageMSTeams: deleteMessageMSTeamsMock,
+    getChannelInfoMSTeams: getChannelInfoMSTeamsMock,
+    getMemberInfoMSTeams: getMemberInfoMSTeamsMock,
     getMessageMSTeams: getMessageMSTeamsMock,
+    listChannelsMSTeams: listChannelsMSTeamsMock,
     listReactionsMSTeams: listReactionsMSTeamsMock,
     pinMessageMSTeams: pinMessageMSTeamsMock,
     reactMessageMSTeams: reactMessageMSTeamsMock,
@@ -39,12 +51,13 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-import { msteamsPlugin } from "./channel.js";
-
 const actionMocks = [
   editMessageMSTeamsMock,
   deleteMessageMSTeamsMock,
+  getChannelInfoMSTeamsMock,
+  getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
+  listChannelsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -87,7 +100,7 @@ function okMSTeamsActionDetails(action: string, details?: Record<string, unknown
 }
 
 function requireMSTeamsHandleAction() {
-  const handleAction = msteamsPlugin.actions?.handleAction;
+  const handleAction = msteamsActionsAdapter.handleAction;
   if (!handleAction) {
     throw new Error("msteams actions.handleAction unavailable");
   }
@@ -100,6 +113,7 @@ async function runAction(params: {
   params?: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const handleAction = requireMSTeamsHandleAction();
   return await handleAction({
@@ -108,8 +122,9 @@ async function runAction(params: {
     cfg: params.cfg ?? {},
     params: params.params ?? {},
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
-  } as any);
+  } as Parameters<ReturnType<typeof requireMSTeamsHandleAction>>[0]);
 }
 
 async function expectActionError(
@@ -166,6 +181,7 @@ async function expectSuccessfulAction(params: {
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
+  mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
   runtimeParams: Record<string, unknown>;
   details: Record<string, unknown>;
   contentDetails?: Record<string, unknown>;
@@ -175,6 +191,7 @@ async function expectSuccessfulAction(params: {
     action: params.action,
     params: params.actionParams,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
   });
   expectActionRuntimeCall(params.mockFn, params.runtimeParams);
@@ -217,7 +234,7 @@ describe("msteamsPlugin message actions", () => {
 
   it("advertises upload-file in the message tool surface", () => {
     expect(
-      msteamsPlugin.actions?.describeMessageTool?.({
+      msteamsActionsAdapter.describeMessageTool?.({
         cfg: {
           channels: {
             msteams: {
@@ -226,12 +243,13 @@ describe("msteamsPlugin message actions", () => {
               tenantId: "tenant-id",
             },
           },
-        } as any,
+        } as OpenClawConfig,
       })?.actions,
     ).toContain("upload-file");
   });
 
   it("routes upload-file through sendMessageMSTeams with filename override", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
     await expectSuccessfulAction({
       mockFn: sendMessageMSTeamsMock,
       mockResult: {
@@ -246,12 +264,14 @@ describe("msteamsPlugin message actions", () => {
         filename: "Q1-report.pdf",
       },
       mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
       runtimeParams: {
         to: targetChannelId,
         text: "Quarterly report",
         mediaUrl: " /tmp/report.pdf ",
         filename: "Q1-report.pdf",
         mediaLocalRoots: ["/tmp"],
+        mediaReadFile,
       },
       details: {
         ok: true,
@@ -264,6 +284,69 @@ describe("msteamsPlugin message actions", () => {
         action: "upload-file",
         messageId: "msg-upload-1",
         conversationId: "conv-upload-1",
+      },
+    });
+  });
+
+  it("routes member-info through the Teams runtime", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMemberInfoMSTeamsMock,
+      mockResult: { member: { id: "user-1" } },
+      action: "member-info",
+      actionParams: { userId: " user-1 " },
+      runtimeParams: { userId: "user-1" },
+      details: okMSTeamsActionDetails("member-info", {
+        member: { id: "user-1" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "member-info",
+        member: { id: "user-1" },
+      },
+    });
+  });
+
+  it("routes channel-list through the Teams runtime", async () => {
+    await expectSuccessfulAction({
+      mockFn: listChannelsMSTeamsMock,
+      mockResult: { channels: [{ id: "channel-1" }] },
+      action: "channel-list",
+      actionParams: { teamId: " team-1 " },
+      runtimeParams: { teamId: "team-1" },
+      details: okMSTeamsActionDetails("channel-list", {
+        channels: [{ id: "channel-1" }],
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "channel-list",
+        channels: [{ id: "channel-1" }],
+      },
+    });
+  });
+
+  it("routes channel-info through the Teams runtime", async () => {
+    await expectSuccessfulAction({
+      mockFn: getChannelInfoMSTeamsMock,
+      mockResult: { channel: { id: "channel-1" } },
+      action: "channel-info",
+      actionParams: {
+        teamId: " team-1 ",
+        channelId: " channel-1 ",
+      },
+      runtimeParams: {
+        teamId: "team-1",
+        channelId: "channel-1",
+      },
+      details: okMSTeamsActionDetails("channel-info", {
+        channelInfo: { id: "channel-1" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "channel-info",
+        channelInfo: { id: "channel-1" },
       },
     });
   });
@@ -329,6 +412,52 @@ describe("msteamsPlugin message actions", () => {
       },
       details: okMSTeamsActionDetails("unpin"),
     });
+  });
+
+  it("uses explicit pinnedMessageId over messageId for unpin actions", async () => {
+    await expectSuccessfulAction({
+      mockFn: unpinMessageMSTeamsMock,
+      mockResult: { ok: true },
+      action: "unpin",
+      actionParams: {
+        target: padded(targetChannelId),
+        pinnedMessageId: padded("pinned-resource-99"),
+        messageId: padded("msg-99"),
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        pinnedMessageId: "pinned-resource-99",
+      },
+      details: okMSTeamsActionDetails("unpin"),
+    });
+  });
+
+  it("returns an error when unpin is called without pinnedMessageId or messageId", async () => {
+    await expectActionParamError(
+      "unpin",
+      { target: targetChannelId },
+      "Unpin requires a target (to) and pinnedMessageId.",
+    );
+  });
+
+  it("exposes pinnedMessageId in the tool schema", () => {
+    const discovery = msteamsPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: {
+          msteams: {
+            appId: "app-id",
+            appPassword: "secret",
+            tenantId: "tenant-id",
+          },
+        },
+      } as OpenClawConfig,
+    });
+    const schema = discovery?.schema;
+    expect(schema).toBeTruthy();
+    const properties = Array.isArray(schema)
+      ? schema[0]?.properties
+      : (schema as { properties: Record<string, unknown> })?.properties;
+    expect(properties).toHaveProperty("pinnedMessageId");
   });
 
   it("reuses currentChannelId fallback for react actions", async () => {
@@ -398,5 +527,172 @@ describe("msteamsPlugin message actions", () => {
       },
       searchMissingQueryError,
     );
+  });
+
+  it("routes channel fallback targets via teamId/channelId for react actions", async () => {
+    // When an action is invoked in a Teams channel context and `target` is
+    // omitted, the action handler falls back to `toolContext.currentChannelId`.
+    // For channel turns, buildToolContext populates that field with the
+    // compound `teamId/channelId` form (see buildToolContext below), so the
+    // runtime call must receive that compound form — NOT a bare
+    // `conversation:<id>` — so Graph API routes through
+    // `/teams/{teamId}/channels/{channelId}` rather than `/chats/{id}`.
+    const teamChannelTarget = "team-1/19:channel-abc@thread.tacv2";
+    await expectSuccessfulAction({
+      mockFn: reactMessageMSTeamsMock,
+      mockResult: { ok: true },
+      action: "react",
+      actionParams: {
+        messageId: "msg-channel-react",
+        emoji: reactionType,
+      },
+      toolContext: {
+        currentChannelId: "conversation:19:channel-abc@thread.tacv2",
+        currentGraphChannelId: teamChannelTarget,
+      },
+      runtimeParams: {
+        to: teamChannelTarget,
+        messageId: "msg-channel-react",
+        reactionType,
+      },
+      details: okMSTeamsActionDetails("react", {
+        reactionType,
+      }),
+      contentDetails: {
+        channel: "msteams",
+        action: "react",
+        reactionType,
+        ok: true,
+      },
+    });
+  });
+
+  it("preserves explicit teamId/channelId target over toolContext fallback", async () => {
+    // Even in a channel context with a compound currentChannelId, an
+    // explicit `target` param must take precedence.
+    const teamChannelTarget = "team-2/19:channel-def@thread.tacv2";
+    const explicitTarget = "team-explicit/19:other@thread.tacv2";
+    await expectSuccessfulAction({
+      mockFn: reactMessageMSTeamsMock,
+      mockResult: { ok: true },
+      action: "react",
+      actionParams: {
+        target: explicitTarget,
+        messageId: "msg-explicit",
+        emoji: reactionType,
+      },
+      toolContext: {
+        currentChannelId: teamChannelTarget,
+        currentGraphChannelId: teamChannelTarget,
+      },
+      runtimeParams: {
+        to: explicitTarget,
+        messageId: "msg-explicit",
+        reactionType,
+      },
+      details: okMSTeamsActionDetails("react", {
+        reactionType,
+      }),
+      contentDetails: {
+        channel: "msteams",
+        action: "react",
+        reactionType,
+        ok: true,
+      },
+    });
+  });
+
+  it("keeps chat conversation fallback targets as-is for DM react actions", async () => {
+    // DM/group-chat turns continue to set currentChannelId to a
+    // `conversation:<id>` string (no `teamId/` prefix), which the runtime
+    // will resolve through `/chats/{id}`.
+    const dmFallback = "conversation:19:chat-dm@thread.skype";
+    await expectSuccessfulAction({
+      mockFn: reactMessageMSTeamsMock,
+      mockResult: { ok: true },
+      action: "react",
+      actionParams: {
+        messageId: "msg-dm-react",
+        emoji: reactionType,
+      },
+      toolContext: {
+        currentChannelId: dmFallback,
+      },
+      runtimeParams: {
+        to: dmFallback,
+        messageId: "msg-dm-react",
+        reactionType,
+      },
+      details: okMSTeamsActionDetails("react", {
+        reactionType,
+      }),
+      contentDetails: {
+        channel: "msteams",
+        action: "react",
+        reactionType,
+        ok: true,
+      },
+    });
+  });
+});
+
+describe("msteamsPlugin.threading.buildToolContext", () => {
+  function callBuildToolContext(context: {
+    To?: string;
+    NativeChannelId?: string;
+    ReplyToId?: string;
+  }) {
+    const build = msteamsPlugin.threading?.buildToolContext;
+    if (!build) {
+      throw new Error("msteams threading.buildToolContext unavailable");
+    }
+    return build({
+      cfg: {} as OpenClawConfig,
+      accountId: undefined,
+      context,
+    });
+  }
+
+  it("uses NativeChannelId for channel turns so actions route via teamId/channelId", () => {
+    // Teams channel inbound messages carry the compound `teamId/channelId`
+    // on NativeChannelId. buildToolContext must prefer it over the bare
+    // `conversation:<id>` in To so action fallbacks route via
+    // `/teams/{teamId}/channels/{channelId}`.
+    const result = callBuildToolContext({
+      To: "conversation:19:channel-abc@thread.tacv2",
+      NativeChannelId: "team-1/19:channel-abc@thread.tacv2",
+      ReplyToId: "reply-1",
+    });
+    expect(result?.currentChannelId).toBe("conversation:19:channel-abc@thread.tacv2");
+    expect(result?.currentGraphChannelId).toBe("team-1/19:channel-abc@thread.tacv2");
+    expect(result?.currentThreadTs).toBe("reply-1");
+  });
+
+  it("falls back to To for DM turns (no NativeChannelId)", () => {
+    const result = callBuildToolContext({
+      To: "user:aad-user-1",
+    });
+    expect(result?.currentChannelId).toBe("user:aad-user-1");
+    expect(result?.currentGraphChannelId).toBeUndefined();
+  });
+
+  it("falls back to To for group chat turns (no NativeChannelId)", () => {
+    const result = callBuildToolContext({
+      To: "conversation:19:groupchat@thread.v2",
+    });
+    expect(result?.currentChannelId).toBe("conversation:19:groupchat@thread.v2");
+    expect(result?.currentGraphChannelId).toBeUndefined();
+  });
+
+  it("ignores NativeChannelId that does not encode a teamId/channelId pair", () => {
+    // Safety: only compound forms (with "/") should preempt the To fallback.
+    // A bare native id without a team prefix must not accidentally route
+    // through channel Graph paths.
+    const result = callBuildToolContext({
+      To: "conversation:19:chat@thread.v2",
+      NativeChannelId: "19:chat@thread.v2",
+    });
+    expect(result?.currentChannelId).toBe("conversation:19:chat@thread.v2");
+    expect(result?.currentGraphChannelId).toBeUndefined();
   });
 });

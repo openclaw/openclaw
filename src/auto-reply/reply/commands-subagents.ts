@@ -1,12 +1,11 @@
-import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
 import { logVerbose } from "../../globals.js";
 import {
-  type SubagentsCommandContext,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
   stopWithText,
-} from "./commands-subagents/shared.js";
+  type SubagentsCommandContext,
+} from "./commands-subagents-dispatch.js";
 import type { CommandHandler } from "./commands-types.js";
 
 export { extractMessageText } from "./commands-subagents-text.js";
@@ -25,6 +24,9 @@ let actionSpawnPromise: Promise<typeof import("./commands-subagents/action-spawn
   null;
 let actionUnfocusPromise: Promise<typeof import("./commands-subagents/action-unfocus.js")> | null =
   null;
+let controlRuntimePromise: Promise<
+  typeof import("./commands-subagents-control.runtime.js")
+> | null = null;
 
 function loadAgentsAction() {
   actionAgentsPromise ??= import("./commands-subagents/action-agents.js");
@@ -76,6 +78,11 @@ function loadUnfocusAction() {
   return actionUnfocusPromise;
 }
 
+function loadControlRuntime() {
+  controlRuntimePromise ??= import("./commands-subagents-control.runtime.js");
+  return controlRuntimePromise;
+}
+
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -98,7 +105,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
   const restTokens = rest.split(/\s+/).filter(Boolean);
   const action = resolveSubagentsAction({ handledPrefix, restTokens });
   if (!action) {
-    return handleSubagentsHelpAction();
+    return (await loadHelpAction()).handleSubagentsHelpAction();
   }
 
   const requesterKey =
@@ -115,7 +122,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     params,
     handledPrefix,
     requesterKey,
-    runs: listControlledSubagentRuns(requesterKey),
+    runs: (await loadControlRuntime()).listControlledSubagentRuns(requesterKey),
     restTokens,
   };
 

@@ -23,200 +23,53 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl,
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForCarbon as parseDiscordModalCustomIdForCarbonImpl,
 } from "./component-custom-id.js";
+import type {
+  DiscordComponentBlock,
+  DiscordComponentBuildResult,
+  DiscordComponentButtonSpec,
+  DiscordComponentButtonStyle,
+  DiscordComponentEntry,
+  DiscordComponentMessageSpec,
+  DiscordComponentModalFieldType,
+  DiscordComponentSectionAccessory,
+  DiscordComponentSelectOption,
+  DiscordComponentSelectSpec,
+  DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
+  DiscordModalSpec,
+} from "./components.types.js";
+export type {
+  DiscordComponentBlock,
+  DiscordComponentBuildResult,
+  DiscordComponentButtonSpec,
+  DiscordComponentButtonStyle,
+  DiscordComponentEntry,
+  DiscordComponentMessageSpec,
+  DiscordComponentModalFieldType,
+  DiscordComponentSectionAccessory,
+  DiscordComponentSelectOption,
+  DiscordComponentSelectSpec,
+  DiscordComponentSelectType,
+  DiscordModalEntry,
+  DiscordModalFieldDefinition,
+  DiscordModalFieldSpec,
+  DiscordModalSpec,
+} from "./components.types.js";
 // Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
 // Keep dynamic form definitions loadable instead of crashing unrelated suites.
-const ModalBase: typeof Modal = (Modal ?? class {}) as typeof Modal;
+const ModalBase: typeof Modal = Modal ?? (function ModalFallback() {} as unknown as typeof Modal);
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
-export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
-
-export type DiscordComponentSelectType = "string" | "user" | "role" | "mentionable" | "channel";
-
-export type DiscordComponentModalFieldType =
-  | "text"
-  | "checkbox"
-  | "radio"
-  | "select"
-  | "role-select"
-  | "user-select";
-
-export type DiscordComponentButtonSpec = {
-  label: string;
-  style?: DiscordComponentButtonStyle;
-  url?: string;
-  callbackData?: string;
-  /** Internal use only: bypass dynamic component ids with a fixed custom id. */
-  internalCustomId?: string;
-  emoji?: {
-    name: string;
-    id?: string;
-    animated?: boolean;
-  };
-  disabled?: boolean;
-  /** Optional allowlist of users who can interact with this button (ids or names). */
-  allowedUsers?: string[];
-};
-
-export type DiscordComponentSelectOption = {
-  label: string;
-  value: string;
-  description?: string;
-  emoji?: {
-    name: string;
-    id?: string;
-    animated?: boolean;
-  };
-  default?: boolean;
-};
-
-export type DiscordComponentSelectSpec = {
-  type?: DiscordComponentSelectType;
-  callbackData?: string;
-  placeholder?: string;
-  minValues?: number;
-  maxValues?: number;
-  options?: DiscordComponentSelectOption[];
-  allowedUsers?: string[];
-};
-
-export type DiscordComponentSectionAccessory =
-  | {
-      type: "thumbnail";
-      url: string;
-    }
-  | {
-      type: "button";
-      button: DiscordComponentButtonSpec;
-    };
-
 type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
-
-export type DiscordComponentBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "section";
-      text?: string;
-      texts?: string[];
-      accessory?: DiscordComponentSectionAccessory;
-    }
-  | {
-      type: "separator";
-      spacing?: DiscordComponentSeparatorSpacing;
-      divider?: boolean;
-    }
-  | {
-      type: "actions";
-      buttons?: DiscordComponentButtonSpec[];
-      select?: DiscordComponentSelectSpec;
-    }
-  | {
-      type: "media-gallery";
-      items: Array<{ url: string; description?: string; spoiler?: boolean }>;
-    }
-  | {
-      type: "file";
-      file: `attachment://${string}`;
-      spoiler?: boolean;
-    };
-
-export type DiscordModalFieldSpec = {
-  type: DiscordComponentModalFieldType;
-  name?: string;
-  label: string;
-  description?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: DiscordComponentSelectOption[];
-  minValues?: number;
-  maxValues?: number;
-  minLength?: number;
-  maxLength?: number;
-  style?: "short" | "paragraph";
-};
-
-export type DiscordModalSpec = {
-  title: string;
-  callbackData?: string;
-  triggerLabel?: string;
-  triggerStyle?: DiscordComponentButtonStyle;
-  allowedUsers?: string[];
-  fields: DiscordModalFieldSpec[];
-};
-
-export type DiscordComponentMessageSpec = {
-  text?: string;
-  reusable?: boolean;
-  container?: {
-    accentColor?: string | number;
-    spoiler?: boolean;
-  };
-  blocks?: DiscordComponentBlock[];
-  modal?: DiscordModalSpec;
-};
-
-export type DiscordComponentEntry = {
-  id: string;
-  kind: "button" | "select" | "modal-trigger";
-  label: string;
-  callbackData?: string;
-  selectType?: DiscordComponentSelectType;
-  options?: Array<{ value: string; label: string }>;
-  modalId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
-  allowedUsers?: string[];
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
-};
-
-export type DiscordModalFieldDefinition = {
-  id: string;
-  name: string;
-  label: string;
-  type: DiscordComponentModalFieldType;
-  description?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: DiscordComponentSelectOption[];
-  minValues?: number;
-  maxValues?: number;
-  minLength?: number;
-  maxLength?: number;
-  style?: "short" | "paragraph";
-};
-
-export type DiscordModalEntry = {
-  id: string;
-  title: string;
-  callbackData?: string;
-  fields: DiscordModalFieldDefinition[];
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
-  allowedUsers?: string[];
-};
-
-export type DiscordComponentBuildResult = {
-  components: TopLevelComponents[];
-  entries: DiscordComponentEntry[];
-  modals: DiscordModalEntry[];
-};
 export {
   DISCORD_COMPONENT_CUSTOM_ID_KEY,
   DISCORD_MODAL_CUSTOM_ID_KEY,
@@ -319,7 +172,7 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
 }
 
 function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
-  switch ((style ?? "primary").toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(style ?? "primary")) {
     case "secondary":
       return ButtonStyle.Secondary;
     case "success":
@@ -339,7 +192,7 @@ function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
 }
 
 function normalizeBlockType(raw: string) {
-  const lowered = raw.trim().toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
   return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
 }
 
@@ -432,10 +285,9 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
 
 function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
   const obj = requireObject(raw, label);
-  const type = readString(
-    obj.type,
-    `${label}.type`,
-  ).toLowerCase() as DiscordComponentModalFieldType;
+  const type = normalizeLowercaseStringOrEmpty(
+    readString(obj.type, `${label}.type`),
+  ) as DiscordComponentModalFieldType;
   const supported: DiscordComponentModalFieldType[] = [
     "text",
     "checkbox",
@@ -469,7 +321,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
 
 function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock {
   const obj = requireObject(raw, label);
-  const typeRaw = readString(obj.type, `${label}.type`).toLowerCase();
+  const typeRaw = normalizeLowercaseStringOrEmpty(readString(obj.type, `${label}.type`));
   const type = normalizeBlockType(typeRaw);
   switch (type) {
     case "text":
@@ -489,10 +341,9 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       let accessory: DiscordComponentSectionAccessory | undefined;
       if (obj.accessory !== undefined) {
         const accessoryObj = requireObject(obj.accessory, `${label}.accessory`);
-        const accessoryType = readString(
-          accessoryObj.type,
-          `${label}.accessory.type`,
-        ).toLowerCase();
+        const accessoryType = normalizeLowercaseStringOrEmpty(
+          readString(accessoryObj.type, `${label}.accessory.type`),
+        );
         if (accessoryType === "thumbnail") {
           accessory = {
             type: "thumbnail",
@@ -710,7 +561,9 @@ function createSelectComponent(params: {
     | ChannelSelectMenu;
   entry: DiscordComponentEntry;
 } {
-  const type = (params.spec.type ?? "string").toLowerCase() as DiscordComponentSelectType;
+  const type = normalizeLowercaseStringOrEmpty(
+    params.spec.type ?? "string",
+  ) as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
   const customId = buildDiscordComponentCustomIdImpl({ componentId });
   if (type === "string") {

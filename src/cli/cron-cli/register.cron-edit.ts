@@ -3,12 +3,21 @@ import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
 } from "./schedule-options.js";
-import { getCronChannelOptions, parseDurationMs, warnIfCronSchedulerDisabled } from "./shared.js";
+import {
+  getCronChannelOptions,
+  parseCronToolsAllow,
+  parseDurationMs,
+  warnIfCronSchedulerDisabled,
+} from "./shared.js";
 
 const assignIf = (
   target: Record<string, unknown>,
@@ -55,7 +64,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
-      .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
+      .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
       .option("--announce", "Announce summary to a chat (subagent-style)")
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
@@ -169,12 +178,9 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
-          const model =
-            typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
-          const thinking =
-            typeof opts.thinking === "string" && opts.thinking.trim()
-              ? opts.thinking.trim()
-              : undefined;
+          const model = normalizeOptionalString(opts.model);
+          const thinking = normalizeOptionalString(opts.thinking);
+          const toolsAllow = parseCronToolsAllow(opts.tools);
           const timeoutSeconds = opts.timeoutSeconds
             ? Number.parseInt(String(opts.timeoutSeconds), 10)
             : undefined;
@@ -190,6 +196,7 @@ export function registerCronEditCommand(cron: Command) {
             hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
+            Array.isArray(opts.tools) ||
             opts.clearTools ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
@@ -217,11 +224,8 @@ export function registerCronEditCommand(cron: Command) {
             );
             if (opts.clearTools) {
               payload.toolsAllow = null;
-            } else if (typeof opts.tools === "string" && opts.tools.trim()) {
-              payload.toolsAllow = opts.tools
-                .split(",")
-                .map((t: string) => t.trim())
-                .filter(Boolean);
+            } else if (toolsAllow) {
+              payload.toolsAllow = toolsAllow;
             }
             patch.payload = payload;
           }
@@ -282,11 +286,10 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.after = after;
             }
             if (hasFailureAlertChannel) {
-              const channel = String(opts.failureAlertChannel).trim().toLowerCase();
-              failureAlert.channel = channel ? channel : undefined;
+              failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);
             }
             if (hasFailureAlertTo) {
-              const to = String(opts.failureAlertTo).trim();
+              const to = normalizeOptionalString(opts.failureAlertTo) ?? "";
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
@@ -297,14 +300,14 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.cooldownMs = cooldownMs;
             }
             if (hasFailureAlertMode) {
-              const mode = String(opts.failureAlertMode).trim().toLowerCase();
+              const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);
               if (mode !== "announce" && mode !== "webhook") {
                 throw new Error("Invalid --failure-alert-mode (must be 'announce' or 'webhook').");
               }
               failureAlert.mode = mode;
             }
             if (hasFailureAlertAccountId) {
-              const accountId = String(opts.failureAlertAccountId).trim();
+              const accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? "";
               failureAlert.accountId = accountId ? accountId : undefined;
             }
             patch.failureAlert = failureAlert;

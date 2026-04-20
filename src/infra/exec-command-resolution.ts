@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import {
   resolveExecutablePath as resolveExecutableCandidatePath,
@@ -250,7 +251,6 @@ const TRAILING_SHELL_REDIRECTIONS_RE = /\s+(?:[12]>&[12]|[12]>\/dev\/null)\s*$/;
 
 function stripTrailingRedirections(value: string): string {
   let prev = value;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const next = prev.replace(TRAILING_SHELL_REDIRECTIONS_RE, "");
     if (next === prev) {
@@ -290,9 +290,7 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
     // that an argPattern built from one style still matches the other.
     // Use the caller-supplied target platform so Linux gateways evaluating
     // Windows node commands also perform the normalization.
-    const effectivePlatform = String(platform ?? process.platform)
-      .trim()
-      .toLowerCase();
+    const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
     if (effectivePlatform.startsWith("win")) {
       const normalized = argsString.replace(/\//g, "\\");
       if (normalized !== argsString && regex.test(normalized)) {
@@ -343,7 +341,7 @@ export function matchAllowlist(
   // Use the caller-supplied target platform rather than process.platform so that
   // a Linux gateway evaluating a Windows node command applies argPattern correctly.
   const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = String(effectivePlatform).trim().toLowerCase().startsWith("win");
+  const useArgPattern = normalizeLowercaseStringOrEmpty(effectivePlatform).startsWith("win");
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();

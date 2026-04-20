@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { clearAgentHarnesses } from "../harness/registry.js";
 
 type MockResolvedModel = {
   model: { provider: string; api: string; id: string; input: unknown[] };
@@ -70,23 +71,27 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
-export const sessionMessages: unknown[] = [
-  { role: "user", content: "hello", timestamp: 1 },
-  { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-  {
-    role: "toolResult",
-    toolCallId: "t1",
-    toolName: "exec",
-    content: [{ type: "text", text: "output" }],
-    isError: false,
-    timestamp: 3,
-  },
-];
+function createDefaultSessionMessages(): unknown[] {
+  return [
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  ];
+}
+export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
+export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
@@ -116,23 +121,12 @@ export function resetCompactSessionStateMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
-  sessionMessages.splice(
-    0,
-    sessionMessages.length,
-    { role: "user", content: "hello", timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-    {
-      role: "toolResult",
-      toolCallId: "t1",
-      toolName: "exec",
-      content: [{ type: "text", text: "output" }],
-      isError: false,
-      timestamp: 3,
-    },
-  );
+  sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
   sessionAbortCompactionMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  registerProviderStreamForModelMock.mockReset();
+  registerProviderStreamForModelMock.mockReturnValue(undefined);
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
@@ -140,6 +134,7 @@ export function resetCompactSessionStateMocks(): void {
 }
 
 export function resetCompactHooksHarnessMocks(): void {
+  clearAgentHarnesses();
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
   hookRunner.runBeforeCompaction.mockReset();
@@ -186,7 +181,7 @@ export function resetCompactHooksHarnessMocks(): void {
 
 export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
-  compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+  compactEmbeddedPiSession: typeof import("./compact.queued.js").compactEmbeddedPiSession;
   __testing: typeof import("./compact.js").__testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 }> {
@@ -199,6 +194,23 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("../harness/selection.js", () => ({
+    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+  }));
+
+  vi.doMock("../../plugins/provider-runtime.js", () => ({
+    prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
+    resolveProviderSystemPromptContribution: vi.fn(() => undefined),
+    resolveProviderTextTransforms: vi.fn(() => undefined),
+    transformProviderSystemPrompt: vi.fn(
+      (params: { systemPrompt?: string }) => params.systemPrompt,
+    ),
+  }));
+
+  vi.doMock("../provider-stream.js", () => ({
+    registerProviderStreamForModel: registerProviderStreamForModelMock,
   }));
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {
@@ -223,8 +235,8 @@ export async function loadCompactHooksHarness(): Promise<{
   });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
-    AuthStorage: class AuthStorage {},
-    ModelRegistry: class ModelRegistry {},
+    AuthStorage: function AuthStorage() {},
+    ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
@@ -254,7 +266,7 @@ export async function loadCompactHooksHarness(): Promise<{
       };
       return { session };
     }),
-    DefaultResourceLoader: class DefaultResourceLoader {},
+    DefaultResourceLoader: function DefaultResourceLoader() {},
     SessionManager: {
       open: vi.fn(() => ({})),
     },
@@ -262,6 +274,7 @@ export async function loadCompactHooksHarness(): Promise<{
       create: vi.fn(() => ({})),
     },
     estimateTokens: estimateTokensMock,
+    generateSummary: vi.fn(async () => "summary"),
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -299,8 +312,11 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: resolveContextEngineMock,
   }));
 
@@ -450,6 +466,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../agent-scope.js", () => ({
+    listAgentEntries: vi.fn(() => []),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));
@@ -543,13 +560,15 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveExecToolDefaults: vi.fn(() => undefined),
   }));
 
-  const [compactModule, transcriptEvents] = await Promise.all([
+  const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
     import("./compact.js"),
+    import("./compact.queued.js"),
     import("../../sessions/transcript-events.js"),
   ]);
 
   return {
     ...compactModule,
+    compactEmbeddedPiSession: compactQueuedModule.compactEmbeddedPiSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
   };
 }

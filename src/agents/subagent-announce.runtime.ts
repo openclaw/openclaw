@@ -10,4 +10,4 @@ export {
   isEmbeddedPiRunActive,
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
-} from "./pi-embedded.js";
+} from "./pi-embedded-runner/runs.js";

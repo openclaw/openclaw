@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -57,7 +58,7 @@ describe("buildSubagentList", () => {
       cleanup: "keep",
       createdAt: 1000,
       startedAt: 1000,
-    };
+    } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = {
       commands: { text: true },
@@ -89,7 +90,7 @@ describe("buildSubagentList", () => {
       startedAt: now - 120_000,
       endedAt: now - 60_000,
       outcome: { status: "ok" },
-    };
+    } satisfies SubagentRunRecord;
     addSubagentRunForTests(orchestratorRun);
     addSubagentRunForTests({
       runId: "run-orchestrator-child-active",
@@ -126,7 +127,7 @@ describe("buildSubagentList", () => {
       cleanup: "keep",
       createdAt: 1000,
       startedAt: 1000,
-    };
+    } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
     await updateSessionStore(storePath, (store) => {

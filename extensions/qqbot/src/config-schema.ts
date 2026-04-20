@@ -41,6 +41,18 @@ const QQBotSttSchema = z
   .strict()
   .optional();
 
+const QQBotStreamingSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        /** "partial" (default) enables block streaming; "off" disables it. */
+        mode: z.enum(["off", "partial"]).default("partial"),
+      })
+      .passthrough(),
+  ])
+  .optional();
+
 const QQBotAccountSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -56,13 +68,14 @@ const QQBotAccountSchema = z
     urlDirectUpload: z.boolean().optional(),
     upgradeUrl: z.string().optional(),
     upgradeMode: z.enum(["doc", "hot-reload"]).optional(),
+    streaming: QQBotStreamingSchema,
   })
-  .strict();
+  .passthrough();
 
 export const QQBotConfigSchema = QQBotAccountSchema.extend({
   tts: QQBotTtsSchema,
   stt: QQBotSttSchema,
-  accounts: z.object({}).catchall(QQBotAccountSchema).optional(),
+  accounts: z.object({}).catchall(QQBotAccountSchema.passthrough()).optional(),
   defaultAccount: z.string().optional(),
-});
+}).passthrough();
 export const qqbotChannelConfigSchema = buildChannelConfigSchema(QQBotConfigSchema);

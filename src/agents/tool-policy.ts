@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   expandToolGroups,
   normalizeToolList,
@@ -112,7 +113,7 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     }
     const name = normalizeToolName(tool.name);
     all.push(name);
-    const pluginId = meta.pluginId.trim().toLowerCase();
+    const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
     if (!pluginId) {
       continue;
     }

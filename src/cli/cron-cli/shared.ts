@@ -9,6 +9,10 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
@@ -67,7 +71,7 @@ export function parseDurationMs(input: string): number | null {
   if (!Number.isFinite(n) || n <= 0) {
     return null;
   }
-  const unit = (match[2] ?? "").toLowerCase();
+  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
   const factor =
     unit === "ms"
       ? 1
@@ -96,6 +100,19 @@ export function parseCronStaggerMs(params: {
     throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
   }
   return parsed;
+}
+
+export function parseCronToolsAllow(input: unknown): string[] | undefined {
+  const raw = Array.isArray(input)
+    ? input.map((value) => String(value)).join(" ")
+    : typeof input === "string"
+      ? input
+      : "";
+  const tools = raw
+    .split(/[,\s]+/u)
+    .map((tool) => normalizeOptionalString(tool))
+    .filter((tool): tool is string => Boolean(tool));
+  return tools.length > 0 ? tools : undefined;
 }
 
 /**

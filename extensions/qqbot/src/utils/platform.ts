@@ -9,6 +9,8 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { debugLog, debugWarn } from "./debug-log.js";
 
 // Basic platform information.
@@ -17,7 +19,9 @@ export type PlatformType = "darwin" | "linux" | "win32" | "other";
 
 export function getPlatform(): PlatformType {
   const p = process.platform;
-  if (p === "darwin" || p === "linux" || p === "win32") return p;
+  if (p === "darwin" || p === "linux" || p === "win32") {
+    return p;
+  }
   return "other";
 }
 
@@ -33,20 +37,24 @@ export function isWindows(): boolean {
  * Priority:
  * 1. `os.homedir()`
  * 2. `$HOME` or `%USERPROFILE%`
- * 3. `os.tmpdir()` as a last resort
+ * 3. the OpenClaw temp directory as a last resort
  */
 export function getHomeDir(): string {
   try {
     const home = os.homedir();
-    if (home && fs.existsSync(home)) return home;
+    if (home && fs.existsSync(home)) {
+      return home;
+    }
   } catch {}
 
   // Fall back to environment variables.
   const envHome = process.env.HOME || process.env.USERPROFILE;
-  if (envHome && fs.existsSync(envHome)) return envHome;
+  if (envHome && fs.existsSync(envHome)) {
+    return envHome;
+  }
 
   // Final fallback.
-  return os.tmpdir();
+  return resolvePreferredOpenClawTmpDir();
 }
 
 /**
@@ -76,9 +84,9 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
 
 // Temporary directory helpers.
 
-/** Return the OS temp directory. */
+/** Return the preferred OpenClaw temp directory. */
 export function getTempDir(): string {
-  return os.tmpdir();
+  return resolvePreferredOpenClawTmpDir();
 }
 
 // Tilde expansion.
@@ -89,8 +97,12 @@ export function getTempDir(): string {
  * Supports `~` and `~/...`. Other forms are returned unchanged.
  */
 export function expandTilde(p: string): string {
-  if (!p) return p;
-  if (p === "~") return getHomeDir();
+  if (!p) {
+    return p;
+  }
+  if (p === "~") {
+    return getHomeDir();
+  }
   if (p.startsWith("~/") || p.startsWith("~\\")) {
     return path.join(getHomeDir(), p.slice(2));
   }
@@ -194,7 +206,9 @@ export function resolveQQBotPayloadLocalFilePath(p: string): string | null {
  * control characters.
  */
 export function sanitizeFileName(name: string): string {
-  if (!name) return name;
+  if (!name) {
+    return name;
+  }
 
   let result = name.trim();
 
@@ -211,7 +225,7 @@ export function sanitizeFileName(name: string): string {
   result = result.normalize("NFC");
 
   // Drop ASCII control characters while keeping printable Unicode content.
-  result = result.replace(/[\x00-\x1F\x7F]/g, "");
+  result = result.replace(/\p{Cc}/gu, "");
 
   return result;
 }
@@ -222,27 +236,45 @@ export function sanitizeFileName(name: string): string {
  * Return true when the string looks like a local filesystem path rather than a URL.
  */
 export function isLocalPath(p: string): boolean {
-  if (!p) return false;
+  if (!p) {
+    return false;
+  }
   // Local file URI.
-  if (p.startsWith("file://")) return true;
+  if (p.startsWith("file://")) {
+    return true;
+  }
   // Tilde-based Unix path.
-  if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) return true;
+  if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
+    return true;
+  }
   // Unix absolute path.
-  if (p.startsWith("/")) return true;
+  if (p.startsWith("/")) {
+    return true;
+  }
   // Windows drive-letter path.
-  if (/^[a-zA-Z]:[\\/]/.test(p)) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(p)) {
+    return true;
+  }
   // Windows UNC path.
-  if (p.startsWith("\\\\")) return true;
+  if (p.startsWith("\\\\")) {
+    return true;
+  }
   // POSIX relative path.
-  if (p.startsWith("./") || p.startsWith("../")) return true;
+  if (p.startsWith("./") || p.startsWith("../")) {
+    return true;
+  }
   // Windows relative path.
-  if (p.startsWith(".\\") || p.startsWith("..\\")) return true;
+  if (p.startsWith(".\\") || p.startsWith("..\\")) {
+    return true;
+  }
   return false;
 }
 
 /** Looser local-path heuristic used for markdown-extracted paths. */
 export function looksLikeLocalPath(p: string): boolean {
-  if (isLocalPath(p)) return true;
+  if (isLocalPath(p)) {
+    return true;
+  }
   return /^(?:Users|home|tmp|var|private|[A-Z]:)/i.test(p);
 }
 
@@ -251,8 +283,12 @@ let _ffmpegCheckPromise: Promise<string | null> | null = null;
 
 /** Detect ffmpeg and return an executable path when available. */
 export function detectFfmpeg(): Promise<string | null> {
-  if (_ffmpegPath !== undefined) return Promise.resolve(_ffmpegPath);
-  if (_ffmpegCheckPromise) return _ffmpegCheckPromise;
+  if (_ffmpegPath !== undefined) {
+    return Promise.resolve(_ffmpegPath);
+  }
+  if (_ffmpegCheckPromise) {
+    return _ffmpegCheckPromise;
+  }
 
   _ffmpegCheckPromise = (async () => {
     const envPath = process.env.FFMPEG_PATH;
@@ -326,7 +362,9 @@ let _silkWasmAvailable: boolean | null = null;
 
 /** Check whether silk-wasm can run in the current environment. */
 export async function checkSilkWasmAvailable(): Promise<boolean> {
-  if (_silkWasmAvailable !== null) return _silkWasmAvailable;
+  if (_silkWasmAvailable !== null) {
+    return _silkWasmAvailable;
+  }
 
   try {
     const { isSilk } = await import("silk-wasm");
@@ -336,9 +374,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
     debugLog("[platform] silk-wasm: available");
   } catch (err) {
     _silkWasmAvailable = false;
-    debugWarn(
-      `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : String(err)})`,
-    );
+    debugWarn(`[platform] silk-wasm: NOT available (${formatErrorMessage(err)})`);
   }
   return _silkWasmAvailable;
 }

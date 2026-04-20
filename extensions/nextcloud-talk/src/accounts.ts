@@ -1,16 +1,28 @@
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
-} from "../runtime-api.js";
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalString(value)?.toLowerCase() ?? "";
+}
+
 function isTruthyEnvValue(value?: string): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 
@@ -66,7 +78,7 @@ function resolveNextcloudTalkSecret(
   const resolvedAccountId = opts.accountId ?? resolveDefaultNextcloudTalkAccountId(cfg);
   const merged = mergeNextcloudTalkAccountConfig(cfg, resolvedAccountId);
 
-  const envSecret = process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim();
+  const envSecret = normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET);
   if (envSecret && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     return { secret: envSecret, source: "env" };
   }
@@ -117,7 +129,7 @@ export function resolveNextcloudTalkAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       baseUrl,
       secret: secretResolution.secret,
       secretSource: secretResolution.source,

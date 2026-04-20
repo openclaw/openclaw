@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
-} from "../../config/sessions/reset.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+} from "../../config/sessions/reset-policy.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
@@ -85,6 +85,7 @@ export function resolveCronSession(params: {
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      sessionFile: undefined,
     }),
     // When an isolated cron session specifies its own payload model, clear
     // model-selection overrides inherited from prior sessions.  Without

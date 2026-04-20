@@ -18,6 +18,7 @@ const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
+const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -87,6 +88,10 @@ vi.mock("./program/command-registry.js", () => ({
 
 vi.mock("./program/register.subclis.js", () => ({
   registerSubCliByName: registerSubCliByNameMock,
+}));
+
+vi.mock("../terminal/restore.js", () => ({
+  restoreTerminalState: restoreTerminalStateMock,
 }));
 
 describe("runCli exit behavior", () => {
@@ -183,5 +188,62 @@ describe("runCli exit behavior", () => {
     expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status");
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
+  });
+
+  it("loads the real primary command before rendering command help", async () => {
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "doctor" }],
+      parseAsync: vi.fn().mockResolvedValueOnce(undefined),
+    });
+    const ctx = { programVersion: "0.0.0-test" };
+    getProgramContextMock.mockReturnValueOnce(ctx as never);
+
+    await runCli(["node", "openclaw", "doctor", "--help"]);
+
+    expect(registerCoreCliByNameMock).toHaveBeenCalledWith(expect.anything(), ctx, "doctor", [
+      "node",
+      "openclaw",
+      "doctor",
+      "--help",
+    ]);
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor");
+  });
+
+  it("restores terminal state before uncaught CLI exits", async () => {
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "status" }],
+      parseAsync: vi.fn().mockResolvedValueOnce(undefined),
+    });
+
+    const processOnSpy = vi.spyOn(process, "on");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${String(code)})`);
+    }) as typeof process.exit);
+
+    await runCli(["node", "openclaw", "status"]);
+
+    const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
+    expect(typeof handler).toBe("function");
+
+    try {
+      expect(() => (handler as (error: unknown) => void)(new Error("boom"))).toThrow(
+        "process.exit(1)",
+      );
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "[openclaw] Uncaught exception:",
+        expect.stringContaining("boom"),
+      );
+      expect(restoreTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
+        resumeStdinIfPaused: false,
+      });
+    } finally {
+      if (typeof handler === "function") {
+        process.off("uncaughtException", handler);
+      }
+      consoleErrorSpy.mockRestore();
+      exitSpy.mockRestore();
+      processOnSpy.mockRestore();
+    }
   });
 });

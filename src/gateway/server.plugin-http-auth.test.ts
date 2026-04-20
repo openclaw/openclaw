@@ -382,6 +382,68 @@ describe("gateway plugin HTTP auth boundary", () => {
     expect(writeAllowedResults).toEqual([true]);
   });
 
+  test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth without scope headers", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const adminAllowedResults: boolean[] = [];
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "runtime-scope-bearer-trusted-operator",
+            source: "runtime-scope-bearer-trusted-operator",
+            path: "/secure-admin-hook",
+            auth: "gateway",
+            gatewayRuntimeScopeSurface: "trusted-operator",
+            match: "exact",
+            handler: async (_req: IncomingMessage, res: ServerResponse) => {
+              const runtimeScopes =
+                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+              observedRuntimeScopes.push(runtimeScopes);
+              const adminAuth = authorizeOperatorScopesForMethod("set-heartbeats", runtimeScopes);
+              adminAllowedResults.push(adminAuth.allowed);
+              res.statusCode = 200;
+              res.end("ok");
+              return true;
+            },
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-bearer-trusted-operator-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname === "/secure-admin-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-admin-hook",
+            authorization: "Bearer test-token",
+          }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("ok");
+      },
+    });
+
+    expect(observedRuntimeScopes).toHaveLength(1);
+    expect(observedRuntimeScopes[0]).toEqual(
+      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
+    );
+    expect(adminAllowedResults).toEqual([true]);
+  });
+
   test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;

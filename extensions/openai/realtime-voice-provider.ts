@@ -1,13 +1,24 @@
+import { randomUUID } from "node:crypto";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import WebSocket from "ws";
+import {
+  asFiniteNumber,
+  readRealtimeErrorDetail,
+  resolveOpenAIProviderConfigRecord,
+  trimToUndefined,
+} from "./realtime-provider-shared.js";
 
 export type OpenAIRealtimeVoice =
   | "alloy"
@@ -79,25 +90,10 @@ type RealtimeSessionUpdate = {
   };
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
 ): OpenAIRealtimeVoiceProviderConfig {
-  const providers = asObject(config.providers);
-  const raw = asObject(providers?.openai) ?? asObject(config.openai) ?? asObject(config);
+  const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -105,20 +101,14 @@ function normalizeProviderConfig(
     }),
     model: trimToUndefined(raw?.model),
     voice: trimToUndefined(raw?.voice) as OpenAIRealtimeVoice | undefined,
-    temperature: asNumber(raw?.temperature),
-    vadThreshold: asNumber(raw?.vadThreshold),
-    silenceDurationMs: asNumber(raw?.silenceDurationMs),
-    prefixPaddingMs: asNumber(raw?.prefixPaddingMs),
+    temperature: asFiniteNumber(raw?.temperature),
+    vadThreshold: asFiniteNumber(raw?.vadThreshold),
+    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
+    prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
   };
-}
-
-function readProviderConfig(
-  providerConfig: RealtimeVoiceProviderConfig,
-): OpenAIRealtimeVoiceProviderConfig {
-  return normalizeProviderConfig(providerConfig);
 }
 
 function base64ToBuffer(b64: string): Buffer {
@@ -141,6 +131,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
+  private readonly flowId = randomUUID();
 
   constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {}
 
@@ -230,7 +221,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private async doConnect(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const { url, headers } = this.resolveConnectionParams();
-      this.ws = new WebSocket(url, { headers });
+      const debugProxy = resolveDebugProxySettings();
+      const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
+      this.ws = new WebSocket(url, {
+        headers,
+        ...(proxyAgent ? { agent: proxyAgent } : {}),
+      });
 
       const connectTimeout = setTimeout(() => {
         reject(new Error("OpenAI realtime connection timeout"));
@@ -240,6 +236,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         clearTimeout(connectTimeout);
         this.connected = true;
         this.reconnectAttempts = 0;
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-open",
+          flowId: this.flowId,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        });
         this.sendSessionUpdate();
         for (const chunk of this.pendingAudio.splice(0)) {
           this.sendAudio(chunk);
@@ -249,6 +255,17 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       this.ws.on("message", (data: Buffer) => {
+        captureWsEvent({
+          url,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: this.flowId,
+          payload: data,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        });
         try {
           this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
         } catch (error) {
@@ -257,6 +274,17 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
 
       this.ws.on("error", (error) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          flowId: this.flowId,
+          errorText: error instanceof Error ? error.message : String(error),
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+          },
+        });
         if (!this.connected) {
           clearTimeout(connectTimeout);
           reject(error);
@@ -264,7 +292,22 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
       });
 
-      this.ws.on("close", () => {
+      this.ws.on("close", (code, reasonBuffer) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-close",
+          flowId: this.flowId,
+          closeCode: typeof code === "number" ? code : undefined,
+          meta: {
+            provider: "openai",
+            capability: "realtime-voice",
+            reason:
+              Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
+                ? reasonBuffer.toString("utf8")
+                : undefined,
+          },
+        });
         this.connected = false;
         if (this.intentionallyClosed) {
           this.config.onClose?.("completed");
@@ -453,12 +496,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
 
       case "error": {
-        const detail =
-          event.error && typeof event.error === "object" && "message" in event.error
-            ? String((event.error as { message?: unknown }).message ?? "Unknown error")
-            : event.error
-              ? String(event.error)
-              : "Unknown error";
+        const detail = readRealtimeErrorDetail(event.error);
         this.config.onError?.(new Error(detail));
         return;
       }
@@ -496,7 +534,19 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private sendEvent(event: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(event));
+      const payload = JSON.stringify(event);
+      captureWsEvent({
+        url: this.resolveConnectionParams().url,
+        direction: "outbound",
+        kind: "ws-frame",
+        flowId: this.flowId,
+        payload,
+        meta: {
+          provider: "openai",
+          capability: "realtime-voice",
+        },
+      });
+      this.ws.send(payload);
     }
   }
 }
@@ -508,9 +558,9 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
     createBridge: (req) => {
-      const config = readProviderConfig(req.providerConfig);
+      const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         throw new Error("OpenAI API key missing");

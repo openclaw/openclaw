@@ -24,7 +24,7 @@ function withPluginsEnabled<T>(cfg: T): T {
   return {
     ...record,
     plugins: {
-      ...(record.plugins && typeof record.plugins === "object" ? (record.plugins as object) : {}),
+      ...(record.plugins && typeof record.plugins === "object" ? record.plugins : {}),
       enabled: true,
     },
   } as T;
@@ -42,7 +42,7 @@ describeLive("comfy live", () => {
   beforeAll(async () => {
     cfg = withPluginsEnabled(loadConfig());
     agentDir = resolveOpenClawAgentDir();
-    await plugin.register(
+    plugin.register(
       createTestPluginApi({
         config: cfg as never,
         registerImageGenerationProvider(provider) {

@@ -24,8 +24,13 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
+import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   formatPermissionDetail,
   formatPermissionRemediation,
@@ -54,6 +59,42 @@ type ExecDockerRawFn = (
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
 const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
 const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
+
+/**
+ * Resolves the realpath of `p` with a 2 s timeout.
+ *
+ * Returns the realpath string on success, or `null` if realpath fails or the
+ * timeout fires first. Note: fs.realpath cannot be cancelled once submitted to
+ * libuv — the underlying OS call continues running in the background after the
+ * timeout resolves. Callers make sequential (not concurrent) calls so at most
+ * one libuv thread is occupied at a time; the OS will eventually time out the
+ * stuck NFS/SMB call independently.
+ *
+ * Timer cleanup: when realpath resolves before the deadline the timer is
+ * cleared immediately so it does not linger across the rest of the audit run.
+ * The timer is also unref'd so it cannot prevent process exit even if it fires
+ * late (e.g. the process finishes while a hang is still in-flight).
+ */
+function realpathWithTimeout(p: string, timeoutMs = 2000): Promise<string | null> {
+  let timerHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const realpathPromise = fs
+    .realpath(p)
+    .catch(() => null)
+    .then((result) => {
+      clearTimeout(timerHandle);
+      return result;
+    });
+
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timerHandle = setTimeout(() => resolve(null), timeoutMs);
+    // Prevent the timer from keeping the process alive while waiting on a
+    // potentially hanging NFS/SMB path during a large audit run.
+    timerHandle.unref?.();
+  });
+
+  return Promise.race([realpathPromise, timeoutPromise]);
+}
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 
@@ -75,7 +116,7 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
     return p;
   }
-  const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME.trim() : null;
+  const home = normalizeOptionalString(env.HOME) ?? null;
   if (!home) {
     return null;
   }
@@ -95,14 +136,24 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
     return [];
   }
 
-  const parsed = JSON.parse(raw) as Partial<
-    Record<typeof MANIFEST_KEY, { extensions?: unknown }>
-  > | null;
+  let parsed: Partial<Record<typeof MANIFEST_KEY, { extensions?: unknown }>> | null;
+  try {
+    parsed = JSON.parse(raw) as Partial<
+      Record<typeof MANIFEST_KEY, { extensions?: unknown }>
+    > | null;
+  } catch (err) {
+    // Re-throw so callers can surface a security finding for malformed manifests.
+    // A malicious plugin could use a malformed package.json to hide declared
+    // extension entrypoints from deep scan — callers must not silently drop them.
+    throw new Error(`Failed to parse plugin manifest at ${manifestPath}: ${String(err)}`, {
+      cause: err,
+    });
+  }
   const extensions = parsed?.[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
     return [];
   }
-  return extensions.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return extensions.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
 }
 
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
@@ -238,7 +289,11 @@ function resolveToolPolicies(params: {
 }
 
 function normalizePluginIdSet(entries: string[]): Set<string> {
-  return new Set(entries.map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+  return new Set(
+    entries
+      .map((entry) => normalizeOptionalLowercaseString(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
 }
 
 function resolveEnabledExtensionPluginIds(params: {
@@ -254,12 +309,16 @@ function resolveEnabledExtensionPluginIds(params: {
   const denySet = normalizePluginIdSet(normalized.deny);
   const entryById = new Map<string, { enabled?: boolean }>();
   for (const [id, entry] of Object.entries(normalized.entries)) {
-    entryById.set(id.trim().toLowerCase(), entry);
+    const normalizedId = normalizeOptionalLowercaseString(id);
+    if (!normalizedId) {
+      continue;
+    }
+    entryById.set(normalizedId, entry);
   }
 
   const enabled: string[] = [];
   for (const id of params.pluginDirs) {
-    const normalizedId = id.trim().toLowerCase();
+    const normalizedId = normalizeOptionalLowercaseString(id);
     if (!normalizedId) {
       continue;
     }
@@ -285,7 +344,9 @@ function collectAllowEntries(config?: { allow?: string[]; alsoAllow?: string[] }
   if (Array.isArray(config?.alsoAllow)) {
     out.push(...config.alsoAllow);
   }
-  return out.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  return out
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function hasExplicitPluginAllow(params: {
@@ -330,16 +391,6 @@ function isPinnedRegistrySpec(spec: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  try {
-    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function buildCodeSafetySummaryCacheKey(params: {
   dirPath: string;
   includeFiles?: string[];
@@ -375,20 +426,31 @@ async function getCodeSafetySummary(params: {
   });
 }
 
-async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<string[]> {
+async function listWorkspaceSkillMarkdownFiles(
+  workspaceDir: string,
+): Promise<{ skillFilePaths: string[]; truncated: boolean }> {
   const skillsRoot = path.join(workspaceDir, "skills");
   const rootStat = await safeStat(skillsRoot);
   if (!rootStat.ok || !rootStat.isDir) {
-    return [];
+    return { skillFilePaths: [], truncated: false };
   }
 
   const skillFiles: string[] = [];
   const queue: string[] = [skillsRoot];
   const visitedDirs = new Set<string>();
+  // Caps total BFS dequeues, not per-path depth. Named to reflect actual semantics.
+  const MAX_TOTAL_DIR_VISITS = MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE * 20;
+  let totalDirVisits = 0;
 
-  while (queue.length > 0 && skillFiles.length < MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE) {
+  while (
+    queue.length > 0 &&
+    skillFiles.length < MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE &&
+    totalDirVisits++ < MAX_TOTAL_DIR_VISITS
+  ) {
     const dir = queue.shift()!;
-    const dirRealPath = await fs.realpath(dir).catch(() => path.resolve(dir));
+    // Use the module-level realpathWithTimeout so a hanging network FS doesn't
+    // block the BFS indefinitely (same 2 s guard as the outer escape-detection loop).
+    const dirRealPath = (await realpathWithTimeout(dir)) ?? path.resolve(dir);
     if (visitedDirs.has(dirRealPath)) {
       continue;
     }
@@ -424,7 +486,7 @@ async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<st
     }
   }
 
-  return skillFiles;
+  return { skillFilePaths: skillFiles, truncated: queue.length > 0 };
 }
 
 // --------------------------------------------------------------------------
@@ -432,7 +494,7 @@ async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<st
 // --------------------------------------------------------------------------
 
 function normalizeDockerLabelValue(raw: string | undefined): string | null {
-  const trimmed = raw?.trim() ?? "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed || trimmed === "<no value>") {
     return null;
   }
@@ -488,8 +550,10 @@ async function readSandboxBrowserHashLabels(params: {
 }
 
 function parsePublishedHostFromDockerPortLine(line: string): string | null {
-  const trimmed = line.trim();
-  const rhs = trimmed.includes("->") ? (trimmed.split("->").at(-1)?.trim() ?? "") : trimmed;
+  const trimmed = normalizeOptionalString(line) ?? "";
+  const rhs = trimmed.includes("->")
+    ? (normalizeOptionalString(trimmed.split("->").at(-1)) ?? "")
+    : trimmed;
   if (!rhs) {
     return null;
   }
@@ -505,7 +569,7 @@ function parsePublishedHostFromDockerPortLine(line: string): string | null {
 }
 
 function isLoopbackPublishHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(host);
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 }
 
@@ -623,6 +687,44 @@ export async function collectPluginsTrustFindings(params: {
   if (pluginDirs.length > 0) {
     const allow = params.cfg.plugins?.allow;
     const allowConfigured = Array.isArray(allow) && allow.length > 0;
+
+    if (allowConfigured) {
+      // Warn about allowlist entries that don't match any installed plugin ID.
+      // An attacker could register a plugin with an allowlisted ID after the
+      // allowlist was created, exploiting the pre-approved entry.
+      // Exclude bundled channel plugin IDs (telegram, discord, etc.) from the
+      // phantom check — they are never in the extensions directory but are
+      // legitimate allowlist targets.
+      const installedPluginIds = new Set(pluginDirs.map((dir) => path.basename(dir).toLowerCase()));
+      const bundledPluginIds = new Set(listChannelPlugins().map((p) => p.id.toLowerCase()));
+      const phantomEntries = allow.filter((entry) => {
+        if (typeof entry !== "string" || entry === "group:plugins") {
+          return false;
+        }
+        const lower = entry.toLowerCase();
+        if (installedPluginIds.has(lower) || bundledPluginIds.has(lower)) {
+          return false;
+        }
+        // Also resolve via plugin alias / legacy-ID normalization so that entries
+        // like a provider ID or a renamed bundled plugin don't produce false-positive
+        // phantom warnings. normalizePluginId maps aliases to their canonical ID.
+        const canonicalId = normalizeOptionalLowercaseString(normalizePluginId(entry)) ?? "";
+        return !canonicalId || !bundledPluginIds.has(canonicalId);
+      });
+      if (phantomEntries.length > 0) {
+        findings.push({
+          checkId: "plugins.allow_phantom_entries",
+          severity: "warn",
+          title: "plugins.allow contains entries with no matching installed plugin",
+          detail:
+            `The following plugins.allow entries do not correspond to any installed plugin: ${phantomEntries.join(", ")}.\n` +
+            "Phantom entries could be exploited by registering a new plugin with an allowlisted ID.",
+          remediation:
+            "Remove unused entries from plugins.allow, or verify the expected plugins are installed.",
+        });
+      }
+    }
+
     if (!allowConfigured) {
       const skillCommandsLikelyExposed = (
         await Promise.all(
@@ -776,7 +878,6 @@ export async function collectPluginsTrustFindings(params: {
         continue;
       }
       const installPath = record.installPath ?? path.join(params.stateDir, "extensions", pluginId);
-      // eslint-disable-next-line no-await-in-loop
       const installedVersion = await readInstalledPackageVersion(installPath);
       if (!installedVersion || installedVersion === recordedVersion) {
         continue;
@@ -839,7 +940,6 @@ export async function collectPluginsTrustFindings(params: {
         continue;
       }
       const installPath = record.installPath ?? path.join(params.stateDir, "hooks", hookId);
-      // eslint-disable-next-line no-await-in-loop
       const installedVersion = await readInstalledPackageVersion(installPath);
       if (!installedVersion || installedVersion === recordedVersion) {
         continue;
@@ -881,8 +981,26 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
 
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
-    const workspaceRealPath = await fs.realpath(workspacePath).catch(() => workspacePath);
-    const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
+    const workspaceRealPath = (await realpathWithTimeout(workspacePath)) ?? workspacePath;
+    const { skillFilePaths, truncated } = await listWorkspaceSkillMarkdownFiles(workspacePath);
+
+    if (truncated) {
+      // The BFS visit cap was hit before the full skills/ tree was scanned.
+      // Escaped SKILL.md symlinks in the unvisited portion will not be detected.
+      // Surface this as a warning so the user knows coverage was incomplete.
+      findings.push({
+        checkId: "skills.workspace.scan_truncated",
+        severity: "warn",
+        title: "Workspace skill scan reached the directory visit limit",
+        detail:
+          `The skills/ directory scan in ${workspacePath} stopped early after reaching the ` +
+          `BFS visit cap. Skill files in the unscanned portion of the tree were not checked ` +
+          "for symlink escapes.",
+        remediation:
+          "Flatten or simplify the skills/ directory hierarchy to stay within the scan budget, " +
+          "or move deeply-nested skill collections to a managed skill location.",
+      });
+    }
 
     for (const skillFilePath of skillFilePaths) {
       const canonicalSkillPath = path.resolve(skillFilePath);
@@ -891,8 +1009,17 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       }
       seenSkillPaths.add(canonicalSkillPath);
 
-      const skillRealPath = await fs.realpath(canonicalSkillPath).catch(() => null);
+      const skillRealPath = await realpathWithTimeout(canonicalSkillPath);
       if (!skillRealPath) {
+        // realpath timed out or failed — cannot verify the symlink target.
+        // Treat as a potential escape rather than silently bypassing the check.
+        // An attacker on a slow/network FS could otherwise hang realpath to
+        // prevent escape detection.
+        escapedSkillFiles.push({
+          workspaceDir: workspacePath,
+          skillFilePath: canonicalSkillPath,
+          skillRealPath: "(realpath timed out \u2014 symlink target unverifiable)",
+        });
         continue;
       }
       if (isPathInside(workspaceRealPath, skillRealPath)) {
@@ -956,7 +1083,6 @@ export async function collectIncludeFilePermFindings(params: {
   }
 
   for (const p of includePaths) {
-    // eslint-disable-next-line no-await-in-loop
     const perms = await inspectPathPermissions(p, {
       env: params.env,
       platform: params.platform,
@@ -1062,7 +1188,12 @@ export async function collectStateDeepFilesystemFindings(params: {
 
   const agentIds = Array.isArray(params.cfg.agents?.list)
     ? params.cfg.agents?.list
-        .map((a) => (a && typeof a === "object" && typeof a.id === "string" ? a.id.trim() : ""))
+        .map(
+          (a) =>
+            normalizeOptionalString(
+              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
+            ) ?? "",
+        )
         .filter(Boolean)
     : [];
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
@@ -1071,7 +1202,6 @@ export async function collectStateDeepFilesystemFindings(params: {
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
     const authPath = path.join(agentDir, "auth-profiles.json");
-    // eslint-disable-next-line no-await-in-loop
     const authPerms = await inspectPathPermissions(authPath, {
       env: params.env,
       platform: params.platform,
@@ -1110,7 +1240,6 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
 
     const storePath = path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
-    // eslint-disable-next-line no-await-in-loop
     const storePerms = await inspectPathPermissions(storePath, {
       env: params.env,
       platform: params.platform,
@@ -1135,8 +1264,7 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const logFile =
-    typeof params.cfg.logging?.file === "string" ? params.cfg.logging.file.trim() : "";
+  const logFile = normalizeOptionalString(params.cfg.logging?.file) ?? "";
   if (logFile) {
     const expanded = logFile.startsWith("~") ? expandTilde(logFile, params.env) : logFile;
     if (expanded) {
@@ -1201,7 +1329,25 @@ export async function collectPluginsCodeSafetyFindings(params: {
 
   for (const pluginName of pluginDirs) {
     const pluginPath = path.join(extensionsDir, pluginName);
-    const extensionEntries = await readPluginManifestExtensions(pluginPath).catch(() => []);
+    let extensionEntries: string[] = [];
+    try {
+      extensionEntries = await readPluginManifestExtensions(pluginPath);
+    } catch (manifestErr) {
+      // Malformed package.json — surface a warning so the user investigates.
+      // A plugin could deliberately corrupt its manifest to hide declared
+      // extension entrypoints from the deep code scanner.
+      findings.push({
+        checkId: "plugins.code_safety.manifest_parse_error",
+        severity: "warn",
+        title: `Plugin "${pluginName}" has a malformed package.json`,
+        detail:
+          `Could not parse plugin manifest: ${String(manifestErr)}.\n` +
+          "The extension entrypoint list is unavailable. Deep scan will cover the plugin directory but may miss entries declared via `openclaw.extensions`.",
+        remediation:
+          "Inspect the plugin package.json for syntax errors. If the plugin is untrusted, remove it from your OpenClaw extensions state directory.",
+      });
+      // Continue — getCodeSafetySummary below still scans the plugin directory
+    }
     const forcedScanEntries: string[] = [];
     const escapedEntries: string[] = [];
 

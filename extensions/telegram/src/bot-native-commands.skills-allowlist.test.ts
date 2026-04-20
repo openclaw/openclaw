@@ -10,7 +10,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
+import { resetPluginCommandMocks } from "./test-support/plugin-command.js";
 import { writeSkill } from "./test-support/write-skill.js";
 
 const tempDirs: string[] = [];
@@ -26,9 +26,7 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
     await Promise.all(
-      tempDirs
-        .splice(0, tempDirs.length)
-        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 

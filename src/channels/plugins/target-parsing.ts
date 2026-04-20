@@ -1,34 +1,26 @@
-import type { ChatType } from "../chat-type.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../../shared/string-coerce.js";
 import { normalizeChatChannelId } from "../registry.js";
 import { getChannelPlugin, normalizeChannelId } from "./index.js";
-
-export type ParsedChannelExplicitTarget = {
-  to: string;
-  threadId?: string | number;
-  chatType?: ChatType;
-};
-
-export type ComparableChannelTarget = {
-  rawTo: string;
-  to: string;
-  threadId?: string | number;
-  chatType?: ChatType;
-};
-
-function normalizeComparableThreadId(
-  threadId?: string | number | null,
-): string | number | undefined {
-  if (typeof threadId === "number") {
-    return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
-  }
-  if (typeof threadId !== "string") {
-    return undefined;
-  }
-  const trimmed = threadId.trim();
-  return trimmed ? trimmed : undefined;
-}
+import type {
+  ComparableChannelTarget,
+  ParsedChannelExplicitTarget,
+} from "./target-parsing-loaded.js";
+export {
+  comparableChannelTargetsMatch,
+  comparableChannelTargetsShareRoute,
+  parseExplicitTargetForLoadedChannel,
+  resolveComparableTargetForLoadedChannel,
+} from "./target-parsing-loaded.js";
+export type {
+  ComparableChannelTarget,
+  ParsedChannelExplicitTarget,
+} from "./target-parsing-loaded.js";
 
 function parseWithPlugin(
+  getPlugin: (channel: string) => ReturnType<typeof getChannelPlugin>,
   rawChannel: string,
   rawTarget: string,
 ): ParsedChannelExplicitTarget | null {
@@ -36,14 +28,14 @@ function parseWithPlugin(
   if (!channel) {
     return null;
   }
-  return getChannelPlugin(channel)?.messaging?.parseExplicitTarget?.({ raw: rawTarget }) ?? null;
+  return getPlugin(channel)?.messaging?.parseExplicitTarget?.({ raw: rawTarget }) ?? null;
 }
 
 export function parseExplicitTargetForChannel(
   channel: string,
   rawTarget: string,
 ): ParsedChannelExplicitTarget | null {
-  return parseWithPlugin(channel, rawTarget);
+  return parseWithPlugin(getChannelPlugin, channel, rawTarget);
 }
 
 export function resolveComparableTargetForChannel(params: {
@@ -51,46 +43,16 @@ export function resolveComparableTargetForChannel(params: {
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
 }): ComparableChannelTarget | null {
-  const rawTo = params.rawTarget?.trim();
+  const rawTo = normalizeOptionalString(params.rawTarget);
   if (!rawTo) {
     return null;
   }
   const parsed = parseExplicitTargetForChannel(params.channel, rawTo);
-  const fallbackThreadId = normalizeComparableThreadId(params.fallbackThreadId);
+  const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
   return {
     rawTo,
     to: parsed?.to ?? rawTo,
-    threadId: normalizeComparableThreadId(parsed?.threadId ?? fallbackThreadId),
+    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? fallbackThreadId),
     chatType: parsed?.chatType,
   };
-}
-
-export function comparableChannelTargetsMatch(params: {
-  left?: ComparableChannelTarget | null;
-  right?: ComparableChannelTarget | null;
-}): boolean {
-  const left = params.left;
-  const right = params.right;
-  if (!left || !right) {
-    return false;
-  }
-  return left.to === right.to && left.threadId === right.threadId;
-}
-
-export function comparableChannelTargetsShareRoute(params: {
-  left?: ComparableChannelTarget | null;
-  right?: ComparableChannelTarget | null;
-}): boolean {
-  const left = params.left;
-  const right = params.right;
-  if (!left || !right) {
-    return false;
-  }
-  if (left.to !== right.to) {
-    return false;
-  }
-  if (left.threadId == null || right.threadId == null) {
-    return true;
-  }
-  return left.threadId === right.threadId;
 }

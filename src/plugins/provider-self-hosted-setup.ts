@@ -5,9 +5,13 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -53,7 +57,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
   const url = `${trimmedBaseUrl}/models`;
 
   try {
-    const trimmedApiKey = params.apiKey?.trim();
+    const trimmedApiKey = normalizeOptionalString(params.apiKey);
     const response = await fetch(url, {
       headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
       signal: AbortSignal.timeout(5000),
@@ -70,7 +74,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
     }
 
     return models
-      .map((model) => ({ id: typeof model.id === "string" ? model.id.trim() : "" }))
+      .map((model) => ({ id: normalizeOptionalString(model.id) ?? "" }))
       .filter((model) => Boolean(model.id))
       .map((model) => {
         const modelId = model.id;
@@ -215,11 +219,9 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
-  const baseUrl = String(baseUrlRaw ?? "")
-    .trim()
-    .replace(/\/+$/, "");
-  const apiKey = String(apiKeyRaw ?? "").trim();
-  const modelId = String(modelIdRaw ?? "").trim();
+  const baseUrl = (baseUrlRaw ?? "").trim().replace(/\/+$/, "");
+  const apiKey = normalizeStringifiedOptionalString(apiKeyRaw) ?? "";
+  const modelId = normalizeStringifiedOptionalString(modelIdRaw) ?? "";
   const credential: AuthProfileCredential = {
     type: "api_key",
     provider: params.providerId,

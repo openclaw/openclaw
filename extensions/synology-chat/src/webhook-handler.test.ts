@@ -10,6 +10,12 @@ const resolveLegacyWebhookNameToChatUserId = vi
 const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
   await import("./webhook-handler.js");
 
+type TestLog = {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
@@ -40,7 +46,7 @@ const validBody = makeFormBody({
 });
 
 async function runDangerousNameMatchReply(
-  log: { info: any; warn: any; error: any },
+  log: TestLog,
   options: {
     resolvedChatUserId?: number;
     accountIdSuffix: string;
@@ -73,7 +79,7 @@ async function runDangerousNameMatchReply(
 }
 
 describe("createWebhookHandler", () => {
-  let log: { info: any; warn: any; error: any };
+  let log: TestLog;
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
@@ -138,26 +144,19 @@ describe("createWebhookHandler", () => {
   });
 
   it("returns 408 when request body times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createWebhookHandler({
-        account: makeAccount(),
-        deliver: vi.fn(),
-        log,
-      });
+    const handler = createWebhookHandler({
+      account: makeAccount(),
+      deliver: vi.fn(),
+      log,
+      bodyTimeoutMs: 1,
+    });
 
-      const req = makeStalledReq("POST");
-      const res = makeRes();
-      const run = handler(req, res);
+    const req = makeStalledReq("POST");
+    const res = makeRes();
+    await handler(req, res);
 
-      await vi.advanceTimersByTimeAsync(30_000);
-      await run;
-
-      expect(res._status).toBe(408);
-      expect(res._body).toContain("timeout");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(res._status).toBe(408);
+    expect(res._body).toContain("timeout");
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {

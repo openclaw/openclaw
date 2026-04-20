@@ -1,26 +1,25 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const mockLoadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
+);
 
-let validateConfigObjectWithPlugins: typeof import("./validation.js").validateConfigObjectWithPlugins;
-let validateConfigObjectRawWithPlugins: typeof import("./validation.js").validateConfigObjectRawWithPlugins;
-
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
-}));
-
-beforeAll(async () => {
-  ({ validateConfigObjectWithPlugins, validateConfigObjectRawWithPlugins } =
-    await import("./validation.js"));
-});
-
-function setupTelegramSchemaWithDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue({
+function createTelegramSchemaRegistry(): PluginManifestRegistry {
+  return {
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecord({
         id: "telegram",
-        origin: "bundled",
         channels: ["telegram"],
         channelCatalogMeta: {
           id: "telegram",
@@ -47,9 +46,77 @@ function setupTelegramSchemaWithDefault() {
             uiHints: {},
           },
         },
-      },
+      }),
     ],
-  });
+  };
+}
+
+function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      createPluginManifestRecord({
+        id: "opik",
+        configSchema: {
+          type: "object",
+          properties: {
+            workspace: {
+              type: "string",
+              default: "default-workspace",
+            },
+          },
+          required: ["workspace"],
+          additionalProperties: true,
+        },
+      }),
+    ],
+  };
+}
+
+function createPluginManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    origin: "bundled",
+    providers: [],
+    rootDir: `/tmp/${overrides.id}`,
+    skills: [],
+    source: `/tmp/${overrides.id}/index.js`,
+    ...overrides,
+  };
+}
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  resolveManifestContractPluginIds: () => [],
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: () => [],
+  listPluginDoctorLegacyConfigRules: () => [],
+  applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+}));
+
+vi.mock("../channels/plugins/legacy-config.js", () => ({
+  collectChannelLegacyConfigRules: () => [],
+}));
+
+vi.mock("./zod-schema.js", () => ({
+  OpenClawSchema: {
+    safeParse: (raw: unknown) => ({ success: true, data: raw }),
+  },
+}));
+
+function setupTelegramSchemaWithDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue(createTelegramSchemaRegistry());
+}
+
+function setupPluginSchemaWithRequiredDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue(createPluginConfigSchemaRegistry());
 }
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
@@ -95,6 +162,27 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       expect(result.config.channels?.telegram).toEqual(
         expect.objectContaining({ dmPolicy: "pairing" }),
       );
+    }
+  });
+});
+
+describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
+  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
+    setupPluginSchemaWithRequiredDefault();
+
+    const result = validateConfigObjectRawWithPlugins({
+      plugins: {
+        entries: {
+          opik: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.entries?.opik?.config).toBeUndefined();
     }
   });
 });

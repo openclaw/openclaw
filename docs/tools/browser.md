@@ -146,7 +146,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   browser: {
     enabled: true, // default: true
     ssrfPolicy: {
-      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowPrivateNetwork: true, // legacy alias
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
@@ -191,7 +191,7 @@ Notes:
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
 - Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
 - In strict SSRF mode, remote CDP endpoint discovery/probes (`cdpUrl`, including `/json/version` lookups) are checked too.
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled by default. Set it to `true` only when you intentionally trust private-network browser access.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
@@ -316,15 +316,29 @@ Notes:
 ## Direct WebSocket CDP providers
 
 Some hosted browser services expose a **direct WebSocket** endpoint rather than
-the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw accepts three
+CDP URL shapes and picks the right connection strategy automatically:
 
-- **HTTP(S) endpoints** — OpenClaw calls `/json/version` to discover the
-  WebSocket debugger URL, then connects.
-- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
-  skipping `/json/version`. Use this for services like
-  [Browserless](https://browserless.io),
-  [Browserbase](https://www.browserbase.com), or any provider that hands you a
-  WebSocket URL.
+- **HTTP(S) discovery** — `http://host[:port]` or `https://host[:port]`.
+  OpenClaw calls `/json/version` to discover the WebSocket debugger URL, then
+  connects. No WebSocket fallback.
+- **Direct WebSocket endpoints** — `ws://host[:port]/devtools/<kind>/<id>` or
+  `wss://...` with a `/devtools/browser|page|worker|shared_worker|service_worker/<id>`
+  path. OpenClaw connects directly via a WebSocket handshake and skips
+  `/json/version` entirely.
+- **Bare WebSocket roots** — `ws://host[:port]` or `wss://host[:port]` with no
+  `/devtools/...` path (e.g. [Browserless](https://browserless.io),
+  [Browserbase](https://www.browserbase.com)). OpenClaw tries HTTP
+  `/json/version` discovery first (normalising the scheme to `http`/`https`);
+  if discovery returns a `webSocketDebuggerUrl` it is used, otherwise OpenClaw
+  falls back to a direct WebSocket handshake at the bare root. This covers
+  both Chrome-style remote debug ports and WebSocket-only providers.
+
+Plain `ws://host:port` / `wss://host:port` without a `/devtools/...` path
+pointed at a local Chrome instance is supported via the discovery-first
+fallback — Chrome only accepts WebSocket upgrades on the specific per-browser
+or per-target path returned by `/json/version`, so a bare-root handshake alone
+would fail.
 
 ### Browserbase
 
@@ -518,8 +532,9 @@ Notes:
 - Existing-session dialog hooks do not support timeout overrides.
 - Some features still require the managed browser path, including batch
   actions, PDF export, download interception, and `responsebody`.
-- Existing-session is host-local. If Chrome lives on a different machine or a
-  different network namespace, use remote CDP or a node host instead.
+- Existing-session can attach on the selected host or through a connected
+  browser node. If Chrome lives elsewhere and no browser node is connected, use
+  remote CDP or a node host instead.
 
 ## Isolation guarantees
 
@@ -575,6 +590,27 @@ Notes:
   Tailscale Serve identity headers.
 - If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
   routes do not inherit those identity-bearing modes; keep them loopback-only.
+
+### `/act` error contract
+
+`POST /act` uses a structured error response for route-level validation and
+policy failures:
+
+```json
+{ "error": "<message>", "code": "ACT_*" }
+```
+
+Current `code` values:
+
+- `ACT_KIND_REQUIRED` (HTTP 400): `kind` is missing or unrecognized.
+- `ACT_INVALID_REQUEST` (HTTP 400): action payload failed normalization or validation.
+- `ACT_SELECTOR_UNSUPPORTED` (HTTP 400): `selector` was used with an unsupported action kind.
+- `ACT_EVALUATE_DISABLED` (HTTP 403): `evaluate` (or `wait --fn`) is disabled by config.
+- `ACT_TARGET_ID_MISMATCH` (HTTP 403): top-level or batched `targetId` conflicts with request target.
+- `ACT_EXISTING_SESSION_UNSUPPORTED` (HTTP 501): action is not supported for existing-session profiles.
+
+Other runtime failures may still return `{ "error": "<message>" }` without a
+`code` field.
 
 ### Playwright requirement
 
@@ -862,6 +898,63 @@ For Linux-specific issues (especially snap Chromium), see
 
 For WSL2 Gateway + Windows Chrome split-host setups, see
 [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
+
+### CDP startup failure vs navigation SSRF block
+
+These are different failure classes and they point to different code paths.
+
+- **CDP startup or readiness failure** means OpenClaw cannot confirm that the browser control plane is healthy.
+- **Navigation SSRF block** means the browser control plane is healthy, but a page navigation target is rejected by policy.
+
+Common examples:
+
+- CDP startup or readiness failure:
+  - `Chrome CDP websocket for profile "openclaw" is not reachable after start`
+  - `Remote CDP for profile "<name>" is not reachable at <cdpUrl>`
+- Navigation SSRF block:
+  - `open`, `navigate`, snapshot, or tab-opening flows fail with a browser/network policy error while `start` and `tabs` still work
+
+Use this minimal sequence to separate the two:
+
+```bash
+openclaw browser --browser-profile openclaw start
+openclaw browser --browser-profile openclaw tabs
+openclaw browser --browser-profile openclaw open https://example.com
+```
+
+How to read the results:
+
+- If `start` fails with `not reachable after start`, troubleshoot CDP readiness first.
+- If `start` succeeds but `tabs` fails, the control plane is still unhealthy. Treat this as a CDP reachability problem, not a page-navigation problem.
+- If `start` and `tabs` succeed but `open` or `navigate` fails, the browser control plane is up and the failure is in navigation policy or the target page.
+- If `start`, `tabs`, and `open` all succeed, the basic managed-browser control path is healthy.
+
+Important behavior details:
+
+- Browser config defaults to a fail-closed SSRF policy object even when you do not configure `browser.ssrfPolicy`.
+- For the local loopback `openclaw` managed profile, CDP health checks intentionally skip browser SSRF reachability enforcement for OpenClaw's own local control plane.
+- Navigation protection is separate. A successful `start` or `tabs` result does not mean a later `open` or `navigate` target is allowed.
+
+Security guidance:
+
+- Do **not** relax browser SSRF policy by default.
+- Prefer narrow host exceptions such as `hostnameAllowlist` or `allowedHostnames` over broad private-network access.
+- Use `dangerouslyAllowPrivateNetwork: true` only in intentionally trusted environments where private-network browser access is required and reviewed.
+
+Example: navigation blocked, control plane healthy
+
+- `start` succeeds
+- `tabs` succeeds
+- `open http://internal.example` fails
+
+That usually means browser startup is fine and the navigation target needs policy review.
+
+Example: startup blocked before navigation matters
+
+- `start` fails with `not reachable after start`
+- `tabs` also fails or cannot run
+
+That points to browser launch or CDP reachability, not a page URL allowlist problem.
 
 ## Agent tools + how control works
 

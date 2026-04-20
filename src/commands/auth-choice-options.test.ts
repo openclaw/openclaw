@@ -15,6 +15,11 @@ const resolveManifestProviderAuthChoices = vi.hoisted(() =>
 const resolveProviderWizardOptions = vi.hoisted(() =>
   vi.fn<() => ProviderWizardOption[]>(() => []),
 );
+const resolveLegacyAuthChoiceAliasesForCli = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+
+vi.mock("./auth-choice-legacy.js", () => ({
+  resolveLegacyAuthChoiceAliasesForCli,
+}));
 
 function includesOnboardingScope(
   scopes: readonly ("text-inference" | "image-generation")[] | undefined,
@@ -90,6 +95,7 @@ describe("buildAuthChoiceOptions", () => {
   beforeEach(() => {
     resolveManifestProviderAuthChoices.mockReturnValue([]);
     resolveProviderWizardOptions.mockReturnValue([]);
+    resolveLegacyAuthChoiceAliasesForCli.mockReturnValue([]);
   });
 
   it("includes core and provider-specific auth choices", () => {
@@ -316,22 +322,14 @@ describe("buildAuthChoiceOptions", () => {
   });
 
   it("can include legacy aliases in cli help choices", () => {
-    resolveManifestProviderAuthChoices.mockReturnValue([
-      {
-        pluginId: "openai",
-        providerId: "openai-codex",
-        methodId: "oauth",
-        choiceId: "openai-codex",
-        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
-        deprecatedChoiceIds: ["codex-cli"],
-      },
-    ]);
+    resolveLegacyAuthChoiceAliasesForCli.mockReturnValue(["claude-cli", "codex-cli"]);
 
     const cliChoices = formatAuthChoiceChoicesForCli({
       includeLegacyAliases: true,
       includeSkip: true,
     }).split("|");
 
+    expect(cliChoices).toContain("claude-cli");
     expect(cliChoices).toContain("codex-cli");
   });
 
@@ -368,7 +366,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("skip");
   });
 
-  it("shows Chutes in grouped provider selection", () => {
+  it("shows plugin and wizard providers in grouped selection", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "chutes",
@@ -379,19 +377,6 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "chutes",
         groupLabel: "Chutes",
       },
-    ]);
-    const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
-      includeSkip: false,
-    });
-    const chutesGroup = groups.find((group) => group.value === "chutes");
-
-    expect(chutesGroup).toBeDefined();
-    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
-  });
-
-  it("shows LiteLLM in grouped provider selection", () => {
-    resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "litellm",
         providerId: "litellm",
@@ -402,17 +387,32 @@ describe("buildAuthChoiceOptions", () => {
         groupLabel: "LiteLLM",
       },
     ]);
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "ollama",
+        label: "Ollama",
+        hint: "Cloud and local open models",
+        groupId: "ollama",
+        groupLabel: "Ollama",
+      },
+    ]);
     const { groups } = buildAuthChoiceGroups({
       store: EMPTY_STORE,
       includeSkip: false,
     });
+    const chutesGroup = groups.find((group) => group.value === "chutes");
     const litellmGroup = groups.find((group) => group.value === "litellm");
+    const ollamaGroup = groups.find((group) => group.value === "ollama");
 
+    expect(chutesGroup).toBeDefined();
+    expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
     expect(litellmGroup).toBeDefined();
     expect(litellmGroup?.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
+    expect(ollamaGroup).toBeDefined();
+    expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
   });
 
-  it("sorts grouped provider options by assistant priority", () => {
+  it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "anthropic",
@@ -426,9 +426,9 @@ describe("buildAuthChoiceOptions", () => {
       {
         pluginId: "anthropic",
         providerId: "anthropic",
-        methodId: "setup-token",
-        choiceId: "setup-token",
-        choiceLabel: "Anthropic setup-token",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
         assistantPriority: -20,
         groupId: "anthropic",
         groupLabel: "Anthropic",
@@ -442,7 +442,7 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(anthropicGroup).toBeDefined();
     expect(anthropicGroup?.options.map((option) => option.value)).toEqual([
-      "setup-token",
+      "anthropic-cli",
       "apiKey",
     ]);
   });
@@ -477,27 +477,6 @@ describe("buildAuthChoiceOptions", () => {
     expect(openCodeGroup).toBeDefined();
     expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-zen")).toBe(true);
     expect(openCodeGroup?.options.some((opt) => opt.value === "opencode-go")).toBe(true);
-  });
-
-  it("shows Ollama in grouped provider selection", () => {
-    resolveManifestProviderAuthChoices.mockReturnValue([]);
-    resolveProviderWizardOptions.mockReturnValue([
-      {
-        value: "ollama",
-        label: "Ollama",
-        hint: "Cloud and local open models",
-        groupId: "ollama",
-        groupLabel: "Ollama",
-      },
-    ]);
-    const { groups } = buildAuthChoiceGroups({
-      store: EMPTY_STORE,
-      includeSkip: false,
-    });
-    const ollamaGroup = groups.find((group) => group.value === "ollama");
-
-    expect(ollamaGroup).toBeDefined();
-    expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
   });
 
   it("hides image-generation-only providers from the interactive auth picker", () => {

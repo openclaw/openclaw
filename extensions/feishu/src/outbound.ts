@@ -1,40 +1,55 @@
 import fs from "fs";
 import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
-import { replyComment } from "./drive.js";
+import { deliverCommentThreadText } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
-import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
 
   // Only auto-convert when the message is a pure path-like payload.
   // Avoid converting regular sentences that merely contain a path.
   const hasWhitespace = /\s/.test(raw);
-  if (hasWhitespace) return null;
+  if (hasWhitespace) {
+    return null;
+  }
 
   // Ignore links/data URLs; those should stay in normal mediaUrl/text paths.
-  if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
+  if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) {
+    return null;
+  }
 
-  const ext = path.extname(raw).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(raw));
   const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
     ext,
   );
-  if (!isImageExt) return null;
+  if (!isImageExt) {
+    return null;
+  }
 
-  if (!path.isAbsolute(raw)) return null;
-  if (!fs.existsSync(raw)) return null;
+  if (!path.isAbsolute(raw)) {
+    return null;
+  }
+  if (!fs.existsSync(raw)) {
+    return null;
+  }
 
   // Fix race condition: wrap statSync in try-catch to handle file deletion
   // between existsSync and statSync
   try {
-    if (!fs.statSync(raw).isFile()) return null;
+    if (!fs.statSync(raw).isFile()) {
+      return null;
+    }
   } catch {
     // File may have been deleted or became inaccessible between checks
     return null;
@@ -66,6 +81,7 @@ async function sendCommentThreadReply(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
   text: string;
+  replyId?: string;
   accountId?: string;
 }) {
   const target = parseFeishuCommentTarget(params.to);
@@ -74,17 +90,34 @@ async function sendCommentThreadReply(params: {
   }
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createFeishuClient(account);
-  const result = await replyComment(client, {
-    file_token: target.fileToken,
-    file_type: target.fileType,
-    comment_id: target.commentId,
-    content: params.text,
-  });
-  return {
-    messageId: typeof result.reply_id === "string" ? result.reply_id : "",
-    chatId: target.commentId,
-    result,
-  };
+  const replyId = params.replyId?.trim();
+  try {
+    const result = await deliverCommentThreadText(client, {
+      file_token: target.fileToken,
+      file_type: target.fileType,
+      comment_id: target.commentId,
+      content: params.text,
+    });
+    return {
+      messageId:
+        (typeof result.reply_id === "string" && result.reply_id) ||
+        (typeof result.comment_id === "string" && result.comment_id) ||
+        "",
+      chatId: target.commentId,
+      result,
+    };
+  } finally {
+    if (replyId) {
+      void cleanupAmbientCommentTypingReaction({
+        client,
+        deliveryContext: {
+          channel: "feishu",
+          to: params.to,
+          threadId: replyId,
+        },
+      });
+    }
+  }
 }
 
 async function sendOutboundText(params: {
@@ -99,6 +132,7 @@ async function sendOutboundText(params: {
     cfg,
     to,
     text,
+    replyId: replyToMessageId,
     accountId,
   });
   if (commentResult) {

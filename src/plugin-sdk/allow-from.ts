@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 export type {
   AllowlistMatch,
   AllowlistMatchSource,
@@ -36,7 +38,8 @@ export function formatAllowFromLowercase(params: {
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
-    .map((entry) => entry.toLowerCase());
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 /** Normalize allowlist entries through a channel-provided parser or canonicalizer. */
@@ -67,8 +70,8 @@ export function isNormalizedSenderAllowed(params: {
   if (normalizedAllow.includes("*")) {
     return true;
   }
-  const sender = String(params.senderId).trim().toLowerCase();
-  return normalizedAllow.includes(sender);
+  const sender = normalizeOptionalLowercaseString(String(params.senderId));
+  return sender ? normalizedAllow.includes(sender) : false;
 }
 
 type ParsedChatAllowTarget =
@@ -78,14 +81,14 @@ type ParsedChatAllowTarget =
   | { kind: "handle"; handle: string };
 
 /** Match chat-aware allowlist entries against sender, chat id, guid, or identifier fields. */
-export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
+export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
   const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
   if (allowFrom.length === 0) {

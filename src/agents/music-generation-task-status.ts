@@ -4,25 +4,14 @@ import {
   buildMediaGenerationTaskStatusDetails,
   buildMediaGenerationTaskStatusText,
   findActiveMediaGenerationTaskForSession,
-  getMediaGenerationTaskProviderId,
-  isActiveMediaGenerationTask,
 } from "./media-generation-task-status-shared.js";
 
 export const MUSIC_GENERATION_TASK_KIND = "music_generation";
 const MUSIC_GENERATION_SOURCE_PREFIX = "music_generate";
 
-export function isActiveMusicGenerationTask(task: TaskRecord): boolean {
-  return isActiveMediaGenerationTask({
-    task,
-    taskKind: MUSIC_GENERATION_TASK_KIND,
-  });
-}
-
-export function getMusicGenerationTaskProviderId(task: TaskRecord): string | undefined {
-  return getMediaGenerationTaskProviderId(task, MUSIC_GENERATION_SOURCE_PREFIX);
-}
-
-export function findActiveMusicGenerationTaskForSession(sessionKey?: string): TaskRecord | null {
+export function findActiveMusicGenerationTaskForSession(
+  sessionKey?: string,
+): TaskRecord | undefined {
   return findActiveMediaGenerationTaskForSession({
     sessionKey,
     taskKind: MUSIC_GENERATION_TASK_KIND,

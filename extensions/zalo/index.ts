@@ -9,6 +9,10 @@ export default defineBundledChannelEntry({
     specifier: "./api.js",
     exportName: "zaloPlugin",
   },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
   runtime: {
     specifier: "./runtime-api.js",
     exportName: "setZaloRuntime",

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import { getPrimaryCommand } from "./argv.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
@@ -77,7 +78,7 @@ export function resolveCliContainerTarget(
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
-  return parsed.container ?? env.OPENCLAW_CONTAINER?.trim() ?? null;
+  return parsed.container ?? normalizeOptionalString(env.OPENCLAW_CONTAINER) ?? null;
 }
 
 function isContainerRunning(params: {
@@ -183,7 +184,7 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function isBlockedContainerCommand(argv: string[]): boolean {
-  if (getPrimaryCommand(["node", "openclaw", ...argv]) === "update") {
+  if (resolveCliArgvInvocation(["node", "openclaw", ...argv]).primary === "update") {
     return true;
   }
   for (let i = 0; i < argv.length; i += 1) {
@@ -213,8 +214,8 @@ export function maybeRunCliInContainer(
   const resolvedDeps: ContainerTargetDeps = {
     env: deps?.env ?? process.env,
     spawnSync: deps?.spawnSync ?? spawnSync,
-    stdinIsTTY: deps?.stdinIsTTY ?? Boolean(process.stdin.isTTY),
-    stdoutIsTTY: deps?.stdoutIsTTY ?? Boolean(process.stdout.isTTY),
+    stdinIsTTY: deps?.stdinIsTTY ?? process.stdin.isTTY,
+    stdoutIsTTY: deps?.stdoutIsTTY ?? process.stdout.isTTY,
   };
 
   if (resolvedDeps.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {

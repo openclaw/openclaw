@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMissingProviderApiKey } from "./models-config.providers.secrets.js";
+import { resolveMissingProviderApiKey } from "./models-config.providers.secret-helpers.js";
 
 describe("models-config", () => {
   it("fills missing provider.apiKey from env var name when models exist", () => {

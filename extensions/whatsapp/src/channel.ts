@@ -6,11 +6,7 @@ import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  listWhatsAppAccountIds,
-  resolveWhatsAppAccount,
-  type ResolvedWhatsAppAccount,
-} from "./accounts.js";
+import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
@@ -30,8 +26,13 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
-import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
+import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
+import {
+  isWhatsAppGroupJid,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppMessagingTarget,
+  normalizeWhatsAppTarget,
+} from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
@@ -74,8 +75,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
-        isConfigured: async (account) =>
-          await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir),
+        isConfigured: async (account) => {
+          const channelRuntime = await loadWhatsAppChannelRuntime();
+          return (await channelRuntime.readWebAuthState(account.authDir)) === "linked";
+        },
       }),
       agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
@@ -134,7 +137,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
         supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ action, params, cfg, accountId, toolContext }) =>
+        resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
+        handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) =>
           await (
             await loadWhatsAppChannelReactAction()
           ).handleWhatsAppReactAction({
@@ -142,11 +146,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             params,
             cfg,
             accountId,
+            requesterSenderId,
             toolContext,
           }),
       },
+      approvalCapability: whatsappApprovalAuth,
       auth: {
-        ...whatsappApprovalAuth,
         login: async ({ cfg, accountId, runtime, verbose }) => {
           const resolvedAccountId =
             accountId?.trim() ||
@@ -162,25 +167,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           detectWhatsAppLegacyStateMigrations({ oauthDir }),
       },
       heartbeat: {
-        checkReady: async ({ cfg, accountId, deps }) => {
-          if (cfg.web?.enabled === false) {
-            return { ok: false, reason: "whatsapp-disabled" };
-          }
-          const account = resolveWhatsAppAccount({ cfg, accountId });
-          const authExists = await (
-            deps?.webAuthExists ?? (await loadWhatsAppChannelRuntime()).webAuthExists
-          )(account.authDir);
-          if (!authExists) {
-            return { ok: false, reason: "whatsapp-not-linked" };
-          }
-          const listenerActive = deps?.hasActiveWebListener
-            ? deps.hasActiveWebListener(account.accountId)
-            : Boolean((await loadWhatsAppChannelRuntime()).getActiveWebListener(account.accountId));
-          if (!listenerActive) {
-            return { ok: false, reason: "whatsapp-not-running" };
-          }
-          return { ok: true, reason: "ok" };
-        },
+        checkReady: async ({ cfg, accountId, deps }) =>
+          await checkWhatsAppHeartbeatReady({ cfg, accountId: accountId ?? undefined, deps }),
         resolveRecipients: ({ cfg, opts }) => resolveWhatsAppHeartbeatRecipients(cfg, opts),
       },
       status: createAsyncComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({
@@ -196,24 +184,47 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         }),
         collectStatusIssues: collectWhatsAppStatusIssues,
         buildChannelSummary: async ({ account, snapshot }) => {
+          const channelRuntime = await loadWhatsAppChannelRuntime();
           const authDir = account.authDir;
+          const auth = authDir
+            ? await channelRuntime.readWebAuthSnapshot(authDir)
+            : {
+                state: "not-linked" as const,
+                authAgeMs: null,
+                selfId: { e164: null, jid: null, lid: null },
+              };
           const linked =
             typeof snapshot.linked === "boolean"
               ? snapshot.linked
-              : authDir
-                ? await (await loadWhatsAppChannelRuntime()).webAuthExists(authDir)
-                : false;
-          const authAgeMs =
-            linked && authDir
-              ? (await loadWhatsAppChannelRuntime()).getWebAuthAgeMs(authDir)
-              : null;
+              : auth.state === "unstable"
+                ? undefined
+                : auth.state === "linked";
+          const summaryAuthState =
+            auth.state === "unstable"
+              ? auth.state
+              : linked === true
+                ? "linked"
+                : linked === false
+                  ? "not-linked"
+                  : undefined;
+          const statusState = summaryAuthState === undefined ? undefined : summaryAuthState;
+          const configured =
+            auth.state === "unstable"
+              ? typeof snapshot.configured === "boolean"
+                ? snapshot.configured
+                : true
+              : typeof linked === "boolean"
+                ? linked
+                : auth.state === "linked";
+          const authAgeMs = typeof linked === "boolean" && linked ? auth.authAgeMs : null;
           const self =
-            linked && authDir
-              ? (await loadWhatsAppChannelRuntime()).readWebSelfId(authDir)
-              : { e164: null, jid: null };
+            typeof linked === "boolean" && linked
+              ? auth.selfId
+              : { e164: null, jid: null, lid: null };
           return {
-            configured: linked,
-            linked,
+            configured,
+            ...(statusState ? { statusState } : {}),
+            ...(typeof linked === "boolean" ? { linked } : {}),
             authAgeMs,
             self,
             running: snapshot.running ?? false,
@@ -229,14 +240,20 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           };
         },
         resolveAccountSnapshot: async ({ account, runtime }) => {
-          const linked = await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir);
+          const channelRuntime = await loadWhatsAppChannelRuntime();
+          const authState = await channelRuntime.readWebAuthState(account.authDir);
           return {
             accountId: account.accountId,
             name: account.name,
             enabled: account.enabled,
             configured: true,
             extra: {
-              linked,
+              statusState: authState,
+              ...(authState === "linked"
+                ? { linked: true }
+                : authState === "not-linked"
+                  ? { linked: false }
+                  : {}),
               connected: runtime?.connected ?? false,
               reconnectAttempts: runtime?.reconnectAttempts,
               lastConnectedAt: runtime?.lastConnectedAt ?? null,

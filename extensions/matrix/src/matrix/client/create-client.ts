@@ -1,6 +1,10 @@
 import fs from "node:fs";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import type { SsrFPolicy } from "../../runtime-api.js";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  type SsrFPolicy,
+} from "../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
 import {
@@ -49,8 +53,8 @@ export async function createMatrixClient(params: {
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
     dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
   });
-  const userId = params.userId?.trim() || "unknown";
-  const matrixClientUserId = params.userId?.trim() || undefined;
+  const matrixClientUserId = normalizeOptionalString(params.userId);
+  const userId = matrixClientUserId ?? "unknown";
   const persistStorage = params.persistStorage !== false;
   const storagePaths = persistStorage
     ? resolveMatrixStoragePaths({
@@ -94,7 +98,8 @@ export async function createMatrixClient(params: {
     idbSnapshotPath: storagePaths?.idbSnapshotPath,
     cryptoDatabasePrefix,
     autoBootstrapCrypto: params.autoBootstrapCrypto,
-    ssrfPolicy: params.ssrfPolicy,
+    ssrfPolicy:
+      params.ssrfPolicy ?? ssrfPolicyFromDangerouslyAllowPrivateNetwork(params.allowPrivateNetwork),
     dispatcherPolicy: params.dispatcherPolicy,
   });
 }

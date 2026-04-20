@@ -1,24 +1,22 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
 import {
-  createTopLevelChannelParsedAllowFromPrompt,
-  createTopLevelChannelDmPolicy,
   createStandardChannelSetupStatus,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelParsedAllowFromPrompt,
+  formatDocsLink,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
+import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const channel = "nostr" as const;
@@ -91,7 +89,7 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   channel,
   policyKey: "channels.nostr.dmPolicy",
   allowFromKey: "channels.nostr.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.nostr?.dmPolicy ?? "pairing",
+  getCurrent: (cfg) => (cfg.channels?.nostr?.dmPolicy as DmPolicy | undefined) ?? "pairing",
   promptAllowFrom: promptNostrAllowFrom,
 });
 
@@ -236,8 +234,8 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       helpLines: ["Use ws:// or wss:// relay URLs.", "Leave blank to keep the default relay set."],
       currentValue: ({ cfg, accountId }) => {
         const account = resolveNostrAccount({ cfg, accountId });
-        const relays =
-          cfg.channels?.nostr?.relays && cfg.channels.nostr.relays.length > 0 ? account.relays : [];
+        const configuredRelays = cfg.channels?.nostr?.relays as string[] | undefined;
+        const relays = configuredRelays && configuredRelays.length > 0 ? account.relays : [];
         return relays.join(", ");
       },
       keepPrompt: (value) => `Relay URLs set (${value}). Keep them?`,

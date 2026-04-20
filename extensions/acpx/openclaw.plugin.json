@@ -32,7 +32,8 @@
       },
       "timeoutSeconds": {
         "type": "number",
-        "minimum": 0.001
+        "minimum": 0.001,
+        "default": 120
       },
       "queueOwnerTtlSeconds": {
         "type": "number",
@@ -101,17 +102,17 @@
     },
     "strictWindowsCmdWrapper": {
       "label": "Strict Windows cmd Wrapper",
-      "help": "Enabled by default. On Windows, reject unresolved .cmd/.bat wrappers instead of shell fallback. Disable only for compatibility with non-standard wrappers.",
+      "help": "Legacy compatibility field. The current embedded acpx/runtime package uses its own Windows command resolution behavior. Setting this to false is accepted for compatibility and logged as ignored.",
       "advanced": true
     },
     "timeoutSeconds": {
       "label": "Prompt Timeout Seconds",
-      "help": "Optional timeout for each embedded runtime turn.",
+      "help": "Timeout for each embedded runtime turn. Defaults to 120 seconds so slower Gemini CLI ACP startups have room to initialize.",
       "advanced": true
     },
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
-      "help": "Reserved compatibility field for future queued embedded prompt ownership.",
+      "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
       "advanced": true
     },
     "mcpServers": {
@@ -123,6 +124,23 @@
       "label": "Agent Commands",
       "help": "Optional per-agent command overrides for the embedded ACP runtime.",
       "advanced": true
+    }
+  },
+  "configContracts": {
+    "dangerousFlags": [
+      {
+        "path": "permissionMode",
+        "equals": "approve-all"
+      }
+    ],
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "mcpServers.*.env.*",
+          "expected": "string"
+        }
+      ]
     }
   }
 }

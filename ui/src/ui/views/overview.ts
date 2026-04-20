@@ -6,10 +6,12 @@ import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
 import type { UiSettings } from "../storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  ModelAuthStatusResult,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -37,7 +39,9 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  warnQueryToken: boolean;
   // New dashboard data
+  modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
@@ -187,6 +191,25 @@ export function renderOverview(props: OverviewProps) {
             >Docs: Insecure HTTP</a
           >
         </div>
+      </div>
+    `;
+  })();
+
+  const queryTokenHint = (() => {
+    if (props.connected || !props.lastError || !props.warnQueryToken) {
+      return null;
+    }
+    const lower = normalizeLowercaseStringOrEmpty(props.lastError);
+    const authFailed = lower.includes("unauthorized") || lower.includes("device identity required");
+    if (!authFailed) {
+      return null;
+    }
+    return html`
+      <div class="muted" style="margin-top: 8px">
+        Auth token must be passed as a URL fragment:
+        <span class="mono">#token=&lt;token&gt;</span>. Query parameters (<span class="mono"
+          >?token=</span
+        >) may appear in server logs.
       </div>
     `;
   })();
@@ -377,6 +400,7 @@ export function renderOverview(props: OverviewProps) {
           ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
+              ${queryTokenHint ?? ""}
             </div>`
           : html`
               <div class="callout" style="margin-top: 14px">
@@ -394,6 +418,7 @@ export function renderOverview(props: OverviewProps) {
       skillsReport: props.skillsReport,
       cronJobs: props.cronJobs,
       cronStatus: props.cronStatus,
+      modelAuthStatus: props.modelAuthStatus,
       presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,
     })}

@@ -88,7 +88,7 @@ locale picker lives in the Gateway Access card, not under Appearance.
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session model/thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`)
 - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
@@ -137,6 +137,38 @@ Cron jobs panel notes:
   - When a run is aborted, partial assistant text can still be shown in the UI
   - Gateway persists aborted partial assistant text into transcript history when buffered output exists
   - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
+
+## Hosted embeds
+
+Assistant messages can render hosted web content inline with the `[embed ...]`
+shortcode. The iframe sandbox policy is controlled by
+`gateway.controlUi.embedSandbox`:
+
+- `strict`: disables script execution inside hosted embeds
+- `scripts`: allows interactive embeds while keeping origin isolation; this is
+  the default and is usually enough for self-contained browser games/widgets
+- `trusted`: adds `allow-same-origin` on top of `allow-scripts` for same-site
+  documents that intentionally need stronger privileges
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      embedSandbox: "scripts",
+    },
+  },
+}
+```
+
+Use `trusted` only when the embedded document genuinely needs same-origin
+behavior. For most agent-generated games and interactive canvases, `scripts` is
+the safer choice.
+
+Absolute external `http(s)` embed URLs stay blocked by default. If you
+intentionally want `[embed url="https://..."]` to load third-party pages, set
+`gateway.controlUi.allowExternalEmbedUrls: true`.
 
 ## Tailnet access (recommended)
 
@@ -246,7 +278,7 @@ See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build
 ```
 
 Optional absolute base (when you want fixed asset URLs):
@@ -258,7 +290,7 @@ OPENCLAW_CONTROL_UI_BASE_PATH=/openclaw/ pnpm ui:build
 For local development (separate dev server):
 
 ```bash
-pnpm ui:dev # auto-installs UI deps on first run
+pnpm ui:dev
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).

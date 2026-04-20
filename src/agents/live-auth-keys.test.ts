@@ -1,32 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { collectProviderApiKeys } from "./live-auth-keys.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const ORIGINAL_MODELSTUDIO_API_KEY = process.env.MODELSTUDIO_API_KEY;
-const ORIGINAL_XAI_API_KEY = process.env.XAI_API_KEY;
+vi.unmock("../secrets/provider-env-vars.js");
+
+let collectProviderApiKeys: typeof import("./live-auth-keys.js").collectProviderApiKeys;
+
+async function loadModulesForTest(): Promise<void> {
+  vi.resetModules();
+  vi.doUnmock("../secrets/provider-env-vars.js");
+  ({ collectProviderApiKeys } = await import("./live-auth-keys.js"));
+}
 
 describe("collectProviderApiKeys", () => {
-  afterEach(() => {
-    if (ORIGINAL_MODELSTUDIO_API_KEY === undefined) {
-      delete process.env.MODELSTUDIO_API_KEY;
-    } else {
-      process.env.MODELSTUDIO_API_KEY = ORIGINAL_MODELSTUDIO_API_KEY;
-    }
-    if (ORIGINAL_XAI_API_KEY === undefined) {
-      delete process.env.XAI_API_KEY;
-    } else {
-      process.env.XAI_API_KEY = ORIGINAL_XAI_API_KEY;
-    }
+  beforeAll(async () => {
+    await loadModulesForTest();
   });
 
-  it("honors manifest-declared provider auth env vars for nonstandard provider ids", () => {
-    process.env.MODELSTUDIO_API_KEY = "modelstudio-live-key";
+  it("honors provider auth env vars with nonstandard names", async () => {
+    const env = { MODELSTUDIO_API_KEY: "modelstudio-live-key" };
 
-    expect(collectProviderApiKeys("alibaba")).toContain("modelstudio-live-key");
+    expect(
+      collectProviderApiKeys("alibaba", {
+        env,
+        providerEnvVars: ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+      }),
+    ).toEqual(["modelstudio-live-key"]);
   });
 
-  it("dedupes manifest env vars against direct provider env naming", () => {
-    process.env.XAI_API_KEY = "xai-live-key";
+  it("dedupes manifest env vars against direct provider env naming", async () => {
+    const env = { XAI_API_KEY: "xai-live-key" };
 
-    expect(collectProviderApiKeys("xai")).toEqual(["xai-live-key"]);
+    expect(
+      collectProviderApiKeys("xai", {
+        env,
+        providerEnvVars: ["XAI_API_KEY"],
+      }),
+    ).toEqual(["xai-live-key"]);
   });
 });

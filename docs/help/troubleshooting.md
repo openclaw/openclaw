@@ -42,6 +42,21 @@ If you see:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
 go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
+## Local OpenAI-compatible backend works directly but fails in OpenClaw
+
+If your local or self-hosted `/v1` backend answers small direct
+`/v1/chat/completions` probes but fails on `openclaw infer model run` or normal
+agent turns:
+
+1. If the error mentions `messages[].content` expecting a string, set
+   `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+2. If the backend still fails only on OpenClaw agent turns, set
+   `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
+3. If tiny direct calls still work but larger OpenClaw prompts crash the
+   backend, treat the remaining issue as an upstream model/server limitation and
+   continue in the deep runbook:
+   [/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
+
 ## Plugin install fails with missing openclaw extensions
 
 If install fails with `package.json missing openclaw.extensions`, the plugin package
@@ -236,18 +251,19 @@ flowchart TD
 
     Common log signatures:
 
-- `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
-- `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
-- `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
-- `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
-- `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
-- `requests-in-flight` → main lane busy; heartbeat wake was deferred. - `unknown accountId` → heartbeat delivery target account does not exist.
+    - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
+    - `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
+    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
+    - `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
+    - `requests-in-flight` → main lane busy; heartbeat wake was deferred.
+    - `unknown accountId` → heartbeat delivery target account does not exist.
 
-      Deep pages:
+    Deep pages:
 
-      - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-      - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
-      - [/gateway/heartbeat](/gateway/heartbeat)
+    - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
+    - [/gateway/heartbeat](/gateway/heartbeat)
 
     </Accordion>
 
@@ -323,7 +339,7 @@ flowchart TD
 
       - [/tools/exec](/tools/exec)
       - [/tools/exec-approvals](/tools/exec-approvals)
-      - [/gateway/security#runtime-expectation-drift](/gateway/security#runtime-expectation-drift)
+      - [/gateway/security#what-the-audit-checks-high-level](/gateway/security#what-the-audit-checks-high-level)
 
     </Accordion>
 
@@ -361,6 +377,7 @@ flowchart TD
       - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
     </Accordion>
+
   </AccordionGroup>
 
 ## Related

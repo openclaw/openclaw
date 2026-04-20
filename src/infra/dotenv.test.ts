@@ -5,9 +5,49 @@ import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
+const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_API_KEY_SECONDARY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "OPENAI_API_KEY_SECONDARY",
+  "OPENCLAW_LIVE_ANTHROPIC_KEY",
+  "OPENCLAW_LIVE_ANTHROPIC_KEYS",
+  "OPENCLAW_LIVE_GEMINI_KEY",
+  "OPENCLAW_LIVE_OPENAI_KEY",
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+  "OPENCLAW_GATEWAY_SECRET",
+] as const;
+
+const BUNDLED_TRUST_ROOT_ENV_LINES = [
+  "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
+  "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+  "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
+] as const;
+
+const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
+  (line) => line.split("=")[0] ?? "",
+);
+
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents, "utf8");
+}
+
+function clearEnv(keys: readonly string[]) {
+  for (const key of keys) {
+    delete process.env[key];
+  }
+}
+
+function expectEnvUndefined(keys: readonly string[]) {
+  for (const key of keys) {
+    expect(process.env[key]).toBeUndefined();
+  }
 }
 
 async function withIsolatedEnvAndCwd(run: () => Promise<void>) {
@@ -210,35 +250,11 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
 
-        delete process.env.ANTHROPIC_API_KEY;
-        delete process.env.ANTHROPIC_API_KEY_SECONDARY;
-        delete process.env.ANTHROPIC_OAUTH_TOKEN;
-        delete process.env.OPENAI_API_KEY;
-        delete process.env.OPENAI_API_KEYS;
-        delete process.env.OPENAI_API_KEY_SECONDARY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS;
-        delete process.env.OPENCLAW_LIVE_GEMINI_KEY;
-        delete process.env.OPENCLAW_LIVE_OPENAI_KEY;
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-        delete process.env.OPENCLAW_GATEWAY_SECRET;
+        clearEnv(CREDENTIAL_AND_GATEWAY_ENV_KEYS);
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
-        expect(process.env.ANTHROPIC_API_KEY_SECONDARY).toBeUndefined();
-        expect(process.env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
-        expect(process.env.OPENAI_API_KEY).toBeUndefined();
-        expect(process.env.OPENAI_API_KEYS).toBeUndefined();
-        expect(process.env.OPENAI_API_KEY_SECONDARY).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_SECRET).toBeUndefined();
+        expectEnvUndefined(CREDENTIAL_AND_GATEWAY_ENV_KEYS);
       });
     });
   });
@@ -333,24 +349,13 @@ describe("loadDotEnv", () => {
   it("blocks bundled trust-root vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
-        await writeEnvFile(
-          path.join(cwdDir, ".env"),
-          [
-            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
-            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
-            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
-          ].join("\n"),
-        );
+        await writeEnvFile(path.join(cwdDir, ".env"), [...BUNDLED_TRUST_ROOT_ENV_LINES].join("\n"));
 
-        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        clearEnv(BUNDLED_TRUST_ROOT_ENV_KEYS);
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
       });
     });
   });
@@ -405,19 +410,7 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-        delete process.env.ANTHROPIC_API_KEY;
-        delete process.env.ANTHROPIC_API_KEY_SECONDARY;
-        delete process.env.ANTHROPIC_OAUTH_TOKEN;
-        delete process.env.OPENAI_API_KEY;
-        delete process.env.OPENAI_API_KEYS;
-        delete process.env.OPENAI_API_KEY_SECONDARY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS;
-        delete process.env.OPENCLAW_LIVE_GEMINI_KEY;
-        delete process.env.OPENCLAW_LIVE_OPENAI_KEY;
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-        delete process.env.OPENCLAW_GATEWAY_SECRET;
+        clearEnv(CREDENTIAL_AND_GATEWAY_ENV_KEYS);
 
         loadDotEnv({ quiet: true });
 
@@ -546,25 +539,14 @@ describe("loadCliDotEnv", () => {
   it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
-        await writeEnvFile(
-          path.join(cwdDir, ".env"),
-          [
-            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
-            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
-            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
-          ].join("\n"),
-        );
+        await writeEnvFile(path.join(cwdDir, ".env"), [...BUNDLED_TRUST_ROOT_ENV_LINES].join("\n"));
 
-        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        clearEnv(BUNDLED_TRUST_ROOT_ENV_KEYS);
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadCliDotEnv({ quiet: true });
 
-        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
       });
     });
   });
@@ -609,6 +591,83 @@ describe("loadCliDotEnv", () => {
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
+      });
+    });
+  });
+});
+
+describe("workspace .env blocklist completeness", () => {
+  it("blocks runtime-control variables from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        const runtimeControlKeys = [
+          "OPENCLAW_UPDATE_PACKAGE_SPEC",
+          "OPENCLAW_GATEWAY_PORT",
+          "OPENCLAW_GATEWAY_URL",
+          "OPENCLAW_CLAWHUB_URL",
+          "CLAWHUB_URL",
+          "OPENCLAW_CLAWHUB_TOKEN",
+          "CLAWHUB_TOKEN",
+          "CLAWHUB_AUTH_TOKEN",
+          "CLAWHUB_CONFIG_PATH",
+          "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+          "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+          "OPENCLAW_BROWSER_EXECUTABLE_PATH",
+          "BROWSER_EXECUTABLE_PATH",
+          "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+          "OPENCLAW_SKIP_CHANNELS",
+          "OPENCLAW_SKIP_PROVIDERS",
+          "OPENCLAW_SKIP_CRON",
+          "OPENCLAW_RAW_STREAM",
+          "OPENCLAW_RAW_STREAM_PATH",
+          "OPENCLAW_CACHE_TRACE",
+          "OPENCLAW_CACHE_TRACE_FILE",
+          "OPENCLAW_CACHE_TRACE_MESSAGES",
+          "OPENCLAW_CACHE_TRACE_PROMPT",
+          "OPENCLAW_CACHE_TRACE_SYSTEM",
+          "OPENCLAW_SHOW_SECRETS",
+          "OPENCLAW_PLUGIN_CATALOG_PATHS",
+          "OPENCLAW_MPM_CATALOG_PATHS",
+          "OPENCLAW_NODE_EXEC_HOST",
+          "OPENCLAW_NODE_EXEC_FALLBACK",
+          "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+        ];
+
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${runtimeControlKeys.map((key) => `${key}=INJECTED_${key}`).join("\n")}\n`,
+        );
+
+        for (const key of runtimeControlKeys) {
+          delete process.env[key];
+        }
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        for (const key of runtimeControlKeys) {
+          expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
+        }
+      });
+    });
+  });
+
+  it("still allows user-defined non-control vars through workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "MY_APP_KEY=user-value\nAPP_GITHUB_REPO=openclaw/openclaw\nDATABASE_URL_CUSTOM=pg://localhost\n",
+        );
+
+        delete process.env.MY_APP_KEY;
+        delete process.env.APP_GITHUB_REPO;
+        delete process.env.DATABASE_URL_CUSTOM;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.MY_APP_KEY).toBe("user-value");
+        expect(process.env.APP_GITHUB_REPO).toBe("openclaw/openclaw");
+        expect(process.env.DATABASE_URL_CUSTOM).toBe("pg://localhost");
       });
     });
   });

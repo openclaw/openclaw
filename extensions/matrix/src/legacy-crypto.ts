@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveConfiguredMatrixAccountIds } from "./account-selection.js";
+import { isMatrixLegacyCryptoInspectorAvailable } from "./legacy-crypto-inspector-availability.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
   resolveMatrixMigrationAccountTarget,
@@ -55,6 +57,7 @@ type MatrixLegacyCryptoPlan = {
 };
 
 type MatrixLegacyCryptoDetection = {
+  inspectorAvailable: boolean;
   plans: MatrixLegacyCryptoPlan[];
   warnings: string[];
 };
@@ -106,10 +109,6 @@ type MatrixStoredRecoveryKey = {
     name?: string;
   };
 };
-
-function isMatrixLegacyCryptoInspectorAvailable(): boolean {
-  return true;
-}
 
 async function loadMatrixLegacyCryptoInspector(): Promise<MatrixLegacyCryptoInspector> {
   const module = await import("./matrix/legacy-crypto-inspector.js");
@@ -228,7 +227,7 @@ function loadLegacyBotSdkMetadata(cryptoRootDir: string): MatrixLegacyBotSdkMeta
 function resolveMatrixLegacyCryptoPlans(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): MatrixLegacyCryptoDetection {
+}): Omit<MatrixLegacyCryptoDetection, "inspectorAvailable"> {
   const warnings: string[] = [];
   const plans: MatrixLegacyCryptoPlan[] = [];
 
@@ -326,13 +325,20 @@ export function detectLegacyMatrixCrypto(params: {
     cfg: params.cfg,
     env: params.env ?? process.env,
   });
-  if (detection.plans.length > 0 && !isMatrixLegacyCryptoInspectorAvailable()) {
+  const inspectorAvailable =
+    detection.plans.length === 0 || isMatrixLegacyCryptoInspectorAvailable();
+  if (!inspectorAvailable && detection.plans.length > 0) {
     return {
+      inspectorAvailable,
       plans: detection.plans,
       warnings: [...detection.warnings, MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE],
     };
   }
-  return detection;
+  return {
+    inspectorAvailable,
+    plans: detection.plans,
+    warnings: detection.warnings,
+  };
 }
 
 export async function autoPrepareLegacyMatrixCrypto(params: {
@@ -345,11 +351,25 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
   const detection = params.deps?.inspectLegacyStore
     ? resolveMatrixLegacyCryptoPlans({ cfg: params.cfg, env })
     : detectLegacyMatrixCrypto({ cfg: params.cfg, env });
+  const inspectorAvailable =
+    "inspectorAvailable" in detection ? detection.inspectorAvailable : true;
   const warnings = [...detection.warnings];
   const changes: string[] = [];
   const writeJsonFileAtomically =
     params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
   if (detection.plans.length === 0) {
+    if (warnings.length > 0) {
+      params.log?.warn?.(
+        `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+    return {
+      migrated: false,
+      changes,
+      warnings,
+    };
+  }
+  if (!params.deps?.inspectLegacyStore && !inspectorAvailable) {
     if (warnings.length > 0) {
       params.log?.warn?.(
         `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
@@ -367,7 +387,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatMatrixErrorMessage(err);
       if (!warnings.includes(message)) {
         warnings.push(message);
       }

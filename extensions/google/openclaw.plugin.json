@@ -3,6 +3,7 @@
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli"],
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },
@@ -45,8 +46,10 @@
   },
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
+    "memoryEmbeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
+    "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
     "webSearchProviders": ["gemini"]
   },

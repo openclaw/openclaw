@@ -1,10 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
-  readJsonWebhookBodyOrReject,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
-  type WebhookInFlightLimiter,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/webhook-targets";
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
@@ -14,9 +14,19 @@ import type {
   GoogleChatUser,
 } from "./types.js";
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 function extractBearerToken(header: unknown): string {
-  const authHeader = Array.isArray(header) ? String(header[0] ?? "") : String(header ?? "");
-  return authHeader.toLowerCase().startsWith("bearer ")
+  const authHeader = Array.isArray(header)
+    ? typeof header[0] === "string"
+      ? header[0]
+      : ""
+    : typeof header === "string"
+      ? header
+      : "";
+  return normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")
     ? authHeader.slice("bearer ".length).trim()
     : "";
 }
@@ -63,7 +73,10 @@ function parseGoogleChatInboundPayload(
       user: chat.user,
       eventTime: chat.eventTime,
     };
-    addOnBearerToken = String(rawObj.authorizationEventObject?.systemIdToken ?? "").trim();
+    addOnBearerToken =
+      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
+        ? rawObj.authorizationEventObject.systemIdToken.trim()
+        : "";
   }
 
   const event = eventPayload as GoogleChatEvent;

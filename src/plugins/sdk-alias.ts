@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
 export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
@@ -65,7 +66,7 @@ function hasTrustedOpenClawRootIndicator(params: {
   const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof params.packageJson.bin === "string" &&
-      params.packageJson.bin.toLowerCase().includes("openclaw")) ||
+      normalizeLowercaseStringOrEmpty(params.packageJson.bin).includes("openclaw")) ||
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
@@ -250,6 +251,54 @@ export function resolvePluginSdkAliasFile(params: {
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
+const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
+const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
+
+function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  try {
+    const raw = fs.readFileSync(
+      path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      "utf-8",
+    );
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
+  } catch {
+    return [];
+  }
+}
+
+function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
+  return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
+}
+
+function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
+  const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+  if (fs.existsSync(distPath)) {
+    return true;
+  }
+  return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
+    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+  );
+}
+
+function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
+    return [];
+  }
+  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
+    hasPluginSdkSubpathArtifact(packageRoot, subpath),
+  );
+}
 
 export function listPluginSdkExportedSubpaths(
   params: {
@@ -268,12 +317,18 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const cached = cachedPluginSdkExportedSubpaths.get(packageRoot);
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const subpaths = readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? [];
-  cachedPluginSdkExportedSubpaths.set(packageRoot, subpaths);
+  const subpaths = [
+    ...new Set([
+      ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
+      ...listPrivateLocalOnlyPluginSdkSubpaths(packageRoot),
+    ]),
+  ].toSorted();
+  cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
   return subpaths;
 }
 
@@ -299,7 +354,7 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -311,14 +366,28 @@ export function resolvePluginSdkScopedAliasMap(
     moduleUrl: params.moduleUrl,
     pluginSdkResolution: params.pluginSdkResolution,
   })) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
-    } as const;
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
-        aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+        if (fs.existsSync(candidate)) {
+          for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+            aliasMap[`${packageName}/${subpath}`] = candidate;
+          }
+          break;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
+        if (!fs.existsSync(candidate)) {
+          continue;
+        }
+        for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+          aliasMap[`${packageName}/${subpath}`] = candidate;
+        }
+        break;
+      }
+      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
       }
     }
@@ -340,14 +409,19 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
       isProduction: process.env.NODE_ENV === "production",
       pluginSdkResolution: params.pluginSdkResolution,
     });
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "extensionAPI.ts"),
-      dist: path.join(packageRoot, "dist", "extensionAPI.js"),
-    } as const;
     for (const kind of orderedKinds) {
-      const candidate = candidateMap[kind];
-      if (fs.existsSync(candidate)) {
-        return candidate;
+      if (kind === "dist") {
+        const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+        continue;
+      }
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
     }
   } catch {
@@ -376,7 +450,12 @@ export function buildPluginLoaderAliasMap(
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
     ...(pluginSdkAlias
-      ? { "openclaw/plugin-sdk": normalizeJitiAliasTargetPath(pluginSdkAlias) }
+      ? Object.fromEntries(
+          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
+            packageName,
+            normalizeJitiAliasTargetPath(pluginSdkAlias),
+          ]),
+        )
       : {}),
     ...Object.fromEntries(
       Object.entries(
@@ -433,15 +512,20 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   };
 }
 
-export function shouldPreferNativeJiti(modulePath: string): boolean {
+function supportsNativeJitiRuntime(): boolean {
   const versions = process.versions as { bun?: string };
-  if (typeof versions.bun === "string") {
+  return typeof versions.bun !== "string" && process.platform !== "win32";
+}
+
+function isBundledPluginDistModulePath(modulePath: string): boolean {
+  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+}
+
+export function shouldPreferNativeJiti(modulePath: string): boolean {
+  if (!supportsNativeJitiRuntime()) {
     return false;
   }
-  if (process.platform === "win32") {
-    return false;
-  }
-  switch (path.extname(modulePath).toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(path.extname(modulePath))) {
     case ".js":
     case ".mjs":
     case ".cjs":
@@ -450,4 +534,76 @@ export function shouldPreferNativeJiti(modulePath: string): boolean {
     default:
       return false;
   }
+}
+
+export function resolvePluginLoaderJitiTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  if (isBundledPluginDistModulePath(modulePath)) {
+    return false;
+  }
+  return (
+    shouldPreferNativeJiti(modulePath) ||
+    (supportsNativeJitiRuntime() &&
+      options?.preferBuiltDist === true &&
+      modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
+}
+
+export function createPluginLoaderJitiCacheKey(params: {
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+}): string {
+  return JSON.stringify({
+    tryNative: params.tryNative,
+    aliasMap: Object.entries(params.aliasMap).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  });
+}
+
+export function resolvePluginLoaderJitiConfig(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl: string;
+  preferBuiltDist?: boolean;
+}): {
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+  cacheKey: string;
+} {
+  const tryNative = resolvePluginLoaderJitiTryNative(
+    params.modulePath,
+    params.preferBuiltDist ? { preferBuiltDist: true } : {},
+  );
+  const aliasMap = buildPluginLoaderAliasMap(params.modulePath, params.argv1, params.moduleUrl);
+  return {
+    tryNative,
+    aliasMap,
+    cacheKey: createPluginLoaderJitiCacheKey({
+      tryNative,
+      aliasMap,
+    }),
+  };
+}
+
+export function isBundledPluginExtensionPath(params: {
+  modulePath: string;
+  openClawPackageRoot: string;
+  bundledPluginsDir?: string;
+}): boolean {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  const roots = [
+    params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : null,
+    path.join(params.openClawPackageRoot, "extensions"),
+    path.join(params.openClawPackageRoot, "dist", "extensions"),
+    path.join(params.openClawPackageRoot, "dist-runtime", "extensions"),
+  ].filter((root): root is string => typeof root === "string");
+  return roots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  );
 }

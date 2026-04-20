@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
@@ -82,8 +83,8 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
-export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
-export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000;
+export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
+export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
@@ -183,7 +184,7 @@ export async function ensureSessionHeader(params: {
   } catch {
     // create
   }
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const sessionVersion = 2;
   const entry = {
     type: "session",
@@ -192,7 +193,10 @@ export async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: params.cwd,
   };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, "utf-8");
+  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 export function buildBootstrapContextFiles(
@@ -210,7 +214,7 @@ export function buildBootstrapContextFiles(
     if (remainingTotalChars <= 0) {
       break;
     }
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       opts?.warn?.(
         `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,

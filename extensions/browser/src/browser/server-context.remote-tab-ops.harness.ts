@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../test-support.js";
 import type { BrowserServerState } from "./server-context.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
@@ -9,8 +9,7 @@ export function makeState(
   profile: "remote" | "openclaw",
 ): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
   return {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    server: null as any,
+    server: null as unknown as BrowserServerState["server"],
     port: 0,
     resolved: {
       enabled: true,
@@ -18,7 +17,7 @@ export function makeState(
       cdpPortRangeStart: 18800,
       cdpPortRangeEnd: 18899,
       cdpProtocol: profile === "remote" ? "https" : "http",
-      cdpHost: profile === "remote" ? "browserless.example" : "127.0.0.1",
+      cdpHost: profile === "remote" ? "1.1.1.1" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
@@ -32,8 +31,8 @@ export function makeState(
       defaultProfile: profile,
       profiles: {
         remote: {
-          cdpUrl: "https://browserless.example/chrome?token=abc",
-          cdpPort: 443,
+          cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+          cdpPort: 9222,
           color: "#00AA00",
         },
         openclaw: { cdpPort: 18800, color: "#FF4500" },

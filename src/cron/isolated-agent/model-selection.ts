@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
   DEFAULT_MODEL,
@@ -9,7 +9,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-} from "./run.runtime.js";
+} from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
   modelOverride?: string;

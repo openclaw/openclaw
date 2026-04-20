@@ -11,8 +11,16 @@ import {
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
-import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
+
+type WhatsAppSendModule = typeof import("./send.js");
+
+let whatsAppSendModulePromise: Promise<WhatsAppSendModule> | undefined;
+
+function loadWhatsAppSendModule(): Promise<WhatsAppSendModule> {
+  whatsAppSendModulePromise ??= import("./send.js");
+  return whatsAppSendModulePromise;
+}
 
 function trimLeadingWhitespace(text: string | undefined): string {
   return text?.trimStart() ?? "";
@@ -55,7 +63,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       const send =
         resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp", {
           legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
-        }) ?? (await import("./send.js")).sendMessageWhatsApp;
+        }) ?? (await loadWhatsAppSendModule()).sendMessageWhatsApp;
       return await send(to, normalizedText, {
         verbose: false,
         cfg,
@@ -78,7 +86,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       const send =
         resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp", {
           legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
-        }) ?? (await import("./send.js")).sendMessageWhatsApp;
+        }) ?? (await loadWhatsAppSendModule()).sendMessageWhatsApp;
       return await send(to, normalizedText, {
         verbose: false,
         cfg,
@@ -90,7 +98,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       });
     },
     sendPoll: async ({ cfg, to, poll, accountId }) =>
-      await sendPollWhatsApp(to, poll, {
+      await (
+        await loadWhatsAppSendModule()
+      ).sendPollWhatsApp(to, poll, {
         verbose: shouldLogVerbose(),
         accountId: accountId ?? undefined,
         cfg,

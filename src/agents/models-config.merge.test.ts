@@ -1,12 +1,24 @@
-import { describe, expect, it } from "vitest";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import {
-  mergeProviderModels,
-  mergeProviders,
-  mergeWithExistingProviderSecrets,
-  type ExistingProviderConfig,
-} from "./models-config.merge.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExistingProviderConfig } from "./models-config.merge.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+let mergeProviderModels: typeof import("./models-config.merge.js").mergeProviderModels;
+let mergeProviders: typeof import("./models-config.merge.js").mergeProviders;
+let mergeWithExistingProviderSecrets: typeof import("./models-config.merge.js").mergeWithExistingProviderSecrets;
+
+async function loadMergeModules() {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  ({ NON_ENV_SECRETREF_MARKER } = await import("./model-auth-markers.js"));
+  ({ mergeProviderModels, mergeProviders, mergeWithExistingProviderSecrets } =
+    await import("./models-config.merge.js"));
+}
+
+beforeAll(loadMergeModules);
+
+beforeEach(() => {
+  vi.doUnmock("../plugins/manifest-registry.js");
+});
 
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
@@ -46,7 +58,7 @@ describe("models-config merge helpers", () => {
     } as ExistingProviderConfig;
   }
 
-  it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
+  it("refreshes implicit model metadata while preserving explicit reasoning overrides", async () => {
     const merged = mergeProviderModels(
       {
         api: "openai-responses",
@@ -89,7 +101,7 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
-  it("merges explicit providers onto trimmed keys", () => {
+  it("merges explicit providers onto trimmed keys", async () => {
     const merged = mergeProviders({
       explicit: {
         " custom ": {
@@ -104,7 +116,7 @@ describe("models-config merge helpers", () => {
     });
   });
 
-  it("keeps existing providers alongside newly configured providers in merge mode", () => {
+  it("keeps existing providers alongside newly configured providers in merge mode", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         "custom-proxy": {
@@ -122,14 +134,13 @@ describe("models-config merge helpers", () => {
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(["custom-proxy"]),
     });
 
     expect(merged.existing?.baseUrl).toBe("http://localhost:1234/v1");
     expect(merged["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
   });
 
-  it("preserves non-empty existing apiKey while explicit baseUrl wins", () => {
+  it("preserves non-empty existing apiKey and baseUrl from models.json", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),
@@ -138,14 +149,13 @@ describe("models-config merge helpers", () => {
         custom: createExistingProvider(),
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(["custom"]),
     });
 
     expect(merged.custom?.apiKey).toBe(preservedApiKey);
-    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
+    expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
-  it("preserves existing apiKey after explicit provider key normalization", () => {
+  it("preserves existing baseUrl after explicit provider key normalization", async () => {
     const normalized = mergeProviders({
       explicit: {
         " custom ": createConfigProvider(),
@@ -157,14 +167,13 @@ describe("models-config merge helpers", () => {
         custom: createExistingProvider(),
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(["custom"]),
     });
 
     expect(merged.custom?.apiKey).toBe(preservedApiKey);
-    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
+    expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
-  it("preserves implicit provider headers when explicit config adds extra headers", () => {
+  it("preserves implicit provider headers when explicit config adds extra headers", async () => {
     const merged = mergeProviderModels(
       {
         baseUrl: "https://api.example.com",
@@ -200,7 +209,7 @@ describe("models-config merge helpers", () => {
     });
   });
 
-  it("replaces stale baseUrl when model api surface changes", () => {
+  it("replaces stale baseUrl when model api surface changes", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: {
@@ -216,7 +225,6 @@ describe("models-config merge helpers", () => {
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(),
     });
 
     expect(merged.custom).toEqual(
@@ -227,7 +235,7 @@ describe("models-config merge helpers", () => {
     );
   });
 
-  it("replaces stale baseUrl when only model-level apis change", () => {
+  it("replaces stale baseUrl when only model-level apis change", async () => {
     const nextProvider = createConfigProvider();
     delete (nextProvider as { api?: string }).api;
     nextProvider.models = [createModel({ api: "openai-responses" })];
@@ -243,18 +251,17 @@ describe("models-config merge helpers", () => {
         custom: existingProvider,
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(["custom"]),
     });
 
     expect(merged.custom?.apiKey).toBe(preservedApiKey);
     expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
   });
 
-  it("does not preserve stale plaintext apiKey when next entry is a marker", () => {
+  it("does not preserve stale plaintext apiKey when next entry is a marker", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: {
-          apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
           models: [createModel({ id: "model", api: "openai-responses" })],
         } as ProviderConfig,
       },
@@ -265,13 +272,12 @@ describe("models-config merge helpers", () => {
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(),
     });
 
-    expect(merged.custom?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expect(merged.custom?.apiKey).toBe("GOOGLE_API_KEY"); // pragma: allowlist secret
   });
 
-  it("does not preserve a stale non-env marker when config returns to plaintext", () => {
+  it("does not preserve a stale non-env marker when config returns to plaintext", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider({ apiKey: "ALLCAPS_SAMPLE" }), // pragma: allowlist secret
@@ -282,14 +288,13 @@ describe("models-config merge helpers", () => {
         }),
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(["custom"]),
     });
 
     expect(merged.custom?.apiKey).toBe("ALLCAPS_SAMPLE"); // pragma: allowlist secret
-    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
+    expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
-  it("uses config apiKey/baseUrl when existing values are empty", () => {
+  it("uses config apiKey/baseUrl when existing values are empty", async () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),
@@ -301,7 +306,6 @@ describe("models-config merge helpers", () => {
         }),
       },
       secretRefManagedProviders: new Set<string>(),
-      explicitBaseUrlProviders: new Set<string>(["custom"]),
     });
 
     expect(merged.custom?.apiKey).toBe(configApiKey);

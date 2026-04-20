@@ -1,20 +1,18 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
-import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
 import {
   createMockAccount,
-  createNewMessagePayloadForTest,
   createMockRequest,
-  createTimestampedNewMessagePayloadForTest,
+  createNewMessagePayloadForTest,
   createTimestampedMessageReactionPayloadForTest,
-  dispatchWebhookRequestForTest,
+  createTimestampedNewMessagePayloadForTest,
   dispatchWebhookPayloadForTest,
-  flushAsync,
+  dispatchWebhookRequestForTest,
   setupWebhookTargetForTest,
   setupWebhookTargetsForTest,
   trackWebhookRegistrationForTest,
@@ -24,12 +22,14 @@ import {
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import { createBlueBubblesFetchGuardPassthroughInstaller } from "./test-harness.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
 } from "./test-support/monitor-test-support.js";
+import { _setFetchGuardForTesting } from "./types.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -158,9 +158,7 @@ function getFirstDispatchCall(): DispatchReplyParams {
 
 function installTimingAwareInboundDebouncer(core: PluginRuntime) {
   // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
-  // oxlint-disable-next-line typescript/no-explicit-any
   core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     type Item = any;
     const buckets = new Map<
       string,
@@ -259,8 +257,16 @@ describe("BlueBubbles webhook monitor", () => {
     return handled;
   }
 
+  const installFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
+
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
+    // The BlueBubblesClient now routes every BB API call through the SSRF
+    // guard (mode-2 allowlist for configured hostnames). Install a passthrough
+    // that wraps `globalThis.fetch` (our stubbed mockFetch) in a real Response
+    // so guarded callers get the same mocked behavior the pre-migration
+    // callsites did. (#34749, #59722)
+    installFetchGuardPassthrough();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
@@ -288,6 +294,7 @@ describe("BlueBubbles webhook monitor", () => {
     setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   describe("DM pairing behavior vs allowFrom", () => {
@@ -805,7 +812,7 @@ describe("BlueBubbles webhook monitor", () => {
         const core = createMockRuntime();
         installTimingAwareInboundDebouncer(core);
 
-        const registration = trackWebhookRegistrationForTest(
+        const _registration = trackWebhookRegistrationForTest(
           setupWebhookTargetForTest({
             createCore: createMockRuntime,
             core,
@@ -1374,7 +1381,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.onReplyStart?.();
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
-        await params.dispatcherOptions.onIdle?.();
+        params.dispatcherOptions.onIdle?.();
         return EMPTY_DISPATCH_RESULT;
       });
 

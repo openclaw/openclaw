@@ -18,8 +18,8 @@ function normalizeConfiguredDefaultAccountId(raw: unknown): string | null {
   if (typeof raw !== "string") {
     return null;
   }
-  const trimmed = raw.trim().toLowerCase();
-  return trimmed ? trimmed : null;
+  const normalized = raw.trim().toLowerCase();
+  return normalized || null;
 }
 
 function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {
@@ -33,8 +33,13 @@ function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): Q
 }
 
 function normalizeAppId(raw: unknown): string {
-  if (raw === null || raw === undefined) return "";
-  return String(raw).trim();
+  if (typeof raw === "string") {
+    return raw.trim();
+  }
+  if (typeof raw === "number") {
+    return String(raw);
+  }
+  return "";
 }
 
 /** List all configured QQBot account IDs. */
@@ -170,7 +175,7 @@ export function applyQQBotAccountConfig(
     next.channels = {
       ...next.channels,
       qqbot: {
-        ...((next.channels?.qqbot as Record<string, unknown>) || {}),
+        ...(next.channels?.qqbot as Record<string, unknown> | undefined),
         enabled: true,
         allowFrom,
         ...(input.appId ? { appId: input.appId } : {}),
@@ -191,12 +196,12 @@ export function applyQQBotAccountConfig(
     next.channels = {
       ...next.channels,
       qqbot: {
-        ...((next.channels?.qqbot as Record<string, unknown>) || {}),
+        ...(next.channels?.qqbot as Record<string, unknown> | undefined),
         enabled: true,
         accounts: {
-          ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts || {}),
+          ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts,
           [accountId]: {
-            ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {}),
+            ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId],
             enabled: true,
             allowFrom,
             ...(input.appId ? { appId: input.appId } : {}),

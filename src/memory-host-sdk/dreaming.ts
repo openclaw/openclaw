@@ -1,14 +1,21 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
+export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
+export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -143,13 +150,6 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function normalizeTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -159,10 +159,11 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
   }
@@ -177,10 +178,11 @@ function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return undefined;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return undefined;
   }
@@ -196,7 +198,7 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
     return value;
   }
   if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(value);
     if (normalized === "true") {
       return true;
     }
@@ -208,10 +210,11 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num) || num < 0 || num > 1) {
     return fallback;
   }
@@ -233,7 +236,7 @@ function normalizeStringArray<T extends string>(
   const allowedSet = new Set(allowed);
   const normalized: T[] = [];
   for (const entry of value) {
-    const normalizedEntry = normalizeTrimmedString(entry)?.toLowerCase();
+    const normalizedEntry = normalizeOptionalLowercaseString(entry);
     if (!normalizedEntry || !allowedSet.has(normalizedEntry as T)) {
       continue;
     }
@@ -245,7 +248,7 @@ function normalizeStringArray<T extends string>(
 }
 
 function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
     return normalized;
   }
@@ -253,7 +256,7 @@ function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
 }
 
 function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "fast" || normalized === "balanced" || normalized === "slow") {
     return normalized;
   }
@@ -261,7 +264,7 @@ function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
 }
 
 function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -269,7 +272,7 @@ function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
 }
 
 function normalizeBudget(value: unknown): MemoryDreamingBudget | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "cheap" || normalized === "medium" || normalized === "expensive") {
     return normalized;
   }
@@ -280,7 +283,7 @@ function resolveExecutionConfig(
   value: unknown,
   fallback: MemoryDreamingExecutionConfig,
 ): MemoryDreamingExecutionConfig {
-  const record = asRecord(value);
+  const record = asNullableRecord(value);
   const maxOutputTokens = normalizeOptionalPositiveInt(record?.maxOutputTokens);
   const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs);
   const temperatureRaw = record?.temperature;
@@ -304,7 +307,7 @@ function resolveExecutionConfig(
 
 function normalizePathForComparison(input: string): string {
   const normalized = path.resolve(input);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {
@@ -315,30 +318,47 @@ function formatLocalIsoDay(epochMs: number): string {
   return `${year}-${month}-${day}`;
 }
 
-export function resolveMemoryCorePluginConfig(
+export function resolveMemoryDreamingPluginId(
+  cfg: OpenClawConfig | Record<string, unknown> | undefined,
+): string {
+  const root = asNullableRecord(cfg);
+  const plugins = asNullableRecord(root?.plugins);
+  const slots = asNullableRecord(plugins?.slots);
+  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
+    return configuredSlot;
+  }
+  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+}
+
+export function resolveMemoryDreamingPluginConfig(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  const root = asRecord(cfg);
-  const plugins = asRecord(root?.plugins);
-  const entries = asRecord(plugins?.entries);
-  const memoryCore = asRecord(entries?.["memory-core"]);
-  return asRecord(memoryCore?.config) ?? undefined;
+  const root = asNullableRecord(cfg);
+  const plugins = asNullableRecord(root?.plugins);
+  const entries = asNullableRecord(plugins?.entries);
+  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
+  return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
+
+// Keep the legacy helper name exported until downstream memory plugins migrate.
+export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
 }): MemoryDreamingConfig {
-  const dreaming = asRecord(params.pluginConfig?.dreaming);
+  const dreaming = asNullableRecord(params.pluginConfig?.dreaming);
   const frequency =
     normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ??
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
-  const storage = asRecord(dreaming?.storage);
-  const execution = asRecord(dreaming?.execution);
-  const phases = asRecord(dreaming?.phases);
+  const storage = asNullableRecord(dreaming?.storage);
+  const execution = asNullableRecord(dreaming?.execution);
+  const phases = asNullableRecord(dreaming?.phases);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -346,10 +366,10 @@ export function resolveMemoryDreamingConfig(params: {
     budget: DEFAULT_MEMORY_DREAMING_BUDGET,
   });
 
-  const light = asRecord(phases?.light);
-  const deep = asRecord(phases?.deep);
-  const rem = asRecord(phases?.rem);
-  const deepRecovery = asRecord(deep?.recovery);
+  const light = asNullableRecord(phases?.light);
+  const deep = asNullableRecord(phases?.deep);
+  const rem = asNullableRecord(phases?.rem);
+  const deepRecovery = asNullableRecord(deep?.recovery);
   const maxAgeDays = normalizeOptionalPositiveInt(deep?.maxAgeDays);
 
   return {
@@ -580,7 +600,7 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
     if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
       continue;
     }
-    const id = entry.id.trim().toLowerCase();
+    const id = normalizeOptionalLowercaseString(entry.id);
     if (!id || seenAgents.has(id)) {
       continue;
     }
@@ -593,9 +613,6 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   for (const agentId of agentIds) {
-    if (!resolveMemorySearchConfig(cfg, agentId)) {
-      continue;
-    }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
     if (!workspaceDir) {
       continue;

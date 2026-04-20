@@ -6,19 +6,97 @@ import {
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { nostrPlugin } from "./channel.js";
 import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
   TEST_SETUP_RELAY_URLS,
+  buildResolvedNostrAccount,
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
 import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
-const nostrConfigure = createPluginSetupWizardConfigure(nostrPlugin);
+function normalizeNostrTestEntry(entry: string): string {
+  return entry
+    .trim()
+    .replace(/^nostr:/i, "")
+    .toLowerCase();
+}
+
+function resolveNostrTestDmPolicy(params: {
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveNostrAccount>;
+}) {
+  return {
+    cfg: params.cfg,
+    accountId: params.account.accountId,
+    policy: params.account.config.dmPolicy ?? "pairing",
+    allowFrom: params.account.config.allowFrom ?? [],
+    normalizeEntry: normalizeNostrTestEntry,
+  };
+}
+
+const nostrTestPlugin = {
+  id: "nostr",
+  meta: {
+    label: "Nostr",
+    docsPath: "/channels/nostr",
+    blurb: "Decentralized DMs via Nostr relays (NIP-04)",
+  },
+  capabilities: {
+    chatTypes: ["direct"],
+    media: false,
+  },
+  config: {
+    listAccountIds: listNostrAccountIds,
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
+      resolveNostrAccount({ cfg, accountId }),
+  },
+  messaging: {
+    normalizeTarget: (target: string) => normalizeNostrTestEntry(target),
+    targetResolver: {
+      looksLikeId: (input: string) => {
+        const trimmed = input.trim();
+        return trimmed.startsWith("npub1") || /^[0-9a-fA-F]{64}$/.test(trimmed);
+      },
+    },
+  },
+  outbound: {
+    deliveryMode: "direct",
+    textChunkLimit: 4000,
+  },
+  pairing: {
+    idLabel: "nostrPubkey",
+    normalizeAllowEntry: normalizeNostrTestEntry,
+  },
+  security: {
+    resolveDmPolicy: resolveNostrTestDmPolicy,
+  },
+  status: {
+    defaultRuntime: {
+      accountId: "default",
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
+  },
+  setupWizard: nostrSetupWizard,
+  setup: {
+    resolveAccountId: ({
+      cfg,
+      accountId,
+    }: {
+      cfg: OpenClawConfig;
+      accountId?: string;
+      input: unknown;
+    }) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
+  },
+};
+
+const nostrConfigure = createPluginSetupWizardConfigure(nostrTestPlugin);
 
 function requireNostrLooksLikeId() {
-  const looksLikeId = nostrPlugin.messaging?.targetResolver?.looksLikeId;
+  const looksLikeId = nostrTestPlugin.messaging?.targetResolver?.looksLikeId;
   if (!looksLikeId) {
     throw new Error("nostr messaging.targetResolver.looksLikeId missing");
   }
@@ -26,7 +104,7 @@ function requireNostrLooksLikeId() {
 }
 
 function requireNostrNormalizeTarget() {
-  const normalize = nostrPlugin.messaging?.normalizeTarget;
+  const normalize = nostrTestPlugin.messaging?.normalizeTarget;
   if (!normalize) {
     throw new Error("nostr messaging.normalizeTarget missing");
   }
@@ -34,7 +112,7 @@ function requireNostrNormalizeTarget() {
 }
 
 function requireNostrPairingNormalizer() {
-  const normalize = nostrPlugin.pairing?.normalizeAllowEntry;
+  const normalize = nostrTestPlugin.pairing?.normalizeAllowEntry;
   if (!normalize) {
     throw new Error("nostr pairing.normalizeAllowEntry missing");
   }
@@ -42,7 +120,7 @@ function requireNostrPairingNormalizer() {
 }
 
 function requireNostrResolveDmPolicy() {
-  const resolveDmPolicy = nostrPlugin.security?.resolveDmPolicy;
+  const resolveDmPolicy = nostrTestPlugin.security?.resolveDmPolicy;
   if (!resolveDmPolicy) {
     throw new Error("nostr security.resolveDmPolicy missing");
   }
@@ -52,40 +130,40 @@ function requireNostrResolveDmPolicy() {
 describe("nostrPlugin", () => {
   describe("meta", () => {
     it("has correct id", () => {
-      expect(nostrPlugin.id).toBe("nostr");
+      expect(nostrTestPlugin.id).toBe("nostr");
     });
 
     it("has required meta fields", () => {
-      expect(nostrPlugin.meta.label).toBe("Nostr");
-      expect(nostrPlugin.meta.docsPath).toBe("/channels/nostr");
-      expect(nostrPlugin.meta.blurb).toContain("NIP-04");
+      expect(nostrTestPlugin.meta.label).toBe("Nostr");
+      expect(nostrTestPlugin.meta.docsPath).toBe("/channels/nostr");
+      expect(nostrTestPlugin.meta.blurb).toContain("NIP-04");
     });
   });
 
   describe("capabilities", () => {
     it("supports direct messages", () => {
-      expect(nostrPlugin.capabilities.chatTypes).toContain("direct");
+      expect(nostrTestPlugin.capabilities.chatTypes).toContain("direct");
     });
 
     it("does not support groups (MVP)", () => {
-      expect(nostrPlugin.capabilities.chatTypes).not.toContain("group");
+      expect(nostrTestPlugin.capabilities.chatTypes).not.toContain("group");
     });
 
     it("does not support media (MVP)", () => {
-      expect(nostrPlugin.capabilities.media).toBe(false);
+      expect(nostrTestPlugin.capabilities.media).toBe(false);
     });
   });
 
   describe("config adapter", () => {
     it("listAccountIds returns empty array for unconfigured", () => {
       const cfg = { channels: {} };
-      const ids = nostrPlugin.config.listAccountIds(cfg);
+      const ids = nostrTestPlugin.config.listAccountIds(cfg);
       expect(ids).toEqual([]);
     });
 
     it("listAccountIds returns default for configured", () => {
       const cfg = createConfiguredNostrCfg();
-      const ids = nostrPlugin.config.listAccountIds(cfg);
+      const ids = nostrTestPlugin.config.listAccountIds(cfg);
       expect(ids).toContain("default");
     });
   });
@@ -120,17 +198,17 @@ describe("nostrPlugin", () => {
 
   describe("outbound", () => {
     it("has correct delivery mode", () => {
-      expect(nostrPlugin.outbound?.deliveryMode).toBe("direct");
+      expect(nostrTestPlugin.outbound?.deliveryMode).toBe("direct");
     });
 
     it("has reasonable text chunk limit", () => {
-      expect(nostrPlugin.outbound?.textChunkLimit).toBe(4000);
+      expect(nostrTestPlugin.outbound?.textChunkLimit).toBe(4000);
     });
   });
 
   describe("pairing", () => {
     it("has id label for pairing", () => {
-      expect(nostrPlugin.pairing?.idLabel).toBe("nostrPubkey");
+      expect(nostrTestPlugin.pairing?.idLabel).toBe("nostrPubkey");
     });
 
     it("normalizes spaced nostr prefixes in allow entries", () => {
@@ -149,7 +227,9 @@ describe("nostrPlugin", () => {
         dmPolicy: "allowlist",
         allowFrom: [`  nostr:${TEST_HEX_PRIVATE_KEY}  `],
       });
-      const account = nostrPlugin.config.resolveAccount(cfg, "default");
+      const account = buildResolvedNostrAccount({
+        config: cfg.channels.nostr,
+      });
 
       const result = resolveDmPolicy({ cfg, account });
       if (!result) {
@@ -166,7 +246,7 @@ describe("nostrPlugin", () => {
 
   describe("status", () => {
     it("has default runtime", () => {
-      expect(nostrPlugin.status?.defaultRuntime).toEqual({
+      expect(nostrTestPlugin.status?.defaultRuntime).toEqual({
         accountId: "default",
         running: false,
         lastStartAt: null,
@@ -234,7 +314,7 @@ describe("nostr setup wizard", () => {
 
   it("uses configured defaultAccount when setup accountId is omitted", () => {
     expect(
-      nostrPlugin.setup?.resolveAccountId?.({
+      nostrTestPlugin.setup?.resolveAccountId?.({
         cfg: createConfiguredNostrCfg({ defaultAccount: "work" }) as OpenClawConfig,
         accountId: undefined,
         input: {},

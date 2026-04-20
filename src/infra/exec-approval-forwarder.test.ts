@@ -42,7 +42,11 @@ function isDiscordExecApprovalClientEnabledForTest(params: {
   const rootConfig = params.cfg.channels?.discord?.execApprovals;
   const accountConfig =
     accountId && accountId !== "default"
-      ? params.cfg.channels?.discordAccounts?.[accountId]?.execApprovals
+      ? (
+          params.cfg.channels?.discordAccounts?.[accountId] as
+            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
+            | undefined
+        )?.execApprovals
       : undefined;
   const config = accountConfig ?? rootConfig;
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
@@ -56,7 +60,11 @@ function isTelegramExecApprovalClientEnabledForTest(params: {
   const rootConfig = params.cfg.channels?.telegram?.execApprovals;
   const accountConfig =
     accountId && accountId !== "default"
-      ? params.cfg.channels?.telegramAccounts?.[accountId]?.execApprovals
+      ? (
+          params.cfg.channels?.telegramAccounts?.[accountId] as
+            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
+            | undefined
+        )?.execApprovals
       : undefined;
   const config = accountConfig ?? rootConfig;
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
@@ -126,17 +134,22 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
 
 const telegramApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "approvals"
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
-  approvals: {
+  approvalCapability: {
     delivery: {
-      shouldSuppressForwardingFallback: (params) =>
-        shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
+      shouldSuppressForwardingFallback: (params: {
+        cfg: OpenClawConfig;
+        target: { channel: string; accountId?: string | null };
+        request: {
+          request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null };
+        };
+      }) => shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
     },
     render: {
       exec: {
-        buildPendingPayload: ({ request }) =>
+        buildPendingPayload: ({ request }: { request: { id: string } }) =>
           buildTelegramExecApprovalPendingPayloadForTest({ request }),
       },
     },
@@ -144,12 +157,18 @@ const telegramApprovalPlugin: Pick<
 };
 const discordApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "approvals"
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
 > = {
   ...createChannelTestPluginBase({ id: "discord" }),
-  approvals: {
+  approvalCapability: {
     delivery: {
-      shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      shouldSuppressForwardingFallback: ({
+        cfg,
+        target,
+      }: {
+        cfg: OpenClawConfig;
+        target: { channel: string; accountId?: string | null };
+      }) =>
         target.channel === "discord" &&
         isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
     },
@@ -327,7 +346,7 @@ describe("exec approval forwarder", () => {
     });
     expect(deliver).toHaveBeenCalledTimes(2);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
@@ -339,7 +358,7 @@ describe("exec approval forwarder", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
@@ -546,7 +565,7 @@ describe("exec approval forwarder", () => {
     },
     {
       command: "echo `uname`\necho done",
-      expectedText: "```\necho `uname`\necho done\n```",
+      expectedText: "```\necho `uname`\\u{A}echo done\n```",
     },
     {
       command: "echo ```danger```",

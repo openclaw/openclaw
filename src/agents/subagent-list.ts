@@ -1,9 +1,10 @@
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   formatDurationCompact,
   formatTokenUsageDisplay,
@@ -13,13 +14,12 @@ import {
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
-  countPendingDescendantRuns,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
-  type SubagentRunRecord,
-} from "./subagent-registry.js";
+} from "./subagent-registry-read.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentListItem = {
   index: number;
@@ -122,12 +122,8 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
     if (pendingDescendantCache.has(sessionKey)) {
       return pendingDescendantCache.get(sessionKey) ?? 0;
     }
-    const pending = Math.max(
-      0,
-      runsSnapshot
-        ? countPendingDescendantRunsFromRuns(runsSnapshot, sessionKey)
-        : countPendingDescendantRuns(sessionKey),
-    );
+    const snapshot = runsSnapshot ?? getSubagentRunsSnapshotForRead(subagentRuns);
+    const pending = Math.max(0, countPendingDescendantRunsFromRuns(snapshot, sessionKey));
     pendingDescendantCache.set(sessionKey, pending);
     return pending;
   };
@@ -239,7 +235,7 @@ export function buildSubagentList(params: {
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
-    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view: SubagentListItem = {
       index,
       line,

@@ -104,12 +104,24 @@ export async function runTavilySearch(
     query: params.query,
     max_results: count,
   };
-  if (params.searchDepth) body.search_depth = params.searchDepth;
-  if (params.topic) body.topic = params.topic;
-  if (params.includeAnswer) body.include_answer = true;
-  if (params.timeRange) body.time_range = params.timeRange;
-  if (params.includeDomains?.length) body.include_domains = params.includeDomains;
-  if (params.excludeDomains?.length) body.exclude_domains = params.excludeDomains;
+  if (params.searchDepth) {
+    body.search_depth = params.searchDepth;
+  }
+  if (params.topic) {
+    body.topic = params.topic;
+  }
+  if (params.includeAnswer) {
+    body.include_answer = true;
+  }
+  if (params.timeRange) {
+    body.time_range = params.timeRange;
+  }
+  if (params.includeDomains?.length) {
+    body.include_domains = params.includeDomains;
+  }
+  if (params.excludeDomains?.length) {
+    body.exclude_domains = params.excludeDomains;
+  }
 
   const start = Date.now();
   const payload = await postTrustedWebToolsJson(
@@ -125,13 +137,17 @@ export async function runTavilySearch(
   );
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
-  const results = rawResults.map((r: Record<string, unknown>) => ({
-    title: typeof r.title === "string" ? wrapWebContent(r.title, "web_search") : "",
-    url: typeof r.url === "string" ? r.url : "",
-    snippet: typeof r.content === "string" ? wrapWebContent(r.content, "web_search") : "",
-    score: typeof r.score === "number" ? r.score : undefined,
-    ...(typeof r.published_date === "string" ? { published: r.published_date } : {}),
-  }));
+  const results = rawResults.map((r: Record<string, unknown>) =>
+    Object.assign(
+      {
+        title: typeof r.title === `string` ? wrapWebContent(r.title, `web_search`) : ``,
+        url: typeof r.url === `string` ? r.url : ``,
+        snippet: typeof r.content === `string` ? wrapWebContent(r.content, `web_search`) : ``,
+        score: typeof r.score === `number` ? r.score : undefined,
+      },
+      typeof r.published_date === `string` ? { published: r.published_date } : {},
+    ),
+  );
 
   const result: Record<string, unknown> = {
     query: params.query,
@@ -188,10 +204,18 @@ export async function runTavilyExtract(
   }
 
   const body: Record<string, unknown> = { urls: params.urls };
-  if (params.query) body.query = params.query;
-  if (params.extractDepth) body.extract_depth = params.extractDepth;
-  if (params.chunksPerSource) body.chunks_per_source = params.chunksPerSource;
-  if (params.includeImages) body.include_images = true;
+  if (params.query) {
+    body.query = params.query;
+  }
+  if (params.extractDepth) {
+    body.extract_depth = params.extractDepth;
+  }
+  if (params.chunksPerSource) {
+    body.chunks_per_source = params.chunksPerSource;
+  }
+  if (params.includeImages) {
+    body.include_images = true;
+  }
 
   const start = Date.now();
   const payload = await postTrustedWebToolsJson(
@@ -207,23 +231,29 @@ export async function runTavilyExtract(
   );
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
-  const results = rawResults.map((r: Record<string, unknown>) => ({
-    url: typeof r.url === "string" ? r.url : "",
-    rawContent:
-      typeof r.raw_content === "string"
-        ? wrapExternalContent(r.raw_content, { source: "web_fetch", includeWarning: false })
-        : "",
-    ...(typeof r.content === "string"
-      ? { content: wrapExternalContent(r.content, { source: "web_fetch", includeWarning: false }) }
-      : {}),
-    ...(Array.isArray(r.images)
-      ? {
-          images: (r.images as string[]).map((img) =>
-            wrapExternalContent(String(img), { source: "web_fetch", includeWarning: false }),
-          ),
-        }
-      : {}),
-  }));
+  const results = rawResults.map((r: Record<string, unknown>) =>
+    Object.assign(
+      {
+        url: typeof r.url === `string` ? r.url : ``,
+        rawContent:
+          typeof r.raw_content === `string`
+            ? wrapExternalContent(r.raw_content, { source: `web_fetch`, includeWarning: false })
+            : ``,
+      },
+      typeof r.content === `string`
+        ? {
+            content: wrapExternalContent(r.content, { source: `web_fetch`, includeWarning: false }),
+          }
+        : {},
+      Array.isArray(r.images)
+        ? {
+            images: (r.images as string[]).map((img) =>
+              wrapExternalContent(img, { source: `web_fetch`, includeWarning: false }),
+            ),
+          }
+        : {},
+    ),
+  );
 
   const failedResults = Array.isArray(payload.failed_results) ? payload.failed_results : [];
 
