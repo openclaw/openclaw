@@ -1275,6 +1275,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("requires explicit approval for strict inline-eval carriers", async () => {
+    // The full carrier matrix lives in exec-inline-eval.test.ts; this is the
+    // handle-level smoke for strictInlineEval denial wiring.
     const cases = [
       {
         command: ["python3", "-c", "print('hi')"],
@@ -1283,22 +1285,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       {
         command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
         expected: "awk inline program requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["find", ".", "-exec", "id", "{}", ";"],
-        expected: "find -exec requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["xargs", "id"],
-        expected: "xargs inline command requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["make", "-f", "evil.mk"],
-        expected: "make -f requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["sed", "s/.*/id/e", "/dev/null"],
-        expected: "sed inline program requires explicit approval in strictInlineEval mode",
       },
     ] as const;
     setRuntimeConfigSnapshot({
@@ -1363,12 +1349,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("does not persist allow-always approvals for strict inline-eval carriers", async () => {
+    // Persistence behavior is covered generically in exec-approvals tests; keep
+    // one flag carrier and one inline-program carrier wired through the handler.
     const cases = [
       { executable: "python3", args: ["-c", "print('hi')"] },
       { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
-      { executable: "find", args: [".", "-exec", "id", "{}", ";"] },
-      { executable: "xargs", args: ["id"] },
-      { executable: "sed", args: ["s/.*/id/e", "/dev/null"] },
     ] as const;
     setRuntimeConfigSnapshot({
       tools: {
