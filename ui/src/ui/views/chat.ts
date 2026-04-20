@@ -109,8 +109,12 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onChatWheelIntent?: (event: WheelEvent) => void;
   basePath?: string;
 };
+
+const COMPACTION_TOAST_DURATION_MS = 5000;
+const FALLBACK_TOAST_DURATION_MS = 8000;
 
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
@@ -188,7 +192,6 @@ function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
-
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -806,6 +809,7 @@ export function renderChat(props: ChatProps) {
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
+      @wheel=${props.onChatWheelIntent}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
