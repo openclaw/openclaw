@@ -530,6 +530,7 @@ export function createSessionStatusTool(opts?: {
           "unknown",
         provider: providerForCard,
         model: defaultModelForCard,
+        contextTokens: resolved.entry?.contextTokens,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,

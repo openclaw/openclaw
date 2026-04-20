@@ -26,6 +26,7 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
 const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
+const buildStatusTextSpy = vi.hoisted(() => vi.fn());
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -182,11 +183,13 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      contextTokens?: number;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
       resolveDefaultThinkingLevel?: () => unknown;
     }) => {
+      buildStatusTextSpy(params);
       resolveQueueSettingsMock({
         channel: params.statusChannel,
         sessionEntry: params.sessionEntry,
@@ -281,6 +284,7 @@ beforeAll(async () => {
 });
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
+  buildStatusTextSpy.mockClear();
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });
@@ -1481,5 +1485,25 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("passes contextTokens from session entry to buildStatusText", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-ctx",
+        updatedAt: 10,
+        contextTokens: 50000,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-ctx-tokens", {});
+
+    expect(buildStatusTextSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokens: 50000,
+      }),
+    );
   });
 });
