@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { SubagentRunRecord } from "./subagent-registry.js";
 
 /**
  * Regression test for #18264: Gateway announcement delivery loop.
@@ -73,6 +74,22 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.js");
 
+  const restoreSubagentRunsFromDiskForTest = (params: {
+    runs: Map<string, SubagentRunRecord>;
+    mergeOnly?: boolean;
+  }) => {
+    const restored = mocks.loadSubagentRegistryFromDisk();
+    let added = 0;
+    for (const [runId, entry] of restored.entries()) {
+      if (params.mergeOnly && params.runs.has(runId)) {
+        continue;
+      }
+      params.runs.set(runId, entry);
+      added += 1;
+    }
+    return added;
+  };
+
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./subagent-registry.js");
@@ -95,6 +112,16 @@ describe("announce loop guard (#18264)", () => {
     mocks.scheduleOrphanRecovery.mockClear();
     mocks.saveSubagentRegistryToDisk.mockClear();
     mocks.updateSessionStore.mockClear();
+    registry.__testing.setDepsForTest({
+      callGateway: mocks.callGateway,
+      captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+      loadConfig: mocks.loadConfig,
+      onAgentEvent: mocks.onAgentEvent,
+      persistSubagentRunsToDisk: mocks.saveSubagentRegistryToDisk,
+      resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
+      restoreSubagentRunsFromDisk: restoreSubagentRunsFromDiskForTest,
+      runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+    });
     registry.resetSubagentRegistryForTests({ persist: false });
     registry.__testing.setDepsForTest({
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
