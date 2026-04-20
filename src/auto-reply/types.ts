@@ -1,5 +1,7 @@
 export type {
   BlockReplyContext,
+  EarlyTypingBinding,
+  EarlyTypingStartPhase,
   GetReplyOptions,
   ModelSelectedContext,
   ReplyThreadingPolicy,

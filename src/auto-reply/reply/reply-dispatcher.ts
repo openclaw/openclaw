@@ -1,13 +1,14 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
+import { defaultRuntime } from "../../runtime.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
-import type { TypingController } from "./typing.js";
+import { createTypingController, type TypingController } from "./typing.js";
 
 export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -66,11 +67,27 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
   onIdle?: () => void;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
   onCleanup?: () => void;
+  /** Optional early-typing policy for accepted inbound turns. */
+  earlyTyping?: ReplyDispatcherEarlyTypingOptions;
 };
+
+export type ReplyDispatcherEarlyTypingOptions = {
+  /**
+   * Start typing as soon as the inbound message is accepted for reply
+   * processing, before reply hooks and lazy runtime bootstrap.
+   */
+  start: "accepted_inbound";
+  typingIntervalSeconds?: number;
+};
+
+type TypingReplyOptions = Pick<
+  GetReplyOptions,
+  "onReplyStart" | "onTypingController" | "onTypingCleanup" | "earlyTyping"
+>;
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
+  replyOptions: TypingReplyOptions;
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
@@ -220,11 +237,20 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const { typingCallbacks, onReplyStart, onIdle, onCleanup, earlyTyping, ...dispatcherOptions } =
+    options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
-  let typingController: TypingController | undefined;
+  const shouldStartTypingOnAccept = earlyTyping?.start === "accepted_inbound";
+  let typingController: TypingController | undefined = shouldStartTypingOnAccept
+    ? createTypingController({
+        onReplyStart: resolvedOnReplyStart,
+        onCleanup: resolvedOnCleanup,
+        typingIntervalSeconds: earlyTyping?.typingIntervalSeconds,
+        log: defaultRuntime.log,
+      })
+    : undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: () => {
@@ -236,11 +262,25 @@ export function createReplyDispatcherWithTyping(
   return {
     dispatcher,
     replyOptions: {
-      onReplyStart: resolvedOnReplyStart,
+      onReplyStart: typingController?.onReplyStart ?? resolvedOnReplyStart,
       onTypingCleanup: resolvedOnCleanup,
       onTypingController: (typing) => {
-        typingController = typing;
+        if (!typingController) {
+          typingController = typing;
+          return;
+        }
+        if (typing !== typingController) {
+          // Reuse the eagerly-started controller so late run-start hooks don't
+          // spin up a second composing lifecycle for the same inbound turn.
+          return;
+        }
       },
+      earlyTyping: typingController
+        ? {
+            start: "accepted_inbound",
+            controller: typingController,
+          }
+        : undefined,
     },
     markDispatchIdle: () => {
       typingController?.markDispatchIdle();

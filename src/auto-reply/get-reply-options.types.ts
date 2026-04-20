@@ -29,6 +29,18 @@ export type ReplyThreadingPolicy = {
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
 
+export type EarlyTypingStartPhase = "accepted_inbound";
+
+export type EarlyTypingBinding = {
+  /**
+   * Start typing before the reply run begins, once the inbound turn has been
+   * accepted for reply processing.
+   */
+  start: EarlyTypingStartPhase;
+  /** Shared typing controller reused across early-start and normal run-start phases. */
+  controller?: TypingController;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -44,6 +56,8 @@ export type GetReplyOptions = {
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
+  /** Optional early-typing handoff for channels that start composing before run start. */
+  earlyTyping?: EarlyTypingBinding;
   isHeartbeat?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;

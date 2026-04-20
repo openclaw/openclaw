@@ -232,13 +232,15 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const typing = createTypingController({
-    onReplyStart: opts?.onReplyStart,
-    onCleanup: opts?.onTypingCleanup,
-    typingIntervalSeconds,
-    silentToken: SILENT_REPLY_TOKEN,
-    log: defaultRuntime.log,
-  });
+  const typing =
+    opts?.earlyTyping?.controller ??
+    createTypingController({
+      onReplyStart: opts?.onReplyStart,
+      onCleanup: opts?.onTypingCleanup,
+      typingIntervalSeconds,
+      silentToken: SILENT_REPLY_TOKEN,
+      log: defaultRuntime.log,
+    });
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
