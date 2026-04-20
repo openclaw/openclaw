@@ -369,6 +369,10 @@ Model override note:
 }
 ```
 
+The runtime state sidecar is derived from `cron.store`: a `.json` store such as
+`~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path
+without a `.json` suffix appends `-state.json`.
+
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.

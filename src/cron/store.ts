@@ -226,7 +226,7 @@ export async function saveCronStore(
     }
   }
 
-  // Write state file first (safer ordering for migration — see PR_DRAFT.md Atomicity).
+  // Write state first so migration never leaves stripped config without runtime state.
   if (stateChanged || migrating) {
     await atomicWrite(statePath, stateJson);
     serializedStoreCache.set(stateCacheKey, stateJson);
