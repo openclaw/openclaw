@@ -20,7 +20,7 @@ env:
 jobs:
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
@@ -84,8 +84,8 @@ jobs:
 
   install-smoke:
     needs: [preflight]
-    if: needs.preflight.outputs.run_install_smoke == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_install_smoke == 'true'
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
