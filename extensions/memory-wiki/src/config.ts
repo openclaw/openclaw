@@ -235,9 +235,15 @@ export function containsVaultPathTemplate(candidatePath: string): boolean {
  * filesystem operations fail visibly instead of silently collapsing the path
  * into a different tenant's vault, the process CWD, or the filesystem root —
  * for example when a plugin tool server resolves tools with a context that
- * does not populate workspace/agent/session fields. The result is normalized
- * so path-traversal segments (e.g. `..`) collapse only after expansion of
- * resolved tokens.
+ * does not populate workspace/agent/session fields.
+ *
+ * Normalization is only applied when every token was resolved. Running
+ * `path.normalize` over a path that still contains literal `{token}` segments
+ * would collapse traversal that references those unresolved segments —
+ * `path.normalize("{workspaceDir}/../wiki")` returns `"wiki"`, a CWD-relative
+ * path — re-introducing the exact silent-redirect failure mode the literal
+ * preservation guards against. Skipping normalization in that case keeps the
+ * path lexically broken so the filesystem surfaces ENOENT.
  */
 export function expandVaultPathTemplate(
   templatePath: string,
@@ -253,6 +259,9 @@ export function expandVaultPathTemplate(
       return value != null && value !== "" ? value : match;
     },
   );
+  if (containsVaultPathTemplate(expanded)) {
+    return expanded;
+  }
   return path.normalize(expanded);
 }
 

@@ -135,6 +135,23 @@ describe("vault path templating", () => {
     // context — a data-integrity / cross-tenant failure mode.
     expect(resolved.vault.path).toBe("{workspaceDir}/wiki");
   });
+
+  it("skips path normalization when tokens stay unresolved so `..` cannot collapse the placeholder away", () => {
+    // `path.normalize("{workspaceDir}/../wiki")` returns `"wiki"` (CWD-relative)
+    // because `path.normalize` eats the `..` against the literal `{workspaceDir}`
+    // segment. Normalizing unresolved templates would silently redirect
+    // vault reads/writes to `process.cwd()/wiki` — re-introducing the exact
+    // failure mode the literal-preservation guard exists to prevent.
+    expect(expandVaultPathTemplate("{workspaceDir}/../wiki", {})).toBe("{workspaceDir}/../wiki");
+
+    // Once the token is resolved, normalization is safe and collapses `..`
+    // against real segments as usual.
+    expect(
+      expandVaultPathTemplate("{workspaceDir}/../wiki", {
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toBe("/tmp/wiki");
+  });
 });
 
 describe("memory-wiki manifest config schema", () => {
