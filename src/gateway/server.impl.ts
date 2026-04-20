@@ -521,9 +521,10 @@ export async function startGatewayServer(
       clearSecretsRuntimeSnapshot,
       closeMcpServer: async () => await closeMcpLoopbackServer(),
     });
-  const closeOnStartupFailure = async () => {
-    await runClosePrelude();
-    await createGatewayCloseHandler({
+  const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
+    channelManager;
+  const createCloseHandler = () =>
+    createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       canvasHost,
@@ -551,11 +552,12 @@ export async function startGatewayServer(
       wss,
       httpServer,
       httpServers,
-    })({ reason: "gateway startup failed" });
+    });
+  const closeOnStartupFailure = async () => {
+    await runClosePrelude();
+    await createCloseHandler()({ reason: "gateway startup failed" });
   };
 
-  const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
-    channelManager;
   try {
     const earlyRuntime = await startGatewayEarlyRuntime({
       minimalTestGateway,
@@ -826,35 +828,7 @@ export async function startGatewayServer(
     throw err;
   }
 
-  const close = createGatewayCloseHandler({
-    bonjourStop: runtimeState.bonjourStop,
-    tailscaleCleanup: runtimeState.tailscaleCleanup,
-    canvasHost,
-    canvasHostServer,
-    releasePluginRouteRegistry,
-    stopChannel,
-    pluginServices: runtimeState.pluginServices,
-    cron: runtimeState.cronState.cron,
-    heartbeatRunner: runtimeState.heartbeatRunner,
-    updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-    stopTaskRegistryMaintenance,
-    nodePresenceTimers,
-    broadcast,
-    tickInterval: runtimeState.tickInterval,
-    healthInterval: runtimeState.healthInterval,
-    dedupeCleanup: runtimeState.dedupeCleanup,
-    mediaCleanup: runtimeState.mediaCleanup,
-    agentUnsub: runtimeState.agentUnsub,
-    heartbeatUnsub: runtimeState.heartbeatUnsub,
-    transcriptUnsub: runtimeState.transcriptUnsub,
-    lifecycleUnsub: runtimeState.lifecycleUnsub,
-    chatRunState,
-    clients,
-    configReloader: runtimeState.configReloader,
-    wss,
-    httpServer,
-    httpServers,
-  });
+  const close = createCloseHandler();
 
   return {
     close: async (opts) => {
