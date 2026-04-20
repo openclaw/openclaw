@@ -123,10 +123,16 @@ export async function fetchThreadReplies(
       break;
     }
 
-    res = await fetchGraphAbsoluteUrl<GraphPagedResponse<GraphThreadMessage>>({
-      token,
-      url: nextLink,
-    });
+    try {
+      res = await fetchGraphAbsoluteUrl<GraphPagedResponse<GraphThreadMessage>>({
+        token,
+        url: nextLink,
+      });
+    } catch {
+      // Preserve already-fetched replies so thread enrichment stays best-effort
+      // even when a later pagination request fails.
+      break;
+    }
     pages++;
   }
 

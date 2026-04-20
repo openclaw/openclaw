@@ -195,6 +195,19 @@ describe("fetchThreadReplies", () => {
     expect(result).toHaveLength(10);
     expect(fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(9);
   });
+
+  it("returns already-fetched replies when a later page fails", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      value: [{ id: "reply-1" }, { id: "reply-2" }],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/replies?page=2",
+    } as never);
+    vi.mocked(fetchGraphAbsoluteUrl).mockRejectedValueOnce(new Error("timeout") as never);
+
+    const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1", 50);
+
+    expect(result).toEqual([{ id: "reply-1" }, { id: "reply-2" }]);
+    expect(fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("formatThreadContext", () => {
