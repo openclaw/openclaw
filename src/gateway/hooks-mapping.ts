@@ -52,6 +52,7 @@ export type HookAction =
       agentId?: string;
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
+      sessionKeySource?: "static" | "templated";
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
       channel?: HookMessageChannel;
@@ -263,6 +264,7 @@ function buildActionFromMapping(
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKeySource: getTemplatedSessionKeySource(mapping.sessionKey),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
@@ -301,6 +303,7 @@ function mergeAction(
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
+    sessionKeySource: baseAgent?.sessionKeySource,
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
@@ -325,6 +328,19 @@ function validateAction(action: HookAction): HookMappingResult {
     return { ok: false, error: "hook mapping requires message" };
   }
   return { ok: true, action };
+}
+
+function getTemplatedSessionKeySource(
+  sessionKeyTemplate: string | undefined,
+): "static" | "templated" | undefined {
+  if (!normalizeOptionalString(sessionKeyTemplate)) {
+    return undefined;
+  }
+  return hasTemplateExpressions(sessionKeyTemplate) ? "templated" : "static";
+}
+
+function hasTemplateExpressions(template: string): boolean {
+  return /\{\{\s*[^}]+\s*\}\}/.test(template);
 }
 
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {

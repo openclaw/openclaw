@@ -277,10 +277,54 @@ describe("gateway hooks helpers", () => {
 
     const allowed = resolveHookSessionKey({
       hooksConfig: resolved,
-      source: "mapping",
+      source: "mapping-static",
       sessionKey: "hook:gmail:1",
     });
     expect(allowed).toEqual({ ok: true, value: "hook:gmail:1" });
+  });
+
+  test("resolveHookSessionKey blocks templated mapping sessionKey when request overrides are disabled", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowedSessionKeyPrefixes: ["hook:gmail:"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      return;
+    }
+
+    const denied = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "mapping-templated",
+      sessionKey: "hook:gmail:attacker",
+    });
+    expect(denied.ok).toBe(false);
+  });
+
+  test("resolveHookSessionKey still allows static mapping sessionKey when request overrides are disabled", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowedSessionKeyPrefixes: ["hook:gmail:"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      return;
+    }
+
+    const allowed = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "mapping-static",
+      sessionKey: "hook:gmail:fixed",
+    });
+    expect(allowed).toEqual({ ok: true, value: "hook:gmail:fixed" });
   });
 
   test("resolveHookSessionKey uses defaultSessionKey when request key is absent", () => {
@@ -344,6 +388,27 @@ describe("gateway hooks helpers", () => {
       } as OpenClawConfig),
     ).toThrow(
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
+    );
+  });
+
+  test("resolveHooksConfig requires prefixes for templated mapping session keys", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              match: { path: "gmail" },
+              action: "agent",
+              messageTemplate: "Subject: {{messages[0].subject}}",
+              sessionKey: "hook:gmail:{{messages[0].id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates",
     );
   });
 });

@@ -144,6 +144,44 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("marks template-derived session keys as templated", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "templated-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:Hello");
+      expect(result.action.sessionKeySource).toBe("templated");
+    }
+  });
+
+  it("marks literal session keys as static", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "static-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:static",
+        },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:static");
+      expect(result.action.sessionKeySource).toBe("static");
+    }
+  });
+
   it("runs transform module", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-"));
     const transformsRoot = path.join(configDir, "hooks", "transforms");

@@ -757,7 +757,10 @@ export function createHooksRequestHandler(
           }
           const sessionKey = resolveHookSessionKey({
             hooksConfig,
-            source: "mapping",
+            source:
+              mapped.action.sessionKeySource === "templated"
+                ? "mapping-templated"
+                : "mapping-static",
             sessionKey: mapped.action.sessionKey,
           });
           if (!sessionKey.ok) {

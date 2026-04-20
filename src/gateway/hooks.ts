@@ -40,6 +40,8 @@ export type HookSessionPolicyResolved = {
   allowedSessionKeyPrefixes?: string[];
 };
 
+export type HookSessionKeySource = "request" | "mapping-static" | "mapping-templated";
+
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) {
     return null;
@@ -80,6 +82,14 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   ) {
     throw new Error(
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
+    );
+  }
+  if (
+    mappings.some((mapping) => hasTemplatedHookSessionKey(mapping.sessionKey)) &&
+    !allowedSessionKeyPrefixes
+  ) {
+    throw new Error(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates",
     );
   }
   return {
@@ -301,19 +311,22 @@ export function isHookAgentAllowed(
 
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
 export const getHookSessionKeyRequestPolicyError = () =>
-  "sessionKey is disabled for external /hooks/agent payloads; set hooks.allowRequestSessionKey=true to enable";
+  "sessionKey is disabled for externally supplied hook payload values; set hooks.allowRequestSessionKey=true to enable";
 export const getHookSessionKeyPrefixError = (prefixes: string[]) =>
   `sessionKey must start with one of: ${prefixes.join(", ")}`;
 
 export function resolveHookSessionKey(params: {
   hooksConfig: HooksConfigResolved;
-  source: "request" | "mapping";
+  source: HookSessionKeySource;
   sessionKey?: string;
   idFactory?: () => string;
 }): { ok: true; value: string } | { ok: false; error: string } {
   const requested = resolveSessionKey(params.sessionKey);
   if (requested) {
-    if (params.source === "request" && !params.hooksConfig.sessionPolicy.allowRequestSessionKey) {
+    if (
+      (params.source === "request" || params.source === "mapping-templated") &&
+      !params.hooksConfig.sessionPolicy.allowRequestSessionKey
+    ) {
       return { ok: false, error: getHookSessionKeyRequestPolicyError() };
     }
     const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
@@ -334,6 +347,10 @@ export function resolveHookSessionKey(params: {
     return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
   }
   return { ok: true, value: generated };
+}
+
+function hasTemplatedHookSessionKey(sessionKey: string | undefined): boolean {
+  return typeof sessionKey === "string" && /\{\{\s*[^}]+\s*\}\}/.test(sessionKey);
 }
 
 export function normalizeHookDispatchSessionKey(params: {
