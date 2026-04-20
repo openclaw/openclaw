@@ -31,6 +31,12 @@ describe("stripModelSpecialTokens", () => {
     expect(stripModelSpecialTokens("Tell it to reply with <channel|> to split streams")).toBe(
       "Tell it to reply with <channel|> to split streams",
     );
+    expect(stripModelSpecialTokens("I will type <channel|> literally.")).toBe(
+      "I will type <channel|> literally.",
+    );
+    expect(stripModelSpecialTokens("Final response should contain <channel|> token")).toBe(
+      "Final response should contain <channel|> token",
+    );
   });
 
   it("keeps the last non-empty visible segment when multiple leaked channel delimiters appear", () => {

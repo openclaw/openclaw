@@ -19,9 +19,9 @@ import { collapseRepeatedVisibleSuffixAfterDelimiter } from "./repeated-visible-
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
-const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE =
-  /\b(?:final response|output content|general instruction|i will|i must|internal planning|plan:)\b/i;
-const CHANNEL_DELIMITER_PREFIX_SOFT_HINT_RE = /\b(?:reply with|reply to)\b/i;
+const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)\b/i;
+const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
+  /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
 
 function overlapsCodeRegion(
   start: number,
@@ -45,7 +45,7 @@ function looksLikeLeakedChannelDelimiterPrefix(prefix: string): boolean {
     return true;
   }
 
-  return trimmed.length >= 120 && CHANNEL_DELIMITER_PREFIX_SOFT_HINT_RE.test(trimmed);
+  return trimmed.length >= 120 && CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE.test(trimmed);
 }
 
 function stripModelSpecialTokensImpl(

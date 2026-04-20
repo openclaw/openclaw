@@ -351,6 +351,30 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["visiblefix5-1776638721"]);
   });
 
+  it("uses the final-delivery sanitizer when chunked text_end replies are drained", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 8, maxChars: 200 },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: "Internal planning about the instruction.<channel|>gemma-visible-ok",
+      id: "item_chunked_text_end_visible",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
+    const delivered = onBlockReply.mock.calls.map((call) => call[0]?.text ?? "").join("");
+    expect(delivered).toBe("gemma-visible-ok");
+    expect(delivered.includes("Internal planning")).toBe(false);
+    expect(delivered.includes("<channel|>")).toBe(false);
+    expect(subscription.assistantTexts.join("")).toBe("gemma-visible-ok");
+  });
+
   it("preserves a repeated structured suffix when the preamble names the full repeated output literally", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
@@ -396,6 +420,24 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("abc-123abc-123");
     expect(subscription.assistantTexts).toEqual(["abc-123abc-123"]);
+  });
+
+  it("preserves intentionally repeated structured output after a leaked delimiter without single-answer intent", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_end",
+      text: "internal planning<channel|>abc-123abc-123abc-123",
+      id: "item_intentional_repeated_output",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("abc-123abc-123abc-123");
+    expect(subscription.assistantTexts).toEqual(["abc-123abc-123abc-123"]);
   });
 
   it("emits the final answer at message_end when commentary was streamed first", async () => {

@@ -3,8 +3,13 @@ const MIN_STRUCTURED_REPEAT_UNIT_LENGTH = 8;
 const VISIBLE_SUFFIX_BOUNDARY_RE = /[.!?:;)\]}>`'"]$/;
 const INTERNAL_PREAMBLE_HINT_RE =
   /\b(?:the user|instruction|output content|reply with|reply to|final response|general instruction|i will|i must|internal planning|plan:)\b/i;
+const DELIMITER_LEAK_HARD_HINT_RE = /\b(?:internal planning|plan:)\b/i;
+const DELIMITER_LEAK_LONG_HINT_RE =
+  /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
 const SINGLE_ANSWER_INTENT_RE =
   /\b(?:exactly|nothing else|one word(?: only)?|one short sentence(?: only)?|single answer)\b/i;
+const INTENTIONAL_REPEAT_INTENT_RE =
+  /\b(?:repeat|repeated|twice|\d+\s+times|three times|four times|five times)\b/i;
 const EXACT_TARGET_HINT_RE =
   /\b(?:specific string|reply with|output the text directly|output content)\b/i;
 const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
@@ -47,6 +52,19 @@ function looksLikeInternalPreamble(prefix: string): boolean {
   return lines.length >= 2 || sentenceCount >= 3;
 }
 
+function looksLikeDelimiterLeakPrefix(prefix: string): boolean {
+  const trimmed = prefix.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (DELIMITER_LEAK_HARD_HINT_RE.test(trimmed)) {
+    return true;
+  }
+
+  return trimmed.length >= 120 && DELIMITER_LEAK_LONG_HINT_RE.test(trimmed);
+}
+
 function matchStructuredRepeatedPrefixPattern(text: string): RepeatedPatternMatch | null {
   if (!text) {
     return null;
@@ -83,12 +101,26 @@ function shouldCollapseRepeatedSuffix(params: {
   context: "delimiter" | "no-delimiter";
 }): boolean {
   const { prefix, match, context } = params;
+  const hasIntentionalRepeatRequest =
+    looksLikeInternalPreamble(prefix) &&
+    INTENTIONAL_REPEAT_INTENT_RE.test(prefix) &&
+    !SINGLE_ANSWER_INTENT_RE.test(prefix);
+  const hasSingleAnswerIntent =
+    looksLikeInternalPreamble(prefix) && SINGLE_ANSWER_INTENT_RE.test(prefix);
 
   if (match.tail.length > 0 || match.fullRepeats >= 3) {
-    return context === "delimiter" || looksLikeInternalPreamble(prefix);
+    if (hasIntentionalRepeatRequest) {
+      return false;
+    }
+    if (match.tail.length > 0) {
+      return context === "delimiter"
+        ? looksLikeDelimiterLeakPrefix(prefix)
+        : looksLikeInternalPreamble(prefix);
+    }
+    return hasSingleAnswerIntent;
   }
 
-  return looksLikeInternalPreamble(prefix) && SINGLE_ANSWER_INTENT_RE.test(prefix);
+  return hasSingleAnswerIntent;
 }
 
 function findExplicitVisibleSuffixTarget(

@@ -450,6 +450,8 @@ export function handleMessageUpdate(
       if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
         replaceBlockReplyBuffer(ctx, cleanedText);
       }
+    } else if (evtType === "text_end" && cleanedText) {
+      replaceBlockReplyBuffer(ctx, cleanedText);
     }
 
     ctx.state.lastStreamedAssistant = next;
@@ -490,7 +492,10 @@ export function handleMessageUpdate(
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    ctx.blockChunker?.drain({
+      force: false,
+      emit: (text) => ctx.emitBlockChunk(text, { finalDelivery: true }),
+    });
   }
 
   if (

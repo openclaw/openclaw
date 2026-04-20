@@ -529,7 +529,8 @@ describe("sanitizeAssistantVisibleText", () => {
 
   it("collapses repeated visible suffixes even when the suffix is repeated more than twice", () => {
     const input = [
-      "Internal planning about the final response.",
+      "The user is instructing me to reply with a very specific string and nothing else.",
+      "I will output the text directly as the final response.",
       "<channel|>dupcheck-b-1776635100574dupcheck-b-1776635100574dupcheck-b-1776635100574dupcheck-b-1776635100574",
     ].join("\n");
 
@@ -614,6 +615,12 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText("Tell it to reply with <channel|> to split streams")).toBe(
       "Tell it to reply with <channel|> to split streams",
     );
+    expect(sanitizeAssistantVisibleText("I will type <channel|> literally.")).toBe(
+      "I will type <channel|> literally.",
+    );
+    expect(sanitizeAssistantVisibleText("Final response should contain <channel|> token")).toBe(
+      "Final response should contain <channel|> token",
+    );
   });
 
   it("keeps the last non-empty visible segment when multiple channel delimiters appear", () => {
@@ -626,6 +633,12 @@ describe("sanitizeAssistantVisibleText", () => {
     const input = "Examples: `noise-999noise-999`. Final output: noise-999noise-999";
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves intentional repeated structured output after a leaked delimiter when the prompt did not ask for a single answer", () => {
+    const input = "internal planning<channel|>abc-123abc-123abc-123";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("abc-123abc-123abc-123");
   });
 
   it("drops a bare trailing control delimiter with no visible suffix", () => {
