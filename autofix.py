@@ -695,6 +695,23 @@ def apply_patches(repo: str, branch: str, head_sha: str, patches: list[FilePatch
 
         if VERIFY_CMD:
             print(f"autofix: running verification command `{VERIFY_CMD}` before push...")
+            # Install dependencies before running verify command
+            # VERIFY_CMD often depends on local tooling in node_modules/.bin
+            if Path(work_dir / "package.json").exists():
+                install_result = subprocess.run(
+                    ["pnpm", "install", "--frozen-lockfile"],
+                    cwd=str(work_dir),
+                    capture_output=True,
+                    text=True,
+                    **_WIN_NO_WINDOW,
+                )
+                if install_result.returncode != 0:
+                    print(
+                        f"autofix: pnpm install failed (exit {install_result.returncode}); "
+                        "skipping verification.",
+                        file=sys.stderr,
+                    )
+                    print(install_result.stderr[-2000:], file=sys.stderr)
             verify = subprocess.run(
                 VERIFY_CMD,
                 shell=True,
