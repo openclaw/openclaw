@@ -538,7 +538,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     args: Record<string, unknown> | undefined,
   ): string => {
     const normalizedName = resolveTrackedToolName(name);
-    const display = resolveCoreToolDisplay({ name: normalizedName, args });
+    const display =
+      normalizedName.trim().toLowerCase() === "bash" && typeof args?.command === "string"
+        ? {
+            ...resolveCoreToolDisplay({ name: "exec", args }),
+            label: "Bash",
+          }
+        : resolveCoreToolDisplay({ name: normalizedName, args });
     const detail = formatCoreToolDetail(display)
       ?.replace(/^with\s+/i, "")
       .trim();
@@ -1569,8 +1575,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onToolStart: streamingEnabled
-        ? (payload: { name?: string; phase?: string; toolCallId?: string }) =>
-            handleToolStartLikeEvent(payload, { allowUnnamed: true })
+        ? (payload: {
+            name?: string;
+            phase?: string;
+            toolCallId?: string;
+            args?: Record<string, unknown>;
+          }) => handleToolStartLikeEvent(payload, { allowUnnamed: true })
         : undefined,
       onToolResult: streamingEnabled
         ? (payload: ReplyPayload) =>

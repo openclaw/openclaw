@@ -1115,6 +1115,34 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(panelText.length).toBeLessThan(260);
   });
 
+  it("shows bash command context instead of only the tool name", async () => {
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({
+      name: "Bash",
+      phase: "start",
+      args: {
+        command: "cd ~/Projects/lm-router && npm test",
+      },
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("Bash — run tests"),
+      { title: "🔧 Tool calls (1)" },
+    );
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("`cd ~/Projects/lm-router && npm test`"),
+      { title: "🔧 Tool calls (1)" },
+    );
+  });
+
   it("clears running tool status as soon as assistant text starts streaming", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
