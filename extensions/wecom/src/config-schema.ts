@@ -5,18 +5,6 @@ import {
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
-const WecomAgentConfigSchema = z
-  .object({
-    corpId: z.string().optional(),
-    corpSecret: buildSecretInputSchema().optional(),
-    agentId: z.union([z.string(), z.number()]).optional(),
-    token: buildSecretInputSchema().optional(),
-    encodingAESKey: buildSecretInputSchema().optional(),
-    configured: z.boolean().optional(),
-  })
-  .strict()
-  .optional();
-
 const WecomNetworkConfigSchema = z
   .object({
     egressProxyUrl: z.string().optional(),
@@ -61,17 +49,9 @@ const WecomAccountSchema = z
     groups: z.record(z.string(), WecomGroupConfigSchema).optional(),
     sendThinkingMessage: z.boolean().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
-    agent: WecomAgentConfigSchema,
     network: WecomNetworkConfigSchema,
     media: WecomMediaConfigSchema,
     dynamicAgents: WecomDynamicAgentsConfigSchema,
-    // Webhook mode fields
-    connectionMode: z.enum(["webhook", "websocket"]).optional(),
-    token: buildSecretInputSchema().optional(),
-    encodingAESKey: buildSecretInputSchema().optional(),
-    receiveId: z.string().optional(),
-    welcomeText: z.string().optional(),
-    streamPlaceholderContent: z.string().optional(),
   })
   .strict();
 

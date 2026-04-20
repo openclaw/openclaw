@@ -1,6 +1,5 @@
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 import { type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   listWeComAccountIds,
   resolveWeComAccountMulti,
@@ -8,14 +7,8 @@ import {
   hasMultiAccounts,
 } from "./accounts.js";
 import type { WeComMultiAccountConfig } from "./accounts.js";
-import {
-  sendText as sendAgentText,
-  sendMedia as sendAgentMedia,
-  uploadMedia as uploadAgentMedia,
-} from "./agent/api-client.js";
-import { registerAgentWebhookTarget, deregisterAgentWebhookTarget } from "./agent/webhook.js";
 import { wecomChannelConfigSchema } from "./config-schema.js";
-import { CHANNEL_ID, TEXT_CHUNK_LIMIT, WEBHOOK_PATHS } from "./const.js";
+import { CHANNEL_ID, TEXT_CHUNK_LIMIT } from "./const.js";
 import { wecomOutboundLog } from "./loggers.js";
 import { uploadAndSendMedia } from "./media-uploader.js";
 import { monitorWeComProvider } from "./monitor.js";
@@ -27,14 +20,11 @@ import {
 import { formatPairingApproveHint, DEFAULT_ACCOUNT_ID } from "./openclaw-compat.js";
 import { getWeComRuntime } from "./runtime.js";
 import { getWeComWebSocket } from "./state-manager.js";
-import { resolveWecomTarget } from "./target.js";
 import type { WeComConfig, ResolvedWeComAccount } from "./utils.js";
-import { startWebhookGateway, stopWebhookGateway } from "./webhook/index.js";
-import type { ResolvedWebhookAccount, WebhookGatewayContext } from "./webhook/index.js";
 
 /**
- * Send a WeCom message proactively using the SDK's sendMessage.
- * Prefers Bot WebSocket; automatically falls back to Agent HTTP API when unavailable.
+ * Send a WeCom message proactively using the Bot WebSocket.
+ * Requires an active WSClient connection for the target account.
  */
 async function sendWeComMessage({
   to,
@@ -54,54 +44,20 @@ async function sendWeComMessage({
   const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
   const chatId = to.replace(channelPrefix, "");
 
-  // ── Try Bot WebSocket ──
   const wsClient = getWeComWebSocket(resolvedAccountId);
-  if (wsClient?.isConnected) {
-    const result = await wsClient.sendMessage(chatId, {
-      msgtype: "markdown",
-      markdown: { content },
-    });
-    const messageId = result?.headers?.req_id ?? `wecom-${Date.now()}`;
-    return { channel: CHANNEL_ID, messageId, chatId };
-  }
-
-  // ── Fall back to Agent HTTP API ──
-  if (!cfg) {
+  if (!wsClient?.isConnected) {
     throw new Error(
-      `WSClient not connected for account ${resolvedAccountId} and no config available for Agent fallback`,
-    );
-  }
-  const account = resolveWeComAccountMulti({ cfg, accountId: resolvedAccountId });
-  const agent = account.agent;
-  if (!agent?.configured) {
-    throw new Error(
-      `WSClient not connected for account ${resolvedAccountId} and Agent mode is not configured. ` +
-        `Please configure either Bot (botId + secret) or Agent (corpId + corpSecret + agentId) for this account.`,
+      `WSClient not connected for account ${resolvedAccountId}. ` +
+        `Ensure botId + secret are configured and the gateway is running.`,
     );
   }
 
-  const target = resolveWecomTarget(chatId);
-  if (!target) {
-    throw new Error(`Cannot resolve outbound target from "${to}"`);
-  }
-
-  wecomOutboundLog.debug(
-    `Bot WS unavailable, sending via Agent HTTP API to ${JSON.stringify(target)} (accountId=${resolvedAccountId})`,
-  );
-  await sendAgentText({
-    agent,
-    toUser: target.touser,
-    toParty: target.toparty,
-    toTag: target.totag,
-    chatId: target.chatid,
-    text: content,
+  const result = await wsClient.sendMessage(chatId, {
+    msgtype: "markdown",
+    markdown: { content },
   });
-
-  return {
-    channel: CHANNEL_ID,
-    messageId: `agent-${Date.now()}`,
-    chatId,
-  };
+  const messageId = result?.headers?.req_id ?? `wecom-${Date.now()}`;
+  return { channel: CHANNEL_ID, messageId, chatId };
 }
 
 // WeCom channel metadata
@@ -228,24 +184,17 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       };
     },
 
-    // Check if configured (any of Bot / Agent / botWebhook credentials is sufficient)
-    isConfigured: (account) =>
-      Boolean(account.botId?.trim() && account.secret?.trim()) ||
-      Boolean(account.agent?.configured) ||
-      Boolean(account.token?.trim() && account.encodingAESKey?.trim()),
+    // Check if configured (requires Bot credentials: botId + secret)
+    isConfigured: (account) => Boolean(account.botId?.trim() && account.secret?.trim()),
 
     // Describe account info
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured:
-        Boolean(account.botId?.trim() && account.secret?.trim()) ||
-        Boolean(account.agent?.configured) ||
-        Boolean(account.token?.trim() && account.encodingAESKey?.trim()),
+      configured: Boolean(account.botId?.trim() && account.secret?.trim()),
       botId: account.botId,
       websocketUrl: account.websocketUrl,
-      agentConfigured: Boolean(account.agent?.configured),
     }),
 
     // Resolve allow-from list (multi-account: resolved by accountId)
@@ -349,167 +298,59 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         return sendWeComMessage({ to, content: text || "", accountId: resolvedAccountId, cfg });
       }
 
-      // ── Try Bot WebSocket ──
       const wsClient = getWeComWebSocket(resolvedAccountId);
-      if (wsClient?.isConnected) {
-        const result = await uploadAndSendMedia({
-          wsClient,
-          mediaUrl,
-          chatId,
-          mediaLocalRoots,
-        });
-
-        if (result.rejected) {
-          return sendWeComMessage({
-            to,
-            content: `⚠️ ${result.rejectReason}`,
-            accountId: resolvedAccountId,
-            cfg,
-          });
-        }
-
-        if (!result.ok) {
-          const fallbackContent = text ? `${text}\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
-          return sendWeComMessage({
-            to,
-            content: fallbackContent,
-            accountId: resolvedAccountId,
-            cfg,
-          });
-        }
-
-        if (text) {
-          await sendWeComMessage({ to, content: text, accountId: resolvedAccountId, cfg });
-        }
-        if (result.downgradeNote) {
-          await sendWeComMessage({
-            to,
-            content: `ℹ️ ${result.downgradeNote}`,
-            accountId: resolvedAccountId,
-            cfg,
-          });
-        }
-
-        return {
-          channel: CHANNEL_ID,
-          messageId: result.messageId!,
-          chatId,
-        };
-      }
-
-      // ── Fall back to Agent HTTP API ──
-      if (!cfg) {
+      if (!wsClient?.isConnected) {
         throw new Error(
-          `WSClient not connected for account ${resolvedAccountId} and no config available for Agent fallback`,
-        );
-      }
-      const account = resolveWeComAccountMulti({ cfg, accountId: resolvedAccountId });
-      const agent = account.agent;
-      if (!agent?.configured) {
-        throw new Error(
-          `WSClient not connected for account ${resolvedAccountId} and Agent mode is not configured. ` +
-            `Please configure either Bot (botId + secret) or Agent (corpId + corpSecret + agentId).`,
+          `WSClient not connected for account ${resolvedAccountId}. ` +
+            `Cannot send media without an active WS connection.`,
         );
       }
 
-      // Agent mode: text fallback (Agent HTTP API does not support sending mediaUrl directly; upload first)
-      const target = resolveWecomTarget(chatId);
-      if (!target) {
-        throw new Error(`Cannot resolve outbound target from "${to}"`);
-      }
-
-      wecomOutboundLog.debug(
-        `Bot WS unavailable, sending media via Agent HTTP API to ${JSON.stringify(target)}`,
-      );
-
-      // Try loading and uploading media to WeCom
-      try {
-        let buffer: Buffer;
-        let filename: string;
-
-        if (/^https?:\/\//i.test(mediaUrl)) {
-          const { response: mediaResponse, release: releaseMedia } = await fetchWithSsrFGuard({
-            url: mediaUrl,
-            auditContext: "wecom-agent-media-fallback",
-          });
-          try {
-            if (!mediaResponse.ok) {
-              throw new Error(`download failed: ${mediaResponse.status}`);
-            }
-            buffer = Buffer.from(await mediaResponse.arrayBuffer());
-            filename = mediaUrl.split("/").pop() || "file.bin";
-          } finally {
-            await releaseMedia();
-          }
-        } else {
-          // Local path — validate against allowed media roots (resolve symlinks to prevent escapes)
-          const pathMod = await import("node:path");
-          const fsMod = await import("node:fs/promises");
-          const resolved = await fsMod.realpath(pathMod.resolve(mediaUrl)).catch(() => {
-            throw new Error(`Path "${mediaUrl}" does not exist or is not accessible`);
-          });
-          const roots = mediaLocalRoots ?? [];
-          if (roots.length > 0) {
-            const realRoots = await Promise.all(
-              roots.map((r) => fsMod.realpath(pathMod.resolve(r)).catch(() => pathMod.resolve(r))),
-            );
-            if (
-              !realRoots.some(
-                (root) => resolved === root || resolved.startsWith(root + pathMod.sep),
-              )
-            ) {
-              throw new Error(`Path "${mediaUrl}" outside allowed media roots`);
-            }
-          }
-          buffer = await fsMod.readFile(resolved);
-          filename = pathMod.basename(resolved);
-        }
-
-        if (buffer.length > 0) {
-          const mediaId = await uploadAgentMedia({
-            agent,
-            type: "file",
-            buffer,
-            filename,
-          });
-          await sendAgentMedia({
-            agent,
-            toUser: target.touser,
-            toParty: target.toparty,
-            toTag: target.totag,
-            chatId: target.chatid,
-            mediaId,
-            mediaType: "file",
-          });
-          if (text) {
-            await sendAgentText({
-              agent,
-              toUser: target.touser,
-              toParty: target.toparty,
-              toTag: target.totag,
-              chatId: target.chatid,
-              text,
-            });
-          }
-          return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
-        }
-      } catch (err) {
-        wecomOutboundLog.warn(
-          `Agent media upload failed, falling back to text: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-
-      // Media upload failed, downgrade to text + URL
-      const fallbackContent = text ? `${text}\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
-      await sendAgentText({
-        agent,
-        toUser: target.touser,
-        toParty: target.toparty,
-        toTag: target.totag,
-        chatId: target.chatid,
-        text: fallbackContent,
+      const result = await uploadAndSendMedia({
+        wsClient,
+        mediaUrl,
+        chatId,
+        mediaLocalRoots,
       });
-      return { channel: CHANNEL_ID, messageId: `agent-${Date.now()}`, chatId };
+
+      if (result.rejected) {
+        return sendWeComMessage({
+          to,
+          content: `⚠️ ${result.rejectReason}`,
+          accountId: resolvedAccountId,
+          cfg,
+        });
+      }
+
+      if (!result.ok) {
+        const fallbackContent = text ? `${text}\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
+        return sendWeComMessage({
+          to,
+          content: fallbackContent,
+          accountId: resolvedAccountId,
+          cfg,
+        });
+      }
+
+      if (text) {
+        await sendWeComMessage({ to, content: text, accountId: resolvedAccountId, cfg });
+      }
+      if (result.downgradeNote) {
+        await sendWeComMessage({
+          to,
+          content: `ℹ️ ${result.downgradeNote}`,
+          accountId: resolvedAccountId,
+          cfg,
+        });
+      }
+
+      wecomOutboundLog.debug(`media sent via WS (accountId=${resolvedAccountId})`);
+
+      return {
+        channel: CHANNEL_ID,
+        messageId: result.messageId!,
+        chatId,
+      };
     },
   },
   status: {
@@ -551,10 +392,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       return { ok: true, status: 200 };
     },
     buildAccountSnapshot: ({ account, runtime }) => {
-      const configured =
-        Boolean(account.botId?.trim() && account.secret?.trim()) ||
-        Boolean(account.agent?.configured) ||
-        Boolean(account.token?.trim() && account.encodingAESKey?.trim());
+      const configured = Boolean(account.botId?.trim() && account.secret?.trim());
       return {
         accountId: account.accountId,
         name: account.name,
@@ -572,119 +410,23 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       // Multi-account: resolve account config by accountId
       const account = resolveWeComAccountMulti({ cfg: ctx.cfg, accountId: ctx.accountId });
 
-      // Read connection mode (default: websocket)
-      const connectionMode = account.config.connectionMode ?? "websocket";
+      ctx.log?.info(`starting wecom[${ctx.accountId}] (name: ${account.name}, mode: websocket)`);
 
-      ctx.log?.info(
-        `starting wecom[${ctx.accountId}] (name: ${account.name}, mode: ${connectionMode})`,
-      );
-
-      // ── Agent target registration ──────────────────────────────────
-      const agent = account.agent;
-      if (agent?.configured) {
-        const isMulti = hasMultiAccounts(ctx.cfg);
-        const defaultId = resolveDefaultWeComAccountId(ctx.cfg);
-        const isDefault = ctx.accountId === defaultId;
-        const paths = isMulti
-          ? [
-              `${WEBHOOK_PATHS.AGENT_PLUGIN}/${ctx.accountId}`,
-              `${WEBHOOK_PATHS.AGENT}/${ctx.accountId}`,
-              // Default account also registers /default alias paths
-              ...(isDefault && ctx.accountId !== DEFAULT_ACCOUNT_ID
-                ? [
-                    `${WEBHOOK_PATHS.AGENT_PLUGIN}/${DEFAULT_ACCOUNT_ID}`,
-                    `${WEBHOOK_PATHS.AGENT}/${DEFAULT_ACCOUNT_ID}`,
-                  ]
-                : []),
-              WEBHOOK_PATHS.AGENT_PLUGIN,
-              WEBHOOK_PATHS.AGENT,
-            ]
-          : [
-              // Single-account mode: also register /default paths for explicit specification
-              WEBHOOK_PATHS.AGENT_PLUGIN,
-              WEBHOOK_PATHS.AGENT,
-              `${WEBHOOK_PATHS.AGENT_PLUGIN}/${DEFAULT_ACCOUNT_ID}`,
-              `${WEBHOOK_PATHS.AGENT}/${DEFAULT_ACCOUNT_ID}`,
-            ];
-
-        for (const p of paths) {
-          registerAgentWebhookTarget({
-            agent,
-            config: ctx.cfg,
-            runtime: {
-              log: ctx.log?.info ? (msg: string) => ctx.log!.info(msg) : undefined,
-              error: ctx.log?.error ? (msg: string) => ctx.log!.error(msg) : undefined,
-            },
-            path: p,
-          });
-        }
-        ctx.log?.info(`[${ctx.accountId}] wecom agent webhook registered at ${paths.join(", ")}`);
-
-        // Clean up when account lifecycle ends
-        ctx.abortSignal.addEventListener(
-          "abort",
-          () => {
-            deregisterAgentWebhookTarget(agent.accountId);
-          },
-          { once: true },
+      // Bot WebSocket listener (requires botId + secret)
+      const hasBotCredentials = Boolean(account.botId?.trim() && account.secret?.trim());
+      if (!hasBotCredentials) {
+        throw new Error(
+          `Cannot start wecom[${ctx.accountId}]: botId + secret are required. ` +
+            `Run 'openclaw channels add wecom' to configure.`,
         );
       }
 
-      // ── Bot WebSocket listener (requires botId + secret) ──────────
-      const hasBotCredentials = Boolean(account.botId?.trim() && account.secret?.trim());
-      if (hasBotCredentials) {
-        return monitorWeComProvider({
-          account,
-          config: ctx.cfg,
-          runtime: ctx.runtime,
-          abortSignal: ctx.abortSignal,
-          setStatus: ctx.setStatus as unknown as (next: Record<string, unknown>) => void,
-        });
-      } else if (connectionMode === "webhook") {
-        // ── Webhook mode ──────────────────────────────────────────────
-        const webhookAccount: ResolvedWebhookAccount = {
-          ...account,
-          connectionMode: "webhook",
-          token: account.config.token ?? "",
-          encodingAESKey: account.config.encodingAESKey ?? "",
-          receiveId: account.config.receiveId ?? "",
-          welcomeText: account.config.welcomeText,
-        };
-
-        const gatewayCtx: WebhookGatewayContext = {
-          account: webhookAccount,
-          config: ctx.cfg,
-          runtime: ctx.runtime,
-          abortSignal: ctx.abortSignal,
-          setStatus: ctx.setStatus as unknown as (next: Record<string, unknown>) => void,
-          log: ctx.log,
-          accountId: ctx.accountId,
-        };
-
-        startWebhookGateway(gatewayCtx);
-
-        // Wait for abortSignal then clean up
-        await new Promise<void>((resolve) => {
-          if (ctx.abortSignal.aborted) {
-            stopWebhookGateway(gatewayCtx);
-            resolve();
-            return;
-          }
-          ctx.abortSignal.addEventListener(
-            "abort",
-            () => {
-              stopWebhookGateway(gatewayCtx);
-              resolve();
-            },
-            { once: true },
-          );
-        });
-        return;
-      }
-
-      // Agent-only: no Bot, wait for abort signal
-      return new Promise<void>((resolve) => {
-        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      return monitorWeComProvider({
+        account,
+        config: ctx.cfg,
+        runtime: ctx.runtime,
+        abortSignal: ctx.abortSignal,
+        setStatus: ctx.setStatus as unknown as (next: Record<string, unknown>) => void,
       });
     },
     logoutAccount: async ({ cfg, accountId }) => {
@@ -702,32 +444,6 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         if (nextWecom.botId || nextWecom.secret) {
           delete nextWecom.botId;
           delete nextWecom.secret;
-          cleared = true;
-          changed = true;
-        }
-
-        // Also clear webhook credentials (token + encodingAESKey)
-        if (nextWecom.token || nextWecom.encodingAESKey) {
-          delete nextWecom.token;
-          delete nextWecom.encodingAESKey;
-          cleared = true;
-          changed = true;
-        }
-
-        // Clear Agent credentials (including callback secrets token/encodingAESKey)
-        const agentCfg = nextWecom.agent as Record<string, unknown> | undefined;
-        if (
-          agentCfg?.corpId ||
-          agentCfg?.corpSecret ||
-          agentCfg?.agentId ||
-          agentCfg?.token ||
-          agentCfg?.encodingAESKey
-        ) {
-          delete agentCfg?.corpId;
-          delete agentCfg?.corpSecret;
-          delete agentCfg?.agentId;
-          delete agentCfg?.token;
-          delete agentCfg?.encodingAESKey;
           cleared = true;
           changed = true;
         }
@@ -750,32 +466,10 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         const wecomConfig = (cfg.channels?.[CHANNEL_ID] ?? {}) as WeComMultiAccountConfig;
         const accountCfg = wecomConfig.accounts?.[resolvedAccountId];
 
-        if (
-          accountCfg?.botId ||
-          accountCfg?.secret ||
-          accountCfg?.token ||
-          accountCfg?.encodingAESKey ||
-          (accountCfg?.agent as Record<string, unknown> | undefined)?.corpId ||
-          (accountCfg?.agent as Record<string, unknown> | undefined)?.corpSecret ||
-          (accountCfg?.agent as Record<string, unknown> | undefined)?.agentId
-        ) {
+        if (accountCfg?.botId || accountCfg?.secret) {
           const nextAccount = { ...accountCfg };
           delete nextAccount.botId;
           delete nextAccount.secret;
-          delete nextAccount.token;
-          delete nextAccount.encodingAESKey;
-          // Clear Agent credentials
-          if (nextAccount.agent && typeof nextAccount.agent === "object") {
-            const nextAgent = { ...(nextAccount.agent as Record<string, unknown>) };
-            delete nextAgent.corpId;
-            delete nextAgent.corpSecret;
-            delete nextAgent.agentId;
-            delete nextAgent.token;
-            delete nextAgent.encodingAESKey;
-            nextAccount.agent = (
-              Object.keys(nextAgent).length > 0 ? nextAgent : undefined
-            ) as typeof nextAccount.agent;
-          }
           cleared = true;
           changed = true;
 
@@ -807,12 +501,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         cfg: changed ? nextCfg : cfg,
         accountId: resolvedAccountId,
       });
-      const loggedOut =
-        !resolved.botId &&
-        !resolved.secret &&
-        !resolved.agent?.configured &&
-        !resolved.token &&
-        !resolved.encodingAESKey;
+      const loggedOut = !resolved.botId && !resolved.secret;
 
       return { cleared, envToken: false, loggedOut };
     },

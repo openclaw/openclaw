@@ -1,7 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { CHANNEL_ID } from "./const.js";
-import type { ResolvedAgentAccount } from "./types/account.js";
 import type { WeComConfig, WeComAccountConfig, ResolvedWeComAccount } from "./utils.js";
 import { DefaultWsUrl } from "./utils.js";
 
@@ -173,27 +172,6 @@ export function resolveWeComAccountMulti(params: {
   // Account-level enabled state
   const accountEnabled = merged.enabled !== false;
 
-  // Resolve Agent sub-configuration
-  const agentCfg = merged.agent;
-  let agent: ResolvedAgentAccount | undefined;
-  if (agentCfg?.corpId && agentCfg?.corpSecret && agentCfg?.agentId && agentCfg?.token && agentCfg?.encodingAESKey) {
-    agent = {
-      accountId,
-      enabled: baseEnabled && accountEnabled,
-      configured: true,
-      corpId: agentCfg.corpId,
-      corpSecret: agentCfg.corpSecret,
-      agentId:
-        typeof agentCfg.agentId === "string"
-          ? Number(agentCfg.agentId) || undefined
-          : agentCfg.agentId,
-      token: agentCfg.token,
-      encodingAESKey: agentCfg.encodingAESKey,
-      config: agentCfg,
-      network: merged.network,
-    };
-  }
-
   return {
     accountId,
     name: merged.name ?? "企业微信",
@@ -203,10 +181,6 @@ export function resolveWeComAccountMulti(params: {
     secret: merged.secret ?? "",
     sendThinkingMessage: merged.sendThinkingMessage ?? true,
     config: merged,
-    agent,
-    token: merged.token ?? "",
-    encodingAESKey: merged.encodingAESKey ?? "",
-    receiveId: merged.receiveId ?? "",
   };
 }
 
@@ -224,9 +198,7 @@ export function listEnabledWeComAccounts(cfg: OpenClawConfig): ResolvedWeComAcco
       if (!account.enabled) {
         return false;
       }
-      const hasBotCredentials = Boolean(account.botId?.trim() && account.secret?.trim());
-      const hasAgentCredentials = Boolean(account.agent?.configured);
-      return hasBotCredentials || hasAgentCredentials;
+      return Boolean(account.botId?.trim() && account.secret?.trim());
     });
 }
 

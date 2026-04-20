@@ -60,11 +60,6 @@ import {
   stopMessageStateCleanup,
   cleanupAccount,
 } from "./state-manager.js";
-import {
-  updateTemplateCardOnEvent,
-  processTemplateCardsIfNeeded,
-} from "./template-card-manager.js";
-import { maskTemplateCardBlocks } from "./template-card-parser.js";
 import type { ResolvedWeComAccount, WeComConfig } from "./utils.js";
 import { PLUGIN_VERSION } from "./version.js";
 
@@ -594,21 +589,12 @@ async function routeAndDispatchMessage(params: {
           }
 
           // Intermediate frame: stream update when visible text exists (skip if stream expired, wait for proactive send after deliver completes)
-          // Use maskTemplateCardBlocks to mask template card code blocks being built,
-          // preventing JSON source from being exposed to end users during stream output
           if (state.accumulatedText && !state.streamExpired) {
             try {
-              const displayText = maskTemplateCardBlocks(
-                state.accumulatedText,
-                (...args: unknown[]) => runtime.log?.(...args),
-              );
-              // if (displayText !== state.accumulatedText) {
-              //   runtime.log?.(`[wecom][template-card] Mid-frame masked: original=${state.accumulatedText.length}chars, masked=${displayText.length}chars`);
-              // }
               await sendWeComReply({
                 wsClient,
                 frame,
-                text: displayText,
+                text: state.accumulatedText,
                 runtime,
                 finish: false,
                 streamId: state.streamId,
@@ -631,36 +617,13 @@ async function routeAndDispatchMessage(params: {
       },
     });
 
-    // 模板卡片检测与发送（在关闭 thinking 流之前独立处理）
-    const cardResult = await processTemplateCardsIfNeeded({
-      wsClient,
-      frame,
-      state,
-      account,
-      runtime,
-    });
-    if (cardResult) {
-      // 卡片已发送，用剩余文本替换累积文本
-      state.accumulatedText = cardResult.remainingText;
-    }
-
     // 关闭 thinking 流
     await finishThinkingStream(ctx);
     safeCleanup();
   } catch (err) {
     runtime.error?.(`[wecom][plugin] Failed to process message: ${String(err)}`);
-    // 即使 dispatch 抛异常，也需要处理卡片和关闭 thinking 流
+    // 即使 dispatch 抛异常，也需要关闭 thinking 流
     try {
-      const cardResult = await processTemplateCardsIfNeeded({
-        wsClient,
-        frame,
-        state,
-        account,
-        runtime,
-      });
-      if (cardResult) {
-        state.accumulatedText = cardResult.remainingText;
-      }
       await finishThinkingStream(ctx);
     } catch (finishErr) {
       runtime.error?.(
@@ -1075,49 +1038,12 @@ export async function monitorWeComProvider(options: WeComMonitorOptions): Promis
         runtime.log?.(
           `[${account.accountId}] Received event callback: eventtype=${eventType ?? ""}, msgid=${eventBody.msgid ?? ""}`,
         );
-
-        if (eventType !== "template_card_event") {
-          return;
-        }
-
-        const templateCardEvent = eventBody.event?.template_card_event;
-        runtime.log?.(
-          `[${account.accountId}] Received template_card_event: event_key=${templateCardEvent?.event_key ?? ""}, task_id=${templateCardEvent?.task_id ?? ""}`,
-        );
-
-        try {
-          await updateTemplateCardOnEvent({
-            frame,
-            accountId: account.accountId,
-            runtime,
-            wsClient,
-          });
-        } catch (updateErr) {
-          runtime.error?.(
-            `[${account.accountId}] [template-card-update] Failed to update template card: ${String(updateErr)}`,
-          );
-        }
-
-        const entry = await prepareWeComMessage({
-          frame,
-          account,
-          config,
-          runtime,
-          wsClient,
-        });
-        if (entry) {
-          await processWeComMessageNow(entry);
-        }
       } catch (err) {
-        runtime.error?.(
-          `[${account.accountId}] Failed to process template_card_event: ${String(err)}`,
-        );
+        runtime.error?.(`[${account.accountId}] Failed to process event callback: ${String(err)}`);
       }
     });
 
-    runtime.log?.(
-      `[${account.accountId}] Event listeners attached: message + event(template_card_event)`,
-    );
+    runtime.log?.(`[${account.accountId}] Event listeners attached: message + event`);
 
     // 启动前预热 reqId 缓存，确保完成后再建立连接，避免 getSync 在预热完成前返回 undefined
     warmupReqIdStore(account.accountId, (...args) => runtime.log?.(...args))

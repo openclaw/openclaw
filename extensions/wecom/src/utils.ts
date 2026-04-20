@@ -5,9 +5,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { CHANNEL_ID } from "./const.js";
 import { DEFAULT_ACCOUNT_ID } from "./openclaw-compat.js";
-import type { ResolvedAgentAccount } from "./types/account.js";
 import type {
-  WecomAgentConfig,
   WecomNetworkConfig,
   WecomMediaConfig,
   WecomDynamicAgentsConfig,
@@ -46,28 +44,12 @@ export interface WeComConfig {
   sendThinkingMessage?: boolean;
   /** Additional local media path allowlist (supports ~ for home directory), e.g. ["~/Downloads", "~/Documents"] */
   mediaLocalRoots?: string[];
-  /** Agent mode configuration (self-built app) */
-  agent?: WecomAgentConfig;
   /** Network configuration */
   network?: WecomNetworkConfig;
   /** Media processing configuration */
   media?: WecomMediaConfig;
   /** Dynamic Agent configuration */
   dynamicAgents?: WecomDynamicAgentsConfig;
-
-  // ── Webhook mode extension fields ──────────────────────────────────
-  /** Connection mode: webhook | websocket (default: websocket) */
-  connectionMode?: "webhook" | "websocket";
-  /** Webhook verification token */
-  token?: string;
-  /** AES encryption key (43-character Base64) */
-  encodingAESKey?: string;
-  /** Receiver ID */
-  receiveId?: string;
-  /** enter_chat welcome message */
-  welcomeText?: string;
-  /** Streaming placeholder prompt content */
-  streamPlaceholderContent?: string;
 }
 
 /**
@@ -88,12 +70,6 @@ export interface ResolvedWeComAccount {
   /** Whether to send "thinking" messages, defaults to true */
   sendThinkingMessage: boolean;
   config: WeComConfig;
-  /** Agent mode capabilities (self-built app) */
-  agent?: ResolvedAgentAccount;
-  /** Webhook mode configuration */
-  token?: string;
-  encodingAESKey?: string;
-  receiveId?: string;
 }
 
 /**

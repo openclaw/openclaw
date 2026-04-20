@@ -3,20 +3,16 @@ summary: "WeCom setup, config, and usage"
 read_when:
   - You want to connect OpenClaw to WeCom (企业微信)
   - You need WeCom Bot credential setup
-  - You want WeCom Bot, Agent, or Webhook mode support
 title: WeCom
 ---
 
 # WeCom (企业微信)
 
-WeCom connects to OpenClaw via three connection modes:
-
-- **Bot WebSocket** (primary): real-time bidirectional messaging via the official WeCom Bot API
-- **Agent HTTP API** (fallback): automatic fallback when Bot WS is unavailable, using a self-built app's HTTP API
-- **Webhook** (passive): HTTP callback endpoint for custom app integration
+WeCom connects to OpenClaw via **Bot WebSocket** long-connection, using the
+official WeCom Bot API for real-time bidirectional messaging.
 
 The plugin supports direct messages, group chats, media (images, voice, video,
-files), template card messages, and MCP tool integration.
+files), and MCP tool integration.
 
 Status: bundled plugin. Direct messages, group chats, and media are supported.
 
@@ -26,8 +22,6 @@ Current OpenClaw releases bundle WeCom, so normal packaged builds do not need
 a separate `openclaw plugins install` step.
 
 ## Setup
-
-### Bot mode (recommended)
 
 1. Log in to the [WeCom Admin Console](https://work.weixin.qq.com/wework_admin/frame#/aiHelper/list?from=openclaw)
    and navigate to **Smart Bots** (智能机器人).
@@ -55,61 +49,9 @@ openclaw channels add
 openclaw configure --section channels
 ```
 
-### Agent mode (self-built app)
-
-Agent mode uses a WeCom self-built application (自建应用) for HTTP-based
-messaging. It serves as an automatic fallback when Bot WebSocket is unavailable.
-
-1. Go to the [WeCom Admin Console](https://work.weixin.qq.com/wework_admin/frame#/apps)
-   → **App Management** → **Create App**.
-2. Note the **CorpID** (from the enterprise info page), **AgentID**, and **CorpSecret**.
-3. Under **Receive Messages**, set the callback URL and note the **Token** and **EncodingAESKey**.
-4. Configure in `openclaw.json5`:
-
-```json5
-{
-  channels: {
-    wecom: {
-      enabled: true,
-      agent: {
-        corpId: "YOUR_CORP_ID",
-        corpSecret: "YOUR_CORP_SECRET",
-        agentId: 1000002,
-        token: "YOUR_CALLBACK_TOKEN",
-        encodingAESKey: "YOUR_ENCODING_AES_KEY",
-      },
-    },
-  },
-}
-```
-
-### Webhook mode
-
-Webhook mode provides a passive HTTP callback endpoint. WeCom pushes encrypted
-messages to OpenClaw, which decrypts and processes them.
-
-1. Create a self-built app (same as Agent mode steps 1–3).
-2. Configure:
-
-```json5
-{
-  channels: {
-    wecom: {
-      enabled: true,
-      token: "YOUR_CALLBACK_TOKEN",
-      encodingAESKey: "YOUR_ENCODING_AES_KEY",
-      receiveId: "YOUR_CORP_ID",
-    },
-  },
-}
-```
-
-3. Set the callback URL in WeCom Admin Console to
-   `https://YOUR_HOST/plugins/wecom/bot`.
-
 ## Configure
 
-### Minimal config (Bot mode)
+### Minimal config
 
 ```json5
 {
@@ -221,10 +163,6 @@ wecom_mcp call contact getContact '{}'
 
 - **Bot not responding:** verify `botId` and `secret` are correct. Check the
   Gateway logs for `WSAuthFailureError`.
-- **Agent fallback not working:** ensure `agent.corpId`, `agent.corpSecret`,
-  `agent.token`, and `agent.encodingAESKey` are all configured.
-- **Webhook messages not arriving:** verify the callback URL is reachable from
-  WeCom servers and the `token` + `encodingAESKey` match.
 - **"bundled channel entry wecom missing contract" log:** this is expected if
   the channel is not yet loaded. It does not affect functionality.
 - **Media not sending:** check that the media URL is accessible and file size
