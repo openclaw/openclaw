@@ -562,6 +562,12 @@ function resolveConfiguredFallbackModel(params: {
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
+  const mergedParams = mergeConfiguredModelParams({
+    cfg,
+    provider,
+    modelId,
+    configuredParams: configuredModel?.params,
+  });
   const fallbackTransport = resolveProviderTransport({
     provider,
     api: providerConfig?.api ?? "openai-responses",
@@ -609,6 +615,7 @@ function resolveConfiguredFallbackModel(params: {
           providerConfig?.models?.[0]?.maxTokens ??
           DEFAULT_CONTEXT_TOKENS,
         headers: requestConfig.headers,
+        ...(mergedParams ? { params: mergedParams } : {}),
       } as Model<Api>,
       providerRequest,
     ),

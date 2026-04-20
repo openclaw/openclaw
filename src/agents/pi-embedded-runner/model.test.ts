@@ -369,6 +369,103 @@ describe("resolveModel", () => {
     expect(result.model?.maxTokens).toBe(32768);
   });
 
+  it("threads params from models.providers.<id>.models[].params onto runtime Model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                contextWindow: 262144,
+                params: { num_ctx: 16384 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "model-a", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.contextWindow).toBe(262144);
+    expect((result.model as unknown as { params?: Record<string, unknown> }).params).toEqual({
+      num_ctx: 16384,
+    });
+  });
+
+  it("threads params from agents.defaults.models[provider/id].params onto runtime Model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom/model-a": {
+              params: { num_ctx: 8192 },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                contextWindow: 262144,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "model-a", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { params?: Record<string, unknown> }).params).toEqual({
+      num_ctx: 8192,
+    });
+  });
+
+  it("prefers models.providers params over agents.defaults params on conflict", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom/model-a": {
+              params: { num_ctx: 8192, temperature: 0.5 },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                contextWindow: 262144,
+                params: { num_ctx: 16384 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "model-a", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { params?: Record<string, unknown> }).params).toEqual({
+      num_ctx: 16384,
+      temperature: 0.5,
+    });
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {
