@@ -20,6 +20,8 @@ export type MonitorFeishuOpts = {
   accountId?: string;
 };
 
+const FEISHU_STARTUP_HARD_TIMEOUT_MS = 3_000;
+
 export {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -27,6 +29,44 @@ export {
   resolveReactionSyntheticEvent,
 };
 export type { FeishuReactionCreatedEvent };
+
+function logFeishuStartupProbeWarning(
+  accountId: string,
+  runtime: RuntimeEnv | undefined,
+  detail: string,
+): void {
+  const log = runtime?.error ?? runtime?.log ?? console.warn;
+  log(`feishu[${accountId}]: ${detail}`);
+}
+
+function startFeishuAccountMonitorInBackground(params: {
+  cfg: ClawdbotConfig;
+  account: ReturnType<typeof resolveFeishuRuntimeAccount>;
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+  botOpenIdSource?:
+    | {
+        kind: "prefetched";
+        botOpenId?: string;
+        botName?: string;
+      }
+    | undefined;
+}): void {
+  void monitorSingleAccount({
+    cfg: params.cfg,
+    account: params.account,
+    runtime: params.runtime,
+    abortSignal: params.abortSignal,
+    botOpenIdSource: params.botOpenIdSource,
+  }).catch((error) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    logFeishuStartupProbeWarning(
+      params.account.accountId,
+      params.runtime,
+      `background runtime monitor failed: ${detail}`,
+    );
+  });
+}
 
 export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
   const cfg = opts.config;
@@ -44,12 +84,13 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
-    return monitorSingleAccount({
+    startFeishuAccountMonitorInBackground({
       cfg,
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
     });
+    return;
   }
 
   const accounts = listEnabledFeishuAccounts(cfg);
@@ -61,36 +102,51 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     `feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
   );
 
-  const monitorPromises: Promise<void>[] = [];
-  for (const account of accounts) {
-    if (opts.abortSignal?.aborted) {
-      log("feishu: abort signal received during startup preflight; stopping startup");
-      break;
-    }
-
-    // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
-    const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
-      runtime: opts.runtime,
-      abortSignal: opts.abortSignal,
-    });
-
-    if (opts.abortSignal?.aborted) {
-      log("feishu: abort signal received during startup preflight; stopping startup");
-      break;
-    }
-
-    monitorPromises.push(
-      monitorSingleAccount({
-        cfg,
-        account,
+  const startupProbeResults = await Promise.allSettled(
+    accounts.map(async (account) => {
+      const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
-        botOpenIdSource: { kind: "prefetched", botOpenId, botName },
-      }),
-    );
-  }
+        timeoutMs: FEISHU_STARTUP_HARD_TIMEOUT_MS,
+      });
+      return { account, botOpenId, botName };
+    }),
+  );
 
-  await Promise.all(monitorPromises);
+  for (const result of startupProbeResults) {
+    if (opts.abortSignal?.aborted) {
+      log("feishu: abort signal received during startup preflight; stopping startup");
+      break;
+    }
+
+    if (result.status === "rejected") {
+      logFeishuStartupProbeWarning(
+        "unknown",
+        opts.runtime,
+        `startup probe failed: ${
+          result.reason instanceof Error ? result.reason.message : String(result.reason)
+        }`,
+      );
+      continue;
+    }
+
+    const { account, botOpenId, botName } = result.value;
+    if (!botOpenId) {
+      logFeishuStartupProbeWarning(
+        account.accountId,
+        opts.runtime,
+        "startup probe degraded; continuing without prefetched bot identity",
+      );
+    }
+
+    startFeishuAccountMonitorInBackground({
+      cfg,
+      account,
+      runtime: opts.runtime,
+      abortSignal: opts.abortSignal,
+      botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+    });
+  }
 }
 
 export function stopFeishuMonitor(accountId?: string): void {

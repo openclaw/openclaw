@@ -1,22 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
-const probeFeishuMock = vi.hoisted(() => vi.fn());
+const fetchBotIdentityForMonitorMock = vi.hoisted(() => vi.fn());
+const monitorSingleAccountMock = vi.hoisted(() => vi.fn(() => new Promise<void>(() => {})));
 
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
+vi.mock("./monitor.startup.js", () => ({
+  fetchBotIdentityForMonitor: fetchBotIdentityForMonitorMock,
 }));
 
-vi.mock("./client.js", async () => {
-  const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
-  return createFeishuClientMockModule();
-});
-vi.mock("./runtime.js", async () => {
-  const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
-  return createFeishuRuntimeMockModule();
-});
+vi.mock("./monitor.account.js", () => ({
+  monitorSingleAccount: monitorSingleAccountMock,
+  resolveReactionSyntheticEvent: vi.fn(),
+}));
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {
@@ -39,153 +35,84 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
   } as ClawdbotConfig;
 }
 
-async function waitForStartedAccount(started: string[], accountId: string) {
-  for (let i = 0; i < 10 && !started.includes(accountId); i += 1) {
-    await Promise.resolve();
-  }
-}
-
 afterEach(() => {
   stopFeishuMonitor();
+  vi.clearAllMocks();
 });
 
 describe("Feishu monitor startup preflight", () => {
-  it("starts account probes sequentially to avoid startup bursts", async () => {
-    let inFlight = 0;
-    let maxInFlight = 0;
+  it("probes multiple accounts concurrently instead of serially", async () => {
     const started: string[] = [];
     let releaseProbes!: () => void;
     const probesReleased = new Promise<void>((resolve) => {
-      releaseProbes = () => resolve();
-    });
-    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
-      started.push(account.accountId);
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await probesReleased;
-      inFlight -= 1;
-      return { ok: true, botOpenId: `bot_${account.accountId}` };
+      releaseProbes = resolve;
     });
 
-    const abortController = new AbortController();
+    fetchBotIdentityForMonitorMock.mockImplementation(async (account: { accountId: string }) => {
+      started.push(account.accountId);
+      await probesReleased;
+      return { botOpenId: `bot_${account.accountId}` };
+    });
+
     const monitorPromise = monitorFeishuProvider({
       config: buildMultiAccountWebsocketConfig(["alpha", "beta", "gamma"]),
-      abortSignal: abortController.signal,
     });
 
-    try {
-      await Promise.resolve();
-      await Promise.resolve();
+    await Promise.resolve();
+    expect(started.sort()).toEqual(["alpha", "beta", "gamma"]);
 
-      expect(started).toEqual(["alpha"]);
-      expect(maxInFlight).toBe(1);
-    } finally {
-      releaseProbes();
-      abortController.abort();
-      await monitorPromise;
-    }
+    releaseProbes();
+    await monitorPromise;
   });
 
-  it("does not refetch bot info after a failed sequential preflight", async () => {
-    const started: string[] = [];
-    let releaseBetaProbe!: () => void;
-    const betaProbeReleased = new Promise<void>((resolve) => {
-      releaseBetaProbe = () => resolve();
+  it("forces startup probe timeoutMs to 3000ms", async () => {
+    fetchBotIdentityForMonitorMock.mockResolvedValue({ botOpenId: "bot_alpha" });
+
+    await monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha"]),
     });
 
-    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
-      started.push(account.accountId);
-      if (account.accountId === "alpha") {
-        return { ok: false };
-      }
-      await betaProbeReleased;
-      return { ok: true, botOpenId: `bot_${account.accountId}` };
-    });
-
-    const abortController = new AbortController();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
-      abortSignal: abortController.signal,
-    });
-
-    try {
-      await waitForStartedAccount(started, "beta");
-      expect(started).toEqual(["alpha", "beta"]);
-      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
-    } finally {
-      releaseBetaProbe();
-      abortController.abort();
-      await monitorPromise;
-    }
-  });
-
-  it("continues startup when probe layer reports timeout", async () => {
-    const started: string[] = [];
-    let releaseBetaProbe!: () => void;
-    const betaProbeReleased = new Promise<void>((resolve) => {
-      releaseBetaProbe = () => resolve();
-    });
-
-    probeFeishuMock.mockImplementation((account: { accountId: string }) => {
-      started.push(account.accountId);
-      if (account.accountId === "alpha") {
-        return Promise.resolve({ ok: false, error: "probe timed out after 10000ms" });
-      }
-      return betaProbeReleased.then(() => ({ ok: true, botOpenId: `bot_${account.accountId}` }));
-    });
-
-    const abortController = new AbortController();
-    const runtime = createNonExitingRuntimeEnv();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
-      runtime,
-      abortSignal: abortController.signal,
-    });
-
-    try {
-      await waitForStartedAccount(started, "beta");
-      expect(started).toEqual(["alpha", "beta"]);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("bot info probe timed out"),
-      );
-    } finally {
-      releaseBetaProbe();
-      abortController.abort();
-      await monitorPromise;
-    }
-  });
-
-  it("stops sequential preflight when aborted during probe", async () => {
-    const started: string[] = [];
-    probeFeishuMock.mockImplementation(
-      (account: { accountId: string }, options: { abortSignal?: AbortSignal }) => {
-        started.push(account.accountId);
-        return new Promise((resolve) => {
-          options.abortSignal?.addEventListener(
-            "abort",
-            () => resolve({ ok: false, error: "probe aborted" }),
-            { once: true },
-          );
-        });
-      },
+    expect(fetchBotIdentityForMonitorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "alpha" }),
+      expect.objectContaining({ timeoutMs: 3000 }),
     );
+  });
 
-    const abortController = new AbortController();
-    const monitorPromise = monitorFeishuProvider({
-      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
-      abortSignal: abortController.signal,
-    });
+  it("starts runtime monitors in background and returns after probes complete", async () => {
+    fetchBotIdentityForMonitorMock.mockResolvedValue({ botOpenId: "bot_alpha" });
 
-    try {
-      await Promise.resolve();
-      expect(started).toEqual(["alpha"]);
+    await expect(
+      monitorFeishuProvider({
+        config: buildMultiAccountWebsocketConfig(["alpha"]),
+      }),
+    ).resolves.toBeUndefined();
 
-      abortController.abort();
-      await monitorPromise;
+    expect(monitorSingleAccountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botOpenIdSource: expect.objectContaining({
+          kind: "prefetched",
+          botOpenId: "bot_alpha",
+        }),
+      }),
+    );
+  });
 
-      expect(started).toEqual(["alpha"]);
-    } finally {
-      abortController.abort();
-    }
+  it("degrades failed probes instead of blocking startup", async () => {
+    fetchBotIdentityForMonitorMock
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ botOpenId: "bot_beta" });
+
+    await expect(
+      monitorFeishuProvider({
+        config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(monitorSingleAccountMock).toHaveBeenCalledTimes(1);
+    expect(monitorSingleAccountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: expect.objectContaining({ accountId: "beta" }),
+      }),
+    );
   });
 });
