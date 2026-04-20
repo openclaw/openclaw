@@ -132,10 +132,10 @@ export function formatDroppedMediaNotice(dropped: readonly DroppedMediaItem[]): 
   }
   if (dropped.length === 1) {
     const item = dropped[0];
-    return `\u26a0 Attachment not sent: ${item.displayName} (${REASON_LABELS[item.code]})`;
+    return `\u26a0 Attachment not sent: \`${item.displayName}\` (${REASON_LABELS[item.code]})`;
   }
   const lines = dropped.map(
-    (item) => `\u2022 ${item.displayName} \u2014 ${REASON_LABELS[item.code]}`,
+    (item) => `\u2022 \`${item.displayName}\` \u2014 ${REASON_LABELS[item.code]}`,
   );
   return `\u26a0 ${dropped.length} attachments not sent:\n${lines.join("\n")}`;
 }
@@ -1665,11 +1665,11 @@ async function deliverOutboundPayloadsCore(
     }
   }
   if (params.mirror && results.length > 0) {
-    // Only collect dropped-media notices from payloads that were actually
-    // delivered (not cancelled by message_sending hooks or errored).
-    const allDropped = normalizedPayloads
-      .filter((_, i) => deliveredPayloadIndices.has(i))
-      .flatMap((p) => p.droppedMedia ?? []);
+    // Collect dropped-media from all payloads regardless of delivery status.
+    // A drop event means media was silently removed; that should always be
+    // recorded in the transcript for auditability even if the text payload
+    // itself failed or was cancelled.
+    const allDropped = normalizedPayloads.flatMap((p) => p.droppedMedia ?? []);
     const droppedNotice = allDropped.length > 0 ? formatDroppedMediaNotice(allDropped) : "";
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,
