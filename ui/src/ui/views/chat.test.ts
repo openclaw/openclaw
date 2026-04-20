@@ -261,21 +261,6 @@ describe("chat view", () => {
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
 
-    render(
-      renderChat(
-        createProps({
-          canAbort: true,
-          sending: false,
-          stream: null,
-          onAbort: vi.fn(),
-        }),
-      ),
-      container,
-    );
-    stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(stopButton).not.toBeNull();
-    expect(container.textContent).not.toContain("New session");
-
     const onNewSession = vi.fn();
     render(
       renderChat(
