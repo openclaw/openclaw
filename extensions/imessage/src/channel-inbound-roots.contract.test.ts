@@ -1,12 +1,12 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
-} from "../../test/helpers/channels/channel-media-roots-contract.js";
-import type { OpenClawConfig } from "../config/types.js";
+} from "../contract-api.js";
 
-describe("channel-inbound-roots contract", () => {
+describe("iMessage channel-inbound-roots contract", () => {
   function expectResolvedRootsCase(resolve: () => string[], expected: readonly string[]) {
     expect(resolve()).toEqual(expected);
   }

@@ -1,12 +1,9 @@
-import { describe, expect, it } from "vitest";
-import {
-  getSignalContractSurface,
-  type SignalSender,
-} from "../../../../test/helpers/channels/dm-policy-contract.js";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
-} from "../../../security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/channel-policy";
+import { describe, expect, it } from "vitest";
+import { isSignalSenderAllowed, type SignalSender } from "../contract-api.js";
 
 type ChannelSmokeCase = {
   name: string;
@@ -21,9 +18,7 @@ const signalSender: SignalSender = {
 };
 const signalSenderE164 = "+15550001111";
 
-function createChannelSmokeCases(
-  isSignalSenderAllowed: (sender: SignalSender, allowFrom: string[]) => boolean,
-): ChannelSmokeCase[] {
+function createChannelSmokeCases(): ChannelSmokeCase[] {
   return [
     {
       name: "bluebubbles",
@@ -52,7 +47,7 @@ function expandChannelIngressCases(cases: readonly ChannelSmokeCase[]) {
   );
 }
 
-describe("security/dm-policy-shared channel smoke", () => {
+describe("Signal dm-policy shared contract", () => {
   function expectBlockedGroupAccess(params: {
     storeAllowFrom: string[];
     isSenderAllowed: (allowFrom: string[]) => boolean;
@@ -71,11 +66,8 @@ describe("security/dm-policy-shared channel smoke", () => {
     expect(access.reason).toBe("groupPolicy=allowlist (not allowlisted)");
   }
 
-  it("blocks group ingress when sender is only in pairing store", async () => {
-    const { isSignalSenderAllowed } = await getSignalContractSurface();
-    for (const { testCase } of expandChannelIngressCases(
-      createChannelSmokeCases(isSignalSenderAllowed),
-    )) {
+  it("blocks group ingress when sender is only in pairing store", () => {
+    for (const { testCase } of expandChannelIngressCases(createChannelSmokeCases())) {
       expectBlockedGroupAccess({
         storeAllowFrom: testCase.storeAllowFrom,
         isSenderAllowed: testCase.isSenderAllowed,
