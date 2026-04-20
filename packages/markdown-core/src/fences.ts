@@ -55,7 +55,11 @@ export function scanFenceSpans(
           marker,
           indent,
         };
-      } else if (open.markerChar === markerChar && markerLen >= open.markerLen) {
+      } else if (
+        open.markerChar === markerChar &&
+        markerLen >= open.markerLen &&
+        /^\s*$/.test(match[3])
+      ) {
         const end = lineEnd;
         spans.push({
           start: open.start,
