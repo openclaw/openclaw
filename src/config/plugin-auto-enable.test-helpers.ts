@@ -66,6 +66,7 @@ export function makeRegistry(
     providers?: string[];
     configSchema?: Record<string, unknown>;
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
+    origin?: "config" | "global" | "workspace" | "bundled";
   }>,
 ): PluginManifestRegistry {
   return {
@@ -82,7 +83,7 @@ export function makeRegistry(
       cliBackends: [],
       skills: [],
       hooks: [],
-      origin: "config" as const,
+      origin: plugin.origin ?? ("config" as const),
       rootDir: `/fake/${plugin.id}`,
       source: `/fake/${plugin.id}/index.js`,
       manifestPath: `/fake/${plugin.id}/openclaw.plugin.json`,
