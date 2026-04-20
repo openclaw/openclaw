@@ -597,9 +597,10 @@ async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
     prepared.cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
     if (runEstimatedCostUsd !== undefined) {
-      prepared.cronSession.sessionEntry.estimatedCostUsd =
-        (resolveNonNegativeNumber(prepared.cronSession.sessionEntry.estimatedCostUsd) ?? 0) +
-        runEstimatedCostUsd;
+      // Snapshot — mirror the token fields above.  `runEstimatedCostUsd` is
+      // derived from `usage` which is the run-cumulative usage; accumulating
+      // would compound the cost for a single run.
+      prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
     }
     telemetry = {
       model: modelUsed,

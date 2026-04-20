@@ -131,8 +131,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
     if (runEstimatedCostUsd !== undefined) {
-      next.estimatedCostUsd =
-        (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
+      // Snapshot — mirror the token fields above.  `runEstimatedCostUsd` is
+      // derived from `usage` which is the run-cumulative usage; accumulating
+      // would compound the cost for a single run.
+      next.estimatedCostUsd = runEstimatedCostUsd;
     }
   } else if (
     typeof entry.totalTokens === "number" &&

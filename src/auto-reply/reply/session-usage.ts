@@ -132,7 +132,6 @@ export async function persistSessionUsageUpdate(params: {
             providerUsed: params.providerUsed ?? entry.modelProvider,
             modelUsed: params.modelUsed ?? entry.model,
           });
-          const existingEstimatedCostUsd = resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0;
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
@@ -150,7 +149,12 @@ export async function persistSessionUsageUpdate(params: {
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
           if (runEstimatedCostUsd !== undefined) {
-            patch.estimatedCostUsd = existingEstimatedCostUsd + runEstimatedCostUsd;
+            // Snapshot, mirroring the token fields above.  `runEstimatedCostUsd`
+            // is derived from `params.usage` which is the run-cumulative usage;
+            // this handler is invoked from several call sites per run, so
+            // accumulating would compound the cost for a single run (#53734
+            // underreports, this path overreports by the same mechanism).
+            patch.estimatedCostUsd = runEstimatedCostUsd;
           } else if (entry.estimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = entry.estimatedCostUsd;
           }
