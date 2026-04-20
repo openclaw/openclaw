@@ -19,7 +19,7 @@ import { collapseRepeatedVisibleSuffixAfterDelimiter } from "./repeated-visible-
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
-const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)\b/i;
+const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
 const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
   /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
 

@@ -668,6 +668,10 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("");
   });
 
+  it("strips leaked plan-prefixed channel delimiters", () => {
+    expect(sanitizeAssistantVisibleText("plan: <channel|>Visible answer")).toBe("Visible answer");
+  });
+
   it("preserves indentation for a leading fenced block while trimming surrounding blank lines", () => {
     const input = "\n\n  ```js\n  const x = 1;\n  ```\n";
 

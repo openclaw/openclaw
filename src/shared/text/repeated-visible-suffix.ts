@@ -3,7 +3,7 @@ const MIN_STRUCTURED_REPEAT_UNIT_LENGTH = 8;
 const VISIBLE_SUFFIX_BOUNDARY_RE = /[.!?:;)\]}>`'"]$/;
 const INTERNAL_PREAMBLE_HINT_RE =
   /\b(?:the user|instruction|output content|reply with|reply to|final response|general instruction|i will|i must|internal planning|plan:)\b/i;
-const DELIMITER_LEAK_HARD_HINT_RE = /\b(?:internal planning|plan:)\b/i;
+const DELIMITER_LEAK_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
 const DELIMITER_LEAK_LONG_HINT_RE =
   /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
 const SINGLE_ANSWER_INTENT_RE =
@@ -13,6 +13,7 @@ const INTENTIONAL_REPEAT_INTENT_RE =
 const EXACT_TARGET_HINT_RE =
   /\b(?:specific string|reply with|output the text directly|output content)\b/i;
 const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
+const MAX_STRUCTURED_SUFFIX_SCAN_CHARS = 8_192;
 
 type RepeatedPatternMatch = {
   unit: string;
@@ -244,32 +245,36 @@ export function extractStructuredRepeatedVisibleSuffix(text: string): string {
     return text;
   }
 
-  const maxUnitLength = Math.floor(text.length / 2);
+  const scanText =
+    text.length > MAX_STRUCTURED_SUFFIX_SCAN_CHARS
+      ? text.slice(-MAX_STRUCTURED_SUFFIX_SCAN_CHARS)
+      : text;
+  const maxUnitLength = Math.floor(scanText.length / 2);
   for (let unitLength = 1; unitLength <= maxUnitLength; unitLength += 1) {
     for (let tailLength = 0; tailLength < unitLength; tailLength += 1) {
-      const unitEnd = text.length - tailLength;
+      const unitEnd = scanText.length - tailLength;
       const unitStart = unitEnd - unitLength;
       if (unitStart < 0) {
         continue;
       }
 
-      const unit = text.slice(unitStart, unitEnd);
+      const unit = scanText.slice(unitStart, unitEnd);
       if (!looksStructuredRepeatedUnit(unit)) {
         continue;
       }
 
-      const tail = text.slice(unitEnd);
+      const tail = scanText.slice(unitEnd);
       if (tail && tail !== unit.slice(0, tail.length)) {
         continue;
       }
 
       let start = unitStart;
       let fullRepeats = 1;
-      while (start - unitLength >= 0 && text.slice(start - unitLength, start) === unit) {
+      while (start - unitLength >= 0 && scanText.slice(start - unitLength, start) === unit) {
         start -= unitLength;
         fullRepeats += 1;
       }
-      const prefix = text.slice(0, start);
+      const prefix = scanText.slice(0, start);
       if (fullRepeats < 2 || !endsAtVisibleSuffixBoundary(prefix)) {
         continue;
       }

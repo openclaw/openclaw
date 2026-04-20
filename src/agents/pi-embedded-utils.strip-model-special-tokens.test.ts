@@ -63,4 +63,8 @@ describe("stripModelSpecialTokens", () => {
       "Visible answer",
     );
   });
+
+  it("treats plan-prefixed channel delimiters as leaked scaffolding", () => {
+    expect(stripModelSpecialTokens("plan: <channel|>Visible answer")).toBe("Visible answer");
+  });
 });
