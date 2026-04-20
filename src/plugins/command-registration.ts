@@ -74,6 +74,27 @@ export function validateCommandName(name: string): string | null {
     "reasoning",
     "elevated",
     "usage",
+    // PR-11: reserve `plan` so third-party plugins can't shadow the
+    // universal /plan slash command (otherwise plugin-handler runs
+    // BEFORE handlePlanCommand in commands-handlers.runtime.ts and can
+    // hijack /plan accept / /plan auto / etc).
+    "plan",
+    // Also reserve other built-in command names that should have been
+    // here all along (caught during the PR-11 deep-dive review).
+    "approve",
+    "tools",
+    "tasks",
+    "plugins",
+    "mcp",
+    "acp",
+    "focus",
+    "unfocus",
+    "agents",
+    "tts",
+    "fast",
+    "trace",
+    "session",
+    "export-session",
   ]);
 
   if (reservedCommands.has(trimmed)) {

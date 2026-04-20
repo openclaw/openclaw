@@ -216,6 +216,19 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       category: "management",
       tier: "power",
     }),
+    // PR-11: universal /plan slash commands. Works on every channel
+    // (Telegram, Discord, Signal, iMessage, Slack, CLI) so users can
+    // resolve plan approvals with text when inline buttons aren't
+    // available. Routes through sessions.patch on the backend; same
+    // state machine the webchat chip uses.
+    defineChatCommand({
+      key: "plan",
+      nativeName: "plan",
+      description: "Manage plan-mode approvals (accept / revise / auto / restate / on / off).",
+      textAlias: "/plan",
+      acceptsArgs: true,
+      category: "management",
+    }),
     defineChatCommand({
       key: "context",
       nativeName: "context",
