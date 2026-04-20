@@ -343,6 +343,31 @@ async function persistApprovalMetadata(params: {
         title: params.title,
         approvalRunId: params.approvalRunId,
         ...(params.approvalId ? { approvalId: params.approvalId } : {}),
+        // PR #68939 follow-up (Test 2 persister race fix): also write
+        // `approval: "pending"` here so the planMode.approval field
+        // moves in lockstep with `pendingInteraction.status`. The
+        // separate `persistPlanApprovalId` writer in
+        // `pi-embedded-subscribe.handlers.tools.ts:115` ALSO writes
+        // this field, but its `current.mode === "plan"` guard fails
+        // when rapid back-to-back plans land before
+        // `enter_plan_mode`'s `mode → "plan"` write commits to disk
+        // (Test 2 reproduces this reliably with 3 echo plans in
+        // burst). The result was that `autoApproveIfEnabled`'s 2-second
+        // poll loop timed out waiting for `approval === "pending"` for
+        // plans #2/#3 of the burst.
+        //
+        // Writing `approval: "pending"` here makes
+        // `persistApprovalMetadata` (which fires from the approval
+        // event — guaranteed to be at the moment of approval
+        // submission) the canonical write for both the
+        // `pendingInteraction.status` AND the legacy `planMode.approval`
+        // signal. `persistPlanApprovalId` becomes redundant in the
+        // happy path but stays as a fallback.
+        //
+        // Only set when `params.approvalId` is present — without an
+        // approvalId there's no actual approval to be pending on
+        // (e.g. mid-question persistence, or a malformed event).
+        ...(params.approvalId ? { approval: "pending" as const } : {}),
         updatedAt: Date.now(),
       },
       ...(params.approvalId
