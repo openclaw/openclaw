@@ -80,4 +80,21 @@ describe("downloadInboundMedia", () => {
     expect(result?.mimetype).toBe("application/pdf");
     expect(result?.fileName).toBe("report.pdf");
   });
+
+  it("unwraps wrapped document messages before downloading media", async () => {
+    const msg = {
+      message: {
+        groupMentionedMessage: {
+          message: {
+            documentMessage: { mimetype: "application/pdf", fileName: "wrapped-report.pdf" },
+          },
+        },
+      },
+    } as never;
+    const result = await downloadInboundMedia(msg, mockSock as never);
+    expect(result).toBeDefined();
+    expect(result?.mimetype).toBe("application/pdf");
+    expect(result?.fileName).toBe("wrapped-report.pdf");
+    expect(downloadMediaMessage).toHaveBeenCalledOnce();
+  });
 });

@@ -273,6 +273,14 @@ export function buildBuiltinChatCommands(
       tier: "standard",
     }),
     defineChatCommand({
+      key: "lean",
+      nativeName: "lean",
+      description:
+        "Run the full prompt-stack cleanup pass with safe autofixes and upgrade guidance.",
+      textAlias: "/lean",
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "btw",
       nativeName: "btw",
       nativeAliases: ["side"],
@@ -350,14 +358,14 @@ export function buildBuiltinChatCommands(
         arg: "action",
         title:
           "TTS Actions:\n" +
-          "• On – Enable TTS for responses\n" +
-          "• Off – Disable TTS\n" +
-          "• Status – Show current settings\n" +
-          "• Provider – Show or set the voice provider\n" +
-          "• Limit – Set max characters for TTS\n" +
-          "• Summary – Toggle AI summary for long texts\n" +
-          "• Audio – Generate TTS from custom text\n" +
-          "• Help – Show usage guide",
+          "• On - Enable TTS for responses\n" +
+          "• Off - Disable TTS\n" +
+          "• Status - Show current settings\n" +
+          "• Provider - Show or set the voice provider\n" +
+          "• Limit - Set max characters for TTS\n" +
+          "• Summary - Toggle AI summary for long texts\n" +
+          "• Audio - Generate TTS from custom text\n" +
+          "• Help - Show usage guide",
       },
     }),
     defineChatCommand({

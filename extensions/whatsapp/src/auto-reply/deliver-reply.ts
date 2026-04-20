@@ -15,6 +15,7 @@ import {
   prepareWhatsAppOutboundMedia,
   sendWhatsAppOutboundWithRetry,
 } from "../outbound-media-contract.js";
+import { looksLikePdfArchiveCandidate, maybeShoarchiveOutboundPdf } from "../pdf-shoarchive.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
@@ -217,6 +218,8 @@ export async function deliverWebReply(params: {
           ),
         );
       } else {
+        const fileName = media.fileName ?? "file";
+        const mimetype = media.mimetype;
         const quote = getQuote();
         rememberSendResult(
           await sendWithRetry(
@@ -224,15 +227,30 @@ export async function deliverWebReply(params: {
               msg.sendMedia(
                 {
                   document: media.buffer,
-                  fileName: media.fileName,
+                  fileName,
                   caption,
-                  mimetype: media.mimetype,
+                  mimetype,
                 },
                 quote,
               ),
             "media:document",
           ),
         );
+        if (
+          looksLikePdfArchiveCandidate({
+            mediaUrl,
+            contentType: mimetype,
+            fileName,
+          })
+        ) {
+          await maybeShoarchiveOutboundPdf({
+            mediaUrl,
+            contentType: mimetype,
+            fileName,
+            recipient: msg.from,
+            via: "WhatsApp",
+          });
+        }
       }
       whatsappOutboundLog.info(
         `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,

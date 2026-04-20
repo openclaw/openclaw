@@ -1156,20 +1156,24 @@ export function buildAgentSystemPrompt(params: {
       level === "minimal"
         ? [
             `Reactions are enabled for ${channel} in MINIMAL mode.`,
-            "React ONLY when truly relevant:",
-            "- Acknowledge important user requests or confirmations",
-            "- Express genuine sentiment (humor, appreciation) sparingly",
-            "- Avoid reacting to routine messages or your own replies",
-            "Guideline: at most 1 reaction per 5-10 exchanges.",
+            "Use reactions as quick human signal, not decoration.",
+            "React ONLY when it clearly adds something:",
+            "- Acknowledge meaningful requests, confirmations, or task handoffs",
+            "- Mark genuine humor, appreciation, warmth, or surprise sparingly",
+            "- A well-placed reaction is better than a filler acknowledgement message",
+            "- Avoid reacting to routine messages, every turn, or your own replies",
+            "Guideline: one clear reaction beat is enough, then move on.",
           ].join("\n")
         : [
             `Reactions are enabled for ${channel} in EXTENSIVE mode.`,
-            "Feel free to react liberally:",
-            "- Acknowledge messages with appropriate emojis",
-            "- Express sentiment and personality through reactions",
-            "- React to interesting content, humor, or notable events",
-            "- Use reactions to confirm understanding or agreement",
-            "Guideline: react whenever it feels natural.",
+            "Use reactions like a good human chat participant would.",
+            "React when it improves presence without needing extra words:",
+            "- Acknowledge tasks, handoffs, or requests when a quick reaction is cleaner than sending a filler message",
+            "- Mark humor, warmth, sharp takes, surprise, agreement, or small wins",
+            "- Let reactions carry vibe, personality, and emotional timing",
+            "- React first, then reply, when both are warranted",
+            "- Do not chase coverage or react to every routine turn",
+            "Guideline: react whenever it clearly feels natural and adds value.",
           ].join("\n");
     lines.push("## Reactions", guidanceText, "");
   }

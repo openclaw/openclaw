@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import { registerCreatedPdfInShoarchive } from "../../../../whatsapp/src/pdf-shoarchive.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
@@ -237,6 +239,27 @@ async function saveBrowserMediaResponse(params: {
     "browser",
     params.maxBytes,
   );
+  if (params.contentType === "application/pdf") {
+    const parsed = path.parse(saved.path);
+    const metadataPath = path.join(parsed.dir, `${parsed.name}.meta.json`);
+    await fs.writeFile(
+      metadataPath,
+      JSON.stringify(
+        {
+          producer: "browser.pdf",
+          sourceUrl: params.url,
+          targetId: params.targetId,
+          createdAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await registerCreatedPdfInShoarchive({
+      sourcePath: path.resolve(saved.path),
+    });
+  }
   params.res.json({
     ok: true,
     path: path.resolve(saved.path),
