@@ -49,7 +49,7 @@ export function createXaiPayloadCaptureStream() {
   };
 }
 
-export function runXaiGrok4ResponseStream(streamFn: StreamFn | undefined) {
+export function runXaiGrok4ResponseStream(streamFn: StreamFn | null | undefined) {
   void streamFn?.(
     {
       api: "openai-responses",
