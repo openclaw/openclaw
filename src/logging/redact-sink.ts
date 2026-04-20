@@ -6,14 +6,6 @@ const MAX_REDACTION_DEPTH = 8;
 const DIRECT_SECRET_MIN_LENGTH = 18;
 const DIRECT_SECRET_KEEP_START = 6;
 const DIRECT_SECRET_KEEP_END = 4;
-const NON_CREDENTIAL_FIELD_NAMES = new Set([
-  "passwordfile",
-  "tokenbudget",
-  "tokencount",
-  "tokenfield",
-  "tokenlimit",
-  "tokens",
-]);
 
 type JsonLikeRecord = Record<string, unknown>;
 
@@ -27,7 +19,7 @@ function normalizeFieldName(value: string): string {
 
 function isCredentialFieldName(key: string): boolean {
   const normalized = normalizeFieldName(key);
-  if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
+  if (!normalized) {
     return false;
   }
   if (normalized === "authorization" || normalized === "proxyauthorization") {
@@ -60,6 +52,7 @@ function shouldMaskDirectString(value: string): boolean {
 export function sanitizeStringForSink(
   text: string,
   resolved: ResolvedRedactOptions = resolveRedactOptions(),
+  options?: { allowDirectMask?: boolean },
 ): string {
   if (!text || shouldBypassRedaction(resolved)) {
     return text;
@@ -69,10 +62,14 @@ export function sanitizeStringForSink(
     if (redacted !== text) {
       return redacted;
     }
-    return shouldMaskDirectString(text) ? maskDirectSecret(text) : text;
+    return options?.allowDirectMask && shouldMaskDirectString(text) ? maskDirectSecret(text) : text;
   } catch {
     return text;
   }
+}
+
+function shouldAllowDirectStringFallback(key: string): boolean {
+  return key === "message" || key === "msg" || /^\d+$/u.test(key);
 }
 
 function sanitizeFieldValueForSink(
@@ -82,9 +79,14 @@ function sanitizeFieldValueForSink(
   seen: WeakSet<object>,
   depth: number,
 ): unknown {
-  if (typeof value === "string" && isCredentialFieldName(key)) {
-    const textSanitized = sanitizeStringForSink(value, resolved);
-    return textSanitized === value ? maskDirectSecret(value) : textSanitized;
+  if (typeof value === "string") {
+    if (isCredentialFieldName(key)) {
+      const textSanitized = sanitizeStringForSink(value, resolved, { allowDirectMask: true });
+      return textSanitized === value ? maskDirectSecret(value) : textSanitized;
+    }
+    return sanitizeStringForSink(value, resolved, {
+      allowDirectMask: shouldAllowDirectStringFallback(key),
+    });
   }
   return sanitizeValueForSink(value, resolved, seen, depth + 1);
 }
@@ -102,7 +104,7 @@ function sanitizeErrorForSink(
   try {
     const out: JsonLikeRecord = {
       name: sanitizeStringForSink(error.name, resolved),
-      message: sanitizeStringForSink(error.message, resolved),
+      message: sanitizeStringForSink(error.message, resolved, { allowDirectMask: true }),
     };
     if (typeof error.stack === "string") {
       out.stack = sanitizeStringForSink(error.stack, resolved);
@@ -148,7 +150,7 @@ function sanitizeValueForSink(
   depth: number,
 ): unknown {
   if (typeof value === "string") {
-    return sanitizeStringForSink(value, resolved);
+    return sanitizeStringForSink(value, resolved, { allowDirectMask: true });
   }
   if (
     value === null ||

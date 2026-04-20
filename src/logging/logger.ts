@@ -11,6 +11,7 @@ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { sanitizeLogRecordForSink } from "./redact-sink.js";
+import { resolveRedactOptions, type ResolvedRedactOptions } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -65,13 +66,17 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const externalTransports = new Set<LogTransport>();
 
-function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
+function attachExternalTransport(
+  logger: TsLogger<LogObj>,
+  transport: LogTransport,
+  redaction: ResolvedRedactOptions,
+): void {
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) {
       return;
     }
     try {
-      transport(sanitizeLogRecordForSink(logObj as LogTransportRecord));
+      transport(sanitizeLogRecordForSink(logObj as LogTransportRecord, redaction));
     } catch {
       // never block on logging failures
     }
@@ -157,11 +162,12 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });
+  const sinkRedaction = resolveRedactOptions();
 
   // Silent logging does not write files; skip all filesystem setup in this path.
   if (settings.level === "silent") {
     for (const transport of externalTransports) {
-      attachExternalTransport(logger, transport);
+      attachExternalTransport(logger, transport, sinkRedaction);
     }
     return logger;
   }
@@ -177,7 +183,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   logger.attachTransport((logObj: LogObj) => {
     try {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
-      const sanitizedLogObj = sanitizeLogRecordForSink({ ...logObj, time });
+      const sanitizedLogObj = sanitizeLogRecordForSink({ ...logObj, time }, sinkRedaction);
       const line = JSON.stringify(sanitizedLogObj);
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
@@ -206,7 +212,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     }
   });
   for (const transport of externalTransports) {
-    attachExternalTransport(logger, transport);
+    attachExternalTransport(logger, transport, sinkRedaction);
   }
 
   return logger;
@@ -318,7 +324,7 @@ export function registerLogTransport(transport: LogTransport): () => void {
   externalTransports.add(transport);
   const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   if (logger) {
-    attachExternalTransport(logger, transport);
+    attachExternalTransport(logger, transport, resolveRedactOptions());
   }
   return () => {
     externalTransports.delete(transport);

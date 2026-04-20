@@ -40,6 +40,22 @@ describe("redact-sink", () => {
     expect(record.items[0]).toBe(SECRET);
   });
 
+  it("preserves non-credential fields while still masking top-level message args", () => {
+    const record = {
+      0: SECRET,
+      time: "2026-02-27T15:04:00.000+08:00",
+      host: "api.production.openclaw.ai:443",
+      token: SECRET,
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved);
+
+    expect(sanitized[0]).toBe(MASKED);
+    expect(sanitized.time).toBe(record.time);
+    expect(sanitized.host).toBe(record.host);
+    expect(sanitized.token).toBe(MASKED);
+  });
+
   it("sanitizes Error payloads and stays JSON-safe for cycles", () => {
     const error = Object.assign(new Error(`Authorization: Bearer ${SECRET}`), {
       apiKey: SECRET,
