@@ -399,31 +399,67 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof persistedTotalTokens === "number" &&
     Number.isFinite(persistedTotalTokens) &&
     persistedTotalTokens > 0;
-  const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback) {
-    return entry ?? params.sessionEntry;
-  }
+  // Only use persisted totals when totalTokensFresh is explicitly true.
+  // When totalTokensFresh is undefined (legacy sessions where freshness was
+  // never tracked), fall through to transcript estimation so we don't gate
+  // compaction on potentially stale persisted values.
+  const hasFreshPersistedTokens = hasPersistedTotalTokens && entry.totalTokensFresh === true;
+
+  // Resolve the token count for the compaction threshold check.
+  //
+  // When totalTokens is fresh and available, use the persisted value directly
+  // (projected forward by the current prompt estimate). This includes cached
+  // tokens from providers like Anthropic — derivePromptTokens sums
+  // input + cacheRead + cacheWrite, so a 100% cache-hit session correctly
+  // reports the full context size.
+  //
+  // Previously, fresh-token sessions returned early WITHOUT checking the
+  // threshold, so compaction never triggered — even at 153% of the context
+  // window — when the prompt cache absorbed all tokens. (#66520)
+  //
+  // When totalTokens is stale/unknown (totalTokensFresh is false OR undefined),
+  // fall back to reading the session transcript and estimating token counts
+  // from the message content.
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const transcriptPromptTokens =
-    typeof freshPersistedTokens === "number"
-      ? undefined
-      : estimatePromptTokensFromSessionTranscript({
-          sessionId: entry.sessionId,
-          storePath: params.storePath,
-          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
-        });
-  const projectedTokenCount =
-    typeof transcriptPromptTokens === "number"
-      ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
-      : undefined;
-  const tokenCountForCompaction =
-    typeof projectedTokenCount === "number" &&
-    Number.isFinite(projectedTokenCount) &&
-    projectedTokenCount > 0
-      ? projectedTokenCount
-      : undefined;
+  let tokenCountForCompaction: number | undefined;
+  let transcriptPromptTokens: number | undefined;
+  if (hasFreshPersistedTokens) {
+    // Fresh persisted tokens available — project forward with prompt estimate
+    const projectedFreshTokens = resolveEffectivePromptTokens(
+      freshPersistedTokens,
+      undefined,
+      promptTokenEstimate,
+    );
+    tokenCountForCompaction =
+      typeof projectedFreshTokens === "number" &&
+      Number.isFinite(projectedFreshTokens) &&
+      projectedFreshTokens > 0
+        ? projectedFreshTokens
+        : freshPersistedTokens;
+  } else {
+    // Stale/unknown — fall back to transcript estimation.
+    // Always estimate from transcript when freshness is not confirmed,
+    // even if resolveFreshSessionTotalTokens would return a value
+    // (it treats totalTokensFresh: undefined as fresh, which is the
+    // exact bug we're guarding against here).
+    transcriptPromptTokens = estimatePromptTokensFromSessionTranscript({
+      sessionId: entry.sessionId,
+      storePath: params.storePath,
+      sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
+    });
+    const projectedTokenCount =
+      typeof transcriptPromptTokens === "number"
+        ? resolveEffectivePromptTokens(transcriptPromptTokens, undefined, promptTokenEstimate)
+        : undefined;
+    tokenCountForCompaction =
+      typeof projectedTokenCount === "number" &&
+      Number.isFinite(projectedTokenCount) &&
+      projectedTokenCount > 0
+        ? projectedTokenCount
+        : undefined;
+  }
 
   const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
   logVerbose(
@@ -435,6 +471,15 @@ export async function runPreflightCompactionIfNeeded(params: {
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"}`,
   );
+
+  // If transcript estimation didn't produce a token count and persisted totals
+  // are not confirmed fresh, we have no reliable basis for compaction gating.
+  // Bail out rather than letting shouldRunPreflightCompaction fall back to
+  // resolveFreshSessionTotalTokens (which treats totalTokensFresh: undefined
+  // as fresh).
+  if (typeof tokenCountForCompaction !== "number" && entry.totalTokensFresh !== true) {
+    return entry ?? params.sessionEntry;
+  }
 
   const shouldCompact = shouldRunPreflightCompaction({
     entry,

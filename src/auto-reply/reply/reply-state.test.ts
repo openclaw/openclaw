@@ -327,6 +327,57 @@ describe("shouldRunPreflightCompaction", () => {
       }),
     ).toBe(true);
   });
+
+  it("triggers when fresh token count (including cached) exceeds threshold", () => {
+    // Simulates a high-cache-hit Anthropic session: totalTokens = input + cacheRead = 305k,
+    // which far exceeds the 200k context window. The tokenCount override represents the
+    // projected total that the caller computes from fresh persisted tokens.
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 305_000, totalTokensFresh: true },
+        tokenCount: 305_000,
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 30_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not trigger when fresh token count is below threshold", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 50_000, totalTokensFresh: true },
+        tokenCount: 50_000,
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 30_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("triggers with partial cache hit where total still exceeds threshold", () => {
+    // 50% cache hit: input=80k, cacheRead=80k → totalTokens=160k (> 166k threshold? no)
+    // Actually: threshold = 200k - 30k - 4k = 166k; 160k < 166k → no compaction
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 160_000, totalTokensFresh: true },
+        tokenCount: 160_000,
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 30_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(false);
+    // Higher partial: 170k > 166k → compaction fires
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 170_000, totalTokensFresh: true },
+        tokenCount: 170_000,
+        contextWindowTokens: 200_000,
+        reserveTokensFloor: 30_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
