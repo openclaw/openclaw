@@ -25,6 +25,7 @@ function buildFakeSdk(): {
 
   const module: SdkModule = {
     CopilotClient: class {
+      start = vi.fn(async () => undefined);
       listModels = listModels;
       createSession = createSession;
       dispose = vi.fn(async () => undefined);

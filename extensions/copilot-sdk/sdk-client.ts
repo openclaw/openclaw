@@ -55,6 +55,7 @@ export type SdkModule = {
 };
 
 export type SdkClientInstance = {
+  start(): Promise<void>;
   listModels(): Promise<Array<{ id: string; name?: string }>>;
   createSession(options: {
     model: string;
@@ -124,6 +125,10 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
     useStdio: true,
     telemetry: { enabled: false },
   });
+
+  // The SDK requires an explicit start() call to spawn the CLI subprocess and
+  // establish the JSON-RPC connection before any other method can be used.
+  await instance.start();
 
   const wrapper: SdkClient = {
     async listModels() {
