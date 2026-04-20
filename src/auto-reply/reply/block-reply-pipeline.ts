@@ -49,6 +49,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
     replyToId: payload.replyToId ?? null,
+    dropped: payload.droppedMedia?.map((d) => `${d.code}:${d.displayName}`) ?? [],
   });
 }
 
@@ -63,6 +64,7 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
     presentation: payload.presentation ?? null,
     interactive: payload.interactive ?? null,
     channelData: payload.channelData ?? null,
+    dropped: payload.droppedMedia?.map((d) => `${d.code}:${d.displayName}`) ?? [],
   });
 }
 
