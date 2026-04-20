@@ -49,6 +49,24 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(lockPath)).resolves.toBeUndefined();
   });
 
+  it("preserves zero-age lock timestamps in doctor output", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, "future.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() + 60_000).toISOString() }),
+      "utf8",
+    );
+
+    await noteSessionLockHealth({ shouldRepair: false, staleMs: 60_000 });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("age=0s");
+    expect(message).not.toContain("age=unknown");
+  });
+
   it("removes stale locks in repair mode", async () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });

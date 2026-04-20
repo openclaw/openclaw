@@ -10,7 +10,8 @@ const DEFAULT_STALE_MS = 30 * 60 * 1000;
 function formatLockLine(lock: SessionLockInspection): string {
   const pidStatus =
     lock.pid === null ? "pid=missing" : `pid=${lock.pid} (${lock.pidAlive ? "alive" : "dead"})`;
-  const ageStatus = `age=${formatDurationCompact(lock.ageMs) ?? "unknown"}`;
+  const ageText = lock.ageMs === null ? "unknown" : (formatDurationCompact(lock.ageMs) ?? "0s");
+  const ageStatus = `age=${ageText}`;
   const staleStatus = lock.stale
     ? `stale=yes (${lock.staleReasons.join(", ") || "unknown"})`
     : "stale=no";
