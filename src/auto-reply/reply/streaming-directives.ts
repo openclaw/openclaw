@@ -59,7 +59,9 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
         hasReplyTag: false,
       };
 
-  text = replyParsed.text;
+  if (replyParsed.hasReplyTag || replyParsed.hasAudioTag) {
+    text = replyParsed.text;
+  }
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent =
