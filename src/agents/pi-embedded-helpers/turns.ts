@@ -65,11 +65,9 @@ function isUnsendableTrailingAssistant(message: AgentMessage): boolean {
     return true;
   }
   // Aborted/errored assistant turns without useful content cannot be the final
-  // message in an Anthropic request — they either fail the empty-content check
-  // or leave the transcript ending on an assistant role. Drop them even if
-  // they carry thinking-only blocks, since those would produce an empty
-  // outbound message anyway.
-  return isAbortedAssistantTurn(message) && isEffectivelyEmptyAssistantContent(message);
+  // message in an Anthropic request — isEffectivelyEmptyAssistantContent above
+  // already handles the thinking-only / empty-content cases.
+  return false;
 }
 
 /**
