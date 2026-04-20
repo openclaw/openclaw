@@ -1,8 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+  getDetachedTaskLifecycleRuntime,
+} from "./detached-task-runtime.js";
+import {
+  previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
@@ -38,6 +44,7 @@ type TaskRegistryMaintenanceRuntime = Parameters<
 afterEach(() => {
   stopTaskRegistryMaintenanceForTests();
   resetTaskRegistryMaintenanceRuntimeForTests();
+  resetDetachedTaskLifecycleRuntimeForTests();
 });
 
 function createTaskRegistryMaintenanceHarness(params: {
@@ -196,5 +203,36 @@ describe("task-registry maintenance issue #60299", () => {
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("skips markTaskLost and counts recovered when recovery hook recovers a stale task", async () => {
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-recovered",
+      childSessionKey: undefined,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+    });
+
+    const recoveryHook = vi.fn(() => ({ recovered: true }));
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      tryRecoverTaskBeforeMarkLost: recoveryHook,
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1, recovered: 0 });
+    const result = await runTaskRegistryMaintenance();
+    expect(result).toMatchObject({ reconciled: 0, recovered: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expect(recoveryHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.taskId,
+        runtime: "cron",
+        task: expect.objectContaining({ taskId: task.taskId }),
+        now: expect.any(Number),
+      }),
+    );
   });
 });
