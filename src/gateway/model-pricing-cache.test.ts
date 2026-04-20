@@ -241,4 +241,92 @@ describe("model-pricing-cache", () => {
       cacheWrite: 0,
     });
   });
+
+  it("rejects suspicious pricing values > $100/million to prevent cost inflation", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "test/suspicious-model" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    // Simulate corrupted pricing data (e.g., already in per-million format but treated as per-token)
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "test/suspicious-model",
+                pricing: {
+                  prompt: "0.0003", // This would be $300/million - suspicious!
+                  completion: "0.0009", // This would be $900/million - suspicious!
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    // Should reject suspicious pricing and use 0 instead
+    expect(
+      getCachedGatewayModelPricing({ provider: "test", model: "suspicious-model" }),
+    ).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("accepts valid pricing in typical LLM range", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "test/normal-model" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    // GPT-4 class pricing: ~$2.50/million input, ~$10/million output
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "test/normal-model",
+                pricing: {
+                  prompt: "0.0000025", // $2.50/million
+                  completion: "0.00001", // $10/million
+                  input_cache_read: "0.00000025", // $0.25/million
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(
+      getCachedGatewayModelPricing({ provider: "test", model: "normal-model" }),
+    ).toEqual({
+      input: 2.5,
+      output: 10,
+      cacheRead: 0.25,
+      cacheWrite: 0,
+    });
+  });
 });
