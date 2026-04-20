@@ -92,6 +92,7 @@ const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.75;
 const BOOTSTRAP_TAIL_RATIO = 0.24;
 const BOOTSTRAP_JOIN_SEPARATOR_CHARS = 2;
+const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 
 type TrimBootstrapResult = {
   content: string;
@@ -148,14 +149,24 @@ function trimBootstrapContent(
       `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
       "",
     ].join("\n");
+  const compactMarkerTemplate = (headChars: number, tailChars: number) =>
+    `[…truncated ${headChars}+${tailChars}/${trimmed.length}]`;
+  const resolveMarkerTemplate = () => {
+    const fullMarker = markerTemplate(0, 0);
+    const fullContentBudget = maxChars - fullMarker.length - BOOTSTRAP_JOIN_SEPARATOR_CHARS;
+    return fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+      ? markerTemplate
+      : compactMarkerTemplate;
+  };
+  const resolvedMarkerTemplate = resolveMarkerTemplate();
   let headChars = 0;
   let tailChars = 0;
-  let marker = markerTemplate(headChars, tailChars);
+  let marker = resolvedMarkerTemplate(headChars, tailChars);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const contentBudget = Math.max(0, maxChars - marker.length - BOOTSTRAP_JOIN_SEPARATOR_CHARS);
     const nextHeadChars = Math.floor(contentBudget * BOOTSTRAP_HEAD_RATIO);
     const nextTailChars = Math.floor(contentBudget * BOOTSTRAP_TAIL_RATIO);
-    const nextMarker = markerTemplate(nextHeadChars, nextTailChars);
+    const nextMarker = resolvedMarkerTemplate(nextHeadChars, nextTailChars);
     if (
       nextHeadChars === headChars &&
       nextTailChars === tailChars &&
@@ -175,7 +186,7 @@ function trimBootstrapContent(
     } else {
       headChars = Math.max(0, headChars - overflow);
     }
-    marker = markerTemplate(headChars, tailChars);
+    marker = resolvedMarkerTemplate(headChars, tailChars);
     renderedLength = headChars + tailChars + marker.length + BOOTSTRAP_JOIN_SEPARATOR_CHARS;
   }
   const head = trimmed.slice(0, headChars);

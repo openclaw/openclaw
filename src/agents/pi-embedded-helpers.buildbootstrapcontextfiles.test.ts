@@ -101,16 +101,20 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
-  it("keeps tiny per-file budgets bounded when the marker is longer than the limit", () => {
-    const maxChars = 40;
+  it("keeps bootstrap bytes in tiny per-file budgets when the marker is longer than the limit", () => {
+    const maxChars = 64;
+    const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
     const files = [
       makeFile({
         name: "HEARTBEAT.md",
         path: "/tmp/HEARTBEAT.md",
-        content: "a".repeat(1_000),
+        content,
       }),
     ];
     const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content.startsWith("HEAD-")).toBe(true);
+    expect(result?.content.endsWith("-TAIL")).toBe(true);
+    expect(result?.content).toContain("truncated");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
   it("keeps content under the default limit", () => {
