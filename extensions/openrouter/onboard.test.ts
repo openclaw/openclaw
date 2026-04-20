@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   expectProviderOnboardAllowlistAlias,
   expectProviderOnboardPrimaryAndFallbacks,
@@ -23,5 +23,13 @@ describe("openrouter onboard", () => {
       applyConfig: applyOpenrouterConfig,
       modelRef: OPENROUTER_DEFAULT_MODEL_REF,
     });
+  });
+
+  it("sets provider config with correct baseUrl", () => {
+    const cfg = applyOpenrouterConfig({});
+    expect(cfg.models?.providers?.openrouter?.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(cfg.models?.providers?.openrouter?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.openrouter?.models).toBeDefined();
+    expect(cfg.models?.providers?.openrouter?.models?.length).toBeGreaterThan(0);
   });
 });
