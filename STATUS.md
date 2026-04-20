@@ -7,6 +7,16 @@
 
 ## Last Session
 
+- **Date**: 2026-04-20 (vcode1bot coding upgrade)
+- **What changed**:
+  - **vcode1bot (2ndclaw)**: upgraded to `venice/qwen3-coder-480b-a35b-instruct-turbo` (primary), added `filesystem` MCP (workspace r/w) and `brave-search` MCP (web search), added coding soul
+  - **Dashboard PR #57** (`feat/coding-capability-template`): config template now uses coding model + MCP servers when `coding=true` capability flag is set — open for review/merge
+  - Dashboard PR #53 `fix/control-deploy-infra` confirmed merged (commit `fix(agents): robust restart...` on main)
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-04-16 (CI runner fix)
 - **What changed**:
   - **CI fix**: replaced Blacksmith third-party runners (`blacksmith-16vcpu-*`) with GitHub-hosted runners (`ubuntu-24.04`, `windows-latest`) across all 8 workflow files — Blacksmith integration was broken, leaving every workflow stuck in `queued` for 23+ hours
@@ -19,7 +29,7 @@
 
 ## Currently In Progress
 
-- Dashboard PR #53: `fix/control-deploy-infra` — awaiting merge (control/logs/deploy fixes)
+- Dashboard PR #57: `feat/coding-capability-template` — open, needs review/merge
 
 ---
 
@@ -49,7 +59,8 @@
 | openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents              |
 | openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                   |
 | openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15 |
-| openclaw-dashboard | fix/control-deploy-infra        | #53 | review          | Claude  | control, logs, deploy routes             | build pass         | Merge to main (auto-deploys)             | Fixes restart/logs/deploy for agents with missing containers             |
+| openclaw-dashboard | fix/control-deploy-infra        | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                            |
+| openclaw-dashboard | feat/coding-capability-template | #57 | review          | Claude  | lib/agent-config-template.ts             | npm run build      | Merge to main (auto-deploys)             | coding=true → qwen3-coder model + filesystem + brave-search MCPs         |
 | unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                           |
 
 ---
