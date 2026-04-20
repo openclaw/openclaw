@@ -1,7 +1,8 @@
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import {
   isValidOpenAIModel,
   isValidOpenAIVoice,
@@ -12,28 +13,7 @@ import {
 } from "./tts.js";
 
 describe("openai tts", () => {
-  const originalFetch = globalThis.fetch;
-  const proxyEnvKeys = [
-    "OPENCLAW_DEBUG_PROXY_ENABLED",
-    "OPENCLAW_DEBUG_PROXY_DB_PATH",
-    "OPENCLAW_DEBUG_PROXY_BLOB_DIR",
-    "OPENCLAW_DEBUG_PROXY_SESSION_ID",
-  ] as const;
-  let priorProxyEnv: Partial<Record<(typeof proxyEnvKeys)[number], string | undefined>> = {};
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-    for (const key of proxyEnvKeys) {
-      const value = priorProxyEnv[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    priorProxyEnv = {};
-  });
+  const proxyReset = installDebugProxyTestResetHooks();
 
   describe("isValidOpenAIVoice", () => {
     it("accepts all valid OpenAI voices including newer additions", () => {
@@ -205,9 +185,7 @@ describe("openai tts", () => {
 
     it("records TTS exchanges in debug proxy capture mode", async () => {
       const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-capture-"));
-      priorProxyEnv = Object.fromEntries(
-        proxyEnvKeys.map((key) => [key, process.env[key]]),
-      ) as typeof priorProxyEnv;
+      proxyReset.captureProxyEnv();
       process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
       process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
       process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
@@ -256,9 +234,7 @@ describe("openai tts", () => {
 
     it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
       const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-patched-capture-"));
-      priorProxyEnv = Object.fromEntries(
-        proxyEnvKeys.map((key) => [key, process.env[key]]),
-      ) as typeof priorProxyEnv;
+      proxyReset.captureProxyEnv();
       process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
       process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
       process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
