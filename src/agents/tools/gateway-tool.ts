@@ -217,6 +217,12 @@ function isProtectedPathEqual(
   }
   for (const [id, currentValue] of currentProjected.keyedValues) {
     if (!nextProjected.keyedValues.has(id)) {
+      // Dropping an entry that currently carries an operator-set protected
+      // subfield value strips that operator state — treat as a protected
+      // change so per-agent overrides cannot be removed via config.apply.
+      if (currentValue !== undefined) {
+        return false;
+      }
       continue;
     }
     if (!isDeepStrictEqual(currentValue, nextProjected.keyedValues.get(id))) {

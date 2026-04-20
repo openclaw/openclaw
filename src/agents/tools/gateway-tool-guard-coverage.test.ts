@@ -283,19 +283,37 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
-  it("allows removing an agent via config.apply", () => {
+  it("allows removing an agent without protected subfields via config.apply", () => {
     expectAllowedApply(
       {
         agents: {
           list: [
-            { id: "worker", sandbox: { mode: "all" } },
+            { id: "worker", model: "sonnet-4.6" },
             { id: "helper", sandbox: { mode: "all" } },
           ],
         },
       },
       {
         agents: {
-          list: [{ id: "helper", model: "gpt-5.4", sandbox: { mode: "all" } }],
+          list: [{ id: "helper", sandbox: { mode: "all" } }],
+        },
+      },
+    );
+  });
+
+  it("blocks removing an agent that carries a protected sandbox override via config.apply", () => {
+    expectBlockedApply(
+      {
+        agents: {
+          list: [
+            { id: "worker", sandbox: { mode: "all" } },
+            { id: "helper", model: "sonnet-4.6" },
+          ],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "helper", model: "sonnet-4.6" }],
         },
       },
     );
