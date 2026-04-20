@@ -33,6 +33,7 @@ export type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartOverrideResult,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -421,6 +422,12 @@ export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
       threadBindingReady?: boolean;
+      deliveryOrigin?: {
+        channel?: string;
+        accountId?: string;
+        to?: string;
+        threadId?: string | number;
+      };
     }
   | {
       status: "error";

@@ -1,11 +1,11 @@
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../agents/skills/refresh-state.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -616,6 +616,32 @@ describe("startGatewayConfigReloader", () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+
+  it("does not dedupe when initialInternalWriteHash is null (#67436)", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 }, auth: { mode: "token", token: "startup" } },
+        },
+        hash: "startup-internal-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialInternalWriteHash: null,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    // With a null hash the guard is a no-op, so the reload proceeds and
+    // detects a config diff → restart.  This is the pre-fix regression
+    // scenario from #67436 where plugin auto-enable was the only startup
+    // writer and the hash was never captured.
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
 
     await harness.reloader.stop();

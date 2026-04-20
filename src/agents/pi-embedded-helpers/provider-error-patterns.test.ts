@@ -167,6 +167,12 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   const html407 =
     "<!doctype html><html><head><title>407 Proxy Authentication Required</title></head>" +
     "<body><h1>Proxy Authentication Required</h1></body></html>";
+  const html402 =
+    "<!doctype html><html><head><title>402 Payment Required</title></head>" +
+    "<body><h1>Payment Required</h1><p>Your quota is exhausted.</p></body></html>";
+  const html429 =
+    "<!doctype html><html><head><title>429 Too Many Requests</title></head>" +
+    "<body><h1>Too Many Requests</h1><p>Rate limit exceeded.</p></body></html>";
   const prefixedHtml401 = `Error: 401 ${html401}`;
   const prefixedHtml407 = `Error: 407 ${html407}`;
 
@@ -188,6 +194,14 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
 
   it("preserves auth classification for Error-prefixed 401 HTML", () => {
     expect(classifyFailoverReason(prefixedHtml401)).toBe("auth");
+  });
+
+  it("preserves billing classification for 402 HTML", () => {
+    expect(classifyFailoverReason(`402 ${html402}`)).toBe("billing");
+  });
+
+  it("preserves rate-limit classification for 429 HTML", () => {
+    expect(classifyFailoverReason(`429 ${html429}`)).toBe("rate_limit");
   });
 
   it("classifies runtime failure kind as upstream_html for non-auth HTML", () => {
