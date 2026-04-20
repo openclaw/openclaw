@@ -51,6 +51,13 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /**
+   * Resolved heartbeat model fallbacks (ordered provider/model list from merged per-agent
+   * config). When defined (even empty), overrides the regular agents.list[].model.fallbacks
+   * chain for this heartbeat tick so quota/availability failures can fail over to a
+   * different provider without manual intervention.
+   */
+  heartbeatModelFallbacks?: string[];
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */

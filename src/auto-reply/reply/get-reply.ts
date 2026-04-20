@@ -10,6 +10,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -202,7 +203,7 @@ export async function getReplyFromConfig(
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
       normalizeOptionalString(opts.heartbeatModelOverride) ??
-      normalizeOptionalString(agentCfg?.heartbeat?.model) ??
+      normalizeOptionalString(resolveAgentModelPrimaryValue(agentCfg?.heartbeat?.model)) ??
       "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({

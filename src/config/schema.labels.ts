@@ -584,6 +584,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list.*.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
   "agents.defaults.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
   "agents.list.*.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
+  "agents.defaults.heartbeat.model": "Heartbeat Model",
+  "agents.list[].heartbeat.model": "Agent Heartbeat Model",
+  "agents.defaults.heartbeat.model.primary": "Heartbeat Primary Model",
+  "agents.defaults.heartbeat.model.fallbacks": "Heartbeat Model Fallbacks",
+  "agents.list[].heartbeat.model.primary": "Agent Heartbeat Primary Model",
+  "agents.list[].heartbeat.model.fallbacks": "Agent Heartbeat Model Fallbacks",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

@@ -272,7 +272,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
   addModelListLike({ value: config.agents?.defaults?.imageModel, aliasIndex, refs });
   addModelListLike({ value: config.agents?.defaults?.pdfModel, aliasIndex, refs });
   addResolvedModelRef({ raw: config.agents?.defaults?.compaction?.model, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.agents?.defaults?.heartbeat?.model, aliasIndex, refs });
+  addModelListLike({ value: config.agents?.defaults?.heartbeat?.model, aliasIndex, refs });
   addModelListLike({ value: config.tools?.subagents?.model, aliasIndex, refs });
   addResolvedModelRef({ raw: config.messages?.tts?.summaryModel, aliasIndex, refs });
   addResolvedModelRef({ raw: config.hooks?.gmail?.model, aliasIndex, refs });
@@ -280,7 +280,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
   for (const agent of config.agents?.list ?? []) {
     addModelListLike({ value: agent.model, aliasIndex, refs });
     addModelListLike({ value: agent.subagents?.model, aliasIndex, refs });
-    addResolvedModelRef({ raw: agent.heartbeat?.model, aliasIndex, refs });
+    addModelListLike({ value: agent.heartbeat?.model, aliasIndex, refs });
   }
 
   for (const mapping of config.hooks?.mappings ?? []) {

@@ -19,6 +19,7 @@ type SeedSessionInput = {
 };
 type AgentDefaultsConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type HeartbeatConfig = NonNullable<AgentDefaultsConfig["heartbeat"]>;
+type HeartbeatModel = HeartbeatConfig["model"];
 
 async function withHeartbeatFixture(
   run: (ctx: {
@@ -79,7 +80,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   }
 
   async function runDefaultsHeartbeat(params: {
-    model?: string;
+    model?: HeartbeatModel;
     suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
     lightContext?: boolean;
@@ -309,5 +310,50 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         heartbeatModelOverride: "ollama/llama3.2:1b",
       }),
     );
+  });
+
+  it("passes primary and fallbacks when heartbeat.model is an object", async () => {
+    const replyOpts = (await runDefaultsHeartbeat({
+      model: {
+        primary: "oc/kimi-k2.5",
+        fallbacks: ["zai/glm-4.7", "zai/glm-5.1"],
+      },
+    })) as Record<string, unknown>;
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        heartbeatModelOverride: "oc/kimi-k2.5",
+        heartbeatModelFallbacks: ["zai/glm-4.7", "zai/glm-5.1"],
+      }),
+    );
+  });
+
+  it("omits fallbacks when object form has no fallbacks array", async () => {
+    const replyOpts = (await runDefaultsHeartbeat({
+      model: { primary: "oc/kimi-k2.5" },
+    })) as Record<string, unknown>;
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        heartbeatModelOverride: "oc/kimi-k2.5",
+      }),
+    );
+    expect(replyOpts.heartbeatModelFallbacks).toBeUndefined();
+  });
+
+  it("propagates per-agent heartbeat fallbacks after merging defaults", async () => {
+    await expectPerAgentHeartbeatOverride({
+      defaultsHeartbeat: { model: "openai/gpt-5.4" },
+      heartbeat: {
+        model: {
+          primary: "oc/kimi-k2.5",
+          fallbacks: ["zai/glm-4.7"],
+        },
+      },
+      expectedOptions: {
+        heartbeatModelOverride: "oc/kimi-k2.5",
+        heartbeatModelFallbacks: ["zai/glm-4.7"],
+      },
+    });
   });
 });
