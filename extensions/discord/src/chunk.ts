@@ -64,6 +64,15 @@ function closeFenceLine(openFence: OpenFence) {
   return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
 }
 
+function isValidFenceOpener(fenceInfo: FenceLine): boolean {
+  // CommonMark: for backtick fences, the info string (everything after the opening backticks)
+  // must not contain any backtick characters.
+  if (fenceInfo.markerChar !== "`") {
+    return true;
+  }
+  return !fenceInfo.trailing.includes("`");
+}
+
 function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   if (!openFence) {
     return text;
@@ -190,7 +199,7 @@ export function splitDiscordTextOnCodeBlocks(text: string): string[] {
 
   for (const line of lines) {
     const fenceInfo = parseFenceLine(trimTrailingNewline(line));
-    if (!openFence && fenceInfo) {
+    if (!openFence && fenceInfo && isValidFenceOpener(fenceInfo)) {
       flush();
       current = line;
       openFence = fenceInfo;
@@ -264,7 +273,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     let nextOpenFence: OpenFence | null = openFence;
     if (fenceInfo) {
       if (!openFence) {
-        nextOpenFence = fenceInfo;
+        nextOpenFence = isValidFenceOpener(fenceInfo) ? fenceInfo : null;
       } else if (
         openFence.markerChar === fenceInfo.markerChar &&
         fenceInfo.markerLen >= openFence.markerLen &&

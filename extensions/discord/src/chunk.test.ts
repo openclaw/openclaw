@@ -161,6 +161,15 @@ describe("chunkDiscordText", () => {
     expect(groups.join("")).toBe(text);
   });
 
+  it("rejects invalid backtick fences when splitting code blocks", () => {
+    const text = "Intro\n\n```js`\nthis is not actually a valid code fence opener\nOutro";
+
+    // Invalid opener (backticks in info string) should be treated as prose,
+    // otherwise we'd incorrectly group the remainder as code.
+    const groups = splitDiscordTextOnCodeBlocks(text);
+    expect(groups).toEqual([text]);
+  });
+
   it("emits separate Discord chunks around fenced code when enabled", () => {
     const text = "Intro\n\n```ts\nconst x = 1;\n```\n\nOutro";
 
