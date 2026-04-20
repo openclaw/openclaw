@@ -92,6 +92,34 @@ openclaw config get agents.list
 openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 ```
 
+### Heartbeat configuration
+
+Heartbeat runs periodic agent turns in the main session. Configure it via `agents.defaults.heartbeat`:
+
+```bash
+# Set heartbeat interval (default: 30m; use 0m to disable)
+openclaw config set agents.defaults.heartbeat.every "2h"
+
+# Set delivery target ("last", "none", or channel id)
+openclaw config set agents.defaults.heartbeat.target "last"
+
+# Set direct/DM delivery policy ("allow" or "block")
+openclaw config set agents.defaults.heartbeat.directPolicy "allow"
+
+# Enable lightweight bootstrap context (only HEARTBEAT.md)
+openclaw config set agents.defaults.heartbeat.lightContext true
+
+# Enable isolated sessions (no conversation history)
+openclaw config set agents.defaults.heartbeat.isolatedSession true
+
+# Set active hours window
+openclaw config set agents.defaults.heartbeat.activeHours.start "09:00"
+openclaw config set agents.defaults.heartbeat.activeHours.end "22:00"
+openclaw config set agents.defaults.heartbeat.activeHours.timezone "America/New_York"
+```
+
+See [Heartbeat](/gateway/heartbeat) for full configuration options and examples.
+
 ## Values
 
 Values are parsed as JSON5 when possible; otherwise they are treated as strings.
