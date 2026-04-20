@@ -1405,6 +1405,30 @@ export class OpenClawApp extends LitElement {
       if (row.planMode?.approval !== "pending") {
         return null;
       }
+      // PR #68939 follow-up (auto-approve UX fix): when the session has
+      // `planMode.autoApprove === true`, the server-side auto-approve
+      // handler (`autoApproveIfEnabled` in pi-embedded-subscribe.handlers
+      // .tools.ts) already resolves the approval automatically — the
+      // popup would be redundant and, because sessions.changed push lag
+      // on the client can stretch the visible-pending window arbitrarily
+      // long, the popup could sit on-screen long after the server-side
+      // approval has already landed. Clicking it then returns a
+      // "requires a pending approval (current state: none)" stale-state
+      // error and the user perceives "I clicked and nothing happened."
+      //
+      // Fix: never render the plan-approval card while autoApprove is
+      // on. If the server-side auto-approve permanently fails (rare —
+      // e.g. subagent gate blocks AND the subagent never settles, or a
+      // catastrophic gateway error), the user's escape hatch is to
+      // toggle `/plan auto off` — which flips autoApprove to false and
+      // lets this hydrate render the card as a manual fallback.
+      //
+      // Question approvals (pending.kind === "question") still render
+      // regardless of autoApprove because they require user input —
+      // auto-approve doesn't answer questions for the user.
+      if (row.planMode?.autoApprove === true) {
+        return null;
+      }
       return {
         approvalId: pending.approvalId,
         sessionKey: row.key,

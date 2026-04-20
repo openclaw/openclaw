@@ -520,9 +520,45 @@ type PlanApprovalHost = ToolStreamHost & {
    * (boxes ticking off as the agent steps through after approval).
    */
   refreshLivePlanSidebar?: (plan: PlanApprovalRequest["plan"], summary?: string) => void;
+  /**
+   * PR #68939 follow-up (auto-approve popup suppression): app host
+   * exposes sessionsResult so we can look up `planMode.autoApprove`
+   * on the target session and skip rendering the card when auto-mode
+   * is on (server-side auto-approve handles resolution — see
+   * `autoApproveIfEnabled` in pi-embedded-subscribe.handlers.tools.ts).
+   */
+  sessionsResult?: {
+    sessions: Array<{
+      key: string;
+      planMode?: { autoApprove?: boolean } | null;
+    }>;
+  } | null;
 };
 
 function setPlanApprovalRequest(host: PlanApprovalHost, next: PlanApprovalRequest | null): void {
+  // PR #68939 follow-up (auto-approve popup suppression): when the
+  // target session has `planMode.autoApprove === true`, the server-side
+  // `autoApproveIfEnabled` handler already resolves the approval
+  // automatically. Rendering the popup creates a user-visible flash
+  // that either pops + dismisses quickly (happy path) or gets stuck on
+  // stale state (client push lag). Skip rendering entirely for plan
+  // approvals while auto is on.
+  //
+  // Questions (next.question is truthy) still render regardless —
+  // auto-approve doesn't answer questions for the user, so the card
+  // is required.
+  //
+  // Mirrors the hydrate-side check in app.ts:buildHydratedPlanApprovalRequest.
+  // Both checks are needed: this one catches live event-stream sets;
+  // the hydrate one catches reloads / tab refreshes.
+  if (next && !next.question) {
+    const autoApprove =
+      host.sessionsResult?.sessions?.find((s) => s.key === next.sessionKey)?.planMode
+        ?.autoApprove === true;
+    if (autoApprove) {
+      return;
+    }
+  }
   const previous = host.planApprovalRequest;
   const previousQuestionId = previous?.question?.questionId;
   const nextQuestionId = next?.question?.questionId;
