@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { clearSessionStoreCaches } from "../config/sessions/store-cache.js";
+import { withTempHomeConfig } from "../config/test-helpers.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
@@ -535,6 +537,168 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
+
+  test("skips stale duplicate rows without matching sessionFile", () => {
+    const sessionId = "stale-row-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "checkpoint content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "current content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        stale: {
+          sessionId,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+        "agent:main:main": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath, currentPath) as Array<{
+      content?: string;
+    }>;
+    expect(out.map((entry) => entry.content)).toEqual(["checkpoint content", "current content"]);
+  });
+
+  test("chains checkpoints for configured main session even when the store key uses a legacy alias", async () => {
+    const sessionId = "canonical-main-alias-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "pre-compaction content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "live content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    await withTempHomeConfig(
+      {
+        agents: {
+          list: [{ id: "ops", default: true }, { id: "main" }],
+        },
+        session: {
+          mainKey: "work",
+        },
+      },
+      async () => {
+        const out = readSessionMessages(sessionId, storePath, currentPath) as Array<{
+          content?: string;
+        }>;
+        expect(out.map((entry) => entry.content)).toEqual([
+          "pre-compaction content",
+          "live content",
+        ]);
+      },
+    );
+  });
+
+  test("keeps non-main sessions on the legacy single-file fallback even when checkpoints exist", () => {
+    const sessionId = "non-main-fallback-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "checkpoint content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "live content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:topic": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const out = readSessionMessages(sessionId, storePath, currentPath) as Array<{
+      content?: string;
+    }>;
+    expect(out.map((entry) => entry.content)).toEqual(["live content"]);
+  });
+
+  test("reuses the cached session store on repeated chained reads", () => {
+    const sessionId = "cached-store-read-session";
+    const snapshotPath = path.join(tmpDir, `${sessionId}.checkpoint.pre.jsonl`);
+    const currentPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    clearSessionStoreCaches();
+    vi.stubEnv("OPENCLAW_SESSION_CACHE_TTL_MS", "45000");
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({ message: { role: "user", content: "checkpoint content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      currentPath,
+      JSON.stringify({ message: { role: "assistant", content: "live content" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId,
+          sessionFile: currentPath,
+          compactionCheckpoints: [{ preCompaction: { sessionFile: snapshotPath } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    const readSpy = vi.spyOn(fs, "readFileSync");
+    const countStoreReads = () =>
+      readSpy.mock.calls.filter(([filePath]) => path.resolve(String(filePath)) === storePath)
+        .length;
+
+    readSessionMessages(sessionId, storePath, currentPath);
+    expect(countStoreReads()).toBe(1);
+    readSessionMessages(sessionId, storePath, currentPath);
+    expect(countStoreReads()).toBe(1);
+
+    readSpy.mockRestore();
+    vi.unstubAllEnvs();
+    clearSessionStoreCaches();
+  });
 });
 
 // Red-bar fixtures for the compaction-chain epoch design decision that is still open
