@@ -60,4 +60,12 @@ describe("qa suite", () => {
       }),
     ).toBe(true);
   });
+
+  it("sanitizes scenario ids for progress logs", () => {
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("scenario-id")).toBe("scenario-id");
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("scenario\nid\tvalue")).toBe(
+      "scenario id value",
+    );
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
+  });
 });

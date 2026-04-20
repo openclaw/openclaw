@@ -114,6 +114,20 @@ function writeQaSuiteProgress(enabled: boolean, message: string) {
   process.stderr.write(`[qa-suite] ${message}\n`);
 }
 
+function sanitizeQaSuiteProgressValue(value: string): string {
+  let normalized = "";
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    normalized += isControl ? " " : char;
+  }
+  normalized = normalized.replace(/\s+/gu, " ").trim();
+  return normalized.length > 0 ? normalized : "<empty>";
+}
+
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
   if (startLab) {
     return startLab;
@@ -410,9 +424,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         selectedCatalogScenarios,
         concurrency,
         async (scenario, index): Promise<QaSuiteScenarioResult> => {
+          const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
           writeQaSuiteProgress(
             progressEnabled,
-            `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+            `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
           );
           liveScenarioOutcomes[index] = {
             id: scenario.id,
@@ -467,7 +482,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
             updateScenarioRun();
             writeQaSuiteProgress(
               progressEnabled,
-              `scenario ${scenarioResult.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+              `scenario ${scenarioResult.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
             );
             return scenarioResult;
           } catch (error) {
@@ -496,7 +511,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
             updateScenarioRun();
             writeQaSuiteProgress(
               progressEnabled,
-              `scenario fail (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+              `scenario fail (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
             );
             return scenarioResult;
           }
@@ -638,9 +653,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     });
 
     for (const [index, scenario] of selectedCatalogScenarios.entries()) {
+      const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
       writeQaSuiteProgress(
         progressEnabled,
-        `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+        `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
       );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
@@ -659,7 +675,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       scenarios.push(result);
       writeQaSuiteProgress(
         progressEnabled,
-        `scenario ${result.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenario.id}`,
+        `scenario ${result.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
       );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
@@ -753,5 +769,6 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
 export const qaSuiteProgressTesting = {
   parseQaSuiteBooleanEnv,
+  sanitizeQaSuiteProgressValue,
   shouldLogQaSuiteProgress,
 };
