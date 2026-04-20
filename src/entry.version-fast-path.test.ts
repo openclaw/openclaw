@@ -12,9 +12,7 @@ const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const normalizeWindowsArgvMock = vi.hoisted(() => vi.fn((argv: string[]) => argv));
 const parseCliProfileArgsMock = vi.hoisted(() => vi.fn((argv: string[]) => ({ ok: true, argv })));
 const resolveCliContainerTargetMock = vi.hoisted(() => vi.fn<() => string | null>(() => null));
-const resolveCommitHashMock = vi.hoisted(() =>
-  vi.fn<typeof import("./infra/git-commit.js").resolveCommitHash>(() => "abc1234"),
-);
+const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 const runCliMock = vi.hoisted(() => vi.fn(async () => {}));
 const shouldSkipRespawnForArgvMock = vi.hoisted(() => vi.fn(() => true));
 
