@@ -53,6 +53,7 @@ export {
   setTimezoneViaPlaywright,
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
+  storeAriaSnapshotRefsViaPlaywright,
   snapshotRoleViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,

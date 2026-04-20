@@ -30,7 +30,7 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -90,7 +90,10 @@ type PageState = {
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
    * Mode "aria" refs are Playwright aria-ref ids and resolved via `aria-ref=...`.
    */
-  roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefs?: Record<
+    string,
+    { role: string; name?: string; nth?: number; backendDOMNodeId?: number }
+  >;
   roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
 };
@@ -872,6 +875,32 @@ export function refLocator(page: Page, ref: string) {
     const scope = state?.roleRefsFrameSelector
       ? page.frameLocator(state.roleRefsFrameSelector)
       : page;
+    const locAny = scope as unknown as {
+      getByRole: (
+        role: never,
+        opts?: { name?: string; exact?: boolean },
+      ) => ReturnType<Page["getByRole"]>;
+    };
+    const locator = info.name
+      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
+      : locAny.getByRole(info.role as never);
+    return info.nth !== undefined ? locator.nth(info.nth) : locator;
+  }
+
+  if (/^ax\d+$/.test(normalized)) {
+    const state = pageStates.get(page);
+    const info = state?.roleRefs?.[normalized];
+    if (!info) {
+      throw new Error(
+        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
+      );
+    }
+    const scope = state.roleRefsFrameSelector
+      ? page.frameLocator(state.roleRefsFrameSelector)
+      : page;
+    if (typeof info.backendDOMNodeId === "number") {
+      return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
+    }
     const locAny = scope as unknown as {
       getByRole: (
         role: never,
