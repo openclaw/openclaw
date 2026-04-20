@@ -175,9 +175,13 @@ function createOllamaThinkingWrapper(baseFn: StreamFn | undefined, think: boolea
  * context sent to Ollama's native API.
  */
 function resolveOllamaNumCtxFromParams(model: unknown): number | undefined {
-  if (!model || typeof model !== "object") return undefined;
+  if (!model || typeof model !== "object") {
+    return undefined;
+  }
   const params = (model as { params?: unknown }).params;
-  if (!params || typeof params !== "object") return undefined;
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
   const numCtx = (params as { num_ctx?: unknown }).num_ctx;
   if (typeof numCtx !== "number" || !Number.isFinite(numCtx) || numCtx <= 0) {
     return undefined;
