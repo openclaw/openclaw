@@ -40,6 +40,26 @@ type StoredDeviceIdentity = {
   deviceId: string;
 };
 
+function hasNumberVersion(value: object): value is { version: number } {
+  return "version" in value && typeof value.version === "number";
+}
+
+function isDeviceAuthStoreTokenEntry(value: unknown): value is DeviceAuthStore["tokens"][string] {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "token" in value &&
+    typeof value.token === "string" &&
+    "role" in value &&
+    typeof value.role === "string" &&
+    "scopes" in value &&
+    Array.isArray(value.scopes) &&
+    value.scopes.every((scope) => typeof scope === "string") &&
+    "updatedAtMs" in value &&
+    typeof value.updatedAtMs === "number"
+  );
+}
+
 function uniqueStrings(...items: Array<string | string[] | undefined>): string[] {
   const values = new Set<string>();
   for (const item of items) {
@@ -285,13 +305,18 @@ function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceId
   if (
     !identity ||
     typeof identity !== "object" ||
+    !hasNumberVersion(identity) ||
+    identity.version !== 1 ||
     !("deviceId" in identity) ||
     typeof identity.deviceId !== "string" ||
     !identity.deviceId.trim()
   ) {
     return null;
   }
-  return identity;
+  return {
+    version: 1,
+    deviceId: identity.deviceId,
+  };
 }
 
 function readLocalDeviceAuthStore(env: NodeJS.ProcessEnv = process.env): DeviceAuthStore | null {
@@ -300,6 +325,8 @@ function readLocalDeviceAuthStore(env: NodeJS.ProcessEnv = process.env): DeviceA
   if (
     !store ||
     typeof store !== "object" ||
+    !hasNumberVersion(store) ||
+    store.version !== 1 ||
     !("deviceId" in store) ||
     typeof store.deviceId !== "string" ||
     !store.deviceId.trim() ||
@@ -309,7 +336,18 @@ function readLocalDeviceAuthStore(env: NodeJS.ProcessEnv = process.env): DeviceA
   ) {
     return null;
   }
-  return store;
+  const tokens: DeviceAuthStore["tokens"] = {};
+  for (const [role, entry] of Object.entries(store.tokens)) {
+    if (!isDeviceAuthStoreTokenEntry(entry)) {
+      return null;
+    }
+    tokens[role] = entry;
+  }
+  return {
+    version: 1,
+    deviceId: store.deviceId,
+    tokens,
+  };
 }
 
 function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[] {
