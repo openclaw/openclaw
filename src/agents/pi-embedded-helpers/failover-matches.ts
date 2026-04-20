@@ -40,6 +40,14 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
 ] as const satisfies readonly ErrorPattern[];
 
+const CJK_AUTH_ERROR_PATTERNS = [
+  "无权访问",
+  "认证失败",
+  "鉴权失败",
+  "密钥无效",
+  "apikey 无效",
+] as const satisfies readonly ErrorPattern[];
+
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
@@ -192,12 +200,7 @@ const ERROR_PATTERNS = {
     ...AMBIGUOUS_AUTH_ERROR_PATTERNS,
     ...COMMON_AUTH_ERROR_PATTERNS,
     ...ZAI_AUTH_ERROR_PATTERNS,
-    // Chinese provider auth messages
-    "无权访问",
-    "认证失败",
-    "鉴权失败",
-    "密钥无效",
-    "apikey 无效",
+    ...CJK_AUTH_ERROR_PATTERNS,
   ],
   format: [
     "string should match pattern",
@@ -282,6 +285,7 @@ export function isAuthErrorMessage(raw: string): boolean {
     AMBIGUOUS_AUTH_ERROR_PATTERNS,
     COMMON_AUTH_ERROR_PATTERNS,
     ZAI_AUTH_ERROR_PATTERNS,
+    CJK_AUTH_ERROR_PATTERNS,
   ]);
 }
 
