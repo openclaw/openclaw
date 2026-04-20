@@ -16,6 +16,22 @@ import {
 } from "./api.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
+const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
+  "fine-grained-tool-streaming-2025-05-14",
+  "interleaved-thinking-2025-05-14",
+] as const;
+
+function createBedrockAnthropicBetasWrapper(baseStreamFn: StreamFn | undefined): StreamFn | undefined {
+  if (!baseStreamFn) return baseStreamFn;
+  return (model, context, options) =>
+    streamWithPayloadPatch(baseStreamFn, model, context, options, (payload) => {
+      payload.additionalModelRequestFields = {
+        ...(payload.additionalModelRequestFields as Record<string, unknown> | undefined),
+        anthropic_beta: [...PI_AI_DEFAULT_ANTHROPIC_BETAS],
+      };
+    });
+}
+
 type GuardrailConfig = {
   guardrailIdentifier: string;
   guardrailVersion: string;
@@ -82,7 +98,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) =>
-    isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn);
+    isAnthropicBedrockModel(modelId)
+      ? createBedrockAnthropicBetasWrapper(streamFn)
+      : createBedrockNoCacheWrapper(streamFn);
 
   const cacheWrapStreamFn =
     guardrail?.guardrailIdentifier && guardrail?.guardrailVersion
