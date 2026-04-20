@@ -156,7 +156,7 @@ export function sanitizeSshTarget(value: unknown): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.replace(/^ssh\\s+/, "");
+  return trimmed.replace(/^ssh\s+/, "");
 }
 
 export async function resolveAuthForTarget(

@@ -9,6 +9,7 @@ import {
   resolveAuthForTarget,
   resolveProbeBudgetMs,
   resolveTargets,
+  sanitizeSshTarget,
 } from "./helpers.js";
 import { createSecretRefGatewayConfig } from "./test-support.js";
 
@@ -367,5 +368,12 @@ describe("resolveProbeBudgetMs", () => {
         url: "wss://gateway.example/ws",
       }),
     ).toBe(2000);
+  });
+});
+
+describe("sanitizeSshTarget", () => {
+  it("strips a leading ssh command prefix", () => {
+    expect(sanitizeSshTarget("ssh me@studio")).toBe("me@studio");
+    expect(sanitizeSshTarget("  ssh me@studio:2222  ")).toBe("me@studio:2222");
   });
 });
