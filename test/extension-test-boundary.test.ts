@@ -171,4 +171,18 @@ describe("non-extension test boundaries", () => {
 
     expect(offenders).toEqual([]);
   });
+
+  it("keeps bundled channel security collector coverage under extension tests", () => {
+    const files = [...walk(path.join(repoRoot, "src")), ...walk(path.join(repoRoot, "test"))]
+      .filter((file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
+      .filter((file) => !file.startsWith("test/helpers/"))
+      .filter((file) => file !== "test/extension-test-boundary.test.ts");
+
+    const offenders = files.filter((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return source.includes("test/helpers/channels/security-audit-contract.js");
+    });
+
+    expect(offenders).toEqual([]);
+  });
 });
