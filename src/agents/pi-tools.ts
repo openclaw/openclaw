@@ -277,27 +277,6 @@ export function createOpenClawCodingTools(options?: {
    * without re-loading the session store on every call.
    */
   planMode?: "plan" | "normal";
-  /**
-   * Bug 3+4 fix: live-read accessor for the session's current planMode.
-   * Returns the LATEST mode from the in-memory SessionEntry on every
-   * tool-call (O(1) map lookup, no disk I/O). Threaded through to the
-   * before-tool-call hook's HookContext so the mutation gate can
-   * detect mid-turn approval transitions where the cached
-   * `planMode` snapshot is stale (sessions.patch flipped mode →
-   * "normal" but the runtime still has "plan" cached for the rest of
-   * the current run).
-   */
-  getLatestPlanMode?: () => "plan" | "normal" | undefined;
-  /**
-   * Cherry-pick of b6b2783ba3 (acceptEdits gate): live-read accessor
-   * for the session's `postApprovalPermissions.acceptEdits` flag.
-   * Returns `true` only when the user approved the plan with
-   * "Accept, allow edits" (granting acceptEdits permission); `false`
-   * otherwise. Threaded to the before-tool-call HookContext so the
-   * acceptEdits constraint gate can run on post-approval tool calls
-   * without re-reading the session store on each call.
-   */
-  getLatestAcceptEdits?: () => boolean;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -743,17 +722,6 @@ export function createOpenClawCodingTools(options?: {
       // the mutation gate fires without re-loading the session store
       // on every tool call.
       ...(options?.planMode ? { planMode: options.planMode } : {}),
-      // Bug 3+4 fix: also forward the live-read accessor so the gate
-      // can re-check after mid-turn approval transitions (cached
-      // planMode goes stale; getLatestPlanMode reads fresh).
-      ...(options?.getLatestPlanMode ? { getLatestPlanMode: options.getLatestPlanMode } : {}),
-      // Cherry-pick of b6b2783ba3 (acceptEdits gate): mirror
-      // getLatestPlanMode for the postApprovalPermissions.acceptEdits
-      // flag. Paired so the gate activates post-approval without a
-      // session store re-read per tool call.
-      ...(options?.getLatestAcceptEdits
-        ? { getLatestAcceptEdits: options.getLatestAcceptEdits }
-        : {}),
     }),
   );
   const withAbort = options?.abortSignal

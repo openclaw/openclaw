@@ -75,6 +75,14 @@ export type RunEmbeddedPiAgentParams = {
   agentDir?: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  /**
+   * PR-8: current plan-mode value for this session, read from
+   * `SessionEntry.planMode.mode` by the caller (typically the auto-reply
+   * pipeline or chat send handler) and threaded through so the runner
+   * can arm the mutation gate without re-loading the session store on
+   * every tool call. Undefined or `"normal"` = mutation gate disarmed.
+   */
+  planMode?: "plan" | "normal";
   prompt: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];

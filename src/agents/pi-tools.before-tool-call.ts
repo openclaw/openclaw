@@ -7,6 +7,7 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { checkMutationGate, type PlanMode } from "./plan-mode/index.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -18,6 +19,15 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /**
+   * Current plan-mode session state (PR-8). When `"plan"`, the runtime
+   * mutation gate (src/agents/plan-mode/mutation-gate.ts) blocks
+   * write/edit/exec/etc. before the plugin hookRunner runs. The runner
+   * (pi-tools.ts) reads `SessionEntry.planMode.mode` once per run-setup
+   * and threads it through here so this hook doesn't have to load the
+   * session store on every tool call.
+   */
+  planMode?: PlanMode;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -183,6 +193,27 @@ export async function runBeforeToolCallHook(args: {
     }
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+  }
+
+  // PR-8: plan-mode mutation gate. Runs AFTER loop detection (loop
+  // detection should still trip on stuck patterns even in plan mode)
+  // and BEFORE the plugin hookRunner (so plugins can't bypass the gate
+  // by handling the call earlier in the pipeline).
+  if (args.ctx?.planMode === "plan") {
+    let execCommand: string | undefined;
+    if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {
+      const cmd = params.command;
+      if (typeof cmd === "string") {
+        execCommand = cmd;
+      }
+    }
+    const gateResult = checkMutationGate(toolName, args.ctx.planMode, execCommand);
+    if (gateResult.blocked) {
+      return {
+        blocked: true,
+        reason: gateResult.reason ?? `Tool "${toolName}" is blocked while plan mode is active.`,
+      };
+    }
   }
 
   const hookRunner = getGlobalHookRunner();

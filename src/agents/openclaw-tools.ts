@@ -16,7 +16,6 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
-import { createAskUserQuestionTool } from "./tools/ask-user-question-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
@@ -30,7 +29,6 @@ import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
-import { createPlanModeStatusTool } from "./tools/plan-mode-status-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -286,25 +284,7 @@ export function createOpenClawTools(
     // affordances that pair with the runtime mutation gate
     // (src/agents/plan-mode/mutation-gate.ts) and SessionEntry.planMode state.
     ...(isPlanModeToolsEnabledForOpenClawTools({ config: resolvedConfig })
-      ? [
-          createEnterPlanModeTool({ runId: options?.runId }),
-          // PR-8 follow-up: pass runId so the tool can read
-          // `AgentRunContext.openSubagentRunIds` and hard-block plan
-          // submission while research subagents are still in flight.
-          createExitPlanModeTool({ runId: options?.runId }),
-          // PR-10: ask_user_question — surfaces a clarifying question
-          // through the same approval-card pipeline as exit_plan_mode.
-          // Plan-mode-safe: doesn't transition out of plan mode.
-          createAskUserQuestionTool({ runId: options?.runId }),
-          // Iter-3 D6: read-only plan-mode introspection. Lets the
-          // agent self-diagnose state ("am I in plan mode? how many
-          // subagents are in flight?") without inferring from tool
-          // errors. Used by /plan self-test (D5) for assertions.
-          createPlanModeStatusTool({
-            runId: options?.runId,
-            sessionKey: options?.agentSessionKey,
-          }),
-        ]
+      ? [createEnterPlanModeTool(), createExitPlanModeTool()]
       : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
@@ -360,11 +340,6 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
-      // PR-8 follow-up: thread runId so the spawn tool can read
-      // AgentRunContext.inPlanMode (for cleanup:keep override) and
-      // add the child runId to AgentRunContext.openSubagentRunIds
-      // (so exit_plan_mode can block on pending children).
-      runId: options?.runId,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
