@@ -2,6 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
+import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -9,6 +10,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -16,6 +18,118 @@ const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
+
+function getGatewayPendingReplyDrainCounts(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+}) {
+  return {
+    pendingReplies: getTotalPendingReplies(),
+    activeChatRuns: params.chatAbortControllers.size,
+  };
+}
+
+function formatGatewayPendingReplyDrainDetails(counts: {
+  pendingReplies: number;
+  activeChatRuns: number;
+}): string[] {
+  const details: string[] = [];
+  if (counts.pendingReplies > 0) {
+    details.push(`${counts.pendingReplies} reply(ies)`);
+  }
+  if (counts.activeChatRuns > 0) {
+    details.push(`${counts.activeChatRuns} chat run(s)`);
+  }
+  return details;
+}
+
+async function sleepForDrainPoll(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    timer.unref?.();
+  });
+}
+
+async function waitForGatewayPendingRepliesToDrain(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  timeoutMs: number;
+  pollMs?: number;
+}): Promise<{
+  drained: boolean;
+  elapsedMs: number;
+  counts: { pendingReplies: number; activeChatRuns: number };
+}> {
+  const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
+  const pollMs = Math.max(25, Math.floor(params.pollMs ?? 100));
+  let counts = getGatewayPendingReplyDrainCounts(params);
+  if (counts.pendingReplies <= 0 && counts.activeChatRuns <= 0) {
+    return { drained: true, elapsedMs: 0, counts };
+  }
+  if (timeoutMs <= 0) {
+    return { drained: false, elapsedMs: 0, counts };
+  }
+  const startedAt = Date.now();
+  for (;;) {
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= timeoutMs) {
+      return { drained: false, elapsedMs, counts };
+    }
+    await sleepForDrainPoll(Math.min(pollMs, timeoutMs - elapsedMs));
+    counts = getGatewayPendingReplyDrainCounts(params);
+    if (counts.pendingReplies <= 0 && counts.activeChatRuns <= 0) {
+      return {
+        drained: true,
+        elapsedMs: Date.now() - startedAt,
+        counts,
+      };
+    }
+  }
+}
+
+function abortActiveChatRunsForShutdown(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatRunBuffers: Map<string, string>;
+  chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
+  chatRunState: { abortedRuns: Map<string, number> };
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => { sessionKey: string; clientRunId: string } | undefined;
+  agentRunSeq: Map<string, number>;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+}): number {
+  let aborted = 0;
+  for (const [runId, entry] of Array.from(params.chatAbortControllers.entries())) {
+    if (!entry.sessionKey) {
+      continue;
+    }
+    if (
+      abortChatRunById(
+        {
+          chatAbortControllers: params.chatAbortControllers,
+          chatRunBuffers: params.chatRunBuffers,
+          chatDeltaSentAt: params.chatDeltaSentAt,
+          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
+          chatAbortedRuns: params.chatRunState.abortedRuns,
+          removeChatRun: params.removeChatRun,
+          agentRunSeq: params.agentRunSeq,
+          broadcast: params.broadcast,
+          nodeSendToSession: params.nodeSendToSession,
+        },
+        {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "shutdown",
+        },
+      ).aborted
+    ) {
+      aborted += 1;
+    }
+  }
+  return aborted;
+}
 
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -98,14 +212,29 @@ export function createGatewayCloseHandler(params: {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  chatRunState: { clear: () => void };
+  chatRunState: { clear: () => void; abortedRuns: Map<string, number> };
+  chatRunBuffers: Map<string, string>;
+  chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => { sessionKey: string; clientRunId: string } | undefined;
+  agentRunSeq: Map<string, number>;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
 }) {
-  return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+  return async (opts?: {
+    reason?: string;
+    restartExpectedMs?: number | null;
+    drainTimeoutMs?: number;
+  }) => {
     try {
       const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
@@ -113,6 +242,60 @@ export function createGatewayCloseHandler(params: {
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
           ? Math.max(0, Math.floor(opts.restartExpectedMs))
           : null;
+      const hasReplyDrainBudget =
+        typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs);
+      const drainTimeoutMs = hasReplyDrainBudget
+        ? Math.max(0, Math.floor(opts.drainTimeoutMs as number))
+        : 0;
+      const initialReplyDrainCounts = hasReplyDrainBudget
+        ? getGatewayPendingReplyDrainCounts(params)
+        : { pendingReplies: 0, activeChatRuns: 0 };
+      if (
+        hasReplyDrainBudget &&
+        (initialReplyDrainCounts.pendingReplies > 0 || initialReplyDrainCounts.activeChatRuns > 0)
+      ) {
+        let drainResult: {
+          drained: boolean;
+          elapsedMs: number;
+          counts: { pendingReplies: number; activeChatRuns: number };
+        } = {
+          drained: false,
+          elapsedMs: 0,
+          counts: initialReplyDrainCounts,
+        };
+        if (drainTimeoutMs > 0) {
+          const initialDetails = formatGatewayPendingReplyDrainDetails(initialReplyDrainCounts);
+          shutdownLog.info(
+            `waiting for ${initialDetails.join(", ")} to settle before shutdown (timeout ${drainTimeoutMs}ms)`,
+          );
+          drainResult = await waitForGatewayPendingRepliesToDrain({
+            chatAbortControllers: params.chatAbortControllers,
+            timeoutMs: drainTimeoutMs,
+          });
+        }
+        if (drainResult.drained) {
+          shutdownLog.info(`pending replies settled after ${drainResult.elapsedMs}ms`);
+        } else {
+          const remainingDetails = formatGatewayPendingReplyDrainDetails(drainResult.counts);
+          shutdownLog.warn(
+            `reply drain timeout after ${drainResult.elapsedMs}ms with ${remainingDetails.join(", ")} still active; continuing shutdown`,
+          );
+          if (drainResult.counts.activeChatRuns > 0) {
+            const abortedRuns = abortActiveChatRunsForShutdown(params);
+            if (abortedRuns > 0) {
+              shutdownLog.warn(`aborted ${abortedRuns} active chat run(s) during shutdown`);
+              const postAbortDrain = await waitForGatewayPendingRepliesToDrain({
+                chatAbortControllers: params.chatAbortControllers,
+                timeoutMs: 1_000,
+                pollMs: 50,
+              });
+              if (postAbortDrain.drained) {
+                shutdownLog.info("pending replies settled after shutdown abort cleanup");
+              }
+            }
+          }
+        }
+      }
       if (params.bonjourStop) {
         try {
           await params.bonjourStop();
