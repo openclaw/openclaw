@@ -127,8 +127,8 @@ type DispatchCronDeliveryParams = {
 
 export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
-  delivered: boolean;
-  deliveryAttempted: boolean;
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -442,8 +442,28 @@ export async function dispatchCronDelivery(
   // Shared callers can treat a matching message-tool send as the completed
   // delivery path. Cron-owned callers keep this false so direct cron delivery
   // remains the only source of delivered state.
-  let delivered = skipMessagingToolDelivery;
-  let deliveryAttempted = skipMessagingToolDelivery;
+  // When delivery is not requested, these are undefined (not false) to distinguish
+  // from an actual failed delivery attempt.
+  let delivered: boolean | undefined = skipMessagingToolDelivery;
+  let deliveryAttempted: boolean | undefined = skipMessagingToolDelivery;
+
+  // Early return when delivery is not requested: use undefined to indicate
+  // "not requested" status rather than false (which means "failed to deliver").
+  // This allows resolveDeliveryStatus to distinguish between:
+  // - undefined: delivery not requested
+  // - false: delivery attempted but failed
+  // - true: delivery succeeded
+  if (!params.deliveryRequested) {
+    return {
+      delivered: undefined,
+      deliveryAttempted: undefined,
+      summary: params.summary,
+      outputText: params.outputText,
+      synthesizedText: params.synthesizedText,
+      deliveryPayloads: params.deliveryPayloads,
+    };
+  }
+
   let directCronSessionDeleted = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
