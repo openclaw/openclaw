@@ -322,6 +322,37 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("allows reordering agents when a dangerous per-agent sandbox flag is already enabled", () => {
+    expectAllowedApply(
+      {
+        agents: {
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                docker: { dangerouslyAllowContainerNamespaceJoin: true },
+              },
+            },
+            { id: "helper" },
+          ],
+        },
+      },
+      {
+        agents: {
+          list: [
+            { id: "helper" },
+            {
+              id: "worker",
+              sandbox: {
+                docker: { dangerouslyAllowContainerNamespaceJoin: true },
+              },
+            },
+          ],
+        },
+      },
+    );
+  });
+
   it("blocks adding a new agent with a protected sandbox override via config.patch", () => {
     expectBlocked(
       {

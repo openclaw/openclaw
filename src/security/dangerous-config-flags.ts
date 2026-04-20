@@ -11,6 +11,18 @@ function formatDangerousConfigFlagValue(value: string | number | boolean | null)
   return value === null ? "null" : String(value);
 }
 
+function getAgentDangerousFlagPathSegment(agent: unknown, index: number): string {
+  const id =
+    agent &&
+    typeof agent === "object" &&
+    !Array.isArray(agent) &&
+    typeof (agent as { id?: unknown }).id === "string" &&
+    (agent as { id: string }).id.length > 0
+      ? (agent as { id: string }).id
+      : undefined;
+  return id ? `agents.list[id=${JSON.stringify(id)}]` : `agents.list[${index}]`;
+}
+
 export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
   const enabledFlags: string[] = [];
 
@@ -69,7 +81,7 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
     for (const [index, agent] of cfg.agents.list.entries()) {
       collectSandboxDockerDangerousFlags(
         isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
-        `agents.list[${index}].sandbox.docker`,
+        `${getAgentDangerousFlagPathSegment(agent, index)}.sandbox.docker`,
       );
     }
   }
