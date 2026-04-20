@@ -61,6 +61,7 @@ import {
   slackConfigAdapter,
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
+import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 // Lazy SDK loaders. The dynamic import is hidden behind a string-literal
@@ -167,7 +168,6 @@ let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undef
 let slackProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
 let slackMonitorModulePromise: Promise<typeof import("./monitor.js")> | undefined;
 let slackDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
-const SLACK_THREAD_TS_PATTERN = /^\d+\.\d+$/;
 
 const loadSlackDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
@@ -200,27 +200,6 @@ async function loadSlackMonitorModule() {
 async function loadSlackDirectoryLiveModule() {
   slackDirectoryLiveModulePromise ??= import("./directory-live.js");
   return await slackDirectoryLiveModulePromise;
-}
-
-function normalizeSlackThreadTsCandidate(value?: string | number | null): string | undefined {
-  const normalized =
-    typeof value === "number"
-      ? normalizeOptionalString(String(value))
-      : normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  return SLACK_THREAD_TS_PATTERN.test(normalized) ? normalized : undefined;
-}
-
-function resolveSlackThreadTsValue(params: {
-  replyToId?: string | number | null;
-  threadId?: string | number | null;
-}): string | undefined {
-  return (
-    normalizeSlackThreadTsCandidate(params.replyToId) ??
-    (params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined)
-  );
 }
 
 async function resolveSlackSendContext(params: {
