@@ -21,6 +21,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
+  "MINIMAX_API_HOST",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "OPENAI_API_KEY",
@@ -69,7 +70,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
