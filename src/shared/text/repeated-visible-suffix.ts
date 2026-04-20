@@ -14,6 +14,8 @@ const EXACT_TARGET_HINT_RE =
   /\b(?:specific string|reply with|output the text directly|output content)\b/i;
 const INLINE_CODE_LITERAL_RE = /`([^`\r\n]{1,400})`/g;
 const EXCLUDED_TARGET_HINT_SEGMENT_RE = /\b(?:incorrect|wrong|duplicate|previous|attempt)\b/i;
+const EXCLUDED_TRAILING_COLLAPSE_CONTEXT_RE =
+  /\b(?:mistaken|example|examples|incorrect|wrong|previous attempt|doubled output|duplicate(?:d)? output)\b/i;
 const MAX_STRUCTURED_SUFFIX_SCAN_CHARS = 8_192;
 const MAX_DELIMITER_SUFFIX_SCAN_CHARS = 2_048;
 
@@ -164,6 +166,9 @@ function selectVisibleSuffixReplacement(params: {
   if (explicitTarget) {
     return explicitTarget;
   }
+  if (context === "no-delimiter" && hasExcludedTrailingCollapseContext(prefix)) {
+    return null;
+  }
   if (!shouldCollapseRepeatedSuffix({ prefix, match, context })) {
     return null;
   }
@@ -201,7 +206,7 @@ function extractInlineCodeLiterals(text: string): string[] {
     .filter((literal) => literal.length > 0);
 }
 
-function findExplicitSingleTargetLiteralInPreamble(text: string): string | null {
+export function findExplicitSingleTargetLiteralInPreamble(text: string): string | null {
   if (
     !text ||
     !looksLikeInternalPreamble(text) ||
@@ -228,6 +233,11 @@ function findExplicitSingleTargetLiteralInPreamble(text: string): string | null 
   }
 
   return uniqueLiterals[0] ?? null;
+}
+
+function hasExcludedTrailingCollapseContext(prefix: string): boolean {
+  const trailingSegment = splitPreambleHintSegments(prefix).at(-1) ?? "";
+  return EXCLUDED_TRAILING_COLLAPSE_CONTEXT_RE.test(trailingSegment);
 }
 
 function extractExplicitRepeatedLiteralFromRunawayText(text: string): string | null {

@@ -91,6 +91,18 @@ describe("stripModelSpecialTokens", () => {
     );
   });
 
+  it("preserves an explicitly requested literal channel delimiter target", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `<channel|>` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|><channel|>",
+    ].join("\n");
+
+    expect(stripModelSpecialTokens(input)).toBe("<channel|>");
+  });
+
   it("treats plan-prefixed channel delimiters as leaked scaffolding", () => {
     expect(stripModelSpecialTokens("plan: <channel|>Visible answer")).toBe("Visible answer");
   });

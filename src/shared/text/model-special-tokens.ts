@@ -14,7 +14,10 @@
  * @see https://github.com/openclaw/openclaw/issues/40020
  */
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { collapseRepeatedVisibleSuffixAfterDelimiter } from "./repeated-visible-suffix.js";
+import {
+  collapseRepeatedVisibleSuffixAfterDelimiter,
+  findExplicitSingleTargetLiteralInPreamble,
+} from "./repeated-visible-suffix.js";
 
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
@@ -153,17 +156,19 @@ function stripModelSpecialTokensImpl(text: string): string {
   }
   for (let idx = channelDelimiterMatches.length - 1; idx >= 0; idx -= 1) {
     const channelDelimiterMatch = channelDelimiterMatches[idx];
+    const prefix = text.slice(0, channelDelimiterMatch.end);
     const visibleSuffix = stripTrailingChannelDelimiters(
       stripModelSpecialTokensImpl(text.slice(channelDelimiterMatch.end)),
     );
     if (!visibleSuffix.trim()) {
+      const explicitLiteral = findExplicitSingleTargetLiteralInPreamble(prefix);
+      if (explicitLiteral?.toLowerCase() === "<channel|>") {
+        return explicitLiteral;
+      }
       continue;
     }
 
-    return collapseRepeatedVisibleSuffixAfterDelimiter(
-      text.slice(0, channelDelimiterMatch.end),
-      visibleSuffix,
-    );
+    return collapseRepeatedVisibleSuffixAfterDelimiter(prefix, visibleSuffix);
   }
   if (channelDelimiterMatches.length > 0) {
     return "";

@@ -560,6 +560,18 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("visiblefix5-1776638721");
   });
 
+  it("does not collapse a repeated suffix that is explicitly framed as a mistaken doubled example", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "Here is the mistaken doubled output:",
+      "abc-123abc-123",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("does not collapse repeated structured text in ordinary prose without scaffolding", () => {
     expect(sanitizeAssistantVisibleText("Here is the pattern: abc-123abc-123")).toBe(
       "Here is the pattern: abc-123abc-123",
@@ -706,6 +718,18 @@ describe("sanitizeAssistantVisibleText", () => {
     const input = "Internal planning<channel|>";
 
     expect(sanitizeAssistantVisibleText(input)).toBe("");
+  });
+
+  it("preserves an explicitly requested literal channel delimiter target", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `<channel|>` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response.",
+      "<channel|><channel|>",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("<channel|>");
   });
 
   it("strips leaked plan-prefixed channel delimiters", () => {
