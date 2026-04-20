@@ -16,6 +16,9 @@ function changedProfileInvariants(
   if (current.driver !== next.driver) {
     changed.push("driver");
   }
+  if (current.headless !== next.headless) {
+    changed.push("headless");
+  }
   if (current.attachOnly !== next.attachOnly) {
     changed.push("attachOnly");
   }

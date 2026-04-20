@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.types.js";
 
-type TestProfileConfig = { cdpPort?: number; cdpUrl?: string; color?: string };
+type TestProfileConfig = {
+  cdpPort?: number;
+  cdpUrl?: string;
+  color?: string;
+  headless?: boolean;
+};
 type TestConfig = {
   browser: {
     enabled: true;
@@ -224,5 +229,48 @@ describe("server-context hot-reload profiles", () => {
     expect(runtime?.profile.cdpPort).toBe(19999);
     expect(runtime?.lastTargetId).toBeNull();
     expect(runtime?.reconcile?.reason).toContain("cdpPort");
+  });
+
+  it("marks existing runtime state for reconcile when profile headless changes", async () => {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const openclawProfile = resolveProfile(resolved, "openclaw");
+    expect(openclawProfile).toBeTruthy();
+    expect(openclawProfile?.headless).toBe(true);
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "openclaw",
+          {
+            profile: openclawProfile!,
+            running: { pid: 123 } as never,
+            lastTargetId: "tab-1",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.openclaw = {
+      cdpPort: 18800,
+      color: "#FF4500",
+      headless: false,
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("openclaw");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.headless).toBe(false);
+    expect(runtime?.lastTargetId).toBeNull();
+    expect(runtime?.reconcile?.reason).toContain("headless");
   });
 });
