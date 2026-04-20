@@ -47,6 +47,7 @@ struct GatewayMetrics {
     online: bool,
     cpu_usage: f32,
     memory_mb: u64,
+    total_memory_mb: u64,
     uptime_secs: u64,
     restarts: u32,
 }
@@ -177,6 +178,7 @@ async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, S
             metrics.online = true;
             metrics.cpu_usage = process.cpu_usage();
             metrics.memory_mb = process.memory() / 1024 / 1024;
+            metrics.total_memory_mb = sys.total_memory() / 1024 / 1024;
             if let Some(start) = *state.start_time.lock().unwrap() {
                 metrics.uptime_secs = start.elapsed().as_secs();
             }
@@ -186,7 +188,85 @@ async fn get_metrics(state: State<'_, GatewayState>) -> Result<GatewayMetrics, S
     Ok(metrics)
 }
 
-fn drain_stream<R: std::io::Read + Send + 'static>(stream: R, prefix: &'static str, is_error: bool) {
+#[tauri::command]
+fn get_config(key: String) -> Result<String, String> {
+    let (program, args_base) = get_openclaw_command();
+    let mut args = args_base;
+    args.push("config".to_string());
+    args.push("get".to_string());
+    args.push(key);
+    
+    let output = Command::new(&program)
+        .args(&args)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(val)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+fn set_config(key: String, value: String) -> Result<(), String> {
+    let (program, args_base) = get_openclaw_command();
+    let mut args = args_base;
+    args.push("config".to_string());
+    args.push("set".to_string());
+    args.push(key);
+    args.push(value);
+    
+    let output = Command::new(&program)
+        .args(&args)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+fn is_autostart_enabled() -> bool {
+    let run_path = "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"; // Use HKCU for easier access
+    let output = Command::new("powershell")
+        .args(&["-NoProfile", "-Command", &format!("Get-ItemProperty -Path '{}' -Name 'OpenClaw' -ErrorAction SilentlyContinue", run_path)])
+        .output();
+    
+    match output {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+fn toggle_autostart(enabled: bool) -> Result<(), String> {
+    let run_path = "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+    let exe_path = env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().to_string();
+    
+    let command = if enabled {
+        format!("Set-ItemProperty -Path '{}' -Name 'OpenClaw' -Value '\"{}\"'", run_path, exe_path)
+    } else {
+        format!("Remove-ItemProperty -Path '{}' -Name 'OpenClaw' -ErrorAction SilentlyContinue", run_path)
+    };
+
+    let output = Command::new("powershell")
+        .args(&["-NoProfile", "-Command", &command])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+fn drain_stream<R: std::io::Read + Send + 'static>(app: AppHandle, stream: R, prefix: &'static str, is_error: bool) {
     let thread_name = format!("drain-{}", prefix.to_lowercase().replace(':', ""));
     let _ = thread::Builder::new()
         .name(thread_name)
@@ -195,11 +275,14 @@ fn drain_stream<R: std::io::Read + Send + 'static>(stream: R, prefix: &'static s
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
+                        let log_entry = format!("[{}] {}", prefix, l);
                         if is_error {
-                            log::warn!("[{}] {}", prefix, l);
+                            log::warn!("{}", log_entry);
                         } else {
-                            log::info!("[{}] {}", prefix, l);
+                            log::info!("{}", log_entry);
                         }
+                        // Emit to frontend
+                        let _ = app.emit_all("gateway-log", l);
                     }
                     Err(e) => log::trace!("Stream error for {}: {}", prefix, e),
                 }
@@ -225,10 +308,10 @@ fn spawn_gateway(app: AppHandle, state: GatewayState) -> Result<String, String> 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
     
     if let Some(stdout) = child.stdout.take() {
-        drain_stream(stdout, "STDOUT:", false);
+        drain_stream(app.clone(), stdout, "STDOUT:", false);
     }
     if let Some(stderr) = child.stderr.take() {
-        drain_stream(stderr, "STDERR:", true);
+        drain_stream(app.clone(), stderr, "STDERR:", true);
     }
 
     let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
@@ -409,7 +492,16 @@ fn main() {
             let _ = spawn_gateway(app.handle(), state.inner().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![start_gateway, stop_gateway, get_port, get_metrics])
+        .invoke_handler(tauri::generate_handler![
+            start_gateway, 
+            stop_gateway, 
+            get_port, 
+            get_metrics,
+            get_config,
+            set_config,
+            is_autostart_enabled,
+            toggle_autostart
+        ])
         .system_tray(SystemTray::new().with_menu(tray_menu))
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {

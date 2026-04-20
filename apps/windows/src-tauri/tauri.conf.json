@@ -30,6 +30,14 @@
         "exit": true
       }
     },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://raw.githubusercontent.com/openclaw/openclaw/main/apps/windows/update.json"
+      ],
+      "dialog": true,
+      "pubkey": "REPLACE_WITH_ACTUAL_PUBKEY_IF_AVAILABLE"
+    },
     "bundle": {
       "active": true,
       "targets": "all",

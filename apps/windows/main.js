@@ -1,9 +1,40 @@
 import { invoke } from '@tauri-apps/api/tauri';
+import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
+import { checkUpdate, installUpdate } from '@tauri-apps/api/updater';
+
+// Listen for gateway logs
+listen('gateway-log', (event) => {
+  appendLog(event.payload, "info");
+});
+
+(async () => {
+  const version = await getVersion();
+  document.getElementById('app-version').textContent = `v${version}`;
+})();
+
+async function handleUpdate() {
+  try {
+    const { shouldUpdate, manifest } = await checkUpdate();
+    if (shouldUpdate) {
+      appendLog(`Update found: ${manifest.version}. Installing...`);
+      await installUpdate();
+    } else {
+      appendLog("Already on the latest version.");
+    }
+  } catch (error) {
+    appendLog("Update Error: " + error, "error");
+  }
+}
 
 document.querySelector('#app').innerHTML = `
   <div class="cyber-container">
     <div class="header">
-      <h1>OpenClaw<span class="neon-text">_Gateway</span></h1>
+      <div>
+        <h1>OpenClaw<span class="neon-text">_Gateway</span></h1>
+        <span id="app-version" style="font-size: 0.7rem; color: #555; margin-left: 2px;">v1.0.0</span>
+      </div>
+      <button id="settings-btn" class="settings-btn">Settings</button>
     </div>
     <div class="dashboard">
       <div class="left-col">
@@ -47,13 +78,80 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
   </div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <h2>System Settings</h2>
+      <div class="settings-row">
+        <label>Gateway Port</label>
+        <input type="number" id="setting-gateway-port" value="18789">
+      </div>
+      <div class="settings-row">
+        <label>Auto-start on Boot</label>
+        <label class="switch">
+          <input type="checkbox" id="setting-autostart">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="settings-row">
+        <label>System Maintenance</label>
+        <button id="update-check-btn" class="settings-btn" style="width: auto;">Check for Updates</button>
+      </div>
+      <div class="modal-actions">
+        <button id="settings-cancel" class="cancel-btn">Cancel</button>
+        <button id="settings-save" class="save-btn">Save Changes</button>
+      </div>
+    </div>
+  </div>
 `;
 
 const statusIndicator = document.getElementById('status-indicator');
 const startBtn = document.getElementById('start-btn');
 const stopBtn = document.getElementById('stop-btn');
+const settingsBtn = document.getElementById('settings-btn');
+const settingsModal = document.getElementById('settings-modal');
+const settingsSave = document.getElementById('settings-save');
+const settingsCancel = document.getElementById('settings-cancel');
+const updateCheckBtn = document.getElementById('update-check-btn');
 
 
+
+// Modal listeners
+settingsBtn.addEventListener('click', async () => {
+  try {
+    const port = await invoke('get_config', { key: 'gateway.port' });
+    const autostart = await invoke('is_autostart_enabled');
+    
+    document.getElementById('setting-gateway-port').value = port;
+    document.getElementById('setting-autostart').checked = autostart;
+    
+    settingsModal.classList.remove('hidden');
+  } catch (e) {
+    appendLog("Settings Load Error: " + e, "error");
+  }
+});
+
+settingsCancel.addEventListener('click', () => {
+  settingsModal.classList.add('hidden');
+});
+
+settingsSave.addEventListener('click', async () => {
+  const port = document.getElementById('setting-gateway-port').value;
+  const autostart = document.getElementById('setting-autostart').checked;
+  
+  try {
+    await invoke('set_config', { key: 'gateway.port', value: port });
+    await invoke('toggle_autostart', { enabled: autostart });
+    
+    appendLog("Settings saved successfully.");
+    settingsModal.classList.add('hidden');
+  } catch (e) {
+    appendLog("Settings Save Error: " + e, "error");
+  }
+});
+
+updateCheckBtn.addEventListener('click', handleUpdate);
 
 async function updateDashboard() {
   try {
@@ -78,9 +176,10 @@ async function updateDashboard() {
     document.getElementById('cpu-bar').style.width = `${Math.min(cpu, 100)}%`;
 
     const ram = metrics.memory_mb;
-    document.getElementById('ram-val').textContent = `${ram} MB`;
-    const ramPercent = Math.min((ram / 1024) * 100, 100); // Assume 1GB as 100% for scale, or just relative
-    document.getElementById('ram-bar').style.width = `${ramPercent}%`;
+    const totalRam = metrics.total_memory_mb;
+    document.getElementById('ram-val').textContent = `${ram} MB / ${totalRam} MB`;
+    const ramPercent = totalRam > 0 ? (ram / totalRam) * 100 : 0;
+    document.getElementById('ram-bar').style.width = `${Math.min(ramPercent, 100)}%`;
 
     document.getElementById('restart-val').textContent = metrics.restarts;
     
