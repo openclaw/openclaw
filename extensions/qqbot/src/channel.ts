@@ -19,7 +19,6 @@ import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
 } from "./engine/messaging/target-parser.js";
-import { sendStartupGreetings } from "./engine/session/admin-resolver.js";
 // Re-export text helpers from core/.
 export { chunkText, TEXT_CHUNK_LIMIT } from "./engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "./types.js";
@@ -210,8 +209,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           if (account.appId && account.clientSecret) {
             saveCredentialBackup(account.accountId, account.appId, account.clientSecret);
           }
-          // Fire startup / upgrade greeting (per-(accountId, appId) marker).
-          sendStartupGreetings({ account: account as never, log }, "READY");
         },
         onResumed: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway resumed`);
@@ -224,7 +221,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           if (account.appId && account.clientSecret) {
             saveCredentialBackup(account.accountId, account.appId, account.clientSecret);
           }
-          sendStartupGreetings({ account: account as never, log }, "RESUMED");
         },
         onError: (error) => {
           log?.error(`[qqbot:${account.accountId}] Gateway error: ${error.message}`);
