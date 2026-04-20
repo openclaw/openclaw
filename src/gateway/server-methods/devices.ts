@@ -2,6 +2,7 @@ import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
+  getPendingDevicePairing,
   listApprovedPairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
@@ -34,12 +35,17 @@ type DeviceTokenRotateTarget = {
   normalizedRole: string;
 };
 
-type DeviceManagementAuthz = {
+type DeviceSessionAuthz = {
   callerDeviceId: string | null;
   callerScopes: string[];
   isAdminCaller: boolean;
+};
+
+type DeviceManagementAuthz = DeviceSessionAuthz & {
   normalizedTargetDeviceId: string;
 };
+
+const DEVICE_PAIR_APPROVAL_DENIED_MESSAGE = "device pairing approval denied";
 
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
@@ -91,6 +97,13 @@ function resolveDeviceManagementAuthz(
   client: GatewayClient | null,
   targetDeviceId: string,
 ): DeviceManagementAuthz {
+  return {
+    ...resolveDeviceSessionAuthz(client),
+    normalizedTargetDeviceId: targetDeviceId.trim(),
+  };
+}
+
+function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionAuthz {
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const rawCallerDeviceId = client?.connect?.device?.id;
   const callerDeviceId =
@@ -101,7 +114,6 @@ function resolveDeviceManagementAuthz(
     callerDeviceId,
     callerScopes,
     isAdminCaller: callerScopes.includes("operator.admin"),
-    normalizedTargetDeviceId: targetDeviceId.trim(),
   };
 }
 
@@ -114,7 +126,7 @@ function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
 }
 
 export const deviceHandlers: GatewayRequestHandlers = {
-  "device.pair.list": async ({ params, respond }) => {
+  "device.pair.list": async ({ params, respond, client }) => {
     if (!validateDevicePairListParams(params)) {
       respond(
         false,
@@ -129,11 +141,21 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const list = await listDevicePairing();
+    const authz = resolveDeviceSessionAuthz(client);
+    const visibleList =
+      authz.callerDeviceId && !authz.isAdminCaller
+        ? {
+            pending: list.pending.filter(
+              (request) => request.deviceId.trim() === authz.callerDeviceId,
+            ),
+            paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
+          }
+        : list;
     respond(
       true,
       {
-        pending: list.pending,
-        paired: list.paired.map((device) => redactPairedDevice(device)),
+        pending: visibleList.pending,
+        paired: visibleList.paired.map((device) => redactPairedDevice(device)),
       },
       undefined,
     );
@@ -153,8 +175,26 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const { requestId } = params as { requestId: string };
-    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const approved = await approveDevicePairing(requestId, { callerScopes });
+    const authz = resolveDeviceSessionAuthz(client);
+    if (authz.callerDeviceId && !authz.isAdminCaller) {
+      const pending = await getPendingDevicePairing(requestId);
+      if (!pending) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        return;
+      }
+      if (pending.deviceId.trim() !== authz.callerDeviceId) {
+        context.logGateway.warn(
+          `device pairing approval denied request=${requestId} reason=device-ownership-mismatch`,
+        );
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
+        );
+        return;
+      }
+    }
+    const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
     if (!approved) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
