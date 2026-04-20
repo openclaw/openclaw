@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Features
+
+- feat(doctor): warn when the installed openclaw package is a local rebuild diverging from the pristine npm release (#TBD)
+
 ### Fixes
 
 - Cron/delivery: treat explicit `delivery.mode: "none"` runs as not requested even if the runner reports `delivered: false`, so no-delivery cron jobs no longer persist false delivery failures or errors. (#69285) Thanks @matsuri1987.

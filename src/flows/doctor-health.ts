@@ -3,6 +3,7 @@ import { loadAndMaybeMigrateDoctorConfig } from "../commands/doctor-config-flow.
 import { noteSourceInstallIssues } from "../commands/doctor-install.js";
 import { noteStartupOptimizationHints } from "../commands/doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "../commands/doctor-prompter.js";
+import { noteRebuildGuardHealth } from "../commands/doctor-rebuild-guard.js";
 import { maybeRepairUiProtocolFreshness } from "../commands/doctor-ui.js";
 import { maybeOfferUpdateBeforeDoctor } from "../commands/doctor-update.js";
 import { printWizardHeader } from "../commands/onboard-helpers.js";
@@ -43,6 +44,7 @@ export async function doctorCommand(
 
   await maybeRepairUiProtocolFreshness(runtime, prompter);
   noteSourceInstallIssues(root);
+  await noteRebuildGuardHealth(root);
   noteStartupOptimizationHints();
 
   const configResult = await loadAndMaybeMigrateDoctorConfig({

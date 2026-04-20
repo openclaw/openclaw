@@ -50,6 +50,12 @@ Notes:
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.
 - Telegram `allowFrom` username auto-resolution (`doctor --fix`) requires a resolvable Telegram token in the current command path. If token inspection is unavailable, doctor reports a warning and skips auto-resolution for that pass.
 
+## Install freshness check
+
+`openclaw doctor` compares the local package build metadata in `dist/build-info.json` with the npm registry publish time for the installed version. It stays silent when the install looks like the pristine npm package or the registry cannot be checked.
+
+Doctor warns when the local build appears to be a later rebuild of a published version, when the installed version is not present in the registry publish map, or when local build metadata is missing or malformed. The warning is non-blocking and is meant to catch locally patched installs before `openclaw update` overwrites them.
+
 ## macOS: `launchctl` env overrides
 
 If you previously ran `launchctl setenv OPENCLAW_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent “unauthorized” errors.
