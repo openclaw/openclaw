@@ -1,4 +1,6 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
   formatDurationPrecise,
@@ -57,6 +59,7 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 export class TelegramPollingSession {
@@ -92,6 +95,12 @@ export class TelegramPollingSession {
   }
 
   async runUntilAbort(): Promise<void> {
+    this.opts.setStatus?.({
+      mode: "polling",
+      connected: false,
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
     try {
       while (!this.opts.abortSignal?.aborted) {
         const bot = await this.#createPollingBot();
@@ -117,6 +126,10 @@ export class TelegramPollingSession {
       // this, the undici keep-alive sockets survive beyond the session and
       // leak to api.telegram.org; see openclaw#68128.
       await this.#transportState.dispose();
+      this.opts.setStatus?.({
+        mode: "polling",
+        connected: false,
+      });
     }
   }
 
@@ -273,6 +286,11 @@ export class TelegramPollingSession {
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
         lastApiActivityAt = finishedAt;
+        this.opts.setStatus?.({
+          ...createConnectedChannelStatusPatch(finishedAt),
+          mode: "polling",
+          lastError: null,
+        });
         return result;
       } catch (err) {
         const finishedAt = Date.now();

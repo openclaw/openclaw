@@ -1,3 +1,4 @@
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
@@ -140,6 +141,7 @@ function createPollingSession(params: {
   log?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
   return new TelegramPollingSession({
     token: "tok",
@@ -153,6 +155,7 @@ function createPollingSession(params: {
     persistUpdateId: async () => undefined,
     log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
+    setStatus: params.setStatus,
     ...(params.createTelegramTransport
       ? { createTelegramTransport: params.createTelegramTransport }
       : {}),
@@ -190,6 +193,19 @@ function mockLongRunningPollingCycle(runnerStop: AsyncVoidFn) {
     isRunning: () => true,
   });
   return () => firstTaskResolve?.();
+}
+
+async function waitForApiMiddleware(
+  getApiMiddleware: () => TelegramApiMiddleware | undefined,
+): Promise<TelegramApiMiddleware> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const apiMiddleware = getApiMiddleware();
+    if (apiMiddleware) {
+      return apiMiddleware;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("Telegram API middleware was not installed");
 }
 
 describe("TelegramPollingSession", () => {
@@ -473,6 +489,128 @@ describe("TelegramPollingSession", () => {
     } finally {
       watchdogHarness.restore();
     }
+  });
+
+  it("publishes polling liveness after getUpdates succeeds", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const setStatus = vi.fn();
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    const runPromise = session.runUntilAbort();
+
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+    const fakeGetUpdates = vi.fn(async () => []);
+    await apiMiddleware(fakeGetUpdates, "getUpdates", { offset: 1 });
+
+    expect(setStatus).toHaveBeenCalledWith({
+      mode: "polling",
+      connected: false,
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
+    const connectedPatch = setStatus.mock.calls.find(
+      ([patch]) => (patch as Record<string, unknown>).connected === true,
+    )?.[0] as Record<string, unknown> | undefined;
+    expect(connectedPatch).toMatchObject({
+      connected: true,
+      mode: "polling",
+      lastConnectedAt: expect.any(Number),
+      lastEventAt: expect.any(Number),
+      lastError: null,
+    });
+    expect(connectedPatch?.lastConnectedAt).toBe(connectedPatch?.lastEventAt);
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+
+    expect(setStatus).toHaveBeenLastCalledWith({
+      mode: "polling",
+      connected: false,
+    });
+  });
+
+  it("keeps polling marked connected across recoverable restart cycles", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable polling error");
+    const setStatus = vi.fn();
+    let apiMiddleware: TelegramApiMiddleware | undefined;
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: vi.fn((fn: TelegramApiMiddleware) => {
+            apiMiddleware = fn;
+          }),
+        },
+      },
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let cycle = 0;
+    runMock.mockImplementation(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          task: async () => {
+            const middleware = apiMiddleware;
+            if (!middleware) {
+              throw new Error("Telegram API middleware was not installed");
+            }
+            await middleware(
+              vi.fn(async () => []),
+              "getUpdates",
+              { offset: 1 },
+            );
+            throw recoverableError;
+          },
+          stop: vi.fn(async () => undefined),
+          isRunning: () => false,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      };
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    await session.runUntilAbort();
+
+    expect(runMock).toHaveBeenCalledTimes(2);
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ connected: true, mode: "polling" }),
+    );
+    const disconnectedPatches = setStatus.mock.calls.filter(
+      ([patch]) => (patch as Record<string, unknown>).connected === false,
+    );
+    expect(disconnectedPatches).toHaveLength(2);
+    expect(disconnectedPatches[0]?.[0]).toMatchObject({
+      mode: "polling",
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
+    expect(disconnectedPatches[1]?.[0]).toEqual({
+      mode: "polling",
+      connected: false,
+    });
   });
 
   it("does not trigger stall restart when non-getUpdates API calls are active", async () => {
