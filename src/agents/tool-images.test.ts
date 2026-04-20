@@ -1,6 +1,10 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
+import {
+  sanitizeContentBlocksImages,
+  sanitizeImageBlocks,
+  sanitizeToolResultImages,
+} from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
   const getImageBlock = (
@@ -135,31 +139,45 @@ describe("tool image sanitizing", () => {
     ]);
   });
 
-  it("drops HEIF tool image payloads before native decode", async () => {
+  it("drops HEIF tool-result image payloads before native decode", async () => {
     const heif = createIsoBmffImage("heic", ["mif1"]);
-    const out = await sanitizeContentBlocksImages(
-      [{ type: "image", data: heif.toString("base64"), mimeType: "image/heif" }],
+    const out = await sanitizeToolResultImages(
+      {
+        content: [{ type: "image", data: heif.toString("base64"), mimeType: "image/heif" }],
+        details: {},
+      },
       "test",
     );
-    expect(out).toEqual([
-      {
-        type: "text",
-        text: "[test] omitted image payload: Error: unsupported image format",
-      },
+    expect(out.content).toEqual([
+      { type: "text", text: "[test] omitted image payload: Error: unsupported image format" },
     ]);
   });
 
-  it("drops AVIF payloads even when mislabeled as jpeg", async () => {
+  it("drops AVIF tool-result payloads even when mislabeled as jpeg", async () => {
     const avif = createIsoBmffImage("avif", ["mif1"]);
-    const out = await sanitizeContentBlocksImages(
-      [{ type: "image", data: avif.toString("base64"), mimeType: "image/jpeg" }],
+    const out = await sanitizeToolResultImages(
+      {
+        content: [{ type: "image", data: avif.toString("base64"), mimeType: "image/jpeg" }],
+        details: {},
+      },
       "test",
     );
-    expect(out).toEqual([
+    expect(out.content).toEqual([
+      { type: "text", text: "[test] omitted image payload: Error: unsupported image format" },
+    ]);
+  });
+
+  it("drops HEIF-family payloads detected only via compatible brand on tool results", async () => {
+    const avif = createIsoBmffImage("mp41", ["mif1"]);
+    const out = await sanitizeToolResultImages(
       {
-        type: "text",
-        text: "[test] omitted image payload: Error: unsupported image format",
+        content: [{ type: "image", data: avif.toString("base64"), mimeType: "image/jpeg" }],
+        details: {},
       },
+      "test",
+    );
+    expect(out.content).toEqual([
+      { type: "text", text: "[test] omitted image payload: Error: unsupported image format" },
     ]);
   });
 });

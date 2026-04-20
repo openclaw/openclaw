@@ -17,6 +17,9 @@ import {
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
+type ToolImageSanitizationLimits = ImageSanitizationLimits & {
+  rejectHeifFamily?: boolean;
+};
 
 // Anthropic Messages API limitations (observed in OpenClaw sessions):
 // - Images over ~2000px per side can fail in multi-image requests.
@@ -315,7 +318,7 @@ async function resizeImageBase64IfNeeded(params: {
 export async function sanitizeContentBlocksImages(
   blocks: ToolContentBlock[],
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
   const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
   const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
@@ -355,12 +358,14 @@ export async function sanitizeContentBlocksImages(
     try {
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
-      if (mimeType === "image/avif" || mimeType === "image/heic" || mimeType === "image/heif") {
-        throw new Error("unsupported image format");
-      }
-      const buffer = Buffer.from(canonicalData, "base64");
-      if (isHeifFamilyImageBuffer(buffer)) {
-        throw new Error("unsupported image format");
+      if (opts.rejectHeifFamily) {
+        if (mimeType === "image/avif" || mimeType === "image/heic" || mimeType === "image/heif") {
+          throw new Error("unsupported image format");
+        }
+        const buffer = Buffer.from(canonicalData, "base64");
+        if (isHeifFamilyImageBuffer(buffer)) {
+          throw new Error("unsupported image format");
+        }
       }
       const fileName = inferImageFileName({ block, label, mediaPathHint });
       const resized = await resizeImageBase64IfNeeded({
@@ -390,7 +395,7 @@ export async function sanitizeContentBlocksImages(
 export async function sanitizeImageBlocks(
   images: ImageContent[],
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationLimits = {},
 ): Promise<{ images: ImageContent[]; dropped: number }> {
   if (images.length === 0) {
     return { images, dropped: 0 };
@@ -410,6 +415,9 @@ export async function sanitizeToolResultImages(
     return result;
   }
 
-  const next = await sanitizeContentBlocksImages(content, label, opts);
+  const next = await sanitizeContentBlocksImages(content, label, {
+    ...opts,
+    rejectHeifFamily: true,
+  });
   return { ...result, content: next };
 }
