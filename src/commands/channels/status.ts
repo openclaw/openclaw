@@ -174,6 +174,10 @@ export async function channelsStatusCommand(
     }
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
+    if (opts.probe) {
+      throw err;
+    }
+
     runtime.error(`Gateway not reachable: ${String(err)}`);
     const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {

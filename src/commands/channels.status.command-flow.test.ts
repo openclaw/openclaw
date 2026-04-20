@@ -237,4 +237,25 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(joined).not.toContain("secret unavailable in this command path");
     expect(joined).not.toContain("token:config (unavailable)");
   });
+
+  it("does not fall back to config-only status when probe mode fails after reaching the gateway", async () => {
+    callGateway.mockRejectedValue(new Error("channel probe timed out"));
+    requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
+    resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: { secretResolved: false, channels: {} },
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    });
+
+    const { runtime, logs, errors } = createRuntimeCapture();
+
+    await expect(channelsStatusCommand({ probe: true }, runtime as never)).rejects.toThrow(
+      "channel probe timed out",
+    );
+
+    expect(errors).toEqual([]);
+    expect(logs).toEqual(["Checking channel status (probe)…"]);
+    expect(requireValidConfigSnapshot).not.toHaveBeenCalled();
+  });
 });
