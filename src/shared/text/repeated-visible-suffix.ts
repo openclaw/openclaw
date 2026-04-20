@@ -157,6 +157,31 @@ function findExplicitVisibleSuffixTarget(
   return null;
 }
 
+function collapseExplicitStructuredRepeatTarget(params: {
+  explicitTarget: string;
+  match: RepeatedPatternMatch;
+  prefix: string;
+  context: "delimiter" | "no-delimiter";
+}): string {
+  const { explicitTarget, match, prefix, context } = params;
+  if (context !== "no-delimiter" || hasIntentionalRepeatRequest(prefix)) {
+    return explicitTarget;
+  }
+  if (match.tail.length === 0 && match.fullRepeats < 3) {
+    return explicitTarget;
+  }
+
+  const nestedMatch = matchStructuredRepeatedPrefixPattern(explicitTarget);
+  if (!nestedMatch || nestedMatch.tail.length > 0 || nestedMatch.fullRepeats < 2) {
+    return explicitTarget;
+  }
+  if (nestedMatch.unit !== match.unit) {
+    return explicitTarget;
+  }
+
+  return nestedMatch.unit;
+}
+
 function selectVisibleSuffixReplacement(params: {
   prefix: string;
   match: RepeatedPatternMatch;
@@ -173,7 +198,7 @@ function selectVisibleSuffixReplacement(params: {
     if (context === "no-delimiter" && hasExcludedTrailingCollapseContext(prefix)) {
       return null;
     }
-    return explicitTarget;
+    return collapseExplicitStructuredRepeatTarget({ explicitTarget, match, prefix, context });
   }
   if (context === "delimiter" && findExplicitSingleTargetLiteralInPreamble(prefix)) {
     return null;
@@ -281,7 +306,16 @@ function extractExplicitRepeatedLiteralFromRunawayText(text: string): string | n
     return null;
   }
 
-  return literal;
+  return collapseExplicitStructuredRepeatTarget({
+    explicitTarget: literal,
+    match: matchStructuredRepeatedPrefixPattern(literal) ?? {
+      unit: literal,
+      fullRepeats: 1,
+      tail: "",
+    },
+    prefix,
+    context: "no-delimiter",
+  });
 }
 
 export function extractStructuredRepeatedVisibleSuffix(text: string): string {

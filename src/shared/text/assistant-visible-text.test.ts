@@ -560,6 +560,17 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("visiblefix5-1776638721");
   });
 
+  it("collapses a mistakenly doubled exact target when runaway text repeats the minimal unit with no delimiter", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `pr68986-live-1776657289pr68986-live-1776657289` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response, as per the general instruction to reply in the current session.pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-1776657289pr68986-live-177",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("pr68986-live-1776657289");
+  });
+
   it("does not collapse a repeated suffix that is explicitly framed as a mistaken doubled example", () => {
     const input = [
       "The user is instructing me to reply with a very specific string and nothing else.",
