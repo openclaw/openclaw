@@ -19,10 +19,19 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [READ_SCOPE],
   chat: [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
+  cron: [READ_SCOPE],
+  health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
+  heartbeat: [],
   "plugin.approval.requested": [APPROVALS_SCOPE],
   "plugin.approval.resolved": [APPROVALS_SCOPE],
+  presence: [],
+  shutdown: [],
+  tick: [],
+  "talk.mode": [WRITE_SCOPE],
+  "update.available": [],
+  "voicewake.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
@@ -42,6 +51,9 @@ export type {
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
+    return false;
+  }
+  if (required.length === 0) {
     return true;
   }
   const role = client.connect.role ?? "operator";

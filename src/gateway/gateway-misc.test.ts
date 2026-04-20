@@ -167,6 +167,28 @@ type TestSocket = {
   close: (code: number, reason: string) => void;
 };
 
+type EventFrame = {
+  type: "event";
+  event: string;
+  payload?: unknown;
+};
+
+type RecordingSocket = TestSocket & {
+  sent: EventFrame[];
+};
+
+function makeRecordingSocket(): RecordingSocket {
+  const sent: EventFrame[] = [];
+  return {
+    bufferedAmount: 0,
+    send: vi.fn((payload: string) => {
+      sent.push(JSON.parse(payload) as EventFrame);
+    }),
+    close: vi.fn(),
+    sent,
+  };
+}
+
 describe("gateway broadcaster", () => {
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
@@ -222,26 +244,11 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.read for chat-class broadcast events", () => {
-    const pairingSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const nodeSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const readSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const writeSocket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
+    const pairingSocket = makeRecordingSocket();
+    const nodeSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const writeSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
       {
@@ -268,6 +275,12 @@ describe("gateway broadcaster", () => {
         connId: "c-write",
         usesSharedGatewayAuth: false,
       },
+      {
+        socket: adminSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
+        connId: "c-admin",
+        usesSharedGatewayAuth: false,
+      },
     ]);
 
     const { broadcast } = createGatewayBroadcaster({ clients });
@@ -280,6 +293,125 @@ describe("gateway broadcaster", () => {
     expect(nodeSocket.send).not.toHaveBeenCalled();
     expect(readSocket.send).toHaveBeenCalledTimes(3);
     expect(writeSocket.send).toHaveBeenCalledTimes(3);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
+    expect(readSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+  });
+
+  it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
+    const pairingSocket = makeRecordingSocket();
+    const nodeSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const writeSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: pairingSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
+        connId: "c-pairing",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: nodeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "node", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-node",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: readSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-read",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: writeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.write"] } as GatewayWsClient["connect"],
+        connId: "c-write",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: adminSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
+        connId: "c-admin",
+        usesSharedGatewayAuth: false,
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("cron", { jobId: "job-1" });
+    broadcast("talk.mode", { enabled: true });
+    broadcast("voicewake.changed", { triggers: ["hello"] });
+    broadcast("heartbeat", { ts: 1 });
+    broadcast("presence", { presence: [] });
+    broadcast("health", { ok: true });
+    broadcast("tick", { ts: 2 });
+    broadcast("shutdown", { reason: "restart" });
+    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("unknown.future.event", { hidden: true });
+
+    expect(pairingSocket.sent.map((frame) => frame.event)).toEqual([
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(nodeSocket.sent.map((frame) => frame.event)).toEqual([
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(readSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "talk.mode",
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "talk.mode",
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
   });
 });
 
