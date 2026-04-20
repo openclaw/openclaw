@@ -227,7 +227,8 @@ export function createReplyMediaPathNormalizer(params: {
       normalizedMedia.push(normalized);
     }
 
-    const droppedMedia = dropped.length > 0 ? dropped : undefined;
+    const allDropped = [...(payload.droppedMedia ?? []), ...dropped];
+    const droppedMedia = allDropped.length > 0 ? allDropped : undefined;
 
     if (normalizedMedia.length === 0) {
       return {
