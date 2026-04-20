@@ -116,12 +116,14 @@ export async function handleAction(input: ActionParams): Promise<ActionHandlerRe
 
     // Send items sequentially, collect last successful messageId
     let lastMessageId = "";
+    let successCount = 0;
+    let lastError: string | undefined;
     for (const item of items) {
       log.info("send for", { type: item.type });
 
       const result = await sender.send(item);
       if (!result.ok) {
-        // Text send failure returns directly, media failure continues to send subsequent items
+        // Text send failure returns directly, media/sticker failure continues to send subsequent items
         if (item.type === "text") {
           return {
             channel: "yuanbao",
@@ -130,10 +132,25 @@ export async function handleAction(input: ActionParams): Promise<ActionHandlerRe
             error: new Error(result.error ?? "text send failed"),
           };
         }
+        lastError = result.error ?? `${item.type} send failed`;
         log.error(`${item.type} send failed: ${result.error}`);
-      } else if (result.messageId) {
-        lastMessageId = result.messageId;
+      } else {
+        successCount++;
+        if (result.messageId) {
+          lastMessageId = result.messageId;
+        }
       }
+    }
+
+    // If no item was delivered successfully, report failure so upstream callers
+    // can trigger fallback / error handling instead of treating it as success.
+    if (successCount === 0) {
+      return {
+        channel: "yuanbao",
+        ok: false,
+        messageId: "",
+        error: new Error(lastError ?? "all outbound items failed"),
+      };
     }
 
     return { channel: "yuanbao", ok: true, messageId: lastMessageId };
