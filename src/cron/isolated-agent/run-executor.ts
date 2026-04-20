@@ -65,7 +65,11 @@ export function createCronPromptExecutor(params: {
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   messageChannel: string | undefined;
-  resolvedDelivery: { accountId?: string };
+  resolvedDelivery: {
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
@@ -150,6 +154,9 @@ export function createCronPromptExecutor(params: {
           senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
+          messageTo: params.resolvedDelivery.to,
+          messageThreadId: params.resolvedDelivery.threadId,
+          currentChannelId: params.resolvedDelivery.to,
           sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
@@ -222,6 +229,8 @@ export async function executeCronRun(params: {
   resolvedDelivery: {
     channel?: string;
     accountId?: string;
+    to?: string;
+    threadId?: string | number;
   };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
