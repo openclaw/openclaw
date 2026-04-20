@@ -211,12 +211,101 @@ function collectActiveBranchEntryIds(sessionManager: SessionManagerLike): Set<st
 }
 
 /**
+ * Candidate abandoned-id set is not yet safe on its own: a legitimate
+ * sibling branch can reference a candidate id as an ancestor. Removing
+ * that id would orphan the sibling and destroy its shared history.
+ *
+ * Restrict the set to ids that are NOT reachable as a parentId-ancestor
+ * from any non-abandoned entry in the file. Ancestry is computed by
+ * walking `parentId` chains from every non-abandoned entry until we hit
+ * a root or an already-visited node. Every id visited on such a walk is
+ * load-bearing and must survive.
+ */
+function filterAbandonedIdsByReferenceIntegrity(
+  sessionFile: string,
+  candidateAbandoned: ReadonlySet<string>,
+): Set<string> {
+  const safeToRemove = new Set<string>();
+  if (candidateAbandoned.size === 0) {
+    return safeToRemove;
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(sessionFile, "utf-8");
+  } catch {
+    return safeToRemove;
+  }
+  type Entry = { id?: string; parentId?: string | null };
+  const entries: Entry[] = [];
+  for (const raw of content.split("\n")) {
+    if (!raw.trim()) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(raw) as { id?: unknown; parentId?: unknown };
+      entries.push({
+        id: typeof obj.id === "string" ? obj.id : undefined,
+        parentId:
+          typeof obj.parentId === "string"
+            ? obj.parentId
+            : obj.parentId === null
+              ? null
+              : undefined,
+      });
+    } catch {
+      // Malformed line: ignore for ancestry computation (line is kept verbatim
+      // by the cleanup write path).
+    }
+  }
+  const byId = new Map<string, Entry>();
+  for (const entry of entries) {
+    if (entry.id) {
+      byId.set(entry.id, entry);
+    }
+  }
+  // Collect every id that is reachable as an ancestor from any non-abandoned
+  // entry. Those ids are load-bearing.
+  const ancestryLive = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.id) {
+      continue;
+    }
+    if (candidateAbandoned.has(entry.id)) {
+      continue;
+    }
+    let cursor: Entry | undefined = entry;
+    while (cursor && cursor.id) {
+      if (ancestryLive.has(cursor.id)) {
+        break;
+      }
+      ancestryLive.add(cursor.id);
+      const parentId = cursor.parentId;
+      if (typeof parentId !== "string" || !parentId) {
+        break;
+      }
+      cursor = byId.get(parentId);
+    }
+  }
+  for (const id of candidateAbandoned) {
+    if (!ancestryLive.has(id)) {
+      safeToRemove.add(id);
+    }
+  }
+  return safeToRemove;
+}
+
+/**
  * Remove ONLY those entry ids that we can prove were just abandoned by this
  * rewrite (present in the pre-rewrite active branch, absent from the
- * post-rewrite active branch). Legitimate sibling branches — alternate paths
- * the user navigated to via `sm.branch(...)` before this rewrite ran — never
- * appear in `getBranch()`, so their ids are never part of the abandoned set
- * and their entries stay in the file.
+ * post-rewrite active branch) AND that no surviving entry still references
+ * as an ancestor via `parentId`.
+ *
+ * Legitimate sibling branches — alternate paths the user navigated to via
+ * `sm.branch(...)` — never appear in `getBranch()` directly, so their ids
+ * are never part of the abandoned set. But a sibling can hang off an entry
+ * that IS in the abandoned set (the rewrite replaced what used to be a
+ * branch point). The ancestry-reference filter catches that case and keeps
+ * the shared-ancestor entry in the file so the sibling stays grounded.
  *
  * Matches the repo-wide invariant documented in session-truncation: rewrite /
  * maintenance operations must preserve unsummarized sibling branches.
@@ -226,6 +315,10 @@ function removeSpecificAbandonedEntriesFromSessionFile(
   abandonedEntryIds: ReadonlySet<string>,
 ): RewriteArtifactCleanupResult {
   if (abandonedEntryIds.size === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const safeAbandonedIds = filterAbandonedIdsByReferenceIntegrity(sessionFile, abandonedEntryIds);
+  if (safeAbandonedIds.size === 0) {
     return { removedEntries: 0, bytesRemoved: 0 };
   }
   let content: string;
@@ -244,7 +337,7 @@ function removeSpecificAbandonedEntriesFromSessionFile(
     let shouldDrop = false;
     try {
       const obj = JSON.parse(raw) as { id?: unknown };
-      if (typeof obj.id === "string" && abandonedEntryIds.has(obj.id)) {
+      if (typeof obj.id === "string" && safeAbandonedIds.has(obj.id)) {
         shouldDrop = true;
       }
     } catch {

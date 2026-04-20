@@ -414,4 +414,130 @@ describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () 
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Second repo-semantic regression guard: the sibling branch can hang off
+  // an entry that lies INSIDE the rewritten suffix. The previous entry on
+  // the main branch is strictly part of the shared history and must not be
+  // garbage-collected just because this rewrite made a new copy of it —
+  // the sibling's parentId still references the original, so removing it
+  // would turn the sibling into an orphan root and destroy the shared-
+  // ancestor relationship in the tree.
+  test("preserves ancestry when a sibling branch hangs off the rewritten suffix", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rewrite-sibling-suffix-"));
+    try {
+      const sm = SessionManager.create(dir, dir);
+      // Main branch head: user, assistant
+      sm.appendMessage(
+        makeAgentUserMessage({ content: [{ type: "text", text: "hello" }], timestamp: 1 }),
+      );
+      sm.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "hi there" }], timestamp: 2 }),
+      );
+      // Main branch continuation that WILL be the rewritten suffix:
+      // userMid → toolResult (to be rewritten) → mainTailAssistant
+      const userMidId = sm.appendMessage(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "please do the tool call" }],
+          timestamp: 3,
+        }),
+      );
+      const toolResultId = sm.appendMessage(
+        makeAgentToolResultMessage({
+          toolCallId: "call_Z",
+          toolName: "read",
+          content: [{ type: "text", text: "Z".repeat(200000) }],
+          timestamp: 4,
+        }),
+      );
+      const mainTailId = sm.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "main tail after tool" }],
+          timestamp: 5,
+        }),
+      );
+      // Sibling branch forks from toolResultId — an entry that WILL be
+      // rewritten. The sibling references that id as its parent. The
+      // rewrite must not strand the sibling by dropping its parent.
+      sm.branch(toolResultId);
+      const siblingUserId = sm.appendMessage(
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "sibling alt question" }],
+          timestamp: 6,
+        }),
+      );
+      const siblingAssistantId = sm.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "sibling alt answer" }],
+          timestamp: 7,
+        }),
+      );
+      // Return to main tail so the rewrite operates there.
+      sm.branch(mainTailId);
+      sm.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "main continuation take 2" }],
+          timestamp: 8,
+        }),
+      );
+
+      const sessionFile = sm.getSessionFile() as string;
+
+      // Rewrite the tool result — which is in the suffix, BUT userMidId is its
+      // parent and is also the shared ancestor of the sibling branch. Whatever
+      // the cleanup does, it MUST NOT orphan the sibling.
+      const result = await rewriteTranscriptEntriesInSessionFile({
+        sessionFile,
+        request: {
+          replacements: [
+            {
+              entryId: toolResultId,
+              message: makeAgentToolResultMessage({
+                toolCallId: "call_Z",
+                toolName: "read",
+                content: [{ type: "text", text: "[truncated suffix Z]" }],
+                timestamp: 4,
+              }) as AgentMessage,
+            },
+          ],
+        },
+      });
+      expect(result.changed).toBe(true);
+
+      const smAfter = SessionManager.open(sessionFile);
+      const allEntries = smAfter.getEntries();
+      const byId = new Map(allEntries.map((e) => [e.id, e]));
+
+      // Sibling user + assistant must still exist.
+      const siblingUser = byId.get(siblingUserId);
+      const siblingAssistant = byId.get(siblingAssistantId);
+      expect(siblingUser, "sibling user turn must be preserved").toBeDefined();
+      expect(siblingAssistant, "sibling assistant turn must be preserved").toBeDefined();
+
+      // Crucial: the sibling branch must still have ancestry. Walk sibling's
+      // parentId chain back up; every referenced parent must still exist in
+      // the file. Otherwise the sibling is orphaned and the tree is corrupt.
+      const visited = new Set<string>();
+      let cursor: typeof siblingAssistant = siblingAssistant;
+      while (cursor && !visited.has(cursor.id)) {
+        visited.add(cursor.id);
+        const parentId = (cursor as { parentId?: string | null }).parentId;
+        if (!parentId) {
+          break;
+        }
+        const parent = byId.get(parentId);
+        expect(
+          parent,
+          `sibling ancestry broken: parentId ${parentId} of ${cursor.id} no longer present`,
+        ).toBeDefined();
+        cursor = parent;
+      }
+
+      // And the shared-ancestor userMidId message must specifically still be
+      // in the file — it is the fork-point and both branches need it.
+      const userMid = byId.get(userMidId);
+      expect(userMid, "shared-ancestor user turn must be preserved").toBeDefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
