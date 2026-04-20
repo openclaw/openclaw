@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextForStreamUpdate,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
 } from "./assistant-visible-text.js";
@@ -610,6 +611,21 @@ describe("sanitizeAssistantVisibleText", () => {
       "The marker <channel|> splits streams.",
     );
     expect(sanitizeAssistantVisibleText("Before <channel|> after")).toBe("Before <channel|> after");
+    expect(sanitizeAssistantVisibleText("Tell it to reply with <channel|> to split streams")).toBe(
+      "Tell it to reply with <channel|> to split streams",
+    );
+  });
+
+  it("keeps the last non-empty visible segment when multiple channel delimiters appear", () => {
+    expect(
+      sanitizeAssistantVisibleText("internal planning<channel|>Visible answer<channel|>"),
+    ).toBe("Visible answer");
+  });
+
+  it("does not rewrite explanatory prose down to a single named literal", () => {
+    const input = "Examples: `noise-999noise-999`. Final output: noise-999noise-999";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
   it("drops a bare trailing control delimiter with no visible suffix", () => {
@@ -642,5 +658,30 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
       "[Tool Call: read (ID: toolu_1)]",
     );
+  });
+
+  it("does not apply visible-output rewrites outside delivery mode", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response, as per the general instruction to reply in the current session.abc-123abc-123abc-123abc-123abc-123abc-123noise-999noise-999noise-9",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toBe(input);
+  });
+});
+
+describe("sanitizeAssistantVisibleTextForStreamUpdate", () => {
+  it("leaves long exact-string scaffolding untouched until the final delivery pass", () => {
+    const input = [
+      "The user is instructing me to reply with a very specific string: `abc-123abc-123` and nothing else.",
+      "This is a direct instruction for the output content.",
+      "I must adhere to the instruction precisely.",
+      "I will output the text directly as the final response, as per the general instruction to reply in the current session.abc-123abc-123abc-123abc-123abc-123abc-123noise-999noise-999noise-9",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextForStreamUpdate(input)).toBe(input);
   });
 });

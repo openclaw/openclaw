@@ -561,7 +561,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (text: string, options?: { assistantMessageIndex?: number }) => {
+  const emitBlockChunk = (
+    text: string,
+    options?: { assistantMessageIndex?: number; finalDelivery?: boolean },
+  ) => {
     if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
@@ -569,7 +572,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
     const chunk = sanitizeAssistantVisibleTextWithProfile(
       stripBlockTags(text, state.blockState),
-      "history",
+      options?.finalDelivery ? "delivery" : "history",
     ).trimEnd();
     if (!chunk) {
       return;
@@ -633,6 +636,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const flushBlockReplyBuffer = (options?: {
     assistantMessageIndex?: number;
+    finalDelivery?: boolean;
   }): void | Promise<void> => {
     if (!params.onBlockReply) {
       return;

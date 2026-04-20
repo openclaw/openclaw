@@ -12,7 +12,10 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
+import {
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextForStreamUpdate,
+} from "../shared/text/assistant-visible-text.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -413,7 +416,10 @@ export function handleMessageUpdate(
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = sanitizeAssistantVisibleText(parsedFull.text);
+    const cleanedText =
+      evtType === "text_end"
+        ? sanitizeAssistantVisibleText(parsedFull.text)
+        : sanitizeAssistantVisibleTextForStreamUpdate(parsedFull.text);
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
@@ -495,7 +501,7 @@ export function handleMessageUpdate(
   ) {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
-      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, finalDelivery: true }))
       .catch((err) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
@@ -724,7 +730,7 @@ export function handleMessageEnd(
     ctx.state.blockReplyBreak === "message_end" &&
     ctx.params.onBlockReplyFlush
   ) {
-    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ finalDelivery: true });
     if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
       return flushBlockReplyBufferResult
         .then(() => {

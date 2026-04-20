@@ -28,5 +28,14 @@ describe("stripModelSpecialTokens", () => {
       "The marker <channel|> splits streams.",
     );
     expect(stripModelSpecialTokens("Before <channel|> after")).toBe("Before <channel|> after");
+    expect(stripModelSpecialTokens("Tell it to reply with <channel|> to split streams")).toBe(
+      "Tell it to reply with <channel|> to split streams",
+    );
+  });
+
+  it("keeps the last non-empty visible segment when multiple leaked channel delimiters appear", () => {
+    expect(stripModelSpecialTokens("internal planning<channel|>Visible answer<channel|>")).toBe(
+      "Visible answer",
+    );
   });
 });

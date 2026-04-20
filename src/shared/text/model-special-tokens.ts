@@ -19,8 +19,9 @@ import { collapseRepeatedVisibleSuffixAfterDelimiter } from "./repeated-visible-
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
-const CHANNEL_DELIMITER_PREFIX_HINT_RE =
-  /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must|internal planning|plan:)\b/i;
+const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE =
+  /\b(?:final response|output content|general instruction|i will|i must|internal planning|plan:)\b/i;
+const CHANNEL_DELIMITER_PREFIX_SOFT_HINT_RE = /\b(?:reply with|reply to)\b/i;
 
 function overlapsCodeRegion(
   start: number,
@@ -36,10 +37,21 @@ function shouldInsertSeparator(before: string | undefined, after: string | undef
 
 function looksLikeLeakedChannelDelimiterPrefix(prefix: string): boolean {
   const trimmed = prefix.trim();
-  return Boolean(trimmed) && CHANNEL_DELIMITER_PREFIX_HINT_RE.test(trimmed);
+  if (!trimmed) {
+    return false;
+  }
+
+  if (CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(trimmed)) {
+    return true;
+  }
+
+  return trimmed.length >= 120 && CHANNEL_DELIMITER_PREFIX_SOFT_HINT_RE.test(trimmed);
 }
 
-export function stripModelSpecialTokens(text: string): string {
+function stripModelSpecialTokensImpl(
+  text: string,
+  options?: { afterLeakedChannelDelimiter?: boolean },
+): string {
   if (!text) {
     return text;
   }
@@ -52,7 +64,7 @@ export function stripModelSpecialTokens(text: string): string {
   CHANNEL_DELIMITER_RE.lastIndex = 0;
 
   const codeRegions = findCodeRegions(text);
-  let lastChannelDelimiterEnd: number | null = null;
+  const channelDelimiterMatches: { start: number; end: number }[] = [];
   for (const match of text.matchAll(CHANNEL_DELIMITER_RE)) {
     const matched = match[0];
     const start = match.index ?? 0;
@@ -60,16 +72,30 @@ export function stripModelSpecialTokens(text: string): string {
     if (
       !isInsideCode(start, codeRegions) &&
       !overlapsCodeRegion(start, end, codeRegions) &&
-      looksLikeLeakedChannelDelimiterPrefix(text.slice(0, start))
+      (options?.afterLeakedChannelDelimiter ||
+        looksLikeLeakedChannelDelimiterPrefix(text.slice(0, start)))
     ) {
-      lastChannelDelimiterEnd = end;
+      channelDelimiterMatches.push({ start, end });
     }
   }
-  if (lastChannelDelimiterEnd !== null) {
+  for (let idx = channelDelimiterMatches.length - 1; idx >= 0; idx -= 1) {
+    const channelDelimiterMatch = channelDelimiterMatches[idx];
+    const visibleSuffix = stripModelSpecialTokensImpl(text.slice(channelDelimiterMatch.end), {
+      afterLeakedChannelDelimiter: true,
+    });
+    if (!visibleSuffix.trim()) {
+      continue;
+    }
+
     return collapseRepeatedVisibleSuffixAfterDelimiter(
-      text.slice(0, lastChannelDelimiterEnd),
-      stripModelSpecialTokens(text.slice(lastChannelDelimiterEnd)),
+      text.slice(0, channelDelimiterMatch.end),
+      visibleSuffix,
     );
+  }
+  if (channelDelimiterMatches.length > 0) {
+    return options?.afterLeakedChannelDelimiter
+      ? text.slice(0, channelDelimiterMatches[0].start)
+      : "";
   }
 
   let out = "";
@@ -88,4 +114,8 @@ export function stripModelSpecialTokens(text: string): string {
   }
   out += text.slice(cursor);
   return out;
+}
+
+export function stripModelSpecialTokens(text: string): string {
+  return stripModelSpecialTokensImpl(text);
 }

@@ -6,10 +6,7 @@ import {
   type ReasoningTagMode,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
-import {
-  extractExplicitSingleTargetLiteral,
-  extractStructuredRepeatedVisibleSuffix,
-} from "./repeated-visible-suffix.js";
+import { extractStructuredRepeatedVisibleSuffix } from "./repeated-visible-suffix.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -527,6 +524,7 @@ export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "int
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
+  normalizeVisibleOutput?: boolean;
   preserveDowngradedToolText?: boolean;
   preserveMinimaxToolXml?: boolean;
   reasoningMode: ReasoningTagMode;
@@ -540,18 +538,21 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
 > = {
   delivery: {
     finalTrim: "both",
+    normalizeVisibleOutput: true,
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
   },
   history: {
     finalTrim: "none",
+    normalizeVisibleOutput: false,
     reasoningMode: "strict",
     reasoningTrim: "none",
     stageOrder: "reasoning-last",
   },
   "internal-scaffolding": {
     finalTrim: "start",
+    normalizeVisibleOutput: false,
     preserveDowngradedToolText: true,
     preserveMinimaxToolXml: true,
     reasoningMode: "preserve",
@@ -604,7 +605,7 @@ function applyAssistantVisibleTextStagePipeline(
     return cleaned;
   };
   const normalizeVisibleOutput = (value: string) =>
-    extractExplicitSingleTargetLiteral(value) ?? extractStructuredRepeatedVisibleSuffix(value);
+    options.normalizeVisibleOutput ? extractStructuredRepeatedVisibleSuffix(value) : value;
 
   if (options.stageOrder === "reasoning-first") {
     return applyFinalTrim(normalizeVisibleOutput(stripNonReasoningStages(stripReasoning(text))));
@@ -633,6 +634,13 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+}
+
+export function sanitizeAssistantVisibleTextForStreamUpdate(text: string): string {
+  return applyAssistantVisibleTextStagePipeline(text, {
+    ...ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS.delivery,
+    normalizeVisibleOutput: false,
+  });
 }
 
 /**

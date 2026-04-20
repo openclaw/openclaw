@@ -95,7 +95,7 @@ function findExplicitVisibleSuffixTarget(
   prefix: string,
   match: RepeatedPatternMatch,
 ): string | null {
-  if (!prefix) {
+  if (!prefix || !looksLikeInternalPreamble(prefix)) {
     return null;
   }
 
@@ -112,6 +112,21 @@ function findExplicitVisibleSuffixTarget(
     if (prefix.includes(candidate)) {
       return candidate;
     }
+  }
+
+  const explicitlyNamedLiteral = findExplicitSingleTargetLiteralInPreamble(prefix);
+  if (!explicitlyNamedLiteral) {
+    return null;
+  }
+
+  if (
+    rawVisibleSuffix.startsWith(explicitlyNamedLiteral) ||
+    explicitlyNamedLiteral.startsWith(rawVisibleSuffix) ||
+    rawVisibleSuffix.includes(explicitlyNamedLiteral) ||
+    explicitlyNamedLiteral.includes(match.unit) ||
+    match.unit.includes(explicitlyNamedLiteral)
+  ) {
+    return explicitlyNamedLiteral;
   }
 
   return null;
@@ -147,7 +162,7 @@ export function collapseRepeatedVisibleSuffixAfterDelimiter(
   return selectVisibleSuffixReplacement({ prefix, match, context: "delimiter" }) ?? suffix;
 }
 
-export function extractExplicitSingleTargetLiteral(text: string): string | null {
+function findExplicitSingleTargetLiteralInPreamble(text: string): string | null {
   if (
     !text ||
     !looksLikeInternalPreamble(text) ||
@@ -166,6 +181,30 @@ export function extractExplicitSingleTargetLiteral(text: string): string | null 
   }
 
   return uniqueLiterals[0] ?? null;
+}
+
+function extractExplicitRepeatedLiteralFromRunawayText(text: string): string | null {
+  const literal = findExplicitSingleTargetLiteralInPreamble(text);
+  if (!literal || !looksStructuredRepeatedUnit(literal)) {
+    return null;
+  }
+
+  const literalCount = text.split(literal).length - 1;
+  if (literalCount < 3) {
+    return null;
+  }
+
+  const lastLiteralIndex = text.lastIndexOf(literal);
+  if (lastLiteralIndex < 0) {
+    return null;
+  }
+
+  const trailingJunk = text.slice(lastLiteralIndex + literal.length);
+  if (!trailingJunk) {
+    return null;
+  }
+
+  return literal;
 }
 
 export function extractStructuredRepeatedVisibleSuffix(text: string): string {
@@ -216,5 +255,5 @@ export function extractStructuredRepeatedVisibleSuffix(text: string): string {
     }
   }
 
-  return text;
+  return extractExplicitRepeatedLiteralFromRunawayText(text) ?? text;
 }
