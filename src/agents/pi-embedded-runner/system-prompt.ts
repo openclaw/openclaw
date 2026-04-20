@@ -86,7 +86,34 @@ export function buildEmbeddedSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
     promptContribution: params.promptContribution,
+    // PR-8 follow-up Round 2: thread model/provider identity so
+    // `sortContextFilesForPrompt` can apply GPT-5-family boot reorder
+    // (SOUL.md / IDENTITY.md before AGENTS.md) when applicable.
+    //
+    // Copilot review #68939 (2026-04-19): defensively normalize the
+    // modelId by stripping any `<provider>/` prefix so the
+    // GPT-5-family check (`modelId.toLowerCase().startsWith("gpt-5")`
+    // inside `getContextFileOrder`) activates even when an upstream
+    // producer hands us a provider-qualified string like
+    // `openai/gpt-5.4`. The `runtimeInfo.provider` field already
+    // carries the provider separately (line above), so the
+    // `<provider>/<model>` form would be redundant — but cheaper to
+    // tolerate it here than to chase every producer call site.
+    modelProviderId: params.runtimeInfo?.provider,
+    modelId: stripProviderPrefix(params.runtimeInfo?.model),
   });
+}
+
+function stripProviderPrefix(modelId: string | undefined): string | undefined {
+  if (!modelId) {
+    return undefined;
+  }
+  // Copilot review #68939: use lastIndexOf so multi-segment IDs like
+  // `openai/codex/gpt-5.4` collapse to the trailing model name
+  // (`gpt-5.4`) rather than the middle slice (`codex/gpt-5.4`) that
+  // wouldn't match the `gpt-5` family check.
+  const slashIdx = modelId.lastIndexOf("/");
+  return slashIdx >= 0 ? modelId.slice(slashIdx + 1) : modelId;
 }
 
 export function createSystemPromptOverride(

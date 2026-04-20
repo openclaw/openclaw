@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentAutoContinue,
   resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
@@ -643,5 +644,79 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual([]);
+  });
+});
+
+describe("resolveAgentAutoContinue per-field merge (Codex P2 #67538 r3095650458)", () => {
+  it("uses defaults when nothing is configured", () => {
+    expect(resolveAgentAutoContinue(undefined)).toEqual({
+      enabled: false,
+      maxCycles: 3,
+      stopOnMutation: true,
+    });
+  });
+
+  // PR-D review fix (Copilot #3096802942 / #3096802964 / #3105171975 /
+  // #3105216698 / #3096802909): test values lowered to fit the Zod
+  // schema cap of `.max(10)` so the configurations exercised here are
+  // ones a real user could actually load. The merge-cascade behavior
+  // is identical at any value within bounds; the original 12/20 values
+  // were chosen for visual distinctness from the default 3, but 7/9
+  // provide the same distinctness within bounds.
+  it("agents.defaults overrides default constants per field", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          embeddedPi: { autoContinue: { enabled: true, maxCycles: 7 } },
+        },
+      },
+    };
+    const result = resolveAgentAutoContinue(cfg);
+    expect(result.enabled).toBe(true);
+    expect(result.maxCycles).toBe(7);
+    expect(result.stopOnMutation).toBe(true); // inherits from constant default
+  });
+
+  it("partial per-agent override INHERITS unspecified fields from agents.defaults (was wholesale replace)", () => {
+    // Adversarial regression: prior implementation used `agentAc ?? defaultAc`
+    // which discarded the entire defaults object as soon as the per-agent
+    // block existed. An agent setting only `enabled` would silently reset
+    // maxCycles/stopOnMutation to constants, ignoring the configured defaults.
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          embeddedPi: { autoContinue: { maxCycles: 9, stopOnMutation: false } },
+        },
+        list: [
+          {
+            id: "writer",
+            embeddedPi: { autoContinue: { enabled: true } },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentAutoContinue(cfg, "writer");
+    expect(result.enabled).toBe(true); // from per-agent
+    expect(result.maxCycles).toBe(9); // INHERITED from defaults — NOT reset to constant 3
+    expect(result.stopOnMutation).toBe(false); // INHERITED from defaults — NOT reset to true
+  });
+
+  it("per-agent fully specified values win over defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          embeddedPi: { autoContinue: { enabled: true, maxCycles: 9 } },
+        },
+        list: [
+          {
+            id: "writer",
+            embeddedPi: { autoContinue: { enabled: false, maxCycles: 3 } },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentAutoContinue(cfg, "writer");
+    expect(result.enabled).toBe(false);
+    expect(result.maxCycles).toBe(3);
   });
 });
