@@ -131,6 +131,14 @@ if (-not $srcExe) {
 New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
 Copy-Item $srcExe.FullName -Destination (Join-Path $InstallPath "OpenClaw.exe") -Force
 
+# Copy Sidecars/Binaries if present
+$srcBinDir = Join-Path $srcExe.Directory.FullName "binaries"
+$destBinDir = Join-Path $InstallPath "binaries"
+if (Test-Path $srcBinDir) {
+    Write-Step "Copying sidecar binaries..."
+    Copy-Item $srcBinDir -Destination $destBinDir -Recurse -Force
+}
+
 # Persistent Uninstaller
 $UninstallerTarget = Join-Path $InstallPath "uninstall.ps1"
 if ($PSCommandPath) {
@@ -168,8 +176,32 @@ $RunPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 Set-ItemProperty -Path $RunPath -Name "OpenClaw" -Value "`"$ExePath`""
 
 # 7. Firewall Rules
-Write-Step "Configuring Windows Firewall for OpenClaw Gateway..."
-New-NetFirewallRule -DisplayName "OpenClaw Gateway" -Direction Inbound -LocalPort 18789 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
-New-NetFirewallRule -DisplayName "OpenClaw Gateway" -Direction Outbound -LocalPort 18789 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+Write-Step "Configuring Hardened Windows Firewall for OpenClaw Gateway..."
+$SidecarPath = Get-ChildItem -Path "$InstallPath\binaries" -Filter "openclaw-*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+$FirewallProgram = if ($SidecarPath) { $SidecarPath.FullName } else { $ExePath }
+
+# Inbound Rule
+$inboundArgs = @{
+    DisplayName = "OpenClaw Gateway"
+    Direction   = "Inbound"
+    LocalPort   = 18789
+    Protocol    = "TCP"
+    Action      = "Allow"
+    ErrorAction = "SilentlyContinue"
+}
+if ($SidecarPath) { $inboundArgs["Program"] = $SidecarPath.FullName }
+New-NetFirewallRule @inboundArgs | Out-Null
+
+# Outbound Rule
+$outboundArgs = @{
+    DisplayName = "OpenClaw Gateway"
+    Direction   = "Outbound"
+    LocalPort   = 18789
+    Protocol    = "TCP"
+    Action      = "Allow"
+    ErrorAction = "SilentlyContinue"
+}
+if ($SidecarPath) { $outboundArgs["Program"] = $SidecarPath.FullName }
+New-NetFirewallRule @outboundArgs | Out-Null
 
 Write-Host "`nOpenClaw installation complete! Launch it from your desktop." -ForegroundColor Green
