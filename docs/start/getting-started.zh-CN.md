@@ -2,13 +2,13 @@
 summary: "在几分钟内安装 OpenClaw 并运行您的第一次聊天。"
 read_when:
   - 从零开始的首次设置
-  - 您想要最快的路径到一个正常工作的聊天
-title: "入门指南"
+  - 您想要以最快的方式开始工作聊天
+title: "快速开始"
 ---
 
-# 入门指南
+# 快速开始
 
-安装 OpenClaw，运行引导流程，并与您的 AI 助手聊天 — 全部在约 5 分钟内完成。完成后，您将拥有一个运行中的网关、配置好的认证和一个正常工作的聊天会话。
+安装 OpenClaw，运行引导流程，与您的 AI 助手聊天 — 全部只需约 5 分钟。完成后，您将拥有一个运行中的网关、已配置的身份验证和一个工作中的聊天会话。
 
 ## 您需要的东西
 
@@ -55,7 +55,7 @@ title: "入门指南"
 
     向导会引导您选择模型提供商、设置 API 密钥和配置网关。这大约需要 2 分钟。
 
-    请参阅 [引导流程（CLI）](/start/wizard) 获取完整参考。
+    请参阅 [引导流程 (CLI)](/start/wizard) 了解完整参考。
 
   </Step>
   <Step title="验证网关是否运行">
@@ -75,15 +75,18 @@ title: "入门指南"
 
   </Step>
   <Step title="发送您的第一条消息">
-    在控制 UI 聊天中输入一条消息，您应该会收到 AI 回复。
+    在控制 UI 聊天中输入消息，您应该会收到 AI 回复。
 
-    想从手机聊天？最快设置的通道是 [Telegram](/channels/telegram)（只需一个机器人令牌）。请参阅 [通道](/channels) 了解所有选项。
+    想在手机上聊天？设置最快的通道是
+    [Telegram](/channels/telegram)（只需一个机器人令牌）。请参阅 [通道](/channels)
+    了解所有选项。
 
   </Step>
 </Steps>
 
 <Accordion title="高级：挂载自定义控制 UI 构建">
-  如果您维护本地化或自定义的仪表板构建，请将 `gateway.controlUi.root` 指向包含您构建的静态资产和 `index.html` 的目录。
+  如果您维护本地化或自定义的仪表板构建，请将
+  `gateway.controlUi.root` 指向包含您构建的静态资产和 `index.html` 的目录。
 
 ```bash
 mkdir -p "$HOME/.openclaw/control-ui-custom"
@@ -116,7 +119,7 @@ openclaw dashboard
 
 <Columns>
   <Card title="连接通道" href="/channels" icon="message-square">
-    Discord、飞书、iMessage、Matrix、Microsoft Teams、Signal、Slack、Telegram、WhatsApp、Zalo 等更多。
+    Discord、飞书、iMessage、Matrix、Microsoft Teams、Signal、Slack、Telegram、WhatsApp、Zalo 等。
   </Card>
   <Card title="配对和安全" href="/channels/pairing" icon="shield">
     控制谁可以向您的代理发送消息。
@@ -130,9 +133,9 @@ openclaw dashboard
 </Columns>
 
 <Accordion title="高级：环境变量">
-  如果您以服务账户运行 OpenClaw 或想要自定义路径：
+  如果您以服务账户运行 OpenClaw 或需要自定义路径：
 
-- `OPENCLAW_HOME` — 用于内部路径解析的主目录
+- `OPENCLAW_HOME` — 内部路径解析的主目录
 - `OPENCLAW_STATE_DIR` — 覆盖状态目录
 - `OPENCLAW_CONFIG_PATH` — 覆盖配置文件路径
 
