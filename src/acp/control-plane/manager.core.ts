@@ -702,6 +702,19 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
+
+    // Check if there's already an active turn for this session
+    // If so, throw SESSION_BUSY error so callers can distinguish
+    // "session busy, retry" from "real crash/timeout"
+    const actorKey = normalizeActorKey(sessionKey);
+    const activeTurn = this.activeTurnBySession.get(actorKey);
+    if (activeTurn) {
+      throw new AcpRuntimeError(
+        "SESSION_BUSY",
+        `Session ${sessionKey} is busy processing another turn.`,
+      );
+    }
+
     await this.withSessionActor(
       sessionKey,
       async () => {
