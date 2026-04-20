@@ -27,9 +27,9 @@ describe("collectAttackSurfaceSummaryFindings", () => {
       expectedDetail: ["hooks.webhooks: enabled", "hooks.internal: enabled"],
     },
     {
-      name: "reports internal hooks as enabled by default and webhooks as disabled when neither is configured",
+      name: "reports internal hooks as disabled until configured",
       cfg: {} satisfies OpenClawConfig,
-      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: enabled"],
+      expectedDetail: ["hooks.webhooks: disabled", "hooks.internal: disabled"],
     },
     {
       name: "reports internal hooks as disabled when explicitly set to false",

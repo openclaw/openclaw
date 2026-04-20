@@ -138,7 +138,8 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect([...unavailableGatewayMethods]).toEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-    expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
+    expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
+    expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );

@@ -14,6 +14,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
+import { hasConfiguredInternalHooks } from "./configured.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook, unregisterInternalHook } from "./internal-hooks.js";
@@ -86,8 +87,7 @@ export async function loadInternalHooks(
 ): Promise<number> {
   resetLoadedInternalHooks();
 
-  // Hooks are on by default; only skip when explicitly disabled.
-  if (cfg.hooks?.internal?.enabled === false) {
+  if (!hasConfiguredInternalHooks(cfg)) {
     return 0;
   }
 

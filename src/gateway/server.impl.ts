@@ -20,7 +20,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -131,6 +131,34 @@ const logSecrets = log.child("secrets");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
+function createGatewayStartupTrace() {
+  const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
+  const started = performance.now();
+  let last = started;
+  const emit = (name: string, durationMs: number, totalMs: number) => {
+    if (enabled) {
+      log.info(`startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
+    }
+  };
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      emit(name, now - last, now - started);
+      last = now;
+    },
+    async measure<T>(name: string, run: () => Promise<T> | T): Promise<T> {
+      const before = performance.now();
+      try {
+        return await run();
+      } finally {
+        const now = performance.now();
+        emit(name, now - before, now - started);
+        last = now;
+      }
+    },
+  };
+}
+
 type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
 
 function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
@@ -222,11 +250,14 @@ export async function startGatewayServer(
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
+  const startupTrace = createGatewayStartupTrace();
 
-  const configSnapshot = await loadGatewayStartupConfigSnapshot({
-    minimalTestGateway,
-    log,
-  });
+  const configSnapshot = await startupTrace.measure("config.snapshot", () =>
+    loadGatewayStartupConfigSnapshot({
+      minimalTestGateway,
+      log,
+    }),
+  );
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -247,12 +278,14 @@ export async function startGatewayServer(
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
-  const authBootstrap = await prepareGatewayStartupConfig({
-    configSnapshot,
-    authOverride: opts.auth,
-    tailscaleOverride: opts.tailscale,
-    activateRuntimeSecrets,
-  });
+  const authBootstrap = await startupTrace.measure("config.auth", () =>
+    prepareGatewayStartupConfig({
+      configSnapshot,
+      authOverride: opts.auth,
+      tailscaleOverride: opts.tailscale,
+      activateRuntimeSecrets,
+    }),
+  );
   cfgAtStart = authBootstrap.cfg;
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
@@ -281,11 +314,13 @@ export async function startGatewayServer(
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
   const controlUiSeed = minimalTestGateway
     ? { config: cfgAtStart, persistedAllowedOriginsSeed: false }
-    : await maybeSeedControlUiAllowedOriginsAtStartup({
-        config: cfgAtStart,
-        writeConfig: writeConfigFile,
-        log,
-      });
+    : await startupTrace.measure("control-ui.seed", () =>
+        maybeSeedControlUiAllowedOriginsAtStartup({
+          config: cfgAtStart,
+          writeConfig: writeConfigFile,
+          log,
+        }),
+      );
   cfgAtStart = controlUiSeed.config;
   // Always capture the final config hash after all startup writes (plugin
   // auto-enable, auth token generation, control-UI origin seeding) so the
@@ -295,16 +330,20 @@ export async function startGatewayServer(
   // changes, missing the plugin auto-enable write performed earlier inside
   // loadGatewayStartupConfigSnapshot().  See #67436.
   {
-    const startupSnapshot = await readConfigFileSnapshot();
+    const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
+      readConfigFileSnapshot(),
+    );
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
   }
-  const pluginBootstrap = await prepareGatewayPluginBootstrap({
-    cfgAtStart,
-    startupRuntimeConfig,
-    minimalTestGateway,
-    log,
-  });
+  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
+    prepareGatewayPluginBootstrap({
+      cfgAtStart,
+      startupRuntimeConfig,
+      minimalTestGateway,
+      log,
+    }),
+  );
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
@@ -326,17 +365,19 @@ export async function startGatewayServer(
         ...listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []),
       ]),
     );
-  const runtimeConfig = await resolveGatewayRuntimeConfig({
-    cfg: cfgAtStart,
-    port,
-    bind: opts.bind,
-    host: opts.host,
-    controlUiEnabled: opts.controlUiEnabled,
-    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-    openResponsesEnabled: opts.openResponsesEnabled,
-    auth: opts.auth,
-    tailscale: opts.tailscale,
-  });
+  const runtimeConfig = await startupTrace.measure("runtime.config", () =>
+    resolveGatewayRuntimeConfig({
+      cfg: cfgAtStart,
+      port,
+      bind: opts.bind,
+      host: opts.host,
+      controlUiEnabled: opts.controlUiEnabled,
+      openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+      openResponsesEnabled: opts.openResponsesEnabled,
+      auth: opts.auth,
+      tailscale: opts.tailscale,
+    }),
+  );
   const {
     bindHost,
     controlUiEnabled,
@@ -392,12 +433,14 @@ export async function startGatewayServer(
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 
-  const controlUiRootState = await resolveGatewayControlUiRootState({
-    controlUiRootOverride,
-    controlUiEnabled,
-    gatewayRuntime,
-    log,
-  });
+  const controlUiRootState = await startupTrace.measure("control-ui.root", () =>
+    resolveGatewayControlUiRootState({
+      controlUiRootOverride,
+      controlUiEnabled,
+      gatewayRuntime,
+      log,
+    }),
+  );
 
   const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -405,7 +448,9 @@ export async function startGatewayServer(
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
   let canvasHostServer: CanvasHostServer | null = null;
-  const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
+  const gatewayTls = await startupTrace.measure("tls.runtime", () =>
+    loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
+  );
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
@@ -446,36 +491,39 @@ export async function startGatewayServer(
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
-  } = await createGatewayRuntimeState({
-    cfg: cfgAtStart,
-    bindHost,
-    port,
-    controlUiEnabled,
-    controlUiBasePath,
-    controlUiRoot: controlUiRootState,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
-    resolvedAuth,
-    rateLimiter: authRateLimiter,
-    gatewayTls,
-    getResolvedAuth,
-    hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
-    getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
-    pluginRegistry,
-    pinChannelRegistry: !minimalTestGateway,
-    deps,
-    canvasRuntime,
-    canvasHostEnabled,
-    allowCanvasHostInTests: opts.allowCanvasHostInTests,
-    logCanvas,
-    log,
-    logHooks,
-    logPlugins,
-    getReadiness,
-  });
+  } = await startupTrace.measure("runtime.state", () =>
+    createGatewayRuntimeState({
+      cfg: cfgAtStart,
+      bindHost,
+      port,
+      controlUiEnabled,
+      controlUiBasePath,
+      controlUiRoot: controlUiRootState,
+      openAiChatCompletionsEnabled,
+      openAiChatCompletionsConfig,
+      openResponsesEnabled,
+      openResponsesConfig,
+      strictTransportSecurityHeader,
+      resolvedAuth,
+      rateLimiter: authRateLimiter,
+      gatewayTls,
+      getResolvedAuth,
+      hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
+      getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
+      pluginRegistry,
+      pinChannelRegistry: !minimalTestGateway,
+      deps,
+      canvasRuntime,
+      canvasHostEnabled,
+      allowCanvasHostInTests: opts.allowCanvasHostInTests,
+      logCanvas,
+      log,
+      logHooks,
+      logPlugins,
+      getReadiness,
+    }),
+  );
+  startupTrace.mark("http.bound");
   const {
     nodeRegistry,
     nodePresenceTimers,
@@ -559,40 +607,42 @@ export async function startGatewayServer(
   };
 
   try {
-    const earlyRuntime = await startGatewayEarlyRuntime({
-      minimalTestGateway,
-      cfgAtStart,
-      port,
-      gatewayTls,
-      tailscaleMode,
-      log,
-      logDiscovery,
-      nodeRegistry,
-      broadcast,
-      nodeSendToAllSubscribed,
-      getPresenceVersion,
-      getHealthVersion,
-      refreshGatewayHealthSnapshot,
-      logHealth,
-      dedupe,
-      chatAbortControllers,
-      chatRunState,
-      chatRunBuffers,
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
-      removeChatRun,
-      agentRunSeq,
-      nodeSendToSession,
-      ...(typeof cfgAtStart.media?.ttlHours === "number"
-        ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
-        : {}),
-      skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
-      getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
-      setSkillsRefreshTimer: (timer) => {
-        runtimeState.skillsRefreshTimer = timer;
-      },
-      loadConfig,
-    });
+    const earlyRuntime = await startupTrace.measure("runtime.early", () =>
+      startGatewayEarlyRuntime({
+        minimalTestGateway,
+        cfgAtStart,
+        port,
+        gatewayTls,
+        tailscaleMode,
+        log,
+        logDiscovery,
+        nodeRegistry,
+        broadcast,
+        nodeSendToAllSubscribed,
+        getPresenceVersion,
+        getHealthVersion,
+        refreshGatewayHealthSnapshot,
+        logHealth,
+        dedupe,
+        chatAbortControllers,
+        chatRunState,
+        chatRunBuffers,
+        chatDeltaSentAt,
+        chatDeltaLastBroadcastLen,
+        removeChatRun,
+        agentRunSeq,
+        nodeSendToSession,
+        ...(typeof cfgAtStart.media?.ttlHours === "number"
+          ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
+          : {}),
+        skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
+        getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
+        setSkillsRefreshTimer: (timer) => {
+          runtimeState.skillsRefreshTimer = timer;
+        },
+        loadConfig,
+      }),
+    );
     runtimeState.bonjourStop = earlyRuntime.bonjourStop;
     runtimeState.skillsChangeUnsub = earlyRuntime.skillsChangeUnsub;
     if (earlyRuntime.maintenance) {
@@ -747,30 +797,33 @@ export async function startGatewayServer(
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       pluginServices: runtimeState.pluginServices,
-    } = await startGatewayPostAttachRuntime({
-      minimalTestGateway,
-      cfgAtStart,
-      bindHost,
-      bindHosts: httpBindHosts,
-      port,
-      tlsEnabled: gatewayTls.enabled,
-      log,
-      isNixMode,
-      startupStartedAt: opts.startupStartedAt,
-      broadcast,
-      tailscaleMode,
-      resetOnExit: tailscaleConfig.resetOnExit ?? false,
-      controlUiBasePath,
-      logTailscale,
-      gatewayPluginConfigAtStart,
-      pluginRegistry,
-      defaultWorkspaceDir,
-      deps,
-      startChannels,
-      logHooks,
-      logChannels,
-      unavailableGatewayMethods,
-    }));
+    } = await startupTrace.measure("runtime.post-attach", () =>
+      startGatewayPostAttachRuntime({
+        minimalTestGateway,
+        cfgAtStart,
+        bindHost,
+        bindHosts: httpBindHosts,
+        port,
+        tlsEnabled: gatewayTls.enabled,
+        log,
+        isNixMode,
+        startupStartedAt: opts.startupStartedAt,
+        broadcast,
+        tailscaleMode,
+        resetOnExit: tailscaleConfig.resetOnExit ?? false,
+        controlUiBasePath,
+        logTailscale,
+        gatewayPluginConfigAtStart,
+        pluginRegistry,
+        defaultWorkspaceDir,
+        deps,
+        startChannels,
+        logHooks,
+        logChannels,
+        unavailableGatewayMethods,
+      }),
+    ));
+    startupTrace.mark("ready");
 
     // Keep scheduled work inert until post-attach sidecars finish.
     const activated = activateGatewayScheduledServices({

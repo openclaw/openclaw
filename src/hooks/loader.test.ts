@@ -7,6 +7,7 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { captureEnv } from "../test-utils/env.js";
+import { hasConfiguredInternalHooks } from "./configured.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
@@ -133,6 +134,25 @@ describe("loader", () => {
   });
 
   describe("loadInternalHooks", () => {
+    it("detects configured internal hook surfaces", () => {
+      expect(hasConfiguredInternalHooks({} satisfies OpenClawConfig)).toBe(false);
+      expect(
+        hasConfiguredInternalHooks({
+          hooks: { internal: { entries: { "session-memory": { enabled: true } } } },
+        } satisfies OpenClawConfig),
+      ).toBe(true);
+      expect(
+        hasConfiguredInternalHooks({
+          hooks: { internal: { entries: { "session-memory": { enabled: false } } } },
+        } satisfies OpenClawConfig),
+      ).toBe(false);
+      expect(
+        hasConfiguredInternalHooks({
+          hooks: { internal: { load: { extraDirs: ["/tmp/hooks"] } } },
+        } satisfies OpenClawConfig),
+      ).toBe(true);
+    });
+
     const createLegacyHandlerConfig = () =>
       createEnabledHooksConfig([
         {
@@ -172,10 +192,7 @@ describe("loader", () => {
       }
     });
 
-    it("should treat missing hooks.internal.enabled as enabled (default-on)", async () => {
-      // Empty config should NOT skip loading — it should attempt discovery.
-      // With no discoverable hooks in the temp dir (bundled dir is overridden
-      // to /nonexistent), this returns 0 but does NOT bail at the guard.
+    it("skips hook discovery until internal hooks are configured", async () => {
       for (const cfg of [
         {} satisfies OpenClawConfig,
         { hooks: {} } satisfies OpenClawConfig,

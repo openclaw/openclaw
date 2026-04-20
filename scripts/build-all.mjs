@@ -70,10 +70,6 @@ export const BUILD_ALL_STEPS = [
     label: "copy-hook-metadata",
     kind: "node",
     args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
-    cache: {
-      inputs: ["scripts/copy-hook-metadata.ts", "scripts/lib/copy-assets.ts", "src/hooks/bundled"],
-      outputs: ["dist/bundled"],
-    },
   },
   {
     label: "copy-export-html-templates",

@@ -320,6 +320,21 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   );
 }
 
+function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
+  try {
+    const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
+    return new Set(
+      fs
+        .readdirSync(distPluginSdkDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+        .map((entry) => entry.name.slice(0, -".js".length))
+        .filter((subpath) => isSafePluginSdkSubpathSegment(subpath)),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
     return [];
@@ -389,6 +404,9 @@ export function resolvePluginSdkScopedAliasMap(
     return cached;
   }
   const aliasMap: Record<string, string> = {};
+  const distPluginSdkArtifacts = orderedKinds.includes("dist")
+    ? listDistPluginSdkArtifactSubpaths(packageRoot)
+    : new Set<string>();
   for (const subpath of listPluginSdkExportedSubpaths({
     modulePath,
     argv1: params.argv1,
@@ -397,6 +415,9 @@ export function resolvePluginSdkScopedAliasMap(
   })) {
     for (const kind of orderedKinds) {
       if (kind === "dist") {
+        if (!distPluginSdkArtifacts.has(subpath)) {
+          continue;
+        }
         const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
         if (isUsableDistPluginSdkArtifact(candidate)) {
           for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
