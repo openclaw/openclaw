@@ -18,6 +18,19 @@ function createCompletionProgram(): Command {
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
 
+  const wiki = program.command("wiki").description("Wiki commands");
+  wiki
+    .command("ingest")
+    .description("Ingest a source")
+    .option("--title <title>", "Override title")
+    .argument("<path>", "Local file path to ingest");
+  wiki.command("scan").description("Scan a directory").argument("<directory>", "Directory to scan");
+  wiki
+    .command("tag")
+    .description("Tag a note")
+    .argument("<name>", "Note id")
+    .argument("[tags...]", "Tags to add");
+
   return program;
 }
 
@@ -29,6 +42,29 @@ describe("completion-cli", () => {
     expect(script).toContain("(status) _openclaw_gateway_status ;;");
     expect(script).toContain("(restart) _openclaw_gateway_restart ;;");
     expect(script).toContain("--force[Force the action]");
+  });
+
+  it("emits zsh positional file completion for leaf command path arguments", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("_openclaw_wiki_ingest()");
+    expect(script).toContain('"1:Local file path to ingest:_files"');
+  });
+
+  it("emits zsh positional directory completion when the argument name hints at a directory", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("_openclaw_wiki_scan()");
+    expect(script).toContain('"1:Directory to scan:_files -/"');
+  });
+
+  it("emits a variadic positional spec for trailing ...args", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("_openclaw_wiki_tag()");
+    // Non-file positional keeps a neutral action; variadic gets position `*`.
+    expect(script).toContain('"1:Note id: "');
+    expect(script).toContain('"*:Tags to add: "');
   });
 
   it("defers zsh registration until compinit is available", async () => {

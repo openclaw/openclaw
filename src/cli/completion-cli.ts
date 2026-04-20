@@ -207,6 +207,62 @@ function generateZshArgs(cmd: Command): string {
     .join(" \\\n    ");
 }
 
+// Argument names that hint at a filesystem path. Used to pick the correct
+// zsh completion action (_files / _path_files / _files -/) for a positional.
+const FILE_ARG_HINT = /(^|[_-])(path|file|files|source|target|src|dest|destination)s?($|[_-])/i;
+const DIR_ARG_HINT = /(^|[_-])(dir|directory|folder)s?($|[_-])/i;
+
+function zshPositionalAction(name: string): string {
+  if (DIR_ARG_HINT.test(name)) {
+    return "_files -/";
+  }
+  if (FILE_ARG_HINT.test(name)) {
+    return "_files";
+  }
+  return " ";
+}
+
+function escapeZshLabel(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/'/g, "'\\''")
+    .replace(/:/g, "\\:")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
+}
+
+function generateZshPositionalArgs(cmd: Command): string[] {
+  // Commander 14 exposes registeredArguments; fall back to _args for older versions.
+  const args =
+    (cmd as unknown as { registeredArguments?: ReadonlyArray<unknown> }).registeredArguments ??
+    (cmd as unknown as { _args?: ReadonlyArray<unknown> })._args ??
+    [];
+  return args.map((raw, index) => {
+    const arg = raw as {
+      _name?: string;
+      name?: () => string;
+      description?: string;
+      variadic?: boolean;
+    };
+    const name = typeof arg.name === "function" ? arg.name() : (arg._name ?? `arg${index + 1}`);
+    const label = escapeZshLabel(arg.description || name);
+    const action = zshPositionalAction(name);
+    const position = arg.variadic ? "*" : String(index + 1);
+    return `"${position}:${label}:${action}"`;
+  });
+}
+
+function generateZshLeafArgs(cmd: Command): string {
+  const optionSpecs = generateZshArgs(cmd);
+  const positionalSpecs = generateZshPositionalArgs(cmd);
+  if (positionalSpecs.length === 0) {
+    return optionSpecs;
+  }
+  const joinedPositionals = positionalSpecs.join(" \\\n    ");
+  return optionSpecs ? `${optionSpecs} \\\n    ${joinedPositionals}` : joinedPositionals;
+}
+
 function generateZshSubcmdList(cmd: Command): string {
   const list = cmd.commands
     .map((c) => {
@@ -260,7 +316,7 @@ ${funcName}() {
       segments.push(`
 ${funcName}() {
   _arguments -C \\
-    ${generateZshArgs(cmd)}
+    ${generateZshLeafArgs(cmd)}
 }
 `);
     }
