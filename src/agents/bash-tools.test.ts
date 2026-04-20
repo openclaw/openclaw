@@ -232,6 +232,19 @@ async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
   return requireRunningSessionId(result);
 }
 
+async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<string, unknown>) {
+  const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+  const dispose = setHeartbeatWakeHandler(
+    wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+  );
+  try {
+    await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    await expect.poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS).toEqual(expected);
+  } finally {
+    dispose();
+  }
+}
+
 async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   return await drainFormattedSystemEvents({
     cfg: notifyCfg,
@@ -606,42 +619,16 @@ describe("exec notifyOnExit", () => {
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
-    const tool = createNotifyOnExitExecTool();
-    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(
-      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    try {
-      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
-
-      await expect
-        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
-        .toMatchObject({
-          reason: "exec-event",
-          sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-        });
-    } finally {
-      dispose();
-    }
+    await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
+      reason: "exec-event",
+      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+    });
   });
 
   it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    const tool = createNotifyOnExitExecTool({ sessionKey: "global" });
-    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
-    const dispose = setHeartbeatWakeHandler(
-      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
-    );
-    try {
-      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
-
-      await expect
-        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
-        .toEqual({
-          reason: "exec-event",
-        });
-    } finally {
-      dispose();
-    }
+    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
+      reason: "exec-event",
+    });
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
@@ -768,7 +755,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       await execTool.execute(nextCallId(), { command }, undefined, onUpdateSpy);
       const callsAtExit = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 5));
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtExit);
     },
     isWin ? 10_000 : 5_000,
@@ -795,8 +782,8 @@ describe("exec backgrounded onUpdate suppression", () => {
         onUpdateSpy,
       );
       const callsAtAbort = onUpdateSpy.mock.calls.length;
-      // Allow extra time for any straggling stdout data events.
-      await new Promise((r) => setTimeout(r, 100));
+      // Allow a tick for any straggling stdout data events.
+      await new Promise((r) => setTimeout(r, 5));
       // After abort, no new onUpdate calls should have been made.
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
       expect(result).toBeDefined();

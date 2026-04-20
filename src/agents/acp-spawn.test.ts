@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
+import * as channelPlugins from "../channels/plugins/index.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -82,6 +83,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
+const getChannelPluginSpy = vi.spyOn(channelPlugins, "getChannelPlugin");
 const getAcpSessionManagerSpy = vi.spyOn(acpSessionManager, "getAcpSessionManager");
 const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
 const resolveStorePathSpy = vi.spyOn(sessionPaths, "resolveStorePath");
@@ -350,6 +352,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     resetTaskRegistryForTests();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
+    getChannelPluginSpy.mockReset().mockReturnValue(undefined);
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -629,7 +632,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "channel:!room:example",
+      to: "room:!room:example",
       threadId: "child-thread",
     });
   });
@@ -689,7 +692,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "channel:!Room:Example.org",
+      to: "room:!Room:Example.org",
       threadId: "child-thread",
     });
   });
@@ -751,7 +754,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "channel:!Room:Example.org",
+      to: "room:!Room:Example.org",
       threadId: "child-thread",
     });
   });

@@ -97,6 +97,10 @@ type GatewayHost = {
   updateAvailable: UpdateAvailable | null;
 };
 
+type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
+  pendingSessionMessageReloadSessionKey?: string | null;
+};
+
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
   mainKey?: string;
@@ -176,6 +180,27 @@ function normalizeSessionKeyForDefaults(
 function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnapshot) {
   if (!defaults?.mainSessionKey) {
     return;
+  }
+
+  // Detect if user has already selected a specific session (not an alias like "main").
+  // If normalization doesn't change the value, it's a user-selected session.
+  const normalizedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
+  const isUserSelectedSession = normalizedSessionKey === host.sessionKey;
+
+  if (isUserSelectedSession) {
+    // User has selected a specific session; preserve their choice
+    // Only normalize lastActiveSessionKey, don't override current sessionKey
+    const resolvedLastActiveSessionKey = normalizeSessionKeyForDefaults(
+      host.settings.lastActiveSessionKey,
+      defaults,
+    );
+    if (resolvedLastActiveSessionKey !== host.settings.lastActiveSessionKey) {
+      applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+        ...host.settings,
+        lastActiveSessionKey: resolvedLastActiveSessionKey,
+      });
+    }
+    return; // Keep user's session selection
   }
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
@@ -388,9 +413,49 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+  const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
+  const payloadSessionKey = payload?.sessionKey?.trim();
+  const shouldReplayDeferredSessionMessageReload = Boolean(
+    deferredSessionKey &&
+    payloadSessionKey &&
+    deferredSessionKey === payloadSessionKey &&
+    isTerminalChatState(state) &&
+    payloadSessionKey === host.sessionKey &&
+    !host.chatRunId,
+  );
+  if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  }
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as ChatState);
+    return;
   }
+  if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
+    void loadChatHistory(host as unknown as ChatState);
+  }
+}
+
+function handleSessionMessageGatewayEvent(
+  host: GatewayHost,
+  payload: { sessionKey?: string } | undefined,
+) {
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+  const sessionKey = payload?.sessionKey?.trim();
+  if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  // Skip history reload while a chat run is active. The chat event handler
+  // manages streaming state and appends the final assistant message. Reloading
+  // history mid-run races with the optimistic user-message update and resets
+  // chatStream, which delays the user message card from appearing until the
+  // first LLM delta arrives.
+  if (host.chatRunId) {
+    deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    return;
+  }
+  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  void loadChatHistory(host as unknown as ChatState);
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
@@ -426,6 +491,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const sideResultHost = host as GatewayHostWithSideResults;
     sideResultHost.chatSideResult = sideResult;
     sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
+    return;
+  }
+
+  if (evt.event === "session.message") {
+    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
     return;
   }
 

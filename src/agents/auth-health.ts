@@ -1,14 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type AuthCredentialReasonCode,
-  type AuthProfileCredential,
-  type AuthProfileStore,
-  resolveAuthProfileDisplayLabel,
-} from "./auth-profiles.js";
-import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
 } from "./auth-profiles/credential-state.js";
+import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type AuthProfileSource = "store";
@@ -164,22 +162,21 @@ function buildProfileHealth(params: {
     };
   }
 
-  const hasRefreshToken = typeof credential.refresh === "string" && credential.refresh.length > 0;
+  const effectiveCredential = resolveEffectiveOAuthCredential({
+    profileId,
+    credential,
+  });
   const { status: rawStatus, remainingMs } = resolveOAuthStatus(
-    credential.expires,
+    effectiveCredential.expires,
     now,
     warnAfterMs,
   );
-  // OAuth credentials with a valid refresh token auto-renew on first API call,
-  // so don't warn about access token expiration.
-  const status =
-    hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring") ? "ok" : rawStatus;
   return {
     profileId,
     provider,
     type: "oauth",
-    status,
-    expiresAt: credential.expires,
+    status: rawStatus,
+    expiresAt: effectiveCredential.expires,
     remainingMs,
     source,
     label,

@@ -14,16 +14,16 @@ const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 128),
-  bundledPluginCallsite("bluebubbles", "src/types.ts", 181),
+  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 130),
+  bundledPluginCallsite("bluebubbles", "src/types.ts", 189),
   bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
   bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 24),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 27),
   bundledPluginCallsite("chutes", "models.ts", 535),
   bundledPluginCallsite("chutes", "models.ts", 542),
-  bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 370),
-  bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 436),
+  bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 387),
+  bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 453),
   bundledPluginCallsite("discord", "src/voice-message.ts", 298),
   bundledPluginCallsite("discord", "src/voice-message.ts", 333),
   bundledPluginCallsite("elevenlabs", "speech-provider.ts", 295),

@@ -1,11 +1,51 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
-import {
-  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
-  estimatePrePromptTokens,
-  shouldPreemptivelyCompactBeforePrompt,
-} from "./preemptive-compaction.js";
+
+const piCodingAgentMocks = vi.hoisted(() => ({
+  estimateTokens: vi.fn((message: unknown) => estimateTokenish(message)),
+}));
+
+function readText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(readText).join("");
+  }
+  if (value && typeof value === "object") {
+    const record = value as { text?: unknown; content?: unknown };
+    return `${readText(record.text)}${readText(record.content)}`;
+  }
+  return "";
+}
+
+function estimateTokenish(message: unknown): number {
+  return Math.max(1, Math.ceil(readText(message).length / 4));
+}
+
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
+  return {
+    ...actual,
+    estimateTokens: piCodingAgentMocks.estimateTokens,
+  };
+});
+
+let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
+let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
+let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({
+    PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+    estimatePrePromptTokens,
+    shouldPreemptivelyCompactBeforePrompt,
+  } = await import("./preemptive-compaction.js"));
+});
 
 let timestamp = 1;
 
@@ -82,6 +122,35 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
     expect(result.route).toBe("fits");
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
+  });
+
+  it("caps reserve tokens so small context models keep usable prompt budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 16_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.effectiveReserveTokens).toBe(8_000);
+    expect(result.promptBudgetBeforeReserve).toBe(8_000);
+    expect(result.shouldCompact).toBe(false);
+    expect(result.route).toBe("fits");
+  });
+
+  it("keeps the requested reserve when it leaves enough prompt budget", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 32_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.effectiveReserveTokens).toBe(20_000);
+    expect(result.promptBudgetBeforeReserve).toBe(12_000);
+    expect(result.shouldCompact).toBe(false);
   });
 
   it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
@@ -170,7 +239,7 @@ describe("preemptive-compaction", () => {
 
     expect(potential.oversizedReducibleChars).toBeGreaterThan(0);
     expect(potential.aggregateReducibleChars).toBeGreaterThan(0);
-    expect(potential.oversizedReducibleChars).toBeLessThan(desiredOverflowTokens * 4);
+    expect(potential.oversizedReducibleChars).toBeLessThan(potential.maxReducibleChars);
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);

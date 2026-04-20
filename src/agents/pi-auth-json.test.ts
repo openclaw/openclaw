@@ -9,6 +9,17 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./auth-profiles/external-cli-sync.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles/external-cli-sync.js")>(
+    "./auth-profiles/external-cli-sync.js",
+  );
+  return {
+    ...actual,
+    readManagedExternalCliCredential: () => null,
+    resolveExternalCliAuthProfiles: () => [],
+  };
+});
+
 type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
 
 async function createAgentDir() {

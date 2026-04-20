@@ -16,6 +16,87 @@ const taskExecutorMocks = vi.hoisted(() => ({
   recordTaskRunProgressByRunId: vi.fn(),
 }));
 
+const configMocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({})),
+}));
+
+const mediaStoreMocks = vi.hoisted(() => ({
+  saveMediaBuffer: vi.fn(),
+}));
+
+const musicGenerationRuntimeMocks = vi.hoisted(() => ({
+  generateMusic: vi.fn(),
+  listRuntimeMusicGenerationProviders: vi.fn(),
+}));
+
+const musicGenerateBackgroundMocks = vi.hoisted(() => ({
+  completeMusicGenerationTaskRun: vi.fn((params) => {
+    if (!params.handle) {
+      return;
+    }
+    taskExecutorMocks.completeTaskRunByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+    });
+  }),
+  createMusicGenerationTaskRun: vi.fn((params) => {
+    const sessionKey = params.sessionKey?.trim();
+    if (!sessionKey) {
+      return null;
+    }
+    const runId = "tool:music_generate:test-run";
+    const task = taskExecutorMocks.createRunningTaskRun({
+      runId,
+      runtime: "cli",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      task: params.prompt,
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: Date.now(),
+    });
+    return {
+      taskId: task.taskId,
+      runId,
+      requesterSessionKey: sessionKey,
+      requesterOrigin: params.requesterOrigin,
+      taskLabel: params.prompt,
+    };
+  }),
+  failMusicGenerationTaskRun: vi.fn((params) => {
+    if (!params.handle) {
+      return;
+    }
+    taskExecutorMocks.failTaskRunByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+    });
+  }),
+  recordMusicGenerationTaskProgress: vi.fn((params) => {
+    if (!params.handle) {
+      return;
+    }
+    taskExecutorMocks.recordTaskRunProgressByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+      progressSummary: params.progressSummary,
+      eventSummary: params.eventSummary,
+    });
+  }),
+  wakeMusicGenerationTaskCompletion: vi.fn(),
+}));
+
+vi.mock("../../config/config.js", () => configMocks);
+vi.mock("../../media/store.js", () => mediaStoreMocks);
+vi.mock("../../media/web-media.js", () => ({
+  loadWebMedia: vi.fn(),
+}));
+vi.mock("../../music-generation/runtime.js", () => musicGenerationRuntimeMocks);
+vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
 
@@ -86,7 +167,7 @@ describe("createMusicGenerateTool", () => {
       lyrics: ["wake the city up"],
       metadata: { taskId: "music-task-1" },
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/tmp/generated-night-drive.mp3",
       id: "generated-night-drive.mp3",
       size: 11,
@@ -97,6 +178,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
           },
         },
@@ -113,6 +195,13 @@ describe("createMusicGenerateTool", () => {
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("music-bytes"),
+      "audio/mpeg",
+      "tool-music-generation",
+      8 * 1024 * 1024,
+      "night-drive.mp3",
+    );
     expect(text).toContain("Generated 1 track with google/lyria-3-clip-preview.");
     expect(text).toContain("Lyrics returned.");
     expect(text).toContain("MEDIA:/tmp/generated-night-drive.mp3");

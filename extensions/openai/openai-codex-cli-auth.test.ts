@@ -1,5 +1,16 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const runtimeMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    debug: runtimeMocks.debug,
+  }),
+}));
+
 import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
   readOpenAICodexCliOAuthProfile,
@@ -12,6 +23,10 @@ function buildJwt(payload: Record<string, unknown>) {
 }
 
 describe("readOpenAICodexCliOAuthProfile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -79,5 +94,98 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     });
 
     expect(parsed).toBeNull();
+  });
+
+  it("allows the runtime-only Codex CLI profile when the stored default already matches", () => {
+    const accessToken = buildJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/profile": {
+        email: "codex@example.com",
+      },
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: accessToken,
+          refresh_token: "refresh-token",
+          account_id: "acct_123",
+        },
+      }),
+    );
+
+    const firstParse = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+    expect(firstParse).not.toBeNull();
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: firstParse!.credential,
+        },
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: {
+        access: accessToken,
+        refresh: "refresh-token",
+        accountId: "acct_123",
+        email: "codex@example.com",
+      },
+    });
+  });
+
+  it("returns null without logging when the Codex CLI auth file is missing", () => {
+    const error = Object.assign(new Error("missing"), {
+      code: "ENOENT",
+    });
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw error;
+    });
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(parsed).toBeNull();
+    expect(runtimeMocks.debug).not.toHaveBeenCalled();
+  });
+
+  it("logs a sanitized code for invalid auth JSON", () => {
+    vi.spyOn(fs, "readFileSync").mockReturnValue("{");
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(parsed).toBeNull();
+    expect(runtimeMocks.debug).toHaveBeenCalledWith(
+      "Failed to read Codex CLI auth file (code=INVALID_JSON)",
+    );
+  });
+
+  it("does not leak auth file paths in debug logs for filesystem failures", () => {
+    const error = Object.assign(
+      new Error("EACCES: permission denied, open '/Users/alice/.codex/auth.json'"),
+      {
+        code: "EACCES",
+      },
+    );
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw error;
+    });
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(parsed).toBeNull();
+    expect(runtimeMocks.debug).toHaveBeenCalledWith(
+      "Failed to read Codex CLI auth file (code=EACCES)",
+    );
   });
 });

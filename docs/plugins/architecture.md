@@ -173,6 +173,15 @@ For channel plugins, the SDK surface is
 call lets a plugin return its visible actions, capabilities, and schema
 contributions together so those pieces do not drift apart.
 
+When a channel-specific message-tool param carries a media source such as a
+local path or remote media URL, the plugin should also return
+`mediaSourceParams` from `describeMessageTool(...)`. Core uses that explicit
+list to apply sandbox path normalization and outbound media-access hints
+without hardcoding plugin-owned param names.
+Prefer action-scoped maps there, not one channel-wide flat list, so a
+profile-only media param does not get normalized on unrelated actions like
+`send`.
+
 Core passes runtime scope into that discovery step. Important fields include:
 
 - `accountId`
@@ -527,6 +536,14 @@ actual behavior such as hooks, tools, commands, or provider flows.
 Optional manifest `activation` and `setup` blocks stay on the control plane.
 They are metadata-only descriptors for activation planning and setup discovery;
 they do not replace runtime registration, `register(...)`, or `setupEntry`.
+The first live activation consumers now use manifest command, channel, and provider hints
+to narrow plugin loading before broader registry materialization:
+
+- CLI loading narrows to plugins that own the requested primary command
+- channel setup/plugin resolution narrows to plugins that own the requested
+  channel id
+- explicit provider setup/runtime resolution narrows to plugins that own the
+  requested provider id
 
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to

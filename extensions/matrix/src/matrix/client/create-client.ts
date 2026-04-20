@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";

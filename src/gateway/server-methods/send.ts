@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -13,7 +12,10 @@ import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
-import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForMirror,
+} from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -24,6 +26,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -183,7 +186,7 @@ function cacheGatewayDedupeFailure(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params, respond, context }) => {
+  "message.action": async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateMessageActionParams(p)) {
       respond(
@@ -214,6 +217,22 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       idempotencyKey: string;
     };
+    // Owner status is an authorization signal used to unlock owner-only
+    // channel actions and owner-only tool policy. The legitimate propagation
+    // path is the trusted runtime forwarding a real channel-sender ownership
+    // bit through the gateway RPC — but that wire value must not be honored
+    // for callers who are not already full operators. Per SECURITY.md,
+    // shared-secret bearer and admin-scoped callers get the full default
+    // operator scope set (including `operator.admin`); those callers are
+    // trusted to forward `senderIsOwner`. Narrowly-scoped callers
+    // (e.g. `operator.write`-only, including the gateway-forwarding
+    // least-privilege path) are not trusted to assert ownership, so their
+    // wire value is forced to `false` to prevent a non-admin scoped caller
+    // from unlocking owner-only channel actions by setting
+    // `senderIsOwner: true` on the request.
+    const callerScopes = client?.connect?.scopes ?? [];
+    const callerIsFullOperator = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
+    const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
     const cached = context.dedupe.get(dedupeKey);
@@ -263,7 +282,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: request.senderIsOwner,
+          senderIsOwner,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,
@@ -405,16 +424,11 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const mirrorPayloads = normalizeReplyPayloadsForDelivery([
-          { text: message, mediaUrl, mediaUrls },
-        ]);
-        const mirrorText = mirrorPayloads
-          .map((payload) => payload.text)
-          .filter(Boolean)
-          .join("\n");
-        const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-        );
+        const outboundPayloads = [{ text: message, mediaUrl, mediaUrls }];
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+        const mirrorText = mirrorProjection.text;
+        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
         const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
@@ -460,7 +474,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel: outboundChannel,
           to: deliveryTarget,
           accountId,
-          payloads: [{ text: message, mediaUrl, mediaUrls }],
+          payloads: outboundPayloads,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,

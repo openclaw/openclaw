@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { startQaLabServer, startQaGatewayChild, startQaMockOpenAiServer } = vi.hoisted(() => ({
+const { startQaLabServer, startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
   startQaLabServer: vi.fn(),
   startQaGatewayChild: vi.fn(),
-  startQaMockOpenAiServer: vi.fn(),
+  startQaProviderServer: vi.fn(),
 }));
 
 vi.mock("./lab-server.js", () => ({
@@ -14,8 +14,8 @@ vi.mock("./gateway-child.js", () => ({
   startQaGatewayChild,
 }));
 
-vi.mock("./mock-openai-server.js", () => ({
-  startQaMockOpenAiServer,
+vi.mock("./providers/server-runtime.js", () => ({
+  startQaProviderServer,
 }));
 
 import { runQaManualLane } from "./manual-lane.runtime.js";
@@ -31,12 +31,18 @@ describe("runQaManualLane", () => {
     labStop.mockReset();
     startQaLabServer.mockReset();
     startQaGatewayChild.mockReset();
-    startQaMockOpenAiServer.mockReset();
+    startQaProviderServer.mockReset();
 
     startQaLabServer.mockResolvedValue({
       listenUrl: "http://127.0.0.1:43124",
       baseUrl: "http://127.0.0.1:58000",
       state: {
+        reset: vi.fn(),
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        readMessage: vi.fn(),
+        searchMessages: vi.fn(() => []),
+        waitFor: vi.fn(),
         getSnapshot: () => ({
           messages: [
             {
@@ -58,10 +64,14 @@ describe("runQaManualLane", () => {
       stop: gatewayStop,
     });
 
-    startQaMockOpenAiServer.mockResolvedValue({
-      baseUrl: "http://127.0.0.1:44080",
-      stop: mockStop,
-    });
+    startQaProviderServer.mockImplementation(async (providerMode: string) =>
+      providerMode === "mock-openai"
+        ? {
+            baseUrl: "http://127.0.0.1:44080",
+            stop: mockStop,
+          }
+        : null,
+    );
   });
 
   afterEach(() => {
@@ -78,10 +88,7 @@ describe("runQaManualLane", () => {
       timeoutMs: 5_000,
     });
 
-    expect(startQaMockOpenAiServer).toHaveBeenCalledWith({
-      host: "127.0.0.1",
-      port: 0,
-    });
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: "/tmp/openclaw-repo",
@@ -109,7 +116,7 @@ describe("runQaManualLane", () => {
       timeoutMs: 5_000,
     });
 
-    expect(startQaMockOpenAiServer).not.toHaveBeenCalled();
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",

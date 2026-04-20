@@ -1,17 +1,9 @@
-import {
-  SimplePool,
-  finalizeEvent,
-  getPublicKey,
-  verifyEvent,
-  nip19,
-  type Event,
-} from "nostr-tools";
+import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/direct-dm-guard-policy";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
@@ -21,6 +13,7 @@ import {
   type MetricsSnapshot,
   type MetricEvent,
 } from "./metrics.js";
+import { validatePrivateKey } from "./nostr-key-utils.js";
 import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
 import {
   readNostrBusState,
@@ -30,6 +23,14 @@ import {
   writeNostrProfileState,
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
+
+export {
+  validatePrivateKey,
+  getPublicKeyFromPrivate,
+  isValidPubkey,
+  normalizePubkey,
+  pubkeyToNpub,
+} from "./nostr-key-utils.js";
 
 // ============================================================================
 // Constants
@@ -341,46 +342,6 @@ function createRelayHealthTracker(): RelayHealthTracker {
 }
 
 // ============================================================================
-// Key Validation
-// ============================================================================
-
-/**
- * Validate and normalize a private key (accepts hex or nsec format)
- */
-export function validatePrivateKey(key: string): Uint8Array {
-  const trimmed = key.trim();
-
-  // Handle nsec (bech32) format
-  if (trimmed.startsWith("nsec1")) {
-    const decoded = nip19.decode(trimmed);
-    if (decoded.type !== "nsec") {
-      throw new Error("Invalid nsec key: wrong type");
-    }
-    return decoded.data;
-  }
-
-  // Handle hex format
-  if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new Error("Private key must be 64 hex characters or nsec bech32 format");
-  }
-
-  // Convert hex string to Uint8Array
-  const bytes = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) {
-    bytes[i] = parseInt(trimmed.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-/**
- * Get public key from private key (hex or nsec format)
- */
-export function getPublicKeyFromPrivate(privateKey: string): string {
-  const sk = validatePrivateKey(privateKey);
-  return getPublicKey(sk);
-}
-
-// ============================================================================
 // Main Bus
 // ============================================================================
 
@@ -505,15 +466,24 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       inflight.add(event.id);
 
+      const markSeen = () => {
+        seen.add(event.id);
+        metrics.emit("memory.seen_tracker_size", seen.size());
+      };
+      const rejectAndMarkSeen = (metric: Parameters<typeof metrics.emit>[0]) => {
+        markSeen();
+        metrics.emit(metric);
+      };
+
       // Self-message loop prevention: skip our own messages
       if (event.pubkey === pk) {
-        metrics.emit("event.rejected.self_message");
+        rejectAndMarkSeen("event.rejected.self_message");
         return;
       }
 
       // Skip events older than our `since` (relay may ignore filter)
       if (event.created_at < since) {
-        metrics.emit("event.rejected.stale");
+        rejectAndMarkSeen("event.rejected.stale");
         return;
       }
 
@@ -523,7 +493,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (!guardPolicy.allowedKinds.includes(event.kind)) {
-        metrics.emit("event.rejected.wrong_kind");
+        rejectAndMarkSeen("event.rejected.wrong_kind");
         return;
       }
 
@@ -536,7 +506,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
       if (!targetsUs) {
-        metrics.emit("event.rejected.wrong_kind");
+        rejectAndMarkSeen("event.rejected.wrong_kind");
         return;
       }
 
@@ -578,16 +548,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return false;
       };
 
-      const markSeen = () => {
-        seen.add(event.id);
-        metrics.emit("memory.seen_tracker_size", seen.size());
-      };
-
       if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
         if (rejectIfGlobalRateLimited()) {
           return;
         }
-        metrics.emit("event.rejected.oversized_ciphertext");
+        rejectAndMarkSeen("event.rejected.oversized_ciphertext");
         return;
       }
 
@@ -597,7 +562,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
       // Verify signature (must pass before we trust the event)
       if (!verifyEvent(event)) {
-        metrics.emit("event.rejected.invalid_signature");
+        rejectAndMarkSeen("event.rejected.invalid_signature");
         onError?.(new Error("Invalid signature"), `event ${event.id}`);
         return;
       }
@@ -617,15 +582,13 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
       }
 
-      // Mark seen AFTER verify (don't cache invalid IDs)
-      markSeen();
-
       // Decrypt the message
       let plaintext: string;
       try {
         plaintext = decrypt(sk, event.pubkey, event.content);
         metrics.emit("decrypt.success");
       } catch (err) {
+        markSeen();
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
         onError?.(err as Error, `decrypt from ${event.pubkey}`);
@@ -633,6 +596,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
 
       if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
+        markSeen();
         metrics.emit("event.rejected.oversized_plaintext");
         return;
       }
@@ -642,6 +606,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         eventId: event.id,
         createdAt: event.created_at,
       });
+
+      // Only cache successful deliveries so handler failures can retry.
+      markSeen();
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -827,65 +794,4 @@ async function sendEncryptedDm(
   }
 
   throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
-}
-
-// ============================================================================
-// Pubkey Utilities
-// ============================================================================
-
-/**
- * Check if a string looks like a valid Nostr pubkey (hex or npub)
- */
-export function isValidPubkey(input: string): boolean {
-  if (typeof input !== "string") {
-    return false;
-  }
-  const trimmed = input.trim();
-
-  // npub format
-  if (trimmed.startsWith("npub1")) {
-    try {
-      const decoded = nip19.decode(trimmed);
-      return decoded.type === "npub";
-    } catch {
-      return false;
-    }
-  }
-
-  // Hex format
-  return /^[0-9a-fA-F]{64}$/.test(trimmed);
-}
-
-/**
- * Normalize a pubkey to hex format (accepts npub or hex)
- */
-export function normalizePubkey(input: string): string {
-  const trimmed = input.trim();
-
-  // npub format - decode to hex
-  if (trimmed.startsWith("npub1")) {
-    const decoded = nip19.decode(trimmed);
-    if (decoded.type !== "npub") {
-      throw new Error("Invalid npub key");
-    }
-    // Convert Uint8Array to hex string
-    return Array.from(decoded.data as unknown as Uint8Array)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
-  // Already hex - validate and return lowercase
-  if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new Error("Pubkey must be 64 hex characters or npub format");
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed);
-}
-
-/**
- * Convert a hex pubkey to npub format
- */
-export function pubkeyToNpub(hexPubkey: string): string {
-  const normalized = normalizePubkey(hexPubkey);
-  // npubEncode expects a hex string, not Uint8Array
-  return nip19.npubEncode(normalized);
 }
