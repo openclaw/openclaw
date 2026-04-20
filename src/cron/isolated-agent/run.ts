@@ -609,9 +609,9 @@ async function finalizeCronRun(params: {
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
-  await prepared.persistSessionEntry();
-
   if (params.isAborted()) {
+    prepared.cronSession.sessionEntry.status = "timeout";
+    await prepared.persistSessionEntry();
     return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
   }
   let {
@@ -628,6 +628,8 @@ async function finalizeCronRun(params: {
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
     preferFinalAssistantVisibleText: prepared.resolvedDelivery.channel === "telegram",
   });
+  prepared.cronSession.sessionEntry.status = hasFatalErrorPayload ? "failed" : "done";
+  await prepared.persistSessionEntry();
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
@@ -766,6 +768,8 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
     });
     if (isAborted()) {
+      prepared.context.cronSession.sessionEntry.status = "timeout";
+      await prepared.context.persistSessionEntry();
       return prepared.context.withRunSession({ status: "error", error: abortReason() });
     }
     return await finalizeCronRun({
@@ -775,6 +779,8 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
     });
   } catch (err) {
+    prepared.context.cronSession.sessionEntry.status = isAborted() ? "timeout" : "failed";
+    await prepared.context.persistSessionEntry();
     return prepared.context.withRunSession({ status: "error", error: String(err) });
   }
 }
