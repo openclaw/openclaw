@@ -133,7 +133,7 @@ function resolveSessionMessagesStoreContext(
         typeof record.sessionFile === "string" && record.sessionFile.trim()
           ? path.resolve(record.sessionFile.trim())
           : null;
-      if (targetSessionFile && entrySessionFile && entrySessionFile !== targetSessionFile) {
+      if (targetSessionFile && entrySessionFile !== targetSessionFile) {
         continue;
       }
       return {
