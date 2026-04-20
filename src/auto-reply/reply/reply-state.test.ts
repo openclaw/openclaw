@@ -228,7 +228,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 0 },
         contextWindowTokens: 16_000,
-        reserveTokensFloor: 20_000,
+        reserveTokens: 20_000,
         softThresholdTokens: 4_000,
       }),
     ).toBe(false);
@@ -239,7 +239,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: undefined,
         contextWindowTokens: 16_000,
-        reserveTokensFloor: 1_000,
+        reserveTokens: 1_000,
         softThresholdTokens: 4_000,
       }),
     ).toBe(false);
@@ -250,7 +250,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 10_000 },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 20_000,
+        reserveTokens: 20_000,
         softThresholdTokens: 10_000,
       }),
     ).toBe(false);
@@ -261,7 +261,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 85 },
         contextWindowTokens: 100,
-        reserveTokensFloor: 10,
+        reserveTokens: 10,
         softThresholdTokens: 5,
       }),
     ).toBe(true);
@@ -276,7 +276,7 @@ describe("shouldRunMemoryFlush", () => {
           memoryFlushCompactionCount: 2,
         },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
@@ -287,7 +287,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, compactionCount: 1 },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
@@ -298,8 +298,33 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("honors a larger effective reserve than the default floor", () => {
+    // Regression guard: callers pass `reserveTokens` pre-computed as
+    // max(config.reserveTokens, config.reserveTokensFloor). If a caller passes
+    // only the floor (e.g. 20_000) when reserveTokens is configured much
+    // higher (840_000), the threshold would sit near the context window and
+    // the gate would never fire on a healthy-sized session. This test locks
+    // in that the helper trusts whatever the caller passes.
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 200_000, compactionCount: 0 },
+        contextWindowTokens: 1_000_000,
+        reserveTokens: 840_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 100_000, compactionCount: 0 },
+        contextWindowTokens: 1_000_000,
+        reserveTokens: 840_000,
+        softThresholdTokens: 4_000,
       }),
     ).toBe(false);
   });
@@ -311,7 +336,7 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 96_000, totalTokensFresh: false },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
@@ -323,10 +348,28 @@ describe("shouldRunPreflightCompaction", () => {
         entry: { totalTokens: 10, totalTokensFresh: false },
         tokenCount: 93_000,
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
+  });
+
+  it("returns null gate state when effective reserve + soft threshold exceed the context window", () => {
+    // If a caller accidentally passes reserve + soft > contextWindow (the
+    // scenario that silently disabled compaction on 2026-04-19 for one user
+    // before this fix was written), the gate returns false rather than
+    // firing every turn. Important invariant: the threshold clamp to 0 is
+    // intentional and prevents pathological compaction loops on tiny-window
+    // models.
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokensFresh: false },
+        tokenCount: 50_000,
+        contextWindowTokens: 100_000,
+        reserveTokens: 80_000,
+        softThresholdTokens: 30_000,
+      }),
+    ).toBe(false);
   });
 });
 

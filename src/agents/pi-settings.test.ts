@@ -4,6 +4,7 @@ import {
   applyPiCompactionSettingsFromConfig,
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   resolveCompactionReserveTokensFloor,
+  resolveEffectiveCompactionReserveTokens,
 } from "./pi-settings.js";
 
 describe("applyPiCompactionSettingsFromConfig", () => {
@@ -343,5 +344,110 @@ describe("resolveCompactionReserveTokensFloor", () => {
         agents: { defaults: { compaction: { reserveTokensFloor: 0 } } },
       }),
     ).toBe(0);
+  });
+});
+
+describe("resolveEffectiveCompactionReserveTokens", () => {
+  it("returns the floor when reserveTokens is unset", () => {
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 24_000 } } } },
+      }),
+    ).toBe(24_000);
+  });
+
+  it("returns reserveTokens when it exceeds the floor", () => {
+    // Regression guard for the preflight / memory-flush bug: when a user sets
+    // `reserveTokens` above the floor, the effective reserve must reflect
+    // their configured value, not be silently floored back down.
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                reserveTokens: 840_000,
+                reserveTokensFloor: 20_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(840_000);
+  });
+
+  it("returns the floor when it exceeds a smaller reserveTokens", () => {
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                reserveTokens: 10_000,
+                reserveTokensFloor: 20_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(20_000);
+  });
+
+  it("prefers the caller-supplied floor over re-reading config", () => {
+    // The caller often already has the floor in hand (e.g. from a
+    // MemoryFlushPlan). Re-reading it from config would risk drift if the
+    // caller is using a plan-owned value that post-processed the raw config.
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                reserveTokens: 100,
+                reserveTokensFloor: 99_999,
+              },
+            },
+          },
+        },
+        reserveTokensFloor: 50_000,
+      }),
+    ).toBe(50_000);
+  });
+
+  it("treats missing cfg as reserveTokens = 0 and falls back to default floor", () => {
+    expect(resolveEffectiveCompactionReserveTokens({})).toBe(
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    );
+  });
+
+  it("ignores negative or non-finite reserveTokens", () => {
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                reserveTokens: -1 as unknown as number,
+                reserveTokensFloor: 20_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(20_000);
+    expect(
+      resolveEffectiveCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                reserveTokens: Number.NaN,
+                reserveTokensFloor: 20_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(20_000);
   });
 });

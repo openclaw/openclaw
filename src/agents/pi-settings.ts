@@ -48,6 +48,45 @@ export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): numbe
   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 }
 
+/**
+ * Resolve the effective compaction reserve — the larger of the user-configured
+ * `agents.defaults.compaction.reserveTokens` and `reserveTokensFloor`.
+ *
+ * `reserveTokensFloor` is documented as "Minimum floor enforced for
+ * reserveTokens in Pi compaction paths" (see `schema.help.ts`), so the
+ * effective reserve is `max(reserveTokens, reserveTokensFloor)`. Memory-flush
+ * and preflight-compaction gates must use this value, not the floor alone;
+ * otherwise a user-configured `reserveTokens` above the floor is silently
+ * ignored by those gates.
+ *
+ * The Pi settings-manager path already computes this inline in
+ * `applyPiCompactionSettingsFromConfig`; this helper exposes the same
+ * semantic for gate-path callers that do not go through the settings manager.
+ */
+export function resolveEffectiveCompactionReserveTokens(params: {
+  cfg?: OpenClawConfig;
+  /**
+   * The floor value the caller has already resolved (typically from a
+   * MemoryFlushPlan or direct config read). Supplying it here avoids a second
+   * config lookup and keeps the floor consistent with what the caller is
+   * already using for logging/diagnostics.
+   */
+  reserveTokensFloor?: number;
+}): number {
+  const configuredReserveTokens = params.cfg?.agents?.defaults?.compaction?.reserveTokens;
+  const reserveTokens =
+    typeof configuredReserveTokens === "number" &&
+    Number.isFinite(configuredReserveTokens) &&
+    configuredReserveTokens >= 0
+      ? Math.floor(configuredReserveTokens)
+      : 0;
+  const reserveTokensFloor =
+    typeof params.reserveTokensFloor === "number" && Number.isFinite(params.reserveTokensFloor)
+      ? Math.max(0, Math.floor(params.reserveTokensFloor))
+      : resolveCompactionReserveTokensFloor(params.cfg);
+  return Math.max(reserveTokens, reserveTokensFloor);
+}
+
 function toNonNegativeInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return undefined;

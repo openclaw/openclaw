@@ -5,6 +5,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveEffectiveCompactionReserveTokens } from "../../agents/pi-settings.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -426,6 +427,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
     20_000;
+  const effectiveReserveTokens = resolveEffectiveCompactionReserveTokens({
+    cfg: params.cfg,
+    reserveTokensFloor,
+  });
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
@@ -476,11 +481,12 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const threshold = contextWindowTokens - effectiveReserveTokens - softThresholdTokens;
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `reserveTokens=${effectiveReserveTokens} reserveTokensFloor=${reserveTokensFloor} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -494,7 +500,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     entry,
     tokenCount: tokenCountForCompaction,
     contextWindowTokens,
-    reserveTokensFloor,
+    reserveTokens: effectiveReserveTokens,
     softThresholdTokens,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
@@ -653,8 +659,12 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
+  const effectiveReserveTokens = resolveEffectiveCompactionReserveTokens({
+    cfg: params.cfg,
+    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+  });
   const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+    contextWindowTokens - effectiveReserveTokens - memoryFlushPlan.softThresholdTokens;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -765,6 +775,7 @@ export async function runMemoryFlushIfNeeded(params: {
     `memoryFlush check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
+      `reserveTokens=${effectiveReserveTokens} reserveTokensFloor=${memoryFlushPlan.reserveTokensFloor} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
       `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlushCompactionCount ?? "undefined"} ` +
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
@@ -781,7 +792,7 @@ export async function runMemoryFlushIfNeeded(params: {
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+        reserveTokens: effectiveReserveTokens,
         softThresholdTokens: memoryFlushPlan.softThresholdTokens,
       })) ||
     (shouldForceFlushByTranscriptSize &&

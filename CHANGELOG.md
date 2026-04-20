@@ -1635,6 +1635,7 @@ Docs: https://docs.openclaw.ai
 - Tlon/uploads: route both hosted Memex upload targets and custom-S3 presigned upload URLs through the shared SSRF guard so blocked private or loopback destinations fail before upload, while public upload URLs continue through the existing hosted upload flow. (#69794) Thanks @drobison00.
 - Channels/thread routing: keep outbound replies in existing Slack, Mattermost, Matrix, Telegram, Discord, and QA-channel thread sessions by sharing the Plugin SDK thread-aware route builder across bundled plugins.
 - Agents/replay: normalize restored assistant text content before provider replay and prompt submission, so legacy or repaired sessions no longer crash on `assistantMsg.content.flatMap`. (#69850) Thanks @fuller-stack-dev.
+- Agents/compaction: preflight-compaction and memory-flush gates now respect `agents.defaults.compaction.reserveTokens`, not just `reserveTokensFloor`. Previously, setting `reserveTokens` above the floor had no effect on when those gates fired; the effective reserve is now `max(reserveTokens, reserveTokensFloor)`, matching the documented help text for `reserveTokensFloor` ("Minimum floor enforced for reserveTokens in Pi compaction paths") and the existing behavior of `applyPiCompactionSettingsFromConfig` in `src/agents/pi-settings.ts`. Fixes #66830.
 
 ## 2026.4.20
 
