@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DiscordConfigSchema } from "./zod-schema.providers-core.js";
+import { DiscordConfigSchema } from "../config-api.js";
 
 function expectValidDiscordConfig(config: unknown) {
   const res = DiscordConfigSchema.safeParse(config);
@@ -19,8 +19,8 @@ function expectInvalidDiscordConfig(config: unknown) {
   return res.error.issues;
 }
 
-describe("config discord", () => {
-  it("loads discord guild map + dm group settings", () => {
+describe("discord config schema", () => {
+  it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,
       dm: {
@@ -57,7 +57,7 @@ describe("config discord", () => {
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
   });
 
-  it("coerces safe-integer numeric discord allowlist entries to strings", () => {
+  it("coerces safe-integer numeric allowlist entries to strings", () => {
     const cfg = expectValidDiscordConfig({
       allowFrom: [123],
       dm: { allowFrom: [456], groupChannels: [789] },
@@ -83,13 +83,105 @@ describe("config discord", () => {
     expect(cfg.execApprovals?.approvers).toEqual(["555"]);
   });
 
-  it("rejects numeric discord IDs that are not valid non-negative safe integers", () => {
+  it("rejects numeric IDs that are not valid non-negative safe integers", () => {
     const cases = [106232522769186816, -1, 123.45];
     for (const id of cases) {
       const issues = expectInvalidDiscordConfig({ allowFrom: [id] });
 
       expect(
         issues.some((issue) => issue.message.includes("not a valid non-negative safe integer")),
+      ).toBe(true);
+    }
+  });
+
+  it.each([
+    { name: "status-only presence", config: { status: "idle" } },
+    {
+      name: "custom activity when type is omitted",
+      config: { activity: "Focus time" },
+    },
+    {
+      name: "custom activity type",
+      config: { activity: "Chilling", activityType: 4 },
+    },
+    {
+      name: "auto presence config",
+      config: {
+        autoPresence: {
+          enabled: true,
+          intervalMs: 30000,
+          minUpdateIntervalMs: 15000,
+          exhaustedText: "token exhausted",
+        },
+      },
+    },
+  ] as const)("accepts $name", ({ config }) => {
+    expect(DiscordConfigSchema.safeParse(config).success).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "streaming activity without url",
+      config: { activity: "Live", activityType: 1 },
+    },
+    {
+      name: "activityUrl without streaming type",
+      config: { activity: "Live", activityUrl: "https://twitch.tv/openclaw" },
+    },
+    {
+      name: "auto presence min update interval above check interval",
+      config: {
+        autoPresence: {
+          enabled: true,
+          intervalMs: 5000,
+          minUpdateIntervalMs: 6000,
+        },
+      },
+    },
+  ] as const)("rejects $name", ({ config }) => {
+    expect(DiscordConfigSchema.safeParse(config).success).toBe(false);
+  });
+
+  it("accepts agentComponents.enabled at channel scope", () => {
+    const res = DiscordConfigSchema.safeParse({
+      agentComponents: {
+        enabled: true,
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts agentComponents.enabled at account scope", () => {
+    const res = DiscordConfigSchema.safeParse({
+      accounts: {
+        work: {
+          agentComponents: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects unknown fields under agentComponents", () => {
+    const res = DiscordConfigSchema.safeParse({
+      agentComponents: {
+        enabled: true,
+        invalidField: true,
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(
+        res.error.issues.some(
+          (issue) =>
+            issue.path.join(".") === "agentComponents" &&
+            issue.message.toLowerCase().includes("unrecognized"),
+        ),
       ).toBe(true);
     }
   });

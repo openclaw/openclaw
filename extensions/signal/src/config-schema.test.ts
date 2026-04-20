@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SignalConfigSchema } from "./zod-schema.providers-core.js";
+import { SignalConfigSchema } from "../config-api.js";
 
 function expectValidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
@@ -16,7 +16,7 @@ function expectInvalidSignalConfig(config: unknown) {
 }
 
 describe("signal groups schema", () => {
-  it("accepts top-level Signal groups overrides", () => {
+  it("accepts top-level group overrides", () => {
     expectValidSignalConfig({
       groups: {
         "*": {
@@ -29,7 +29,7 @@ describe("signal groups schema", () => {
     });
   });
 
-  it("accepts per-account Signal groups overrides", () => {
+  it("accepts per-account group overrides", () => {
     expectValidSignalConfig({
       accounts: {
         primary: {
@@ -43,7 +43,7 @@ describe("signal groups schema", () => {
     });
   });
 
-  it("rejects unknown keys in Signal groups entries", () => {
+  it("rejects unknown keys in group entries", () => {
     const issues = expectInvalidSignalConfig({
       groups: {
         "*": {
