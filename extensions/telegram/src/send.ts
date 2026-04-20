@@ -1539,6 +1539,193 @@ export async function sendStickerTelegram(
   return { messageId: String(messageId), chatId: resolvedChatId };
 }
 
+/**
+ * PR-14: standalone document/file upload helper. Wraps `api.sendDocument`
+ * with the same retry/diag/threading machinery as `sendMessageTelegram`'s
+ * media branch. Used by the plan-mode bridge to deliver a markdown plan
+ * file to a Telegram chat as an attachment so the user can read the full
+ * plan from their primary platform.
+ *
+ * - `filePath`: absolute path to a local file on disk. Read into a Buffer.
+ * - `caption`: optional caption text. Truncated to 1024 chars (Telegram
+ *   document caption limit). Defaults to `parse_mode: "HTML"` so the
+ *   universal-/plan resolution hint can use `<code>` markup.
+ * - `messageThreadId` / `replyToMessageId`: standard threading shape
+ *   shared with sendMessageTelegram.
+ *
+ * Telegram's document size cap is 50 MiB. We pre-check and reject with a
+ * descriptive error so the caller can fall back to a text-only message
+ * if needed (in practice, plan markdowns are tiny — ~10-50 KB).
+ */
+export type TelegramDocumentOpts = {
+  cfg?: ReturnType<typeof loadConfig>;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
+  /** Caption shown beneath the file in the chat. Truncated to 1024 chars. */
+  caption?: string;
+  /**
+   * Caption parse mode. Defaults to "HTML" when a non-empty caption is
+   * present (so the universal /plan resolution hint can use `<code>`
+   * markup). Pass `"MarkdownV2"` to switch formats. There is no
+   * "disable parse_mode" path while a caption is present — Telegram
+   * will receive `parse_mode: <this value>` whenever a caption is
+   * attached. When no caption is present, no `parse_mode` is sent.
+   *
+   * **Caller responsibility — escape user-controlled caption text.**
+   * Copilot review #68939 (2026-04-19): because the default is HTML
+   * mode, captions derived from agent- or user-controlled strings
+   * (plan titles, summaries, etc.) MUST be HTML-escaped by the
+   * caller before being passed in. The plan-archetype-bridge does
+   * this via `escapeHtml()` in `buildPlanAttachmentCaption`. New
+   * callers should mirror that pattern (or, if calling with
+   * `parseMode: "MarkdownV2"`, escape per Telegram's MarkdownV2
+   * grammar instead). Failure to escape risks accidental link
+   * injection / formatting drift — the bridge ESCAPES, so its
+   * captions are safe.
+   *
+   * Earlier docstring claimed "omit/empty to disable" which
+   * contradicted both the type union (no falsy value accepted) and
+   * the implementation (`?? (caption ? "HTML" : undefined)` always
+   * produces a value when caption is set).
+   */
+  parseMode?: "HTML" | "MarkdownV2";
+  /** Disable the upload + caption notification (silent attachment). */
+  silent?: boolean;
+  /** Message ID to reply to (for threading). */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups). */
+  messageThreadId?: number;
+};
+
+const TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024; // Telegram bot API limit
+const TELEGRAM_CAPTION_MAX_CHARS = 1024;
+
+export async function sendDocumentTelegram(
+  to: string,
+  filePath: string,
+  opts: TelegramDocumentOpts = {},
+): Promise<TelegramSendResult> {
+  if (!filePath?.trim()) {
+    throw new Error("Telegram document filePath is required");
+  }
+  // Defer the fs/path imports to avoid pulling Node-only modules into
+  // any browser/edge runtime that might import this file.
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  // Copilot review #68939 (post-nuclear-fix-stack): stat() the
+  // file BEFORE allocating the read buffer so an oversized file
+  // doesn't trigger a multi-MB allocation just to be rejected on
+  // the size check below. Pre-fix, a caller pointing at a 50+ MiB
+  // file would allocate the full buffer and THEN reject — risking
+  // OOM in the gateway process under malicious or accidental
+  // misuse. The grammy SDK doesn't expose stream uploads cleanly
+  // (deferred to a future refactor), but stat-first is a cheap
+  // bounded-allocation guard.
+  let fileStat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    fileStat = await fs.stat(filePath);
+  } catch (err) {
+    throw new Error(
+      `sendDocumentTelegram: failed to stat ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  if (fileStat.size > TELEGRAM_DOCUMENT_MAX_BYTES) {
+    throw new Error(
+      `sendDocumentTelegram: file too large for Telegram (${fileStat.size} bytes > ${TELEGRAM_DOCUMENT_MAX_BYTES} byte cap)`,
+    );
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await fs.readFile(filePath);
+  } catch (err) {
+    throw new Error(
+      `sendDocumentTelegram: failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
+  });
+
+  const fileName = path.basename(filePath);
+  const file = new InputFileCtor(buffer, fileName);
+
+  const threadParams = buildTelegramThreadReplyParams({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+    replyToMessageId: opts.replyToMessageId,
+  });
+
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  const captionRaw = opts.caption?.trim() ?? "";
+  const caption =
+    captionRaw.length > TELEGRAM_CAPTION_MAX_CHARS
+      ? captionRaw.slice(0, TELEGRAM_CAPTION_MAX_CHARS - 1) + "…"
+      : captionRaw;
+  const parseMode = opts.parseMode ?? (caption ? "HTML" : undefined);
+
+  const sendParams: Record<string, unknown> = {
+    ...threadParams,
+    ...(caption ? { caption } : {}),
+    ...(parseMode && caption ? { parse_mode: parseMode } : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+  const hasParams = Object.keys(sendParams).length > 0;
+
+  const result = await withTelegramThreadFallback(
+    hasParams ? (sendParams as TelegramThreadScopedParams) : undefined,
+    "document",
+    opts.verbose,
+    async (effectiveParams, label) =>
+      requestWithChatNotFound(
+        () =>
+          api.sendDocument(
+            chatId,
+            file,
+            effectiveParams as Parameters<typeof api.sendDocument>[2],
+          ) as Promise<TelegramMessageLike>,
+        label,
+      ),
+  );
+
+  const messageId = resolveTelegramMessageIdOrThrow(result, "document send");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId);
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { messageId: String(messageId), chatId: resolvedChatId };
+}
+
 type TelegramPollOpts = {
   cfg?: ReturnType<typeof loadConfig>;
   token?: string;
