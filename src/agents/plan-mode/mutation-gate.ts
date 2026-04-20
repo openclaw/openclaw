@@ -47,6 +47,51 @@ const PLAN_MODE_ALLOWED_TOOLS = new Set([
   "update_plan",
   "exit_plan_mode",
   "session_status",
+  // PR-10 review fix (Copilot/Codex P1 #3104741578 / #3104743331):
+  // ask_user_question is a planning-time clarification tool that
+  // does NOT exit plan mode and does NOT mutate workspace state. It
+  // must be in the allowlist or the entire feature is broken under
+  // the default-deny gate.
+  "ask_user_question",
+  // enter_plan_mode is also non-mutating (state transition only) and
+  // should be allowed even when called redundantly mid-plan.
+  "enter_plan_mode",
+  // sessions_spawn allowed for research-subagent flows (see comment
+  // on MUTATION_TOOL_BLOCKLIST above). Belt-and-suspenders allowlist
+  // entry in addition to the blocklist removal.
+  "sessions_spawn",
+  // Iter-3 D6 followup: read-only plan-mode introspection — must be
+  // allowed in plan mode (the most important place to call it). The
+  // tool is purely read; no state mutation. Without this entry, the
+  // default-deny gate blocks the agent from self-diagnosing while in
+  // plan mode, defeating the entire point of the introspection
+  // surface. (User-reported regression: agent called plan_mode_status
+  // mid-pending-approval and got "Tool not in plan-mode allowlist".)
+  "plan_mode_status",
+  // Read-only sessions tools — useful during plan-mode investigation
+  // and the agent shouldn't have to learn they're allowed.
+  "sessions_list",
+  "sessions_history",
+  // PR #68939 follow-up (Test 4a UX gap fix): `agents_list` is a
+  // read-only directory of registered agents (used by sessions_spawn
+  // to discover valid `agentId` values). When sessions_spawn validation
+  // rejects a malformed agentId, its error message tells the agent to
+  // "use agents_list to discover valid targets" — but agents_list was
+  // blocked by the default-deny gate, creating a catch-22 (live-
+  // reproduced 2026-04-21 in Test 4a: Eva guessed "openai-codex/gpt-5.4",
+  // got rejected, tried agents_list, got "Tool not in plan-mode
+  // allowlist", had to submit her plan with a fabricated subagent
+  // result). This is purely metadata read; no workspace mutation.
+  "agents_list",
+  // PR #68939 follow-up (broader allowlist audit, 2026-04-21):
+  // pure-read analytical tools that an agent investigating visual
+  // evidence in plan mode commonly needs. Both feed media to a
+  // vision/document model and return text — no workspace state
+  // touched. Without these, an agent has to exit plan mode to
+  // inspect a screenshot or a referenced PDF, which defeats the
+  // "investigation phase" purpose.
+  "image",
+  "pdf",
 ]);
 
 /**
@@ -78,6 +123,34 @@ const READ_ONLY_EXEC_PREFIXES = [
   "whoami",
   "hostname",
   "uname",
+  // PR #68939 follow-up (audit 2026-04-21): structured-data + log
+  // analysis utilities. The shell-operator regex below blocks pipes
+  // (`|`), so an agent investigating logs cannot do `tail file | grep
+  // pattern`. These additions let the agent do the same work via
+  // single-command flags (`grep -A 5 pattern file`, `jq '.field'
+  // file.json`, etc.) without needing pipes. All are pure-read with
+  // no documented write modes:
+  "sort", // log line ordering
+  "uniq", // deduplication of grep output (pair with sort -u alternative)
+  "cut", // field extraction from structured logs
+  "diff", // file/output comparison (no -i / write modes)
+  "tree", // directory tree visualization
+  "jq", // JSON query (critical for structured logs / config files)
+  "column", // tabular output formatting
+  // System introspection — pure read, useful for diagnostics.
+  // Excluded: `ps`, `lsof`, `top`, `dmesg`, `groups`, `last` per
+  // audit (security-sensitive system info exposure).
+  "env", // env var listing
+  "uptime", // load average + boot time
+  "date", // wall clock + timezone
+  "id", // current uid/gid
+  "nproc", // CPU count (Linux)
+  "arch", // CPU architecture
+  "vm_stat", // memory diagnostics (macOS)
+  // Excluded: `awk` and `sed` even with -n flag — both have write modes
+  // (`sed -i` is destructive) and the prefix-match logic can't reliably
+  // distinguish read-only invocations. Agent should use `grep`/`cut`/`jq`
+  // for the same workflows.
 ];
 
 export interface MutationGateResult {
