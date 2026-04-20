@@ -32,6 +32,16 @@ export const ConnectErrorDetailCodes = {
 export type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
 
+export const ConnectPairingRequiredReasons = {
+  NOT_PAIRED: "not-paired",
+  ROLE_UPGRADE: "role-upgrade",
+  SCOPE_UPGRADE: "scope-upgrade",
+  METADATA_UPGRADE: "metadata-upgrade",
+} as const;
+
+export type ConnectPairingRequiredReason =
+  (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
+
 export type ConnectRecoveryNextStep =
   | "retry_with_device_token"
   | "update_auth_configuration"
@@ -44,6 +54,13 @@ export type ConnectErrorRecoveryAdvice = {
   recommendedNextStep?: ConnectRecoveryNextStep;
 };
 
+export type PairingConnectErrorDetails = {
+  code: typeof ConnectErrorDetailCodes.PAIRING_REQUIRED;
+  reason?: ConnectPairingRequiredReason;
+  requestId?: string;
+  remediationHint?: string;
+};
+
 const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
   "retry_with_device_token",
   "update_auth_configuration",
@@ -51,6 +68,45 @@ const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = 
   "wait_then_retry",
   "review_auth_configuration",
 ]);
+
+const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequiredReason> = new Set([
+  "not-paired",
+  "role-upgrade",
+  "scope-upgrade",
+  "metadata-upgrade",
+]);
+
+const PAIRING_CONNECT_REASON_METADATA: Readonly<
+  Record<
+    ConnectPairingRequiredReason,
+    {
+      requirement: string;
+      remediationHint: string;
+      recoveryTitle: string;
+    }
+  >
+> = {
+  "not-paired": {
+    requirement: "device is not approved yet",
+    remediationHint: "Approve this device from the pending pairing requests.",
+    recoveryTitle: "Gateway pairing approval required.",
+  },
+  "role-upgrade": {
+    requirement: "device is asking for a higher role than currently approved",
+    remediationHint: "Review the requested role upgrade, then approve the pending request.",
+    recoveryTitle: "Gateway role upgrade approval required.",
+  },
+  "scope-upgrade": {
+    requirement: "device is asking for more scopes than currently approved",
+    remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    recoveryTitle: "Gateway scope upgrade approval required.",
+  },
+  "metadata-upgrade": {
+    requirement: "device identity changed and must be re-approved",
+    remediationHint: "Review the refreshed device details, then approve the pending request.",
+    recoveryTitle: "Gateway device refresh approval required.",
+  },
+};
 
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
@@ -137,5 +193,96 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
   return {
     canRetryWithDeviceToken,
     recommendedNextStep,
+  };
+}
+
+function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {
+  const normalized = normalizeOptionalString(value) ?? "";
+  return CONNECT_PAIRING_REQUIRED_REASON_VALUES.has(normalized as ConnectPairingRequiredReason)
+    ? (normalized as ConnectPairingRequiredReason)
+    : undefined;
+}
+
+export function describePairingConnectRequirement(
+  reason: ConnectPairingRequiredReason | undefined,
+): string {
+  return reason
+    ? PAIRING_CONNECT_REASON_METADATA[reason].requirement
+    : "device approval is required";
+}
+
+export function buildPairingConnectErrorMessage(
+  reason: ConnectPairingRequiredReason | undefined,
+): string {
+  return reason
+    ? `pairing required: ${describePairingConnectRequirement(reason)}`
+    : "pairing required";
+}
+
+export function buildPairingConnectRemediationHint(
+  reason: ConnectPairingRequiredReason | undefined,
+): string {
+  return reason
+    ? PAIRING_CONNECT_REASON_METADATA[reason].remediationHint
+    : "Approve the pending device request before retrying.";
+}
+
+export function buildPairingConnectRecoveryTitle(
+  reason: ConnectPairingRequiredReason | undefined,
+): string {
+  return reason
+    ? PAIRING_CONNECT_REASON_METADATA[reason].recoveryTitle
+    : "Gateway pairing approval required.";
+}
+
+export function buildPairingConnectErrorDetails(params: {
+  reason: ConnectPairingRequiredReason | undefined;
+  requestId?: string;
+  remediationHint?: string;
+}): PairingConnectErrorDetails {
+  const requestId = normalizeOptionalString(params.requestId) ?? undefined;
+  const remediationHint =
+    normalizeOptionalString(params.remediationHint) ??
+    buildPairingConnectRemediationHint(params.reason);
+  return {
+    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    ...(params.reason ? { reason: params.reason } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(remediationHint ? { remediationHint } : {}),
+  };
+}
+
+export function buildPairingConnectCloseReason(params: {
+  reason: ConnectPairingRequiredReason | undefined;
+  requestId?: string;
+}): string {
+  const requestId = normalizeOptionalString(params.requestId) ?? undefined;
+  const message = buildPairingConnectErrorMessage(params.reason);
+  return requestId ? `${message} (requestId: ${requestId})` : message;
+}
+
+export function readPairingConnectErrorDetails(
+  details: unknown,
+): PairingConnectErrorDetails | null {
+  if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+    return null;
+  }
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return { code: ConnectErrorDetailCodes.PAIRING_REQUIRED };
+  }
+  const raw = details as {
+    reason?: unknown;
+    requestId?: unknown;
+    remediationHint?: unknown;
+  };
+  const reason = normalizePairingConnectReason(raw.reason);
+  const requestId = normalizeOptionalString(raw.requestId) ?? undefined;
+  const remediationHint =
+    normalizeOptionalString(raw.remediationHint) ?? buildPairingConnectRemediationHint(reason);
+  return {
+    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    ...(reason ? { reason } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(remediationHint ? { remediationHint } : {}),
   };
 }

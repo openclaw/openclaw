@@ -31,8 +31,18 @@ async function expectRejectedScopeUpgradeAttempt({
 }) {
   const pending = await devicePairingModule.listDevicePairing();
   expect(pending.pending).toHaveLength(1);
-  expect(((attempt.error?.details ?? {}) as { requestId?: unknown }).requestId).toBe(
-    pending.pending[0]?.requestId,
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        remediationHint?: unknown;
+      }
+    ).requestId,
+  ).toBe(pending.pending[0]?.requestId);
+  expect(((attempt.error?.details ?? {}) as { reason?: unknown }).reason).toBe("scope-upgrade");
+  expect(((attempt.error?.details ?? {}) as { remediationHint?: unknown }).remediationHint).toBe(
+    "Review the requested scopes, then approve the pending upgrade.",
   );
 
   const requested = (await requestedEvent) as {
@@ -76,7 +86,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
         scopes: ["operator.admin"],
       });
       expect(sharedAuthUpgradeAttempt.ok).toBe(false);
-      expect(sharedAuthUpgradeAttempt.error?.message).toBe("pairing required");
+      expect(sharedAuthUpgradeAttempt.error?.message).toBe(
+        "pairing required: device is asking for more scopes than currently approved",
+      );
 
       await expectRejectedScopeUpgradeAttempt({
         attempt: sharedAuthUpgradeAttempt,
@@ -137,7 +149,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
         scopes: ["operator.admin"],
       });
       expect(reconnectAttempt.ok).toBe(false);
-      expect(reconnectAttempt.error?.message).toBe("pairing required");
+      expect(reconnectAttempt.error?.message).toBe(
+        "pairing required: device is asking for more scopes than currently approved",
+      );
 
       await expectRejectedScopeUpgradeAttempt({
         attempt: reconnectAttempt,
@@ -230,7 +244,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("pairing required");
+      expect(res.error?.message).toBe("pairing required: device is not approved yet");
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBeUndefined();
@@ -283,7 +297,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("pairing required");
+      expect(res.error?.message).toBe("pairing required: device is not approved yet");
       expect(replacementRequestId).toBeTruthy();
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,

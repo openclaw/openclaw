@@ -67,7 +67,11 @@ import {
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
+  buildPairingConnectCloseReason,
+  buildPairingConnectErrorDetails,
+  buildPairingConnectErrorMessage,
   ConnectErrorDetailCodes,
+  type ConnectPairingRequiredReason,
   resolveDeviceAuthConnectErrorDetailCode,
   resolveAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
@@ -860,7 +864,7 @@ export function attachGatewayWsMessageHandler(params: {
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (
-            reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade",
+            reason: ConnectPairingRequiredReason,
             existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
           ) => {
             const pairingStateAllowsRequestedAccess = (
@@ -1002,6 +1006,11 @@ export function attachGatewayWsMessageHandler(params: {
                 (approved?.status === "approved" || resolvedByConcurrentApproval)
               )
             ) {
+              const pairingErrorDetails = buildPairingConnectErrorDetails({
+                reason,
+                requestId: recoveryRequestId,
+              });
+              const pairingErrorMessage = buildPairingConnectErrorMessage(reason);
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
@@ -1012,15 +1021,19 @@ export function attachGatewayWsMessageHandler(params: {
                 type: "res",
                 id: frame.id,
                 ok: false,
-                error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
-                  details: {
-                    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-                    ...(recoveryRequestId ? { requestId: recoveryRequestId } : {}),
-                    reason,
-                  },
+                error: errorShape(ErrorCodes.NOT_PAIRED, pairingErrorMessage, {
+                  details: pairingErrorDetails,
                 }),
               });
-              close(1008, "pairing required");
+              close(
+                1008,
+                truncateCloseReason(
+                  buildPairingConnectCloseReason({
+                    reason,
+                    requestId: recoveryRequestId,
+                  }),
+                ),
+              );
               return false;
             }
             return true;
