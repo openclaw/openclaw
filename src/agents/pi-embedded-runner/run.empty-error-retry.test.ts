@@ -153,4 +153,38 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.isError).toBeFalsy();
   });
+
+  it("does not retry when the failed attempt recorded side effects", async () => {
+    // If the errored turn already sent a message / added a cron / ran a
+    // mutating tool whose result wasn't captured as replay-safe,
+    // resubmission would duplicate those actions. Mirror the gate used by
+    // the other retry resolvers (resolveEmptyResponseRetryInstruction et al.)
+    // and surface the incomplete-turn error instead of retrying blind.
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          stopReason: "error",
+          provider: "ollama",
+          model: "glm-5.1:cloud",
+          content: [],
+          usage: { input: 100, output: 0, totalTokens: 100 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        replayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-skip-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+  });
 });

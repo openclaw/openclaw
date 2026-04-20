@@ -1933,6 +1933,13 @@ export async function runEmbeddedPiAgent(
           // Content-empty guard: a reasoning-only error (content has thinking
           // blocks) is a distinct failure mode handled elsewhere; only retry
           // when the assistant truly produced nothing.
+          //
+          // Side-effect guard: if the failed attempt already recorded potential
+          // side effects (messaging tool sent, cron add, mutating tool
+          // call that wasn't round-tripped as replay-safe), resubmission can
+          // duplicate those actions. Mirror the gate the other retry resolvers
+          // use (resolveEmptyResponseRetryInstruction, reasoning-only, planning-
+          // only), which short-circuit on attempt.replayMetadata.hadPotentialSideEffects.
           const silentErrorContent = sessionLastAssistant?.content as Array<unknown> | undefined;
           if (
             incompleteTurnText &&
@@ -1942,6 +1949,7 @@ export async function runEmbeddedPiAgent(
             sessionLastAssistant?.stopReason === "error" &&
             ((sessionLastAssistant?.usage as { output?: number } | undefined)?.output ?? 0) === 0 &&
             (silentErrorContent?.length ?? 0) === 0 &&
+            !attempt.replayMetadata.hadPotentialSideEffects &&
             emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
           ) {
             emptyErrorRetries += 1;
