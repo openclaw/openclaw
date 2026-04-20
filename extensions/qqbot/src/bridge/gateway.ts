@@ -26,7 +26,9 @@ import { registerTextChunker } from "../engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "../types.js";
 import { setBridgeLogger } from "./logger.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
+import { getQQBotRuntime } from "./runtime.js";
 import { getQQBotRuntimeForEngine } from "./runtime.js";
+import { ensurePlatformAdapter } from "./bootstrap.js";
 
 // Register framework SDK version resolver for core/ slash commands.
 registerVersionResolver(resolveRuntimeServiceVersion);
@@ -44,7 +46,7 @@ registerPluginVersion(_pluginVersion);
 
 // Register runtime getter for /bot-approve config management.
 registerApproveRuntimeGetter(() => {
-  const rt = getQQBotRuntimeForEngine();
+  const rt = getQQBotRuntime();
   return {
     config: rt.config as {
       loadConfig: () => Record<string, unknown>;
@@ -85,6 +87,11 @@ export interface GatewayContext {
  * All other dependencies are imported directly by the core module.
  */
 export async function startGateway(ctx: GatewayContext): Promise<void> {
+  // Ensure the PlatformAdapter is registered before any engine code runs.
+  // When the bundler splits code into separate chunks, bootstrap.ts's
+  // side-effect registration may not have executed yet at this point.
+  ensurePlatformAdapter();
+
   const runtime = getQQBotRuntimeForEngine();
 
   // Create per-account logger with auto [qqbot:{accountId}] prefix.
