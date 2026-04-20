@@ -265,14 +265,22 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   mode: TelegramDispatcherMode;
   effectivePolicy: PinnedDispatcherPolicy;
 } {
+  // Telegram polling uses long-lived connections. Undici 8 enables HTTP/2 ALPN
+  // by default which causes stalls on Windows (IPv6 + H2 multiplexing issues).
+  // Force HTTP/1.1 for all Telegram dispatchers to match the core fetch-guard
+  // approach. See: https://github.com/openclaw/openclaw/issues/66885
   if (policy.mode === "explicit-proxy") {
     const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
     const proxyOptions = requestTlsOptions
       ? ({
           uri: policy.proxyUrl,
+          allowH2: false,
           requestTls: requestTlsOptions,
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
-      : policy.proxyUrl;
+      : ({
+          uri: typeof policy.proxyUrl === "string" ? policy.proxyUrl : policy.proxyUrl!,
+          allowH2: false,
+        } satisfies ConstructorParameters<typeof ProxyAgent>[0]);
     try {
       return {
         dispatcher: new ProxyAgent(proxyOptions),
@@ -291,10 +299,11 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
     const proxyOptions =
       connectOptions || proxyTlsOptions
         ? ({
+            allowH2: false,
             ...(connectOptions ? { connect: connectOptions } : {}),
             ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
           } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0])
-        : undefined;
+        : ({ allowH2: false } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0]);
     try {
       return {
         dispatcher: new EnvHttpProxyAgent(proxyOptions),
@@ -312,8 +321,8 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       return {
         dispatcher: new Agent(
           directPolicy.connect
-            ? ({ connect: directPolicy.connect } satisfies ConstructorParameters<typeof Agent>[0])
-            : undefined,
+            ? ({ allowH2: false, connect: directPolicy.connect } satisfies ConstructorParameters<typeof Agent>[0])
+            : ({ allowH2: false } satisfies ConstructorParameters<typeof Agent>[0]),
         ),
         mode: "direct",
         effectivePolicy: directPolicy,
@@ -326,9 +335,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
     dispatcher: new Agent(
       connectOptions
         ? ({
+            allowH2: false,
             connect: connectOptions,
           } satisfies ConstructorParameters<typeof Agent>[0])
-        : undefined,
+        : ({ allowH2: false } satisfies ConstructorParameters<typeof Agent>[0]),
     ),
     mode: "direct",
     effectivePolicy: policy,
