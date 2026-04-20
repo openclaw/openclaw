@@ -1,7 +1,11 @@
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
@@ -17,6 +21,7 @@ type SessionCapabilityEntry = {
   spawnDepth?: unknown;
   subagentRole?: unknown;
   subagentControlScope?: unknown;
+  spawnedBy?: unknown;
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -107,6 +112,71 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
   };
 }
 
+function isStoredSubagentEnvelopeSession(
+  params: {
+    sessionKey: string;
+    cfg?: OpenClawConfig;
+    store?: Record<string, SessionCapabilityEntry>;
+  },
+  visited = new Set<string>(),
+): boolean {
+  const normalizedSessionKey = normalizeSubagentSessionKey(params.sessionKey);
+  if (!normalizedSessionKey || visited.has(normalizedSessionKey)) {
+    return false;
+  }
+  visited.add(normalizedSessionKey);
+
+  if (isSubagentSessionKey(normalizedSessionKey)) {
+    return true;
+  }
+  if (!isAcpSessionKey(normalizedSessionKey)) {
+    return false;
+  }
+
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: params.cfg,
+    store: params.store,
+  });
+  if (
+    normalizeSubagentRole(entry?.subagentRole) ||
+    normalizeSubagentControlScope(entry?.subagentControlScope)
+  ) {
+    return true;
+  }
+
+  const spawnedBy = normalizeSubagentSessionKey(entry?.spawnedBy);
+  if (!spawnedBy) {
+    return false;
+  }
+  return isStoredSubagentEnvelopeSession(
+    {
+      sessionKey: spawnedBy,
+      cfg: params.cfg,
+      store: params.store,
+    },
+    visited,
+  );
+}
+
+export function isSubagentEnvelopeSession(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: Record<string, SessionCapabilityEntry>;
+  },
+): boolean {
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  if (!normalizedSessionKey) {
+    return false;
+  }
+  return isStoredSubagentEnvelopeSession({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store: opts?.store,
+  });
+}
+
 export function resolveStoredSubagentCapabilities(
   sessionKey: string | undefined | null,
   opts?: {
@@ -117,18 +187,20 @@ export function resolveStoredSubagentCapabilities(
   const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
   const maxSpawnDepth =
     opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const entry = normalizedSessionKey
+    ? resolveSessionCapabilityEntry({
+        sessionKey: normalizedSessionKey,
+        cfg: opts?.cfg,
+        store: opts?.store,
+      })
+    : undefined;
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
     store: opts?.store,
   });
-  if (!normalizedSessionKey || !isSubagentSessionKey(normalizedSessionKey)) {
+  if (!normalizedSessionKey || !isSubagentEnvelopeSession(normalizedSessionKey, opts)) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: opts?.cfg,
-    store: opts?.store,
-  });
   const storedRole = normalizeSubagentRole(entry?.subagentRole);
   const storedControlScope = normalizeSubagentControlScope(entry?.subagentControlScope);
   const fallback = resolveSubagentCapabilities({ depth, maxSpawnDepth });

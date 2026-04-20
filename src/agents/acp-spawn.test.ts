@@ -61,6 +61,7 @@ const hoisted = vi.hoisted(() => {
   });
   const cleanupFailedAcpSpawnMock = vi.fn();
   const createRunningTaskRunMock = vi.fn();
+  const countActiveRunsForSessionMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -84,6 +85,7 @@ const hoisted = vi.hoisted(() => {
     normalizeChannelIdMock,
     cleanupFailedAcpSpawnMock,
     createRunningTaskRunMock,
+    countActiveRunsForSessionMock,
     state,
   };
 });
@@ -110,6 +112,11 @@ vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
+vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: hoisted.loadSessionStoreMock,
+  resolveStorePath: hoisted.resolveStorePathMock,
+}));
+
 vi.mock("../config/sessions/transcript.js", () => ({
   resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
 }));
@@ -129,6 +136,10 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 vi.mock("./acp-spawn-parent-stream.js", () => ({
   resolveAcpSpawnStreamLogPath: hoisted.resolveAcpSpawnStreamLogPathMock,
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
+}));
+
+vi.mock("./subagent-registry.js", () => ({
+  countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
 }));
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
@@ -490,6 +501,7 @@ describe("spawnAcpDirect", () => {
     hoisted.getLoadedChannelPluginMock.mockReset().mockReturnValue(undefined);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.createRunningTaskRunMock.mockReset().mockReturnValue(undefined);
+    hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -685,6 +697,125 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("inherits subagent envelope fields onto ACP children", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    });
+
+    const accepted = expectAcceptedSpawn(result);
+    const patchCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      key: accepted.childSessionKey,
+      spawnedBy: "agent:main:subagent:parent",
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    });
+  });
+
+  it("rejects ACP spawns that exceed subagent max depth", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+    hoisted.loadSessionStoreMock.mockReturnValueOnce({
+      "agent:main:subagent:flat-leaf": {
+        sessionId: "subagent-flat-leaf",
+        spawnDepth: 2,
+      },
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:flat-leaf",
+    });
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("current depth: 2, max: 2");
+  });
+
+  it("rejects ACP spawns that exceed subagent child caps", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          subagents: {
+            maxChildrenPerAgent: 1,
+          },
+        },
+      },
+    });
+    hoisted.countActiveRunsForSessionMock.mockReturnValueOnce(1);
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    });
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("max active children");
+  });
+
+  it("rejects ACP spawns to agents outside the subagent allowlist", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "writer"],
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+          {
+            id: "writer",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "writer",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("agentId is not allowed");
   });
 
   it("spawns Matrix thread-bound ACP sessions from top-level room targets", async () => {

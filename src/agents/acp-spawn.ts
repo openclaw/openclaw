@@ -33,6 +33,7 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
@@ -50,7 +51,6 @@ import {
 } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -75,6 +75,9 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
+import { isSubagentEnvelopeSession, resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { countActiveRunsForSession } from "./subagent-registry.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -117,6 +120,7 @@ export const ACP_SPAWN_ERROR_CODES = [
   "acp_disabled",
   "requester_session_required",
   "runtime_policy",
+  "subagent_policy",
   "thread_required",
   "target_agent_required",
   "agent_forbidden",
@@ -214,6 +218,15 @@ type AcpSpawnRequesterState = {
 type AcpSpawnStreamPlan = {
   implicitStreamToParent: boolean;
   effectiveStreamToParent: boolean;
+};
+
+type AcpSubagentEnvelopeState = {
+  childSessionPatch?: {
+    spawnDepth: number;
+    subagentRole: "orchestrator" | "leaf" | null;
+    subagentControlScope: "children" | "none";
+  };
+  error?: string;
 };
 
 type AcpSpawnBootstrapDeliveryPlan = {
@@ -662,7 +675,8 @@ function resolveAcpSpawnRequesterState(params: {
   const bindingService = getSessionBindingService();
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
-    Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
+    Boolean(requesterParsedSession) &&
+    isSubagentEnvelopeSession(params.parentSessionKey, { cfg: params.cfg });
   const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
       ? bindingService
@@ -703,6 +717,84 @@ function resolveAcpSpawnRequesterState(params: {
       requesterGroupSpace: params.ctx.agentGroupSpace,
       requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
+  };
+}
+
+function resolveAcpSubagentEnvelopeState(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey?: string;
+  targetAgentId: string;
+  requestedAgentId?: string;
+}): AcpSubagentEnvelopeState {
+  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
+  if (!requesterSessionKey) {
+    return {};
+  }
+  if (!isSubagentEnvelopeSession(requesterSessionKey, { cfg: params.cfg })) {
+    return {};
+  }
+
+  const callerDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    cfg: params.cfg,
+  });
+  const maxSpawnDepth =
+    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  if (callerDepth >= maxSpawnDepth) {
+    return {
+      error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
+    };
+  }
+
+  const maxChildren = params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+  const activeChildren = countActiveRunsForSession(requesterSessionKey);
+  if (activeChildren >= maxChildren) {
+    return {
+      error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
+    };
+  }
+
+  const requesterAgentId = normalizeAgentId(parseAgentSessionKey(requesterSessionKey)?.agentId);
+  const requireAgentId =
+    resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.requireAgentId ??
+    params.cfg.agents?.defaults?.subagents?.requireAgentId ??
+    false;
+  if (requireAgentId && !params.requestedAgentId?.trim()) {
+    return {
+      error:
+        "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
+    };
+  }
+
+  if (params.targetAgentId !== requesterAgentId) {
+    const allowAgents =
+      resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
+      params.cfg.agents?.defaults?.subagents?.allowAgents ??
+      [];
+    const allowAny = allowAgents.some((value) => value.trim() === "*");
+    const normalizedTargetId = normalizeOptionalLowercaseString(params.targetAgentId) ?? "";
+    const allowSet = new Set(
+      allowAgents
+        .filter((value) => value.trim() && value.trim() !== "*")
+        .map((value) => normalizeOptionalLowercaseString(normalizeAgentId(value)) ?? ""),
+    );
+    if (!allowAny && !allowSet.has(normalizedTargetId)) {
+      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+      return {
+        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+      };
+    }
+  }
+
+  const childCapabilities = resolveSubagentCapabilities({
+    depth: callerDepth + 1,
+    maxSpawnDepth,
+  });
+  return {
+    childSessionPatch: {
+      spawnDepth: childCapabilities.depth,
+      subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
+      subagentControlScope: childCapabilities.controlScope,
+    },
   };
 }
 
@@ -1012,6 +1104,19 @@ export async function spawnAcpDirect(
     targetAgentId,
     ctx,
   });
+  const subagentEnvelopeState = resolveAcpSubagentEnvelopeState({
+    cfg,
+    requesterSessionKey: requesterInternalKey,
+    targetAgentId,
+    requestedAgentId: params.agentId,
+  });
+  if (subagentEnvelopeState.error) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "subagent_policy",
+      error: subagentEnvelopeState.error,
+    });
+  }
   const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
     spawnMode,
     requestThreadBinding,
@@ -1070,6 +1175,7 @@ export async function spawnAcpDirect(
       params: {
         key: sessionKey,
         spawnedBy: requesterInternalKey,
+        ...subagentEnvelopeState.childSessionPatch,
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,

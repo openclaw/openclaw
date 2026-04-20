@@ -238,6 +238,76 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("applies subagent tool policy to ACP children spawned under a subagent envelope", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-subagent-policy-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      const storePath = storeTemplate.replaceAll("{agentId}", "main");
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:main:acp:child": {
+              sessionId: "session-acp-child",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:subagent:parent",
+            },
+            "agent:main:acp:plain": {
+              sessionId: "session-acp-plain",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const restrictedTools = createOpenClawCodingTools({
+        sessionKey: "agent:main:acp:child",
+        config: {
+          session: {
+            store: storeTemplate,
+          },
+          agents: {
+            defaults: {
+              subagents: {
+                maxSpawnDepth: 2,
+              },
+            },
+          },
+        },
+      });
+      const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
+      expect(restrictedNames.has("sessions_spawn")).toBe(false);
+      expect(restrictedNames.has("sessions_list")).toBe(false);
+      expect(restrictedNames.has("sessions_history")).toBe(false);
+      expect(restrictedNames.has("subagents")).toBe(false);
+
+      const plainTools = createOpenClawCodingTools({
+        sessionKey: "agent:main:acp:plain",
+        config: {
+          session: {
+            store: storeTemplate,
+          },
+          agents: {
+            defaults: {
+              subagents: {
+                maxSpawnDepth: 2,
+              },
+            },
+          },
+        },
+      });
+      const plainNames = new Set(plainTools.map((tool) => tool.name));
+      expect(plainNames.has("sessions_spawn")).toBe(true);
+      expect(plainNames.has("subagents")).toBe(true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports allow-only sub-agent tool policy", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
