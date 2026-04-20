@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
 import { safeEqualSecret } from "./secret-equal.js";
+
+vi.mock("../plugins/web-search-credential-presence.js", () => ({
+  hasConfiguredWebSearchCredential: () => false,
+}));
 
 describe("collectAttackSurfaceSummaryFindings", () => {
   it.each([
