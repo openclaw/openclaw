@@ -519,13 +519,15 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
     - scopes: `bot`, `applications.commands`
 
     Typical baseline permissions:
-
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    
+    [General Permissions]
+      - View Channels
+    [Text Permissions]
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
     Avoid `Administrator` unless explicitly needed.
 
