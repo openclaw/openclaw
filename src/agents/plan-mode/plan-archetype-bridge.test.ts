@@ -108,14 +108,11 @@ describe("dispatchPlanArchetypeAttachment (PR-14)", () => {
     };
   }
 
-  it("Telegram session: persists markdown + logs deferred attachment notice (PR-14 re-wire pending)", async () => {
-    // Consolidation pass note (2026-04-19): the upstream rebase
-    // removed `src/plugin-sdk/telegram.ts`; PR-14's Telegram
-    // attachment delivery is deferred until the bridge re-wires to
-    // the new plugin-sdk location. The bridge still persists the
-    // markdown (audit artifact) and emits an info-log line marking
-    // the skip — these assertions verify the persisted-but-not-sent
-    // state until the re-wire follow-up lands.
+  it("Telegram session: persists markdown AND sends document via sendDocumentTelegram (C2 re-wire)", async () => {
+    // PR-14 C2 re-wire (2026-04-20): the bridge now calls through
+    // the public plugin-sdk facade. Mock verifies (1) exact file
+    // path handed in, (2) caption is HTML-escaped, (3) parseMode
+    // is "HTML", and (4) log reflects success.
     readSessionStoreReadOnlyMock.mockReturnValue({
       "agent:main:telegram:acct1:dm:peer1": {
         origin: { provider: "telegram", accountId: "acct1", threadId: 7 },
@@ -138,19 +135,54 @@ describe("dispatchPlanArchetypeAttachment (PR-14)", () => {
       persistBaseDir: tmpBase,
     });
 
-    // Markdown was persisted (audit artifact independent of channel
-    // delivery — covered for the rebase-deferred state too).
     const planDir = path.join(tmpBase, "main", "plans");
     const files = await fs.readdir(planDir);
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^plan-2026-04-18-refactor-websocket-reconnect\.md$/);
+    const absPath = path.join(planDir, files[0] ?? "");
 
-    // The bridge logs the deferred-skip notice on the Telegram path
-    // until PR-14 re-wires the SDK call. Sending was NOT attempted.
+    expect(sendDocumentTelegramMock).toHaveBeenCalledTimes(1);
+    const callArgs = sendDocumentTelegramMock.mock.calls[0];
+    expect(callArgs?.[0]).toBe("tg-chat-1"); // to
+    expect(callArgs?.[1]).toBe(absPath); // filePath
+    expect(callArgs?.[2]?.parseMode).toBe("HTML");
+    expect(callArgs?.[2]?.caption).toContain("Refactor websocket reconnect");
+    expect(callArgs?.[2]?.caption).toContain("/plan accept");
+
+    // Success log reflects delivery + returned chatId/messageId from
+    // the mock. Distinguishes from the old "skipped" path.
     expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("telegram attachment skipped (PR-14 awaiting re-wire"),
+      expect.stringContaining("plan-bridge: telegram attachment sent"),
     );
-    expect(sendDocumentTelegramMock).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("chatId=tg-chat-1"));
+  });
+
+  it("Telegram topic-scoped target (chatId:topic:threadId): passes through to sendDocumentTelegram (SDK parses threadId)", async () => {
+    // PR-14 C2 re-wire: `parseTelegramTarget` inside the SDK auto-
+    // extracts `message_thread_id` from the `to` string. The bridge
+    // passes `to` through unchanged; the SDK does the parsing.
+    readSessionStoreReadOnlyMock.mockReturnValue({
+      "agent:main:telegram:acct1:group:-100123:42": {
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123:topic:42",
+          accountId: "acct1",
+        },
+      },
+    });
+    const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    await dispatchPlanArchetypeAttachment({
+      sessionKey: "agent:main:telegram:acct1:group:-100123:42",
+      agentId: "main",
+      details: makeDetails(),
+      log,
+      nowMs: FIXED_DATE.getTime(),
+      persistBaseDir: tmpBase,
+    });
+    expect(sendDocumentTelegramMock).toHaveBeenCalledTimes(1);
+    // The `to` string is passed through unchanged — SDK parses the
+    // :topic:threadId suffix on the other side.
+    expect(sendDocumentTelegramMock.mock.calls[0]?.[0]).toBe("-100123:topic:42");
   });
 
   it("Web session: persists markdown but does NOT send to Telegram", async () => {
@@ -199,14 +231,11 @@ describe("dispatchPlanArchetypeAttachment (PR-14)", () => {
     expect(sendDocumentTelegramMock).not.toHaveBeenCalled();
   });
 
-  it.skip("Telegram send throws: caller does not throw, warn logged, markdown still persisted (PR-14 re-wire pending)", async () => {
-    // Consolidation pass note (2026-04-19): this test exercised the
-    // network-failure branch of `sendDocumentTelegram`, which is
-    // currently unreachable while the Telegram attachment delivery
-    // is deferred (see the test above). Re-enable once PR-14 wires
-    // the bridge into the new plugin-sdk location and the failure
-    // path becomes live again — then revert this test to its prior
-    // assertion that the bridge swallows the error and warn-logs.
+  it("Telegram send throws: caller does not throw, warn logged, markdown still persisted (C2 re-wire)", async () => {
+    // PR-14 C2 re-wire (2026-04-20): un-skipped. Verifies the
+    // fire-and-forget contract — network failure on the document
+    // send never surfaces to the agent runtime; it's logged-and-
+    // swallowed so the approval flow still completes.
     readSessionStoreReadOnlyMock.mockReturnValue({
       "agent:main:telegram:acct1:dm:peer1": {
         deliveryContext: { channel: "telegram", to: "tg-chat-1", accountId: "acct1" },
@@ -232,12 +261,10 @@ describe("dispatchPlanArchetypeAttachment (PR-14)", () => {
     expect(files).toHaveLength(1);
   });
 
-  it("Multi-cycle: second exit_plan_mode same day produces -2.md suffix", async () => {
-    // Consolidation pass note (2026-04-19): the assertion that two
-    // Telegram sends fired was dropped — Telegram attachment
-    // delivery is deferred until PR-14 re-wires to the new plugin-
-    // sdk location. The collision-suffix file persistence is the
-    // primary contract this test verifies and remains live.
+  it("Multi-cycle: second exit_plan_mode same day produces -2.md suffix and fires both sends", async () => {
+    // PR-14 C2 re-wire (2026-04-20): re-instated the two-send
+    // assertion since Telegram delivery is live again. Collision-
+    // suffix file persistence + per-cycle send are both contracted.
     readSessionStoreReadOnlyMock.mockReturnValue({
       "agent:main:telegram:acct1:dm:peer1": {
         deliveryContext: { channel: "telegram", to: "tg-chat-1", accountId: "acct1" },
@@ -267,10 +294,8 @@ describe("dispatchPlanArchetypeAttachment (PR-14)", () => {
     // because `-` (0x2D) precedes `.` (0x2E) in ASCII).
     expect(files).toContain("plan-2026-04-18-refactor-websocket-reconnect.md");
     expect(files).toContain("plan-2026-04-18-refactor-websocket-reconnect-2.md");
-    // The deferred-skip notice fires twice (once per cycle).
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("telegram attachment skipped (PR-14 awaiting re-wire"),
-    );
+    // Two cycles → two sends.
+    expect(sendDocumentTelegramMock).toHaveBeenCalledTimes(2);
   });
 
   it("Missing SessionEntry (read returns undefined): no send, no throw", async () => {

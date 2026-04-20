@@ -86,32 +86,6 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-// Consolidation-pass note: `parseTelegramThreadId` was the PR-14
-// helper for the now-deferred Telegram document-attachment delivery
-// (see plan-archetype-bridge.ts:200ish). The helper is kept here in
-// commented-out form so PR-14's re-wire follow-up can resurrect it
-// without rewriting the parsing logic from scratch:
-//
-// function parseTelegramThreadId(raw: unknown): number | undefined {
-//   if (raw === undefined || raw === null) return undefined;
-//   if (typeof raw === "number") {
-//     return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
-//   }
-//   if (typeof raw === "string") {
-//     const trimmed = raw.trim();
-//     if (trimmed.length === 0) return undefined;
-//     const direct = Number.parseInt(trimmed, 10);
-//     if (Number.isFinite(direct) && direct > 0 && String(direct) === trimmed) return direct;
-//     const colonIdx = trimmed.lastIndexOf(":");
-//     if (colonIdx >= 0 && colonIdx < trimmed.length - 1) {
-//       const suffix = trimmed.slice(colonIdx + 1);
-//       const parsed = Number.parseInt(suffix, 10);
-//       if (Number.isFinite(parsed) && parsed > 0 && String(parsed) === suffix) return parsed;
-//     }
-//   }
-//   return undefined;
-// }
-
 /**
  * Read-only session entry lookup. Mirrors the
  * `loadSessionStoreRuntime` + `updateSessionStoreEntry` pattern used
@@ -182,19 +156,29 @@ export async function dispatchPlanArchetypeAttachment(
       return;
     }
 
-    // 4. Telegram document upload — DEFERRED.
-    // Consolidation pass note: `src/plugin-sdk/telegram.ts` was
-    // removed in upstream's plugin-sdk restructure. The PR-14 PR
-    // (Telegram plan-mode visibility via markdown attachment) needs
-    // its delivery surface re-wired to the new SDK location before
-    // this branch can call into it. Until then, the markdown plan
-    // file is still persisted to disk (steps 1-3 above) but not
-    // pushed as a Telegram attachment. Tracked as a PR-14 follow-up.
+    // 4. Telegram document upload — PR-14 re-wire (C2 follow-up).
+    // `sendDocumentTelegram` is now re-exported from the public plugin
+    // SDK facade at `openclaw/plugin-sdk/telegram` (see
+    // `src/plugin-sdk/telegram.ts:51`). The facade lazy-loads the
+    // bundled Telegram runtime-api module so cold paths don't pay the
+    // Telegram-bundle startup cost — we follow the same dynamic-
+    // import pattern here so plan-bridge import doesn't drag Telegram
+    // bytes into agent startup.
+    //
+    // Thread-ID handling: `parseTelegramTarget` inside
+    // `sendDocumentTelegram` auto-extracts `message_thread_id` from
+    // the `to` string (formats: `chatId`, `chatId:threadId`,
+    // `chatId:topic:threadId`). The legacy commented-out
+    // `parseTelegramThreadId` helper above is superseded and can be
+    // removed in a future cleanup.
     const caption = buildPlanAttachmentCaption(input.details.title, input.details.summary);
-    void caption;
-    void absPath;
+    const { sendDocumentTelegram } = await import("../../plugin-sdk/telegram.js");
+    const sendResult = await sendDocumentTelegram(dctx.to, absPath, {
+      caption,
+      parseMode: "HTML",
+    });
     log?.info?.(
-      `plan-bridge: telegram attachment skipped (PR-14 awaiting re-wire to new plugin-sdk location); plan markdown persisted at ${absPath}`,
+      `plan-bridge: telegram attachment sent chatId=${sendResult.chatId} msgId=${sendResult.messageId}`,
     );
   } catch (err) {
     // R4 (C1 follow-up): recoverable storage errors are not bugs —
