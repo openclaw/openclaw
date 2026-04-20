@@ -179,12 +179,177 @@ export const SessionsPatchParamsSchema = Type.Object(
      * - `null` is treated as `"normal"` (consistent with sibling fields'
      *   null-semantics for clearing state).
      *
-     * Only the literal mode value is exposed on the wire; the full
-     * `PlanModeSessionState` object (approvalId, rejectionCount, etc.)
-     * is internal to the server and persisted on `SessionEntry.planMode`.
+     * Copilot review #68939 (2026-04-19): scope clarification — this
+     * `sessions.patch` INPUT field only accepts the literal mode
+     * toggle. The richer persisted plan-mode state (`approvalId`,
+     * `rejectionCount`, `lastPlanSteps`, `title`, etc.) is managed
+     * server-side on `SessionEntry.planMode` and is NOT writable
+     * through this patch field. (It IS surfaced READ-ONLY on
+     * `sessions.list`/`sessions.changed` payloads via
+     * `GatewaySessionRow.planMode` so the UI mode chip can render
+     * the live state — that wire-side exposure is intentional.)
      */
     planMode: Type.Optional(
       Type.Union([Type.Literal("plan"), Type.Literal("normal"), Type.Null()]),
+    ),
+    /**
+     * PR-8 follow-up: resolve a pending plan approval emitted by
+     * `exit_plan_mode`. The action transitions
+     * `SessionEntry.planMode.approval` via `resolvePlanApproval` from
+     * the plan-mode lib (#67538):
+     *
+     * - `"approve"` / `"edit"` → mode flips to `"normal"`, mutations unlock.
+     * - `"reject"` → mode stays `"plan"`, rejectionCount++, REQUIRED
+     *   `feedback` (1-8192 chars) is persisted for the agent's next-
+     *   turn injection. Copilot review #68939 (2026-04-19): the
+     *   discriminated union below tightened `feedback` to required
+     *   for the reject variant; this bullet was updated to match
+     *   so API consumers don't implement against the prior optional
+     *   contract.
+     *
+     * `approvalId` is the version token the runtime emitted with the
+     * approval event; the server uses it to ignore stale clicks (e.g.
+     * the user clicking Approve on a plan that was already rejected on
+     * another surface).
+     *
+     * Copilot review #68939 (2026-04-19): clarified per-variant
+     * approvalId requirement. For `approve`, `edit`, and `reject`,
+     * omitting `approvalId` still applies the action on a best-
+     * effort basis so surfaces that don't carry the version token
+     * (CLI prompts, legacy channels) remain usable. `action:
+     * "answer"` is the EXCEPTION: it requires `approvalId`
+     * (enforced at the discriminated-union schema layer below) and
+     * is rejected without it — the answer-guard in sessions-patch.ts
+     * also validates the incoming approvalId against
+     * `pendingQuestionApprovalId` server-side. Client implementers
+     * should always thread the approvalId for `answer` flows; the
+     * other variants degrade gracefully.
+     */
+    /**
+     * Copilot review #68939 (2026-04-19): refactored to a
+     * discriminated union keyed on `action`, so each variant
+     * encodes its required fields at the schema layer. Pre-fix,
+     * all per-action fields were Optional and the runtime had to
+     * manually validate (e.g. `action: "answer"` without `answer`,
+     * or `action: "auto"` without `autoEnabled`). The runtime
+     * checks remain as defense-in-depth but are now unreachable on
+     * the happy path because the schema rejects malformed payloads
+     * first.
+     *
+     * Per-variant requirements:
+     * - `approve` / `edit`: only `approvalId` (optional but
+     *   recommended for staleness protection).
+     * - `reject`: optional `feedback` (capped to 8 KiB to bound
+     *   the prompt-cache hash explosion vector — PR-11 H4).
+     * - `answer`: REQUIRES `answer` text and `approvalId` (Codex P1
+     *   review #68939 — the answer-guard validates the approvalId
+     *   against `pendingQuestionApprovalId` server-side; clients
+     *   that don't thread the version token would otherwise be
+     *   able to overwrite a fresh injection with a stale answer).
+     * - `auto`: REQUIRES `autoEnabled` boolean (a malformed patch
+     *   omitting the field used to coerce to `false` and silently
+     *   disable auto-approve — see PR-10 deep-dive review).
+     *
+     * `action: "edit"` semantic note: still equals "approve with no
+     * diff" — the agent executes the ORIGINAL plan. True edit-and-
+     * approve (with a modified step list) is deferred to a follow-
+     * up PR (PR-8 review fix Codex P1 #3098235203 — Decision C
+     * option (b) standing).
+     */
+    planApproval: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            action: Type.Literal("approve"),
+            approvalId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("edit"),
+            approvalId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("reject"),
+            // Copilot review #68939 (2026-04-19): made `feedback`
+            // REQUIRED for the reject variant (was Optional). The
+            // /plan revise <feedback> text-command path already
+            // requires feedback (commands-plan.ts validates
+            // non-empty at parse time), and the documented UX
+            // (`[Reject + Feedback]` button at types.ts:21-23)
+            // implies feedback is the whole point of rejection
+            // (otherwise the agent has no signal to revise
+            // toward). Schema-level requirement closes the
+            // loophole where a malformed client / future UI
+            // change could submit "reject with no guidance" and
+            // leave the agent stuck.
+            feedback: Type.String({ minLength: 1, maxLength: 8192 }),
+            approvalId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("answer"),
+            answer: Type.String({ minLength: 1, maxLength: 8192 }),
+            approvalId: NonEmptyString,
+            questionId: Type.Optional(NonEmptyString),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            action: Type.Literal("auto"),
+            autoEnabled: Type.Boolean(),
+          },
+          { additionalProperties: false },
+        ),
+      ]),
+    ),
+    /**
+     * PR-8 follow-up: the runtime calls `sessions.patch` with
+     * `lastPlanSteps` after each `update_plan` tool call so the Control
+     * UI can rebuild the live plan-view sidebar after a hard refresh
+     * (in-memory UI state is lost otherwise). Persisted to
+     * `SessionEntry.planMode.lastPlanSteps` on the server; read by the
+     * UI on session subscription mount.
+     *
+     * Additive protocol change: older clients simply omit the field;
+     * older servers silently drop it (no breakage either direction).
+     */
+    lastPlanSteps: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            step: NonEmptyString,
+            // Copilot review #68939 (2026-04-19): tightened from
+            // `NonEmptyString` to a closed enum matching the
+            // `PlanStepStatus` runtime type (defined in
+            // `src/agents/tools/plan-step-status.ts` and validated
+            // by `update_plan`/`exit_plan_mode` at parse time).
+            // Pre-fix, an arbitrary status string could be
+            // persisted into SessionEntry and rendered by the UI
+            // — risking protocol drift, broken close-on-complete
+            // detection (which checks `status === "completed"`),
+            // and inconsistent plan-card rendering.
+            status: Type.Union([
+              Type.Literal("pending"),
+              Type.Literal("in_progress"),
+              Type.Literal("completed"),
+              Type.Literal("cancelled"),
+            ]),
+            activeForm: Type.Optional(NonEmptyString),
+            // PR-9 Wave B1 — closure-gate fields (optional, backwards-compatible).
+            acceptanceCriteria: Type.Optional(Type.Array(NonEmptyString)),
+            verifiedCriteria: Type.Optional(Type.Array(NonEmptyString)),
+          },
+          { additionalProperties: false },
+        ),
+      ),
     ),
   },
   { additionalProperties: false },
