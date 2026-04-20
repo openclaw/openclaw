@@ -94,6 +94,16 @@ function parsePlanCommand(raw: string, channel: string): ParsedPlanCommand | nul
     case "restate":
       return { ok: true, sub: { kind: "restate" } };
     case "accept": {
+      // Codex review #68939: reject malformed `/plan accept <garbage>`
+      // so a typo like `/plan accept editss` doesn't silently land as
+      // a bare approval (allowEdits=false). Only `edits` / `edit` (or
+      // no argument at all) are valid.
+      if (second !== undefined && second !== "edits" && second !== "edit") {
+        return {
+          ok: false,
+          error: `Usage: /plan accept [edits] — unknown argument "${second}". Valid forms: /plan accept, /plan accept edits.`,
+        };
+      }
       const allowEdits = second === "edits" || second === "edit";
       return { ok: true, sub: { kind: "accept", allowEdits } };
     }

@@ -450,13 +450,27 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
   if (typeof input !== "string" || input.length === 0) {
     return [];
   }
-  const re = /^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+?)\s*$/gim;
+  // Match both single-path verbs (Update/Add/Delete) and Move's
+  // `*** Move File: <src> -> <dst>` form. For Move, both source and
+  // destination paths need to flow into the protected-path check so
+  // moving ~/.openclaw/config.toml → /tmp/x (or vice-versa) is gated.
+  const singlePathRe = /^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+?)\s*$/gim;
+  const moveRe = /^\*\*\*\s+Move\s+File:\s+(.+?)\s+->\s+(.+?)\s*$/gim;
   const found = new Set<string>();
   let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration pattern
-  while ((match = re.exec(input)) !== null) {
+  while ((match = singlePathRe.exec(input)) !== null) {
     if (match[1]) {
       found.add(match[1].trim());
+    }
+  }
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration pattern
+  while ((match = moveRe.exec(input)) !== null) {
+    if (match[1]) {
+      found.add(match[1].trim());
+    }
+    if (match[2]) {
+      found.add(match[2].trim());
     }
   }
   return [...found];

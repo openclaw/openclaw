@@ -108,7 +108,11 @@ function stripProviderPrefix(modelId: string | undefined): string | undefined {
   if (!modelId) {
     return undefined;
   }
-  const slashIdx = modelId.indexOf("/");
+  // Copilot review #68939: use lastIndexOf so multi-segment IDs like
+  // `openai/codex/gpt-5.4` collapse to the trailing model name
+  // (`gpt-5.4`) rather than the middle slice (`codex/gpt-5.4`) that
+  // wouldn't match the `gpt-5` family check.
+  const slashIdx = modelId.lastIndexOf("/");
   return slashIdx >= 0 ? modelId.slice(slashIdx + 1) : modelId;
 }
 
