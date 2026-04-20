@@ -1,5 +1,6 @@
 {
   "id": "memory-core",
+  "enabledByDefault": true,
   "kind": "memory",
   "commandAliases": [
     {
