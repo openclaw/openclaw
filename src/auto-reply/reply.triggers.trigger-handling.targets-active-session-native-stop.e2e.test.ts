@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
-import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
-import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import {
   expectInlineCommandHandledAndStripped,
   getAbortEmbeddedPiRunMock,
@@ -16,7 +13,10 @@ import {
   requireSessionStorePath,
   runGreetingPromptForBareNewOrReset,
   withTempHome,
-} from "./reply.triggers.trigger-handling.test-harness.js";
+} from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
+import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
+import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";

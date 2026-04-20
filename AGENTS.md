@@ -132,7 +132,9 @@
   - `pnpm tsgo:core:test`: core colocated tests.
   - `pnpm tsgo:extensions`: bundled extension production graph.
   - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
-  - `pnpm tsgo:all`: every TypeScript graph above; this is what `pnpm check` runs.
+  - `pnpm tsgo:core:all`: core production + core test project references (`tsconfig.core.projects.json`).
+  - `pnpm tsgo:extensions:all`: extension production + extension test project references (`tsconfig.extensions.projects.json`).
+  - `pnpm tsgo:all`: every TypeScript graph above through the project-reference root (`tsconfig.projects.json`); this is what `pnpm check` runs.
   - `pnpm tsgo:profile [core-test|extensions-test|--all]`: profile fresh graph cost into `.artifacts/tsgo-profile/`. Diagnostic-only profile slices (`core-test-agents`, `core-test-non-agents`) exist for investigating agent graph cost; do not treat them as normal user-facing checks.
   - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
 - Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
@@ -147,6 +149,7 @@
   - A landing gate is the broader bar before pushing `main`, usually `pnpm check`, `pnpm test`, and `pnpm build` when the touched surface can affect build output, packaging, lazy-loading/module boundaries, or published surfaces.
   - A CI gate is whatever the relevant workflow enforces for that lane (for example `check`, `check-additional`, `build-smoke`, or release validation).
 - Local dev gate: prefer `pnpm check` for the normal edit loop. It keeps the repo-architecture policy guards out of the default local loop.
+- Timed local gate: use `pnpm check:timed` to see per-stage cost. Add `:architecture` only when investigating the CI architecture gate locally.
 - CI architecture gate: `check-additional` enforces architecture and boundary policy guards that are intentionally kept out of the default local loop.
 - Formatting gate: the pre-commit hook runs targeted formatting on staged source files before `pnpm check`. If you want a repo-wide formatting-only preflight locally, run `pnpm format:check` explicitly.
 - If you need a fast commit loop, `FAST_COMMIT=1 git commit ...` skips the hook’s repo-wide `pnpm check`; targeted formatting/linting still runs, so use that only when you are deliberately covering the touched surface some other way.
@@ -190,7 +193,7 @@
 - New runtime control-flow code should not branch on `error: string` or `reason: string` when a closed code union would be reasonable.
 - Dynamic import guardrail: do not mix `await import("x")` and static `import ... from "x"` for the same module in production code paths. If you need lazy loading, create a dedicated `*.runtime.ts` boundary (that re-exports from `x`) and dynamically import that boundary from lazy callers only.
 - Dynamic import verification: after refactors that touch lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings before submitting.
-- Circular dependencies: keep both `pnpm check:import-cycles` and `pnpm check:madge-import-cycles` green; do not reintroduce runtime import cycles or madge-detected import loops.
+- Circular dependencies: `pnpm check` runs the fast runtime import-cycle guard. `pnpm check:architecture` (and CI `check-additional`) also runs the broader madge import-cycle guard; keep both green before landing architecture-sensitive changes.
 - Extension SDK self-import guardrail: inside an extension package, do not import that same extension via `openclaw/plugin-sdk/<extension>` from production files. Route internal imports through a local barrel such as `./api.ts` or `./runtime-api.ts`, and keep the `plugin-sdk/<extension>` path as the external contract only.
 - Extension package boundary guardrail: inside a bundled plugin package, do not use relative imports/exports that resolve outside that same package root. If shared code belongs in the plugin SDK, import `openclaw/plugin-sdk/<subpath>` instead of reaching into `src/plugin-sdk/**` or other repo paths via `../`.
 - Extension API surface rule: `openclaw/plugin-sdk/<subpath>` is the only public cross-package contract for extension-facing SDK code. If an extension needs a new seam, add a public subpath first; do not reach into `src/plugin-sdk/**` by relative path.

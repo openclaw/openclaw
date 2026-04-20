@@ -4,6 +4,7 @@ import {
   loadPluginManifestRegistry,
   resolveManifestContractPluginIds,
 } from "../manifest-registry.js";
+import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -16,8 +17,8 @@ import type {
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
-import { loadVitestProviderContractRegistry } from "./provider-vitest-registry.js";
 import { uniqueStrings } from "./shared.js";
 import {
   loadVitestImageGenerationProviderContractRegistry,
@@ -28,7 +29,6 @@ import {
   loadVitestSpeechProviderContractRegistry,
   loadVitestVideoGenerationProviderContractRegistry,
 } from "./speech-vitest-registry.js";
-import { loadVitestWebSearchProviderContractRegistry } from "./web-provider-vitest-registry.js";
 
 type BundledCapabilityRuntimeRegistry = ReturnType<typeof loadBundledCapabilityRuntimeRegistry>;
 type CapabilityContractEntry<T> = {
@@ -316,14 +316,12 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
     return cached;
   }
 
-  if (process.env.VITEST) {
-    const vitestEntries = loadVitestProviderContractRegistry().filter(
-      (entry) => entry.pluginId === pluginId,
-    );
-    if (vitestEntries.length > 0) {
-      cache.set(pluginId, vitestEntries);
-      return vitestEntries;
-    }
+  const publicArtifactEntries = resolveBundledExplicitProviderContractsFromPublicArtifacts({
+    onlyPluginIds: [pluginId],
+  });
+  if (publicArtifactEntries) {
+    cache.set(pluginId, publicArtifactEntries);
+    return publicArtifactEntries;
   }
 
   try {
@@ -356,8 +354,14 @@ function loadProviderContractRegistry(): ProviderContractEntry[] {
   if (!providerContractRegistryCache) {
     try {
       providerContractLoadError = undefined;
-      const vitestEntries = process.env.VITEST ? loadVitestProviderContractRegistry() : [];
-      const coveredPluginIds = new Set(vitestEntries.map((entry) => entry.pluginId));
+      const pluginIds = resolveBundledProviderContractPluginIds();
+      const publicArtifactEntries = pluginIds.flatMap(
+        (pluginId) =>
+          resolveBundledExplicitProviderContractsFromPublicArtifacts({
+            onlyPluginIds: [pluginId],
+          }) ?? [],
+      );
+      const coveredPluginIds = new Set(publicArtifactEntries.map((entry) => entry.pluginId));
       const remainingPluginIds = resolveBundledProviderContractPluginIds().filter(
         (pluginId) => !coveredPluginIds.has(pluginId),
       );
@@ -371,7 +375,7 @@ function loadProviderContractRegistry(): ProviderContractEntry[] {
               provider: entry.provider,
             }))
           : [];
-      providerContractRegistryCache = [...vitestEntries, ...runtimeEntries];
+      providerContractRegistryCache = [...publicArtifactEntries, ...runtimeEntries];
     } catch (error) {
       providerContractLoadError = error instanceof Error ? error : new Error(String(error));
       providerContractRegistryCache = [];
@@ -475,8 +479,19 @@ export function resolveWebFetchProviderContractEntriesForPluginId(
 
 function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry[] {
   if (!webSearchProviderContractRegistryCache) {
-    const vitestEntries = process.env.VITEST ? loadVitestWebSearchProviderContractRegistry() : [];
-    const coveredPluginIds = new Set(vitestEntries.map((entry) => entry.pluginId));
+    const pluginIds = resolveBundledManifestContractPluginIds("webSearchProviders");
+    const publicArtifactEntries = pluginIds.flatMap((pluginId) =>
+      (
+        resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+          onlyPluginIds: [pluginId],
+        }) ?? []
+      ).map((provider) => ({
+        pluginId: provider.pluginId,
+        provider,
+        credentialValue: resolveWebSearchCredentialValue(provider),
+      })),
+    );
+    const coveredPluginIds = new Set(publicArtifactEntries.map((entry) => entry.pluginId));
     const remainingPluginIds = resolveBundledManifestContractPluginIds("webSearchProviders").filter(
       (pluginId) => !coveredPluginIds.has(pluginId),
     );
@@ -491,7 +506,7 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
             credentialValue: resolveWebSearchCredentialValue(entry.provider),
           }))
         : [];
-    webSearchProviderContractRegistryCache = [...vitestEntries, ...runtimeEntries];
+    webSearchProviderContractRegistryCache = [...publicArtifactEntries, ...runtimeEntries];
   }
   return webSearchProviderContractRegistryCache;
 }
@@ -512,14 +527,16 @@ export function resolveWebSearchProviderContractEntriesForPluginId(
     return cached;
   }
 
-  if (process.env.VITEST) {
-    const vitestEntries = loadVitestWebSearchProviderContractRegistry().filter(
-      (entry) => entry.pluginId === pluginId,
-    );
-    if (vitestEntries.length > 0) {
-      cache.set(pluginId, vitestEntries);
-      return vitestEntries;
-    }
+  const publicArtifactEntries = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+    onlyPluginIds: [pluginId],
+  })?.map((provider) => ({
+    pluginId: provider.pluginId,
+    provider,
+    credentialValue: resolveWebSearchCredentialValue(provider),
+  }));
+  if (publicArtifactEntries) {
+    cache.set(pluginId, publicArtifactEntries);
+    return publicArtifactEntries;
   }
 
   const entries = loadScopedCapabilityRuntimeRegistryEntries({
