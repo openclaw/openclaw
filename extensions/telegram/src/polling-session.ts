@@ -1,4 +1,6 @@
 import { type RunOptions, run } from "@grammyjs/runner";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
   formatDurationPrecise,
@@ -57,6 +59,7 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 export class TelegramPollingSession {
@@ -92,24 +95,41 @@ export class TelegramPollingSession {
   }
 
   async runUntilAbort(): Promise<void> {
-    while (!this.opts.abortSignal?.aborted) {
-      const bot = await this.#createPollingBot();
-      if (!bot) {
-        continue;
-      }
+    this.opts.setStatus?.({
+      mode: "polling",
+      connected: false,
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
+    try {
+      while (!this.opts.abortSignal?.aborted) {
+        const bot = await this.#createPollingBot();
+        if (!bot) {
+          continue;
+        }
 
-      const cleanupState = await this.#ensureWebhookCleanup(bot);
-      if (cleanupState === "retry") {
-        continue;
-      }
-      if (cleanupState === "exit") {
-        return;
-      }
+        const cleanupState = await this.#ensureWebhookCleanup(bot);
+        if (cleanupState === "retry") {
+          continue;
+        }
+        if (cleanupState === "exit") {
+          return;
+        }
 
-      const state = await this.#runPollingCycle(bot);
-      if (state === "exit") {
-        return;
+        const state = await this.#runPollingCycle(bot);
+        if (state === "exit") {
+          return;
+        }
       }
+    } finally {
+      // Release the transport's dispatchers on session shutdown. Without
+      // this, the undici keep-alive sockets survive beyond the session and
+      // leak to api.telegram.org; see openclaw#68128.
+      await this.#transportState.dispose();
+      this.opts.setStatus?.({
+        mode: "polling",
+        connected: false,
+      });
     }
   }
 
@@ -265,6 +285,12 @@ export class TelegramPollingSession {
         lastGetUpdatesFinishedAt = finishedAt;
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
+        lastApiActivityAt = finishedAt;
+        this.opts.setStatus?.({
+          ...createConnectedChannelStatusPatch(finishedAt),
+          mode: "polling",
+          lastError: null,
+        });
         return result;
       } catch (err) {
         const finishedAt = Date.now();
@@ -272,6 +298,7 @@ export class TelegramPollingSession {
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = "error";
         lastGetUpdatesError = formatErrorMessage(err);
+        lastApiActivityAt = finishedAt;
         throw err;
       } finally {
         inFlightGetUpdates = Math.max(0, inFlightGetUpdates - 1);

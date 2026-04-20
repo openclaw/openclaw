@@ -1,3 +1,4 @@
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
@@ -97,7 +98,11 @@ function expectTelegramBotTransportSequence(firstTransport: unknown, secondTrans
 }
 
 function makeTelegramTransport() {
-  return { fetch: globalThis.fetch, sourceFetch: globalThis.fetch };
+  return {
+    fetch: globalThis.fetch,
+    sourceFetch: globalThis.fetch,
+    close: vi.fn(async () => undefined),
+  };
 }
 
 function mockRestartAfterPollingError(error: unknown, abort: AbortController) {
@@ -136,6 +141,7 @@ function createPollingSession(params: {
   log?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
   return new TelegramPollingSession({
     token: "tok",
@@ -149,6 +155,7 @@ function createPollingSession(params: {
     persistUpdateId: async () => undefined,
     log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
+    setStatus: params.setStatus,
     ...(params.createTelegramTransport
       ? { createTelegramTransport: params.createTelegramTransport }
       : {}),
@@ -186,6 +193,19 @@ function mockLongRunningPollingCycle(runnerStop: AsyncVoidFn) {
     isRunning: () => true,
   });
   return () => firstTaskResolve?.();
+}
+
+async function waitForApiMiddleware(
+  getApiMiddleware: () => TelegramApiMiddleware | undefined,
+): Promise<TelegramApiMiddleware> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const apiMiddleware = getApiMiddleware();
+    if (apiMiddleware) {
+      return apiMiddleware;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("Telegram API middleware was not installed");
 }
 
 describe("TelegramPollingSession", () => {
@@ -366,8 +386,16 @@ describe("TelegramPollingSession", () => {
 
     const watchdogHarness = installPollingStallWatchdogHarness();
 
-    const transport1 = { fetch: globalThis.fetch, sourceFetch: globalThis.fetch };
-    const transport2 = { fetch: globalThis.fetch, sourceFetch: globalThis.fetch };
+    const transport1 = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
+    };
+    const transport2 = {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
+    };
     const createTelegramTransport = vi.fn(() => transport2);
 
     try {
@@ -418,6 +446,171 @@ describe("TelegramPollingSession", () => {
 
     expectTelegramBotTransportSequence(transport1, transport2);
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not trigger stall restart shortly after a getUpdates error", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 1, 30_000], 119_999);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+
+      const apiMiddleware = getApiMiddleware();
+      if (apiMiddleware) {
+        const failedGetUpdates = vi.fn(async () => {
+          throw new Error("Network request for 'getUpdates' failed!");
+        });
+        await expect(apiMiddleware(failedGetUpdates, "getUpdates", { offset: 1 })).rejects.toThrow(
+          "Network request for 'getUpdates' failed!",
+        );
+      }
+
+      watchdog?.();
+
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
+  it("publishes polling liveness after getUpdates succeeds", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const setStatus = vi.fn();
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    const runPromise = session.runUntilAbort();
+
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+    const fakeGetUpdates = vi.fn(async () => []);
+    await apiMiddleware(fakeGetUpdates, "getUpdates", { offset: 1 });
+
+    expect(setStatus).toHaveBeenCalledWith({
+      mode: "polling",
+      connected: false,
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
+    const connectedPatch = setStatus.mock.calls.find(
+      ([patch]) => (patch as Record<string, unknown>).connected === true,
+    )?.[0] as Record<string, unknown> | undefined;
+    expect(connectedPatch).toMatchObject({
+      connected: true,
+      mode: "polling",
+      lastConnectedAt: expect.any(Number),
+      lastEventAt: expect.any(Number),
+      lastError: null,
+    });
+    expect(connectedPatch?.lastConnectedAt).toBe(connectedPatch?.lastEventAt);
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+
+    expect(setStatus).toHaveBeenLastCalledWith({
+      mode: "polling",
+      connected: false,
+    });
+  });
+
+  it("keeps polling marked connected across recoverable restart cycles", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable polling error");
+    const setStatus = vi.fn();
+    let apiMiddleware: TelegramApiMiddleware | undefined;
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: vi.fn((fn: TelegramApiMiddleware) => {
+            apiMiddleware = fn;
+          }),
+        },
+      },
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let cycle = 0;
+    runMock.mockImplementation(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          task: async () => {
+            const middleware = apiMiddleware;
+            if (!middleware) {
+              throw new Error("Telegram API middleware was not installed");
+            }
+            await middleware(
+              vi.fn(async () => []),
+              "getUpdates",
+              { offset: 1 },
+            );
+            throw recoverableError;
+          },
+          stop: vi.fn(async () => undefined),
+          isRunning: () => false,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      };
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    await session.runUntilAbort();
+
+    expect(runMock).toHaveBeenCalledTimes(2);
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ connected: true, mode: "polling" }),
+    );
+    const disconnectedPatches = setStatus.mock.calls.filter(
+      ([patch]) => (patch as Record<string, unknown>).connected === false,
+    );
+    expect(disconnectedPatches).toHaveLength(2);
+    expect(disconnectedPatches[0]?.[0]).toMatchObject({
+      mode: "polling",
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
+    expect(disconnectedPatches[1]?.[0]).toEqual({
+      mode: "polling",
+      connected: false,
+    });
   });
 
   it("does not trigger stall restart when non-getUpdates API calls are active", async () => {
@@ -667,5 +860,52 @@ describe("TelegramPollingSession", () => {
 
     expectTelegramBotTransportSequence(transport1, transport1);
     expect(createTelegramTransport).not.toHaveBeenCalled();
+  });
+
+  it("closes the transport once when runUntilAbort exits normally", async () => {
+    const abort = new AbortController();
+    const transport = makeTelegramTransport();
+    createTelegramBotMock.mockReturnValueOnce(makeBot());
+    runMock.mockReturnValueOnce({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      telegramTransport: transport,
+    });
+
+    await session.runUntilAbort();
+
+    expect(transport.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the stale transport when a rebuild replaces it", async () => {
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable polling error");
+    const transport1 = makeTelegramTransport();
+    const transport2 = makeTelegramTransport();
+    const createTelegramTransport = vi
+      .fn<() => ReturnType<typeof makeTelegramTransport>>()
+      .mockReturnValueOnce(transport2);
+    createTelegramBotMock.mockReturnValueOnce(makeBot()).mockReturnValueOnce(makeBot());
+    mockRestartAfterPollingError(recoverableError, abort);
+
+    const session = createPollingSessionWithTransportRestart({
+      abortSignal: abort.signal,
+      telegramTransport: transport1,
+      createTelegramTransport,
+    });
+
+    await session.runUntilAbort();
+
+    // Dirty-rebuild closes transport1 (fire-and-forget via #closeTransportAsync).
+    // dispose() closes transport2 since it becomes the held transport after the rebuild.
+    expect(transport1.close).toHaveBeenCalled();
+    expect(transport2.close).toHaveBeenCalled();
   });
 });
