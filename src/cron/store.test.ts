@@ -1,12 +1,31 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCronStoreHarness } from "./service.test-harness.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
+let fixtureRoot = "";
+let caseId = 0;
+
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
+});
+
+afterAll(async () => {
+  if (fixtureRoot) {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+async function makeStorePath() {
+  const dir = path.join(fixtureRoot, `case-${caseId++}`);
+  await fs.mkdir(dir, { recursive: true });
+  return {
+    storePath: path.join(dir, "cron", "jobs.json"),
+  };
+}
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
