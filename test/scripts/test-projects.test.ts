@@ -4,6 +4,7 @@ import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
+  listFullExtensionVitestProjectConfigs,
   shouldAcquireLocalHeavyCheckLock,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
@@ -28,12 +29,89 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toBeNull();
   });
 
-  it("ignores changed files that cannot map to test lanes", () => {
+  it("keeps the broad changed run for shared test helpers", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/helpers/channels/plugin.ts",
+      ]),
+    ).toBeNull();
+  });
+
+  it("keeps the broad changed run for unknown root surfaces", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "unknown/file.txt",
+      ]),
+    ).toBeNull();
+  });
+
+  it("skips changed docs files that cannot map to test lanes", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "docs/help/testing.md",
       ]),
-    ).toBeNull();
+    ).toEqual([]);
+  });
+
+  it("skips root agent guidance changes instead of broad-running tests", () => {
+    expect(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => ["AGENTS.md"]),
+    ).toEqual([]);
+  });
+
+  it("skips app-only changes because app tests are separate from Vitest lanes", () => {
+    expect(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+        "apps/macos/OpenClaw/AppDelegate.swift",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("adds extension tests for public plugin SDK changes", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "src/plugin-sdk/provider-entry.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
+        watchMode: false,
+      },
+      ...listFullExtensionVitestProjectConfigs().map((config) => ({
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
+    ]);
+  });
+
+  it("routes LM Studio changes to the provider extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/lmstudio/src/runtime.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-providers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/lmstudio/src/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes the top-level extensions target to every extension shard", () => {
+    expect(buildVitestRunPlans(["extensions"], process.cwd())).toEqual(
+      listFullExtensionVitestProjectConfigs().map((config) => ({
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
+    );
   });
 
   it("narrows default-lane changed source files to include globs", () => {
@@ -115,7 +193,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes changed plugin-sdk source allowlist files to sibling light tests", () => {
+  it("keeps changed plugin-sdk allowlist files on sibling light tests plus extension tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/provider-entry.ts",
     ]);
@@ -127,6 +205,12 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
         watchMode: false,
       },
+      ...listFullExtensionVitestProjectConfigs().map((config) => ({
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
     ]);
   });
 
@@ -149,7 +233,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps non-allowlisted plugin-sdk source files on the heavy lane", () => {
+  it("keeps non-allowlisted plugin-sdk source files on the heavy lane plus extension tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/facade-runtime.ts",
     ]);
@@ -161,6 +245,12 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: ["src/plugin-sdk/**/*.test.ts"],
         watchMode: false,
       },
+      ...listFullExtensionVitestProjectConfigs().map((config) => ({
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
     ]);
   });
 
@@ -316,16 +406,21 @@ describe("scripts/test-projects full-suite sharding", () => {
         "test/vitest/vitest.full-auto-reply.config.ts",
         "test/vitest/vitest.extension-acpx.config.ts",
         "test/vitest/vitest.extension-bluebubbles.config.ts",
-        "test/vitest/vitest.extension-channels.config.ts",
         "test/vitest/vitest.extension-diffs.config.ts",
+        "test/vitest/vitest.extension-discord.config.ts",
         "test/vitest/vitest.extension-feishu.config.ts",
+        "test/vitest/vitest.extension-imessage.config.ts",
         "test/vitest/vitest.extension-irc.config.ts",
+        "test/vitest/vitest.extension-line.config.ts",
         "test/vitest/vitest.extension-mattermost.config.ts",
         "test/vitest/vitest.extension-matrix.config.ts",
         "test/vitest/vitest.extension-memory.config.ts",
         "test/vitest/vitest.extension-messaging.config.ts",
         "test/vitest/vitest.extension-msteams.config.ts",
+        "test/vitest/vitest.extension-provider-openai.config.ts",
         "test/vitest/vitest.extension-providers.config.ts",
+        "test/vitest/vitest.extension-signal.config.ts",
+        "test/vitest/vitest.extension-slack.config.ts",
         "test/vitest/vitest.extension-telegram.config.ts",
         "test/vitest/vitest.extension-voice-call.config.ts",
         "test/vitest/vitest.extension-whatsapp.config.ts",
@@ -499,16 +594,21 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
       "test/vitest/vitest.extension-bluebubbles.config.ts",
-      "test/vitest/vitest.extension-channels.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
+      "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",
+      "test/vitest/vitest.extension-imessage.config.ts",
       "test/vitest/vitest.extension-irc.config.ts",
+      "test/vitest/vitest.extension-line.config.ts",
       "test/vitest/vitest.extension-mattermost.config.ts",
       "test/vitest/vitest.extension-matrix.config.ts",
       "test/vitest/vitest.extension-memory.config.ts",
       "test/vitest/vitest.extension-messaging.config.ts",
       "test/vitest/vitest.extension-msteams.config.ts",
+      "test/vitest/vitest.extension-provider-openai.config.ts",
       "test/vitest/vitest.extension-providers.config.ts",
+      "test/vitest/vitest.extension-signal.config.ts",
+      "test/vitest/vitest.extension-slack.config.ts",
       "test/vitest/vitest.extension-telegram.config.ts",
       "test/vitest/vitest.extension-voice-call.config.ts",
       "test/vitest/vitest.extension-whatsapp.config.ts",
