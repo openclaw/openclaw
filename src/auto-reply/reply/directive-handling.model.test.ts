@@ -24,6 +24,18 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  ensureAuthProfileStore: () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  }),
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    authProfilesStoreMock.profiles[profileId],
+  hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+  saveAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn(),
+}));
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
