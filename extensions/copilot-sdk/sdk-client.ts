@@ -24,6 +24,8 @@ export type RunPromptResult = {
 
 export type SdkClientOptions = {
   cliPath?: string;
+  /** Override the start() timeout (ms). Default: 15 000. */
+  startTimeoutMs?: number;
   /** Hook for tests to inject a fake SDK factory. */
   sdkFactory?: () => Promise<SdkModule>;
 };
@@ -94,11 +96,36 @@ export const denyAllPermissionHandler = (): PermissionResult => ({
   rules: [],
 });
 
+/** How long to wait for the SDK client to start (spawn CLI + JSON-RPC handshake). */
+const START_TIMEOUT_MS = 15_000;
+
+/** How long to wait for a listModels call to return. */
+const LIST_MODELS_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 let cachedClient: SdkClient | undefined;
 let cachedOptionsFingerprint = "";
 
 function fingerprint(options: SdkClientOptions): string {
-  return JSON.stringify({ cliPath: options.cliPath ?? null });
+  return JSON.stringify({
+    cliPath: options.cliPath ?? null,
+    startTimeoutMs: options.startTimeoutMs ?? null,
+  });
 }
 
 /**
@@ -128,11 +155,19 @@ export async function getSdkClient(options: SdkClientOptions = {}): Promise<SdkC
 
   // The SDK requires an explicit start() call to spawn the CLI subprocess and
   // establish the JSON-RPC connection before any other method can be used.
-  await instance.start();
+  await withTimeout(
+    instance.start(),
+    options.startTimeoutMs ?? START_TIMEOUT_MS,
+    "CopilotClient.start()",
+  );
 
   const wrapper: SdkClient = {
     async listModels() {
-      const list = await instance.listModels();
+      const list = await withTimeout(
+        instance.listModels(),
+        LIST_MODELS_TIMEOUT_MS,
+        "CopilotClient.listModels()",
+      );
       return list.map((entry) => ({ id: entry.id, name: entry.name }));
     },
     async runPrompt({ model, prompt, timeoutMs }) {

@@ -95,4 +95,18 @@ describe("sdk-client wrapper", () => {
     await expect(client.runPrompt({ model: "gpt-5", prompt: "x" })).rejects.toThrow("session boom");
     expect(fake.sessionDispose).toHaveBeenCalledOnce();
   });
+
+  it("rejects when start() exceeds the timeout", async () => {
+    const hangingModule: SdkModule = {
+      CopilotClient: class {
+        // start() never resolves — simulates a CLI that spawns but never connects
+        start = () => new Promise<void>(() => {});
+        listModels = vi.fn(async () => []);
+        createSession = vi.fn(async () => ({ sendAndWait: vi.fn() }));
+      } as unknown as SdkModule["CopilotClient"],
+    };
+    await expect(
+      getSdkClient({ sdkFactory: async () => hangingModule, startTimeoutMs: 100 }),
+    ).rejects.toThrow(/timed out/);
+  });
 });
