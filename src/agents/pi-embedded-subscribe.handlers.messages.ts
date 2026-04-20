@@ -420,6 +420,7 @@ export function handleMessageUpdate(
       evtType === "text_end"
         ? sanitizeAssistantVisibleText(parsedFull.text)
         : sanitizeAssistantVisibleTextForStreamUpdate(parsedFull.text);
+    const finalBufferedText = evtType === "text_end" ? sanitizeAssistantVisibleText(next) : "";
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
@@ -447,11 +448,11 @@ export function handleMessageUpdate(
         appendBlockReplyChunk(ctx, blockReplyChunk);
       }
 
-      if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
-        replaceBlockReplyBuffer(ctx, cleanedText);
+      if (evtType === "text_end" && !ctx.state.lastBlockReplyText && finalBufferedText) {
+        replaceBlockReplyBuffer(ctx, finalBufferedText);
       }
-    } else if (evtType === "text_end" && cleanedText) {
-      replaceBlockReplyBuffer(ctx, cleanedText);
+    } else if (evtType === "text_end" && !ctx.state.lastBlockReplyText && finalBufferedText) {
+      replaceBlockReplyBuffer(ctx, finalBufferedText);
     }
 
     ctx.state.lastStreamedAssistant = next;
