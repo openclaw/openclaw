@@ -387,6 +387,19 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it('documents that streamTo requires runtime="acp"', () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        streamTo?: {
+          description?: string;
+        };
+      };
+    };
+
+    expect(schema.properties?.streamTo?.description).toContain('runtime="acp"');
+  });
+
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
