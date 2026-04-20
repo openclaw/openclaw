@@ -1,4 +1,4 @@
-import { buildFallbackModelCatalog, buildModelDefinitionFromSdk } from "./models.js";
+import { buildFallbackModelCatalog, buildModelDefinition } from "./models.js";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -6,8 +6,15 @@ import {
   type ProviderCatalogContext,
   type ProviderCatalogResult,
 } from "./runtime-api.js";
-import { getSdkClient, type SdkClient, type SdkClientOptions } from "./sdk-client.js";
+import {
+  createDedicatedClient,
+  getSdkClient,
+  type SdkClient,
+  type SdkClientOptions,
+} from "./sdk-client.js";
 import type { ModelDefinitionConfig } from "./shared-types.js";
+import type { ShimServerHandle, ShimServerOptions } from "./shim-server.js";
+import { startShimServer } from "./shim-server.js";
 
 const PROVIDER_ID = "copilot-sdk";
 const CHOICE_ID = "copilot-sdk";
@@ -29,10 +36,14 @@ type PluginConfig = {
 
 type SharedDeps = {
   getClient: (options: SdkClientOptions) => Promise<SdkClient>;
+  createDedicatedClient: (options: SdkClientOptions) => Promise<SdkClient>;
+  startShimServer: (options: ShimServerOptions) => Promise<ShimServerHandle>;
 };
 
 const DEFAULT_DEPS: SharedDeps = {
   getClient: getSdkClient,
+  createDedicatedClient,
+  startShimServer,
 };
 
 function readPluginConfig(ctx: ProviderCatalogContext): PluginConfig {
@@ -45,17 +56,93 @@ function readPluginConfig(ctx: ProviderCatalogContext): PluginConfig {
   return raw;
 }
 
+// ---------------------------------------------------------------------------
+// Shim lifecycle — module-level state
+// ---------------------------------------------------------------------------
+
+let shimHandle: ShimServerHandle | undefined;
+let shimConfigFingerprint = "";
+let shimInitPromise: Promise<ShimServerHandle> | undefined;
+
+function shimFingerprint(cfg: PluginConfig): string {
+  return JSON.stringify({
+    port: cfg.port ?? DEFAULT_PORT,
+    cliPath: cfg.cliPath ?? null,
+    rejectToolRequests: cfg.rejectToolRequests ?? false,
+  });
+}
+
 /**
- * Catalog hook — discovers available models via the Copilot SDK.
+ * Ensures a shim HTTP server is running with the given config.
  *
- * The shim server is NOT started here. The catalog only needs the model list
- * which comes from `listModels()`. After discovery the SDK client is stopped
- * so the CLI subprocess does not prevent process exit (important for
- * short-lived commands like `models list`).
+ * - Reuses an existing shim if the config fingerprint hasn't changed.
+ * - Coalesces concurrent callers behind a single init promise.
+ * - Tears down and rebuilds when config changes.
+ */
+async function ensureShim(pluginConfig: PluginConfig, deps: SharedDeps): Promise<ShimServerHandle> {
+  const fp = shimFingerprint(pluginConfig);
+
+  // Fast path: shim already running with matching config.
+  if (shimHandle && shimConfigFingerprint === fp) {
+    return shimHandle;
+  }
+
+  // Coalesce concurrent callers during init.
+  if (shimInitPromise && shimConfigFingerprint === fp) {
+    return shimInitPromise;
+  }
+
+  // Config changed — tear down old shim.
+  if (shimHandle) {
+    await shimHandle.close().catch(() => undefined);
+    shimHandle = undefined;
+  }
+  shimInitPromise = undefined;
+  shimConfigFingerprint = fp;
+
+  shimInitPromise = (async () => {
+    try {
+      const client = await deps.createDedicatedClient({ cliPath: pluginConfig.cliPath });
+      const handle = await deps.startShimServer({
+        client,
+        port: pluginConfig.port ?? DEFAULT_PORT,
+        rejectToolRequests: pluginConfig.rejectToolRequests,
+      });
+      shimHandle = handle;
+      return handle;
+    } catch (err) {
+      // Clean up on failure so the next call retries from scratch.
+      shimHandle = undefined;
+      shimConfigFingerprint = "";
+      shimInitPromise = undefined;
+      throw err;
+    }
+  })();
+
+  try {
+    return await shimInitPromise;
+  } finally {
+    shimInitPromise = undefined;
+  }
+}
+
+/** Test-only: reset module-level shim state between test cases. */
+export async function __resetShimForTests(): Promise<void> {
+  if (shimHandle) {
+    await shimHandle.close().catch(() => undefined);
+  }
+  shimHandle = undefined;
+  shimConfigFingerprint = "";
+  shimInitPromise = undefined;
+}
+
+/**
+ * Catalog hook — discovers available models via the Copilot SDK, then
+ * ensures the shim HTTP server is running so inference requests have a
+ * live endpoint.
  *
- * The shim starts lazily via `ensureShim()` when the provider is actually
- * used for inference (the shim server is `unref()`d so it never blocks exit
- * on its own).
+ * Model discovery uses the singleton SDK client (closed after discovery).
+ * The shim uses a dedicated long-lived client via `createDedicatedClient`.
  */
 async function buildCatalog(
   ctx: ProviderCatalogContext,
@@ -67,18 +154,21 @@ async function buildCatalog(
   }
 
   const pluginConfig = readPluginConfig(ctx);
-  const port = pluginConfig.port ?? DEFAULT_PORT;
-  const baseUrl = `http://127.0.0.1:${port}/v1`;
 
+  // --- Model discovery (singleton client, closed afterward) ---
   let models: ModelDefinitionConfig[];
   let client: SdkClient | undefined;
   try {
     client = await deps.getClient({ cliPath: pluginConfig.cliPath });
     const sdkModels = await client.listModels();
     models = sdkModels.length
-      ? sdkModels.map((m) => buildModelDefinitionFromSdk(m.id, m.name))
+      ? sdkModels.map((m) => buildModelDefinition(m.id, m.name))
       : buildFallbackModelCatalog();
-  } catch {
+  } catch (err) {
+    console.warn(
+      "copilot-sdk: model discovery failed, using fallback catalog:",
+      err instanceof Error ? err.message : String(err),
+    );
     models = buildFallbackModelCatalog();
   } finally {
     // Stop the SDK subprocess so it does not keep the event loop alive.
@@ -87,9 +177,21 @@ async function buildCatalog(
     }
   }
 
+  // --- Shim startup (dedicated long-lived client) ---
+  let handle: ShimServerHandle;
+  try {
+    handle = await ensureShim(pluginConfig, deps);
+  } catch (err) {
+    console.error(
+      "copilot-sdk: shim server failed to start, self-disabling:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+
   return {
     provider: {
-      baseUrl,
+      baseUrl: handle.url,
       api: "openai-completions",
       apiKey: PLACEHOLDER_API_KEY,
       authHeader: false,
