@@ -86,6 +86,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: keep silent recall sub-agent billing/auth failures out of shared auth-profile cooldown state, so a Claude CLI extra-usage rejection cannot disable normal Claude-backed turns. Fixes #71284. (#71539) Thanks @vishutdhar and @obviyus.
 - Auth/Claude CLI: sync refreshed Claude CLI OAuth credentials into the managed auth profile so long-running Claude CLI runs stop falling back to stale OpenClaw snapshots. (#70902) Thanks @starvex.
 - Sessions: make `sessions_spawn(mode="session")` errors name usable alternatives when the current channel cannot bind subagent threads. Fixes #67400. (#67790) Thanks @stainlu.
+- Agents/Claude CLI: pass the OpenClaw system prompt through Claude's prompt-file flag so Windows runs avoid argv length failures without changing system prompt semantics. Fixes #69158. (#69211) Thanks @skylee-01, @cassioanorte, @Syu0, and @Stache73.
 
 ## 2026.4.25 (Unreleased)
 
