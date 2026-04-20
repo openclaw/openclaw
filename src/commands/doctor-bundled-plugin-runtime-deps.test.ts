@@ -9,6 +9,17 @@ function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function writeBundledChannelPlugin(root: string, id: string, dependencies: Record<string, string>) {
+  writeJson(path.join(root, "dist", "extensions", id, "package.json"), {
+    dependencies,
+  });
+  writeJson(path.join(root, "dist", "extensions", id, "openclaw.plugin.json"), {
+    id,
+    channels: [id],
+    configSchema: { type: "object" },
+  });
+}
+
 describe("doctor bundled plugin runtime deps", () => {
   it("skips source checkouts", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
@@ -69,26 +80,8 @@ describe("doctor bundled plugin runtime deps", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
 
-    writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
-      dependencies: {
-        "discord-only": "1.0.0",
-      },
-    });
-    writeJson(path.join(root, "dist", "extensions", "discord", "openclaw.plugin.json"), {
-      id: "discord",
-      channels: ["discord"],
-      configSchema: { type: "object" },
-    });
-    writeJson(path.join(root, "dist", "extensions", "whatsapp", "package.json"), {
-      dependencies: {
-        "whatsapp-only": "1.0.0",
-      },
-    });
-    writeJson(path.join(root, "dist", "extensions", "whatsapp", "openclaw.plugin.json"), {
-      id: "whatsapp",
-      channels: ["whatsapp"],
-      configSchema: { type: "object" },
-    });
+    writeBundledChannelPlugin(root, "discord", { "discord-only": "1.0.0" });
+    writeBundledChannelPlugin(root, "whatsapp", { "whatsapp-only": "1.0.0" });
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot: root,
@@ -109,16 +102,7 @@ describe("doctor bundled plugin runtime deps", () => {
   it("does not report bundled channel deps when the channel is not enabled", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
-    writeJson(path.join(root, "dist", "extensions", "discord", "package.json"), {
-      dependencies: {
-        "discord-only": "1.0.0",
-      },
-    });
-    writeJson(path.join(root, "dist", "extensions", "discord", "openclaw.plugin.json"), {
-      id: "discord",
-      channels: ["discord"],
-      configSchema: { type: "object" },
-    });
+    writeBundledChannelPlugin(root, "discord", { "discord-only": "1.0.0" });
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot: root,
