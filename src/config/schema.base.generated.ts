@@ -4888,7 +4888,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     additionalProperties: false,
                   },
                   model: {
-                    type: "string",
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          primary: {
+                            type: "string",
+                            title: "Heartbeat Primary Model",
+                            description: "Primary heartbeat model (provider/model).",
+                          },
+                          fallbacks: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                            title: "Heartbeat Model Fallbacks",
+                            description:
+                              "Ordered heartbeat fallback models (provider/model). Used when the primary heartbeat model fails with a retriable provider error.",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    ],
+                    title: "Heartbeat Model",
+                    description:
+                      'Heartbeat model. Accepts a string ("provider/model") or an object ({ primary, fallbacks }). Object form fails over to the next fallback on retriable provider errors (429, 502/503, timeout) so quota exhaustion on the primary does not stall heartbeat ticks.',
                   },
                   session: {
                     type: "string",
@@ -6199,7 +6226,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       additionalProperties: false,
                     },
                     model: {
-                      type: "string",
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            primary: {
+                              type: "string",
+                              title: "Agent Heartbeat Primary Model",
+                              description: "Per-agent primary heartbeat model (provider/model).",
+                            },
+                            fallbacks: {
+                              type: "array",
+                              items: {
+                                type: "string",
+                              },
+                              title: "Agent Heartbeat Model Fallbacks",
+                              description:
+                                "Per-agent ordered heartbeat fallback models (provider/model).",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      ],
+                      title: "Agent Heartbeat Model",
+                      description:
+                        'Per-agent heartbeat model override. Accepts a string ("provider/model") or an object ({ primary, fallbacks }). Object form replaces the agent-level model fallback chain for this heartbeat only.',
                     },
                     session: {
                       type: "string",
@@ -25811,6 +25865,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list.*.heartbeat.timeoutSeconds": {
       label: "Heartbeat Timeout (Seconds)",
       tags: ["performance", "automation"],
+    },
+    "agents.defaults.heartbeat.model": {
+      label: "Heartbeat Model",
+      help: 'Heartbeat model. Accepts a string ("provider/model") or an object ({ primary, fallbacks }). Object form fails over to the next fallback on retriable provider errors (429, 502/503, timeout) so quota exhaustion on the primary does not stall heartbeat ticks.',
+      tags: ["models", "automation"],
+    },
+    "agents.list[].heartbeat.model": {
+      label: "Agent Heartbeat Model",
+      help: 'Per-agent heartbeat model override. Accepts a string ("provider/model") or an object ({ primary, fallbacks }). Object form replaces the agent-level model fallback chain for this heartbeat only.',
+      tags: ["models", "automation"],
+    },
+    "agents.defaults.heartbeat.model.primary": {
+      label: "Heartbeat Primary Model",
+      help: "Primary heartbeat model (provider/model).",
+      tags: ["models", "automation"],
+    },
+    "agents.defaults.heartbeat.model.fallbacks": {
+      label: "Heartbeat Model Fallbacks",
+      help: "Ordered heartbeat fallback models (provider/model). Used when the primary heartbeat model fails with a retriable provider error.",
+      tags: ["reliability", "models", "automation"],
+    },
+    "agents.list[].heartbeat.model.primary": {
+      label: "Agent Heartbeat Primary Model",
+      help: "Per-agent primary heartbeat model (provider/model).",
+      tags: ["models", "automation"],
+    },
+    "agents.list[].heartbeat.model.fallbacks": {
+      label: "Agent Heartbeat Model Fallbacks",
+      help: "Per-agent ordered heartbeat fallback models (provider/model).",
+      tags: ["reliability", "models", "automation"],
     },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",

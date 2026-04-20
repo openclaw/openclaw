@@ -199,11 +199,14 @@ export function createFollowupRunner(params: {
           model: run.model,
           runId,
           agentDir: run.agentDir,
-          fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: runtimeConfig,
-            agentId: run.agentId,
-            sessionKey: run.sessionKey,
-          }),
+          fallbacksOverride:
+            run.modelFallbacksOverride !== undefined
+              ? run.modelFallbacksOverride
+              : resolveRunModelFallbacksOverride({
+                  cfg: runtimeConfig,
+                  agentId: run.agentId,
+                  sessionKey: run.sessionKey,
+                }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(run, provider);
             let attemptCompactionCount = 0;

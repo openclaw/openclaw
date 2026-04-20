@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/heartbeat: accept `agents.*.heartbeat.model` as `{ primary, fallbacks }` in addition to the existing string form, mirroring `agents.defaults.model`. Heartbeat ticks now fail over to the next fallback on retriable provider errors (rate-limit/429, overload/502/503, timeout), so primary-provider quota exhaustion no longer silently stalls the heartbeat loop. (#69434)
 - Plugins/tests: reuse plugin loader alias and Jiti config resolution across repeated same-context loads, reducing import-heavy test overhead. (#69316) Thanks @amknight.
 - Cron: split runtime execution state into `jobs-state.json` so `jobs.json` stays stable for git-tracked job definitions. (#63105) Thanks @Feelw00.
 - Agents/compaction: send opt-in start and completion notices during context compaction. (#67830) Thanks @feniix.

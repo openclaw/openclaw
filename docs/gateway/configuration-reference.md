@@ -1348,7 +1348,11 @@ Periodic heartbeat runs.
     defaults: {
       heartbeat: {
         every: "30m", // 0m disables
-        model: "openai/gpt-5.4-mini",
+        // Accepts a string ("provider/model") or an object with fallbacks.
+        model: {
+          primary: "openai/gpt-5.4-mini",
+          fallbacks: ["zai/glm-4.7", "openrouter/anthropic/claude-sonnet-4-6"],
+        },
         includeReasoning: false,
         includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
@@ -1368,6 +1372,10 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
+- `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - String form sets only the primary heartbeat model.
+  - Object form sets primary plus ordered failover models. The heartbeat tick retries against each fallback when the previous attempt fails with a retriable provider error (rate-limit/429, overload/502/503, timeout). Prompt/tool errors are not retried. This replaces the agent-level `model.fallbacks` chain for heartbeat ticks only.
+  - Set an empty `fallbacks: []` to explicitly disable the agent-level fallback chain for heartbeats without replacing it.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds`.

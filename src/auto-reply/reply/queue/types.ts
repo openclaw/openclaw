@@ -64,6 +64,12 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    /**
+     * When defined (even empty), replaces the agents.list[].model.fallbacks chain
+     * for this run. Used by heartbeat ticks to carry heartbeat.model.fallbacks
+     * across the run without mutating the live config.
+     */
+    modelFallbacksOverride?: string[];
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;

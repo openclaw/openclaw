@@ -319,8 +319,8 @@ export type AgentDefaultsConfig = {
       /** Timezone for the window ("user", "local", or IANA TZ id). Default: "user". */
       timezone?: string;
     };
-    /** Heartbeat model override (provider/model). */
-    model?: string;
+    /** Heartbeat model override. Accepts a string (`provider/model`) or an object (`{ primary, fallbacks }`). */
+    model?: AgentModelConfig;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */

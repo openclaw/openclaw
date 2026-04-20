@@ -171,16 +171,23 @@ export const resolveEnforceFinalTag = (
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   const config = run.config;
+  // Runs that carry an explicit per-run fallback override (e.g. heartbeat ticks
+  // with heartbeat.model.fallbacks) must use it verbatim, even when empty, so
+  // those callers can fully replace the agent-level fallback chain.
+  const explicitFallbacksOverride = run.modelFallbacksOverride;
   return {
     cfg: config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    }),
+    fallbacksOverride:
+      explicitFallbacksOverride !== undefined
+        ? explicitFallbacksOverride
+        : resolveRunModelFallbacksOverride({
+            cfg: config,
+            agentId: run.agentId,
+            sessionKey: run.sessionKey,
+          }),
   };
 }
 

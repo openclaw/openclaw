@@ -244,6 +244,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.defaults.heartbeat.model":
+    'Heartbeat model. Accepts a string ("provider/model") or an object ({ primary, fallbacks }). Object form fails over to the next fallback on retriable provider errors (429, 502/503, timeout) so quota exhaustion on the primary does not stall heartbeat ticks.',
+  "agents.list[].heartbeat.model":
+    'Per-agent heartbeat model override. Accepts a string ("provider/model") or an object ({ primary, fallbacks }). Object form replaces the agent-level model fallback chain for this heartbeat only.',
+  "agents.defaults.heartbeat.model.primary": "Primary heartbeat model (provider/model).",
+  "agents.defaults.heartbeat.model.fallbacks":
+    "Ordered heartbeat fallback models (provider/model). Used when the primary heartbeat model fails with a retriable provider error.",
+  "agents.list[].heartbeat.model.primary": "Per-agent primary heartbeat model (provider/model).",
+  "agents.list[].heartbeat.model.fallbacks":
+    "Per-agent ordered heartbeat fallback models (provider/model).",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":

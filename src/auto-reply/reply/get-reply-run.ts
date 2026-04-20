@@ -679,6 +679,9 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      ...(isHeartbeat && Array.isArray(opts?.heartbeatModelFallbacks)
+        ? { modelFallbacksOverride: opts.heartbeatModelFallbacks }
+        : {}),
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,

@@ -34,6 +34,10 @@ import type {
 } from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
 import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
+import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
@@ -1016,7 +1020,13 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
+    const heartbeatModelOverride = normalizeOptionalString(
+      resolveAgentModelPrimaryValue(heartbeat?.model),
+    );
+    const heartbeatModelFallbacksRaw = resolveAgentModelFallbackValues(heartbeat?.model);
+    const heartbeatModelFallbacks = heartbeatModelFallbacksRaw
+      .map((raw) => normalizeOptionalString(raw))
+      .filter((raw): raw is string => Boolean(raw));
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds =
       typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
@@ -1025,6 +1035,7 @@ export async function runHeartbeatOnce(opts: {
     const replyOpts = {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      ...(heartbeatModelFallbacks.length > 0 ? { heartbeatModelFallbacks } : {}),
       suppressToolErrorWarnings,
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,

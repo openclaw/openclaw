@@ -5,6 +5,10 @@ import {
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -18,7 +22,10 @@ export type HeartbeatSummary = {
   everyMs: number | null;
   prompt: string;
   target: string;
+  /** Primary heartbeat model (provider/model). Empty/undefined when not configured. */
   model?: string;
+  /** Ordered heartbeat fallback models (provider/model), when configured as an object. */
+  modelFallbacks?: string[];
   ackMaxChars: number;
 };
 
@@ -79,13 +86,15 @@ export function resolveHeartbeatSummaryForAgent(
   const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
 
   if (!enabled) {
+    const disabledFallbacks = resolveAgentModelFallbackValues(defaults?.model);
     return {
       enabled: false,
       every: "disabled",
       everyMs: null,
       prompt: resolveHeartbeatPromptText(defaults?.prompt),
       target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
-      model: defaults?.model,
+      model: resolveAgentModelPrimaryValue(defaults?.model),
+      ...(disabledFallbacks.length > 0 ? { modelFallbacks: disabledFallbacks } : {}),
       ackMaxChars: Math.max(0, defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
     };
   }
@@ -98,7 +107,9 @@ export function resolveHeartbeatSummaryForAgent(
   );
   const target =
     merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
-  const model = merged?.model ?? defaults?.model ?? overrides?.model;
+  const modelSource = merged?.model ?? defaults?.model ?? overrides?.model;
+  const model = resolveAgentModelPrimaryValue(modelSource);
+  const modelFallbacks = resolveAgentModelFallbackValues(modelSource);
   const ackMaxChars = Math.max(
     0,
     merged?.ackMaxChars ??
@@ -114,6 +125,7 @@ export function resolveHeartbeatSummaryForAgent(
     prompt,
     target,
     model,
+    ...(modelFallbacks.length > 0 ? { modelFallbacks } : {}),
     ackMaxChars,
   };
 }
