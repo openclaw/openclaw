@@ -209,7 +209,7 @@ function generateZshArgs(cmd: Command): string {
 
 // Argument names that hint at a filesystem path. Used to pick the correct
 // zsh completion action (_files / _path_files / _files -/) for a positional.
-const FILE_ARG_HINT = /(^|[_-])(path|file|files|source|target|src|dest|destination)s?($|[_-])/i;
+const FILE_ARG_HINT = /(^|[_-])(path|file|source|target|src|dest|destination)s?($|[_-])/i;
 const DIR_ARG_HINT = /(^|[_-])(dir|directory|folder)s?($|[_-])/i;
 
 function zshPositionalAction(name: string): string {
@@ -223,10 +223,12 @@ function zshPositionalAction(name: string): string {
 }
 
 function escapeZshLabel(value: string): string {
+  // The label is always embedded in a double-quoted zsh spec like
+  // `"<pos>:<label>:<action>"`, so single quotes pass through literally — we
+  // only need to escape backslash, double quote, colon, and bracket.
   return value
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
-    .replace(/'/g, "'\\''")
     .replace(/:/g, "\\:")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
@@ -244,12 +246,17 @@ function generateZshPositionalArgs(cmd: Command): string[] {
       name?: () => string;
       description?: string;
       variadic?: boolean;
+      required?: boolean;
     };
     const name = typeof arg.name === "function" ? arg.name() : (arg._name ?? `arg${index + 1}`);
     const label = escapeZshLabel(arg.description || name);
     const action = zshPositionalAction(name);
     const position = arg.variadic ? "*" : String(index + 1);
-    return `"${position}:${label}:${action}"`;
+    // Commander's `<name>` = required, `[name]` / `[name...]` = optional. In
+    // zsh `_arguments` specs only the first separator doubles up for optional
+    // positionals: `n::MESSAGE:ACTION` / `*::MESSAGE:ACTION`.
+    const head = arg.required === false ? `${position}::` : `${position}:`;
+    return `"${head}${label}:${action}"`;
   });
 }
 

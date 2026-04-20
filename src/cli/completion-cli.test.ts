@@ -62,9 +62,21 @@ describe("completion-cli", () => {
     const script = getCompletionScript("zsh", createCompletionProgram());
 
     expect(script).toContain("_openclaw_wiki_tag()");
-    // Non-file positional keeps a neutral action; variadic gets position `*`.
+    // Required positional keeps the single-colon form; optional variadic gets
+    // the `*::` head so zsh treats it as optional.
     expect(script).toContain('"1:Note id: "');
-    expect(script).toContain('"*:Tags to add: "');
+    expect(script).toContain('"*::Tags to add: "');
+  });
+
+  it("uses the optional positional form for commander [name] arguments", () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.command("query").description("Run a query").argument("[term]", "Optional search term");
+
+    const script = getCompletionScript("zsh", program);
+
+    expect(script).toContain("_openclaw_query()");
+    expect(script).toContain('"1::Optional search term: "');
   });
 
   it("defers zsh registration until compinit is available", async () => {
