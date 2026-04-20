@@ -96,6 +96,28 @@ describe("buildBootstrapContextFiles", () => {
     expect(result[2]?.content).toBe("c".repeat(10_000));
   });
 
+  it("prioritizes SOUL and HARD_EXECUTION_RULES before AGENTS under tight total budget", () => {
+    const files: WorkspaceBootstrapFile[] = [
+      makeFile({ name: "AGENTS.md", path: "/tmp/AGENTS.md", content: "A".repeat(180) }),
+      makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "S".repeat(180) }),
+      makeFile({
+        name: "HARD_EXECUTION_RULES.md",
+        path: "/tmp/HARD_EXECUTION_RULES.md",
+        content: "H".repeat(180),
+      }),
+    ];
+
+    const result = buildBootstrapContextFiles(files, {
+      maxChars: 180,
+      totalMaxChars: 550,
+    });
+
+    const injectedPaths = result.map((entry) => entry.path);
+    expect(injectedPaths[0]).toBe("/tmp/SOUL.md");
+    expect(injectedPaths[1]).toBe("/tmp/HARD_EXECUTION_RULES.md");
+    expect(injectedPaths[2]).toBe("/tmp/AGENTS.md");
+  });
+
   it("caps total injected bootstrap characters when totalMaxChars is configured", () => {
     const files = createLargeBootstrapFiles();
     const result = buildBootstrapContextFiles(files, { totalMaxChars: 24_000 });
@@ -120,11 +142,14 @@ describe("buildBootstrapContextFiles", () => {
 
   it("skips bootstrap injection when remaining total budget is too small", () => {
     const files = [makeFile({ name: "AGENTS.md", content: "a".repeat(1_000) })];
+    const warnings: string[] = [];
     const result = buildBootstrapContextFiles(files, {
       maxChars: 200,
       totalMaxChars: 40,
+      warn: (message) => warnings.push(message),
     });
     expect(result).toEqual([]);
+    expect(warnings.some((line) => line.includes("skipping: AGENTS.md"))).toBe(true);
   });
 
   it("keeps missing markers under small total budgets", () => {
