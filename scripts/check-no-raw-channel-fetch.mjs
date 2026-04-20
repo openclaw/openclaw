@@ -72,7 +72,6 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("yuanbao", "src/access/http/request.ts", 234),
   bundledPluginCallsite("yuanbao", "src/access/http/request.ts", 462),
   bundledPluginCallsite("yuanbao", "src/access/http/request.ts", 520),
-  bundledPluginCallsite("yuanbao", "src/business/commands/log-upload/cos-upload.ts", 119),
   bundledPluginCallsite("yuanbao", "src/business/utils/media.ts", 391),
 ]);
 
