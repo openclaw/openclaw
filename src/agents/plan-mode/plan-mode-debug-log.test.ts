@@ -323,6 +323,45 @@ describe("logPlanModeDebug — event-kind serialization", () => {
     });
   });
 
+  // C7 (Plan Mode 1.0 follow-up): correlation fields.
+  it("approval_event: threads approvalRunId + approvalId when present for cross-event correlation", () => {
+    logPlanModeDebug({
+      kind: "approval_event",
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
+      approvalRunId: "run-abc",
+      approvalId: "approval-v1",
+    });
+    expect(debugMock).toHaveBeenCalledWith("[plan-mode/approval_event]", {
+      sessionKey: "s1",
+      action: "approve",
+      openSubagentCount: 0,
+      result: "accepted",
+      approvalRunId: "run-abc",
+      approvalId: "approval-v1",
+    });
+  });
+
+  it("synthetic_injection: accepts approvalRunId + approvalId for cycle correlation", () => {
+    logPlanModeDebug({
+      kind: "synthetic_injection",
+      sessionKey: "s1",
+      tag: "[PLAN_DECISION]",
+      preview: "approved",
+      approvalRunId: "run-abc",
+      approvalId: "approval-v1",
+    });
+    expect(debugMock).toHaveBeenCalledWith("[plan-mode/synthetic_injection]", {
+      sessionKey: "s1",
+      tag: "[PLAN_DECISION]",
+      preview: "approved",
+      approvalRunId: "run-abc",
+      approvalId: "approval-v1",
+    });
+  });
+
   it("toast_event: includes toast id + phase", () => {
     logPlanModeDebug({
       kind: "toast_event",
