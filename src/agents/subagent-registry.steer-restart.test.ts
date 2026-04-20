@@ -563,10 +563,13 @@ describe("subagent registry steer restarts", () => {
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
 
     const run = listMainRuns()[0];
-    expect(run?.outcome).toMatchObject({ status: "error", error: "manual kill" });
-    expect(typeof run?.outcome?.startedAt).toBe("number");
-    expect(typeof run?.outcome?.endedAt).toBe("number");
-    expect(typeof run?.outcome?.elapsedMs).toBe("number");
+    expect(run?.outcome).toEqual({
+      status: "error",
+      error: "manual kill",
+      startedAt: expect.any(Number),
+      endedAt: expect.any(Number),
+      elapsedMs: expect.any(Number),
+    });
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
     await flushAnnounce();
