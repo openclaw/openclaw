@@ -341,27 +341,22 @@ export type AgentDefaultsConfig = {
     /** Master switch. Default: false. */
     enabled?: boolean;
     /**
-     * **SCHEMA-RESERVED — runtime wiring not yet implemented.**
+     * Optional list of model-id regex patterns. When a session has
+     * never been toggled into plan mode AND its resolved model id
+     * matches any pattern, the cron isolated-agent runtime flips
+     * `planMode.mode` to `"plan"` at session start. Default empty —
+     * no auto-enable. Common use: `["^openai/gpt-5\\."]` to route
+     * the GPT-5.x family into plan-first by default.
      *
-     * Copilot review #68939 (2026-04-19): this field is the
-     * authoritative source of truth on the deferral status — if
-     * the umbrella PR description claims auto-enable is shipped,
-     * the PR description is wrong. The deferral is also tracked
-     * in `docs/plans/PLAN-MODE-ARCHITECTURE.md` under the
-     * "Long-term follow-ups (deferred)" section.
+     * C3 (Plan Mode 1.0 follow-up): shipped. Runtime check lives at
+     * `src/cron/isolated-agent/run.ts` before turn dispatch; pure
+     * pattern-matcher is at `src/agents/plan-mode/auto-enable.ts`
+     * (compiled-regex cache, malformed-pattern fallthrough).
      *
-     * Optional list of model-id regex patterns. When a session's model
-     * matches any pattern AND the user has not explicitly toggled plan
-     * mode, the runtime auto-enters plan mode at session start. Default
-     * empty — no auto-enable. Common use: `["^openai/gpt-5\\."]` to
-     * route GPT-5.x family into plan-first by default.
-     *
-     * Implementation requires cron-time scanning of session activity to
-     * detect auto-enable conditions and emit a `sessions.patch
-     * { planMode: "plan" }` for matching sessions. Setting this field
-     * today is silently ignored at runtime (no error, no effect) — once
-     * the runtime PR lands, configurations using this field will
-     * activate automatically.
+     * Contract: auto-enable only fires when `planMode` is completely
+     * absent on the session entry. Sessions with `planMode.mode:
+     * "normal"` (user explicitly toggled off via `/plan off` or post-
+     * approval) are NOT re-enabled — respects user intent.
      */
     autoEnableFor?: string[];
     /**

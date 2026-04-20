@@ -113,3 +113,148 @@ describe("runCronIsolatedAgentTurn — plan-mode nudge guards", () => {
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 });
+
+describe("runCronIsolatedAgentTurn — autoEnableFor runtime (C3)", () => {
+  setupRunCronIsolatedAgentTurnSuite();
+
+  const autoEnableCfg = {
+    agents: {
+      defaults: {
+        planMode: {
+          enabled: true,
+          autoEnableFor: ["^openai/gpt-5\\."],
+        },
+      },
+    },
+  };
+
+  it("auto-enables plan mode when session.planMode is absent AND model matches a configured pattern", async () => {
+    const session = makeCronSession({
+      sessionEntry: {
+        sessionId: "auto-enable-fresh",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: undefined,
+        planMode: undefined,
+      },
+    });
+    resolveCronSessionMock.mockReturnValue(session);
+
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: autoEnableCfg,
+        job: makeIsolatedAgentTurnJob({
+          payload: { kind: "agentTurn", message: "hello" },
+        }),
+      }),
+    );
+
+    // The cron runner should have flipped the session entry into
+    // plan mode before dispatching the turn. The test harness's
+    // default model selection resolves to openai/gpt-5.4 which
+    // matches the configured pattern.
+    const planMode = session.sessionEntry.planMode as
+      | { mode?: string; approval?: string }
+      | undefined;
+    expect(planMode).toBeDefined();
+    expect(planMode?.mode).toBe("plan");
+    expect(planMode?.approval).toBe("none");
+  });
+
+  it("does NOT auto-enable when session already has planMode state (respects user-toggled /plan off)", async () => {
+    const session = makeCronSession({
+      sessionEntry: {
+        sessionId: "auto-enable-user-off",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: undefined,
+        planMode: {
+          mode: "normal",
+          approval: "none",
+        },
+      },
+    });
+    resolveCronSessionMock.mockReturnValue(session);
+
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: autoEnableCfg,
+        job: makeIsolatedAgentTurnJob({
+          payload: { kind: "agentTurn", message: "hello" },
+        }),
+      }),
+    );
+
+    // User previously toggled plan-mode OFF — don't re-enable.
+    const planMode = session.sessionEntry.planMode as { mode?: string } | undefined;
+    expect(planMode?.mode).toBe("normal");
+  });
+
+  it("does NOT auto-enable when planMode feature gate is off (agents.defaults.planMode.enabled != true)", async () => {
+    const session = makeCronSession({
+      sessionEntry: {
+        sessionId: "auto-enable-gate-off",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: undefined,
+        planMode: undefined,
+      },
+    });
+    resolveCronSessionMock.mockReturnValue(session);
+
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: {
+          agents: {
+            defaults: {
+              planMode: {
+                // enabled omitted → feature gate off
+                autoEnableFor: ["^openai/gpt-5\\."],
+              },
+            },
+          },
+        },
+        job: makeIsolatedAgentTurnJob({
+          payload: { kind: "agentTurn", message: "hello" },
+        }),
+      }),
+    );
+
+    // Feature gate OFF → no auto-enable even if patterns match.
+    expect(session.sessionEntry.planMode).toBeUndefined();
+  });
+
+  it("does NOT auto-enable when autoEnableFor patterns don't match the resolved model", async () => {
+    const session = makeCronSession({
+      sessionEntry: {
+        sessionId: "auto-enable-no-match",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: undefined,
+        planMode: undefined,
+      },
+    });
+    resolveCronSessionMock.mockReturnValue(session);
+
+    await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: {
+          agents: {
+            defaults: {
+              planMode: {
+                enabled: true,
+                // Pattern targets anthropic, not openai/gpt-5.4.
+                autoEnableFor: ["^anthropic/claude-opus"],
+              },
+            },
+          },
+        },
+        job: makeIsolatedAgentTurnJob({
+          payload: { kind: "agentTurn", message: "hello" },
+        }),
+      }),
+    );
+
+    expect(session.sessionEntry.planMode).toBeUndefined();
+  });
+});
