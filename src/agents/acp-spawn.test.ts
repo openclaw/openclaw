@@ -70,6 +70,7 @@ const hoisted = vi.hoisted(() => {
   const cleanupFailedAcpSpawnMock = vi.fn();
   const createRunningTaskRunMock = vi.fn();
   const countActiveRunsForSessionMock = vi.fn();
+  const listTasksForOwnerKeyMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -94,6 +95,7 @@ const hoisted = vi.hoisted(() => {
     cleanupFailedAcpSpawnMock,
     createRunningTaskRunMock,
     countActiveRunsForSessionMock,
+    listTasksForOwnerKeyMock,
     state,
   };
 });
@@ -148,6 +150,10 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
 
 vi.mock("./subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
+}));
+
+vi.mock("../tasks/task-registry.js", () => ({
+  listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
@@ -510,6 +516,7 @@ describe("spawnAcpDirect", () => {
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.createRunningTaskRunMock.mockReset().mockReturnValue(undefined);
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
+    hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -782,6 +789,42 @@ describe("spawnAcpDirect", () => {
       ...createRequesterContext(),
       agentSessionKey: "agent:main:subagent:parent",
     });
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("max active children");
+  });
+
+  it('counts streamTo="parent" ACP runs toward subagent child caps', async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 1,
+          },
+        },
+      },
+    });
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        streamTo: "parent",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
 
     const failed = expectFailedSpawn(result, "forbidden");
     expect(failed.errorCode).toBe("subagent_policy");

@@ -63,6 +63,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import { listTasksForOwnerKey } from "../tasks/task-registry.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -78,7 +79,12 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "./spawned-context.js";
-import { isSubagentEnvelopeSession, resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilities,
+  resolveSubagentCapabilityStore,
+  type SessionCapabilityStore,
+} from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession } from "./subagent-registry.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
@@ -231,6 +237,37 @@ type AcpSubagentEnvelopeState = {
   };
   error?: string;
 };
+
+function isActiveTaskStatus(status: string | undefined): boolean {
+  return status === "queued" || status === "running";
+}
+
+function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): number {
+  const normalizedOwnerKey = normalizeOptionalString(ownerKey);
+  if (!normalizedOwnerKey) {
+    return 0;
+  }
+  const tasks = listTasksForOwnerKey(normalizedOwnerKey);
+  const trackedChildSessionKeys = new Set(
+    tasks
+      .filter(
+        (task) =>
+          task.runtime === "subagent" &&
+          isActiveTaskStatus(task.status) &&
+          normalizeOptionalString(task.childSessionKey),
+      )
+      .map((task) => normalizeOptionalString(task.childSessionKey) as string),
+  );
+  return tasks.filter((task) => {
+    const childSessionKey = normalizeOptionalString(task.childSessionKey);
+    return (
+      task.runtime === "acp" &&
+      isActiveTaskStatus(task.status) &&
+      Boolean(childSessionKey) &&
+      !trackedChildSessionKeys.has(childSessionKey)
+    );
+  }).length;
+}
 
 type AcpSpawnBootstrapDeliveryPlan = {
   useInlineDelivery: boolean;
@@ -674,12 +711,16 @@ function resolveAcpSpawnRequesterState(params: {
   parentSessionKey?: string;
   targetAgentId: string;
   ctx: SpawnAcpContext;
+  subagentStore?: SessionCapabilityStore;
 }): AcpSpawnRequesterState {
   const bindingService = getSessionBindingService();
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) &&
-    isSubagentEnvelopeSession(params.parentSessionKey, { cfg: params.cfg });
+    isSubagentEnvelopeSession(params.parentSessionKey, {
+      cfg: params.cfg,
+      store: params.subagentStore,
+    });
   const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
       ? bindingService
@@ -728,12 +769,18 @@ function resolveAcpSubagentEnvelopeState(params: {
   requesterSessionKey?: string;
   targetAgentId: string;
   requestedAgentId?: string;
+  subagentStore?: SessionCapabilityStore;
 }): AcpSubagentEnvelopeState {
   const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
   if (!requesterSessionKey) {
     return {};
   }
-  if (!isSubagentEnvelopeSession(requesterSessionKey, { cfg: params.cfg })) {
+  if (
+    !isSubagentEnvelopeSession(requesterSessionKey, {
+      cfg: params.cfg,
+      store: params.subagentStore,
+    })
+  ) {
     return {};
   }
 
@@ -751,7 +798,9 @@ function resolveAcpSubagentEnvelopeState(params: {
   const maxChildren =
     params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
     DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
-  const activeChildren = countActiveRunsForSession(requesterSessionKey);
+  const activeChildren =
+    countActiveRunsForSession(requesterSessionKey) +
+    countUntrackedActiveAcpRunsForOwner(requesterSessionKey);
   if (activeChildren >= maxChildren) {
     return {
       error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
@@ -1103,17 +1152,22 @@ export async function spawnAcpDirect(
       error: agentPolicyError.message,
     });
   }
+  const subagentStore = resolveSubagentCapabilityStore(parentSessionKey, {
+    cfg,
+  });
   const requesterState = resolveAcpSpawnRequesterState({
     cfg,
     parentSessionKey,
     targetAgentId,
     ctx,
+    subagentStore,
   });
   const subagentEnvelopeState = resolveAcpSubagentEnvelopeState({
     cfg,
     requesterSessionKey: requesterInternalKey,
     targetAgentId,
     requestedAgentId: params.agentId,
+    subagentStore,
   });
   if (subagentEnvelopeState.error) {
     return createAcpSpawnFailure({

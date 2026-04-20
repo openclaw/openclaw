@@ -16,13 +16,15 @@ export type SubagentSessionRole = (typeof SUBAGENT_SESSION_ROLES)[number];
 export const SUBAGENT_CONTROL_SCOPES = ["children", "none"] as const;
 export type SubagentControlScope = (typeof SUBAGENT_CONTROL_SCOPES)[number];
 
-type SessionCapabilityEntry = {
+export type SessionCapabilityEntry = {
   sessionId?: unknown;
   spawnDepth?: unknown;
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   spawnedBy?: unknown;
 };
+
+export type SessionCapabilityStore = Record<string, SessionCapabilityEntry>;
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
@@ -34,6 +36,10 @@ function normalizeSubagentControlScope(value: unknown): SubagentControlScope | u
   return SUBAGENT_CONTROL_SCOPES.find((entry) => entry === trimmed);
 }
 
+function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
+  return isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
+}
+
 function readSessionStore(storePath: string): Record<string, SessionCapabilityEntry> {
   try {
     return loadSessionStore(storePath);
@@ -43,7 +49,7 @@ function readSessionStore(storePath: string): Record<string, SessionCapabilityEn
 }
 
 function findEntryBySessionId(
-  store: Record<string, SessionCapabilityEntry>,
+  store: SessionCapabilityStore,
   sessionId: string,
 ): SessionCapabilityEntry | undefined {
   const normalizedSessionId = normalizeSubagentSessionKey(sessionId);
@@ -62,7 +68,7 @@ function findEntryBySessionId(
 function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
-  store?: Record<string, SessionCapabilityEntry>;
+  store?: SessionCapabilityStore;
 }): SessionCapabilityEntry | undefined {
   if (params.store) {
     return params.store[params.sessionKey] ?? findEntryBySessionId(params.store, params.sessionKey);
@@ -77,6 +83,31 @@ function resolveSessionCapabilityEntry(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
   const store = readSessionStore(storePath);
   return store[params.sessionKey] ?? findEntryBySessionId(store, params.sessionKey);
+}
+
+export function resolveSubagentCapabilityStore(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): SessionCapabilityStore | undefined {
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  if (!normalizedSessionKey) {
+    return opts?.store;
+  }
+  if (opts?.store) {
+    return opts.store;
+  }
+  if (!opts?.cfg || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(normalizedSessionKey);
+  if (!parsed?.agentId) {
+    return undefined;
+  }
+  const storePath = resolveStorePath(opts.cfg.session?.store, { agentId: parsed.agentId });
+  return readSessionStore(storePath);
 }
 
 export function resolveSubagentRoleForDepth(params: {
@@ -116,7 +147,7 @@ function isStoredSubagentEnvelopeSession(
   params: {
     sessionKey: string;
     cfg?: OpenClawConfig;
-    store?: Record<string, SessionCapabilityEntry>;
+    store?: SessionCapabilityStore;
     entry?: SessionCapabilityEntry;
   },
   visited = new Set<string>(),
@@ -166,7 +197,7 @@ export function isSubagentEnvelopeSession(
   sessionKey: string | undefined | null,
   opts?: {
     cfg?: OpenClawConfig;
-    store?: Record<string, SessionCapabilityEntry>;
+    store?: SessionCapabilityStore;
     entry?: SessionCapabilityEntry;
   },
 ): boolean {
@@ -174,10 +205,17 @@ export function isSubagentEnvelopeSession(
   if (!normalizedSessionKey) {
     return false;
   }
+  if (isSubagentSessionKey(normalizedSessionKey)) {
+    return true;
+  }
+  if (!isAcpSessionKey(normalizedSessionKey)) {
+    return false;
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
   return isStoredSubagentEnvelopeSession({
     sessionKey: normalizedSessionKey,
     cfg: opts?.cfg,
-    store: opts?.store,
+    store,
     entry: opts?.entry,
   });
 }
@@ -186,27 +224,35 @@ export function resolveStoredSubagentCapabilities(
   sessionKey: string | undefined | null,
   opts?: {
     cfg?: OpenClawConfig;
-    store?: Record<string, SessionCapabilityEntry>;
+    store?: SessionCapabilityStore;
   },
 ) {
   const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
   const maxSpawnDepth =
     opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  if (!normalizedSessionKey) {
+    return resolveSubagentCapabilities({ depth: 0, maxSpawnDepth });
+  }
+  if (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
+      cfg: opts?.cfg,
+      store: opts?.store,
+    });
+    return resolveSubagentCapabilities({ depth, maxSpawnDepth });
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
   const entry = normalizedSessionKey
     ? resolveSessionCapabilityEntry({
         sessionKey: normalizedSessionKey,
         cfg: opts?.cfg,
-        store: opts?.store,
+        store,
       })
     : undefined;
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
-    store: opts?.store,
+    store,
   });
-  if (
-    !normalizedSessionKey ||
-    !isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, entry })
-  ) {
+  if (!isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, store, entry })) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
   const storedRole = normalizeSubagentRole(entry?.subagentRole);

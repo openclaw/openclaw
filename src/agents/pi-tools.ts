@@ -48,7 +48,10 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
-import { isSubagentEnvelopeSession } from "./subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "./subagent-capabilities.js";
 import {
   EXEC_TOOL_DISPLAY_SUMMARY,
   PROCESS_TOOL_DISPLAY_SUMMARY,
@@ -395,9 +398,18 @@ export function createOpenClawCodingTools(options?: {
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey =
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const subagentStore = resolveSubagentCapabilityStore(options?.sessionKey, {
+    cfg: options?.config,
+  });
   const subagentPolicy =
-    options?.sessionKey && isSubagentEnvelopeSession(options.sessionKey, { cfg: options.config })
-      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey)
+    options?.sessionKey &&
+    isSubagentEnvelopeSession(options.sessionKey, {
+      cfg: options.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey, {
+          store: subagentStore,
+        })
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,

@@ -6,7 +6,10 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
-import { isSubagentEnvelopeSession } from "../subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../subagent-capabilities.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -133,9 +136,18 @@ export function applyFinalEffectiveToolPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.config,
+  });
   const subagentPolicy =
-    params.sessionKey && isSubagentEnvelopeSession(params.sessionKey, { cfg: params.config })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey)
+    params.sessionKey &&
+    isSubagentEnvelopeSession(params.sessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
+          store: subagentStore,
+        })
       : undefined;
   const ownerFiltered = applyOwnerOnlyToolPolicy(
     params.bundledTools,

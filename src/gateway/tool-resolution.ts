@@ -5,7 +5,10 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../agents/pi-tools.policy.js";
-import { isSubagentEnvelopeSession } from "../agents/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../agents/subagent-capabilities.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -61,8 +64,16 @@ export function resolveGatewayScopedTools(params: {
     messageProvider: params.messageProvider,
     accountId: params.accountId ?? null,
   });
-  const subagentPolicy = isSubagentEnvelopeSession(params.sessionKey, { cfg: params.cfg })
-    ? resolveSubagentToolPolicyForSession(params.cfg, params.sessionKey)
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.cfg,
+  });
+  const subagentPolicy = isSubagentEnvelopeSession(params.sessionKey, {
+    cfg: params.cfg,
+    store: subagentStore,
+  })
+    ? resolveSubagentToolPolicyForSession(params.cfg, params.sessionKey, {
+        store: subagentStore,
+      })
     : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
