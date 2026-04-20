@@ -20,19 +20,31 @@ type DispatchReplyContext = Record<string, unknown> & {
 type DispatchReplyDispatcher = {
   sendFinalReply: (payload: { text: string }) => unknown;
 };
+type FeishuReplyDispatcherMockValue = {
+  dispatcher: DispatchReplyDispatcher;
+  replyOptions: Record<string, never>;
+  markDispatchIdle: () => unknown;
+};
+type CreateFeishuReplyDispatcherMock = Mock<(params?: unknown) => FeishuReplyDispatcherMockValue>;
 type DispatchReplyFromConfigMock = Mock<
   (params: {
     ctx: DispatchReplyContext;
     dispatcher: DispatchReplyDispatcher;
   }) => Promise<{ queuedFinal: boolean; counts: DispatchReplyCounts }>
 >;
-type WithReplyDispatcherMock = Mock<(params: { run: () => unknown }) => Promise<unknown>>;
+type WithReplyDispatcherMock = Mock<
+  (params: {
+    dispatcher?: DispatchReplyDispatcher;
+    onSettled?: () => unknown;
+    run: () => unknown;
+  }) => Promise<unknown>
+>;
 type FeishuLifecycleTestMocks = {
   createEventDispatcherMock: UnknownMock;
   monitorWebSocketMock: AsyncUnknownMock;
   monitorWebhookMock: AsyncUnknownMock;
   createFeishuThreadBindingManagerMock: UnknownMock;
-  createFeishuReplyDispatcherMock: UnknownMock;
+  createFeishuReplyDispatcherMock: CreateFeishuReplyDispatcherMock;
   resolveBoundConversationMock: Mock<() => BoundConversation | null>;
   touchBindingMock: UnknownMock;
   resolveAgentRouteMock: UnknownMock;

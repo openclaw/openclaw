@@ -36,7 +36,10 @@ async function expectDirectoryIds(
 ) {
   const entries = await listDirectoryEntriesWithDefaults(listFn, cfg);
   const ids = entries.map((entry) => entry.id);
-  expect(options?.sorted ? ids.toSorted((a, b) => a.localeCompare(b)) : ids).toEqual(expected);
+  const sortIds = (values: string[]) => values.toSorted((a, b) => a.localeCompare(b));
+  expect(options?.sorted ? sortIds(ids) : ids).toEqual(
+    options?.sorted ? sortIds(expected) : expected,
+  );
 }
 
 describe("Telegram directory contract", () => {
