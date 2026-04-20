@@ -135,6 +135,32 @@ export function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+const DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES = [
+  "../package.json",
+  "./package.json",
+  "../../package.json",
+] as const;
+
+type PackageJsonRequire = (id: string) => unknown;
+
+export function readPluginPackageVersion(params: {
+  require: PackageJsonRequire;
+  candidates?: readonly string[];
+  fallback?: string;
+}): string {
+  for (const candidate of params.candidates ?? DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES) {
+    try {
+      const version = (params.require(candidate) as { version?: unknown }).version;
+      if (typeof version === "string" && version.trim().length > 0) {
+        return version;
+      }
+    } catch {
+      // Ignore missing candidate paths across source and bundled layouts.
+    }
+  }
+  return params.fallback ?? "unknown";
+}
+
 let proxyAgentConstructorPromise: Promise<typeof import("proxy-agent").ProxyAgent> | null = null;
 
 async function loadProxyAgentConstructor(): Promise<typeof import("proxy-agent").ProxyAgent> {
