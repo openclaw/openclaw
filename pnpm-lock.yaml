@@ -44,36 +44,12 @@ importers:
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.16.0
         version: 0.16.0(zod@4.3.6)
-      '@aws-sdk/client-bedrock':
-        specifier: 3.1032.0
-        version: 3.1032.0
-      '@aws-sdk/client-bedrock-runtime':
-        specifier: 3.1032.0
-        version: 3.1032.0
-      '@aws-sdk/credential-provider-node':
-        specifier: 3.972.32
-        version: 3.972.32
-      '@aws/bedrock-token-generator':
-        specifier: ^1.1.0
-        version: 1.1.0
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
-      '@google/genai':
-        specifier: ^1.50.1
-        version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
-      '@grammyjs/runner':
-        specifier: ^2.0.3
-        version: 2.0.3(grammy@1.42.0)
-      '@grammyjs/transformer-throttler':
-        specifier: ^1.2.1
-        version: 1.2.1(grammy@1.42.0)
       '@homebridge/ciao':
         specifier: ^1.3.6
         version: 1.3.6
-      '@lancedb/lancedb':
-        specifier: ^0.27.2
-        version: 0.27.2(apache-arrow@18.1.0)
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -89,9 +65,6 @@ importers:
       '@mariozechner/pi-tui':
         specifier: 0.67.68
         version: 0.67.68
-      '@matrix-org/matrix-sdk-crypto-wasm':
-        specifier: 18.1.0
-        version: 18.1.0
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
@@ -101,18 +74,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
-      '@pierre/diffs':
-        specifier: 1.1.15
-        version: 1.1.15(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
-      '@slack/bolt':
-        specifier: ^4.7.0
-        version: 4.7.0(@types/express@5.0.6)
-      '@slack/web-api':
-        specifier: ^7.15.1
-        version: 7.15.1
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -131,9 +95,6 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
-      discord-api-types:
-        specifier: ^0.38.47
-        version: 0.38.47
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -146,21 +107,12 @@ importers:
       gaxios:
         specifier: 7.1.4
         version: 7.1.4
-      google-auth-library:
-        specifier: ^10.6.2
-        version: 10.6.2
-      grammy:
-        specifier: ^1.42.0
-        version: 1.42.0
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
       ipaddr.js:
         specifier: ^2.3.0
         version: 2.3.0
-      jimp:
-        specifier: ^1.6.1
-        version: 1.6.1
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
@@ -176,36 +128,18 @@ importers:
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
-      matrix-js-sdk:
-        specifier: 41.3.0
-        version: 41.3.0
-      mpg123-decoder:
-        specifier: ^1.0.3
-        version: 1.0.3
-      node-edge-tts:
-        specifier: ^1.2.10
-        version: 1.2.10
       node-llama-cpp:
         specifier: 3.18.1
         version: 3.18.1(typescript@6.0.2)
-      nostr-tools:
-        specifier: ^2.23.3
-        version: 2.23.3(typescript@6.0.3)
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
-      opusscript:
-        specifier: ^0.1.1
-        version: 0.1.1
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
       pdfjs-dist:
         specifier: ^5.6.205
         version: 5.6.205
-      playwright-core:
-        specifier: 1.59.1
-        version: 1.59.1
       proxy-agent:
         specifier: ^8.0.1
         version: 8.0.1
@@ -215,9 +149,6 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
-      silk-wasm:
-        specifier: ^3.7.1
-        version: 3.7.1
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9
@@ -312,16 +243,6 @@ importers:
       vitest:
         specifier: ^4.1.4
         version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(@vitest/browser-playwright@4.1.4)(@vitest/coverage-v8@4.1.4)(jsdom@29.0.2(@noble/hashes@2.0.1))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
-    optionalDependencies:
-      '@matrix-org/matrix-sdk-crypto-nodejs':
-        specifier: ^0.4.0
-        version: 0.4.0
-      fake-indexeddb:
-        specifier: ^6.2.5
-        version: 6.2.5
-      music-metadata:
-        specifier: ^11.12.3
-        version: 11.12.3
 
   extensions/acpx:
     dependencies:
