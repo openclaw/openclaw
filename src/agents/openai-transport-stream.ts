@@ -287,6 +287,30 @@ function parseOpenAICompletionsReasoningSignature(
   }
 }
 
+function appendOpenAICompletionsReplayMetadata(
+  current: OpenAICompletionsReasoningSignature | null | undefined,
+  next: OpenAICompletionsReasoningSignature | null | undefined,
+): OpenAICompletionsReasoningSignature | null | undefined {
+  if (!next) {
+    return current;
+  }
+  if (!current) {
+    return next;
+  }
+  if (current.field !== next.field) {
+    return current;
+  }
+  return {
+    ...current,
+    content: `${current.content}${next.content}`,
+    ...(current.encrypted_content || next.encrypted_content
+      ? {
+          encrypted_content: `${current.encrypted_content ?? ""}${next.encrypted_content ?? ""}`,
+        }
+      : {}),
+  };
+}
+
 function extractOpenAICompletionsReplayMetadataFromAssistant(params: {
   message: Context["messages"][number];
   model: OpenAIModeModel;
@@ -322,22 +346,7 @@ function extractOpenAICompletionsReplayMetadataFromAssistant(params: {
     if (!parsed) {
       continue;
     }
-    if (!replayMetadata) {
-      replayMetadata = parsed;
-      continue;
-    }
-    if (replayMetadata.field !== parsed.field) {
-      continue;
-    }
-    replayMetadata = {
-      ...replayMetadata,
-      content: `${replayMetadata.content}${parsed.content}`,
-      ...(parsed.encrypted_content
-        ? {
-            encrypted_content: `${replayMetadata.encrypted_content ?? ""}${parsed.encrypted_content}`,
-          }
-        : {}),
-    };
+    replayMetadata = appendOpenAICompletionsReplayMetadata(replayMetadata, parsed) ?? null;
   }
 
   return replayMetadata;
@@ -374,7 +383,7 @@ function applyOpenAICompletionsReplayMetadata(params: {
     }
 
     const outbound = message as Record<string, unknown>;
-    if (replayMetadata.content.length > 0) {
+    if (replayMetadata.content.length > 0 || replayMetadata.encrypted_content) {
       outbound[replayMetadata.field] = replayMetadata.content;
     }
     if (replayMetadata.encrypted_content) {
@@ -1336,6 +1345,13 @@ async function processOpenAICompletionsStream(
         return;
       }
       previous.text += next.text;
+      const mergedReplayMetadata = appendOpenAICompletionsReplayMetadata(
+        previous.replayMetadata,
+        next.replayMetadata,
+      );
+      if (mergedReplayMetadata) {
+        previous.replayMetadata = mergedReplayMetadata;
+      }
       return;
     }
     previous.text += next.text;
@@ -1359,17 +1375,10 @@ async function processOpenAICompletionsStream(
       currentBlock?.type === "thinking" ? currentBlock.thinkingSignature : undefined,
       currentThinking,
     );
-    return encodeOpenAICompletionsReasoningSignature({
-      v: 1,
-      type: "openai-completions-reasoning",
-      field: reasoningDelta.replayMetadata.field,
-      content: currentThinking,
-      ...(currentMetadata?.encrypted_content || reasoningDelta.replayMetadata.encrypted_content
-        ? {
-            encrypted_content: `${currentMetadata?.encrypted_content ?? ""}${reasoningDelta.replayMetadata.encrypted_content ?? ""}`,
-          }
-        : {}),
-    });
+    return encodeOpenAICompletionsReasoningSignature(
+      appendOpenAICompletionsReplayMetadata(currentMetadata, reasoningDelta.replayMetadata) ??
+        reasoningDelta.replayMetadata,
+    );
   };
 
   const appendThinkingDeltaInternal = (reasoningDelta: CompletionsReasoningDelta) => {
@@ -1584,6 +1593,13 @@ function getCompletionsReasoningDeltas(
         return;
       }
       previous.text += next.text;
+      const mergedReplayMetadata = appendOpenAICompletionsReplayMetadata(
+        previous.replayMetadata,
+        next.replayMetadata,
+      );
+      if (mergedReplayMetadata) {
+        previous.replayMetadata = mergedReplayMetadata;
+      }
       return;
     }
     previous.text += next.text;
