@@ -167,6 +167,7 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
       runtime: params.runtime,
       textLimit: params.job.payload.textLimit,
       maxLinesPerMessage: params.job.payload.discordConfig?.maxLinesPerMessage,
+      splitOnCodeBlocks: params.job.payload.discordConfig?.splitOnCodeBlocks,
       replyToId: deliveryPlan.replyReference.use(),
       replyToMode: params.job.payload.replyToMode,
       sessionKey:

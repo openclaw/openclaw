@@ -1,6 +1,10 @@
 import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
+import {
+  chunkDiscordText,
+  chunkDiscordTextWithMode,
+  splitDiscordTextOnCodeBlocks,
+} from "./chunk.js";
 
 describe("chunkDiscordText", () => {
   it("splits tall messages even when under 2000 chars", () => {
@@ -129,5 +133,35 @@ describe("chunkDiscordText", () => {
     const second = chunks[1];
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
+  });
+
+  it("splits mixed prose and fenced code into distinct groups when enabled", () => {
+    const text = "Intro\n\n```ts\nconst x = 1;\n```\n\nOutro";
+
+    expect(splitDiscordTextOnCodeBlocks(text)).toEqual([
+      "Intro\n\n",
+      "```ts\nconst x = 1;\n```\n\n",
+      "Outro",
+    ]);
+  });
+
+  it("keeps whitespace between adjacent code blocks attached to a neighbor", () => {
+    const text = "```ts\nconst a = 1;\n```\n\n```ts\nconst b = 2;\n```";
+
+    const groups = splitDiscordTextOnCodeBlocks(text);
+    expect(groups).toEqual(["```ts\nconst a = 1;\n```\n\n", "```ts\nconst b = 2;\n```"]);
+    expect(groups.join("")).toBe(text);
+  });
+
+  it("emits separate Discord chunks around fenced code when enabled", () => {
+    const text = "Intro\n\n```ts\nconst x = 1;\n```\n\nOutro";
+
+    const chunks = chunkDiscordTextWithMode(text, {
+      maxChars: 2000,
+      maxLines: 50,
+      splitOnCodeBlocks: true,
+    });
+
+    expect(chunks).toEqual(["Intro\n\n", "```ts\nconst x = 1;\n```\n\n", "Outro"]);
   });
 });

@@ -421,7 +421,7 @@ describe("deliverDiscordReply", () => {
     expect(sendDiscordTextMock.mock.calls[1]?.[1]).toBe("789");
   });
 
-  it("passes maxLinesPerMessage and chunkMode through the fast path", async () => {
+  it("passes maxLinesPerMessage, chunkMode, and splitOnCodeBlocks through the fast path", async () => {
     const fakeRest = {} as import("@buape/carbon").RequestClient;
 
     await deliverDiscordReply({
@@ -434,15 +434,18 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       maxLinesPerMessage: 120,
       chunkMode: "newline",
+      splitOnCodeBlocks: true,
     });
 
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(sendDiscordTextMock).toHaveBeenCalledTimes(1);
     const firstSendDiscordTextCall = sendDiscordTextMock.mock.calls[0];
-    const [, , , , , maxLinesPerMessageArg, , , chunkModeArg] = firstSendDiscordTextCall ?? [];
+    const [, , , , , maxLinesPerMessageArg, , , chunkModeArg, splitOnCodeBlocksArg] =
+      firstSendDiscordTextCall ?? [];
 
     expect(maxLinesPerMessageArg).toBe(120);
     expect(chunkModeArg).toBe("newline");
+    expect(splitOnCodeBlocksArg).toBe(true);
   });
 
   it("falls back to sendMessageDiscord when rest is not provided", async () => {

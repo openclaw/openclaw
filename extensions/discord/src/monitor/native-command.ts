@@ -53,7 +53,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordMaxLinesPerMessage, resolveDiscordSplitOnCodeBlocks } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
   normalizeDiscordAllowList,
@@ -1098,6 +1098,7 @@ async function dispatchDiscordCommandInteraction(params: {
         fallbackLimit: 2000,
       }),
       maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+      splitOnCodeBlocks: resolveDiscordSplitOnCodeBlocks({ cfg, discordConfig, accountId }),
       preferFollowUp,
       chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
@@ -1167,6 +1168,7 @@ async function dispatchDiscordCommandInteraction(params: {
           fallbackLimit: 2000,
         }),
         maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+        splitOnCodeBlocks: resolveDiscordSplitOnCodeBlocks({ cfg, discordConfig, accountId }),
         preferFollowUp,
         chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
@@ -1232,6 +1234,7 @@ async function dispatchDiscordCommandInteraction(params: {
               fallbackLimit: 2000,
             }),
             maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+            splitOnCodeBlocks: resolveDiscordSplitOnCodeBlocks({ cfg, discordConfig, accountId }),
             preferFollowUp: preferFollowUp || didReply,
             chunkMode: resolveChunkMode(cfg, "discord", accountId),
           });
@@ -1313,10 +1316,19 @@ async function deliverDiscordInteractionReply(params: {
   mediaLocalRoots?: readonly string[];
   textLimit: number;
   maxLinesPerMessage?: number;
+  splitOnCodeBlocks?: boolean;
   preferFollowUp: boolean;
   chunkMode: "length" | "newline";
 }) {
-  const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
+  const {
+    interaction,
+    payload,
+    textLimit,
+    maxLinesPerMessage,
+    splitOnCodeBlocks,
+    preferFollowUp,
+    chunkMode,
+  } = params;
   const reply = resolveSendableOutboundReplyParts(payload);
   const discordData = payload.channelData?.discord as
     | { components?: TopLevelComponents[] }
@@ -1380,6 +1392,7 @@ async function deliverDiscordInteractionReply(params: {
         maxChars: textLimit,
         maxLines: maxLinesPerMessage,
         chunkMode,
+        splitOnCodeBlocks,
       }),
     );
     const caption = chunks[0] ?? "";
@@ -1404,6 +1417,7 @@ async function deliverDiscordInteractionReply(params: {
             maxChars: textLimit,
             maxLines: maxLinesPerMessage,
             chunkMode,
+            splitOnCodeBlocks,
           }),
         )
       : [];

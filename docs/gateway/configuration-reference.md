@@ -281,6 +281,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       chunkMode: "length", // length | newline
       streaming: "off", // off | partial | block | progress (progress maps to partial on Discord)
       maxLinesPerMessage: 17,
+      splitOnCodeBlocks: false,
       ui: {
         components: {
           accentColor: "#5865F2",
@@ -334,6 +335,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
 - `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `splitOnCodeBlocks` (default false) splits mixed prose + fenced code responses into distinct Discord messages before normal chunking. Handy when people want to copy code blocks cleanly on mobile.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
   - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)

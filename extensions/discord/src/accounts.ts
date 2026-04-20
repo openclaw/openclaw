@@ -34,7 +34,7 @@ export function mergeDiscordAccountConfig(
   accountId: string,
 ): DiscordAccountConfig {
   return resolveMergedAccountConfig<DiscordAccountConfig>({
-    channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
+    channelConfig: cfg.channels?.discord,
     accounts: cfg.channels?.discord?.accounts as
       | Record<string, Partial<DiscordAccountConfig>>
       | undefined,
@@ -89,6 +89,20 @@ export function resolveDiscordMaxLinesPerMessage(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   }).config.maxLinesPerMessage;
+}
+
+export function resolveDiscordSplitOnCodeBlocks(params: {
+  cfg: OpenClawConfig;
+  discordConfig?: DiscordAccountConfig | null;
+  accountId?: string | null;
+}): boolean | undefined {
+  if (typeof params.discordConfig?.splitOnCodeBlocks === "boolean") {
+    return params.discordConfig.splitOnCodeBlocks;
+  }
+  return resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).config.splitOnCodeBlocks;
 }
 
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {

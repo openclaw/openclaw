@@ -29,7 +29,7 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordMaxLinesPerMessage, resolveDiscordSplitOnCodeBlocks } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import {
   parseDiscordComponentCustomIdForCarbon,
@@ -561,6 +561,11 @@ async function dispatchDiscordComponentEvent(params: {
           replyToMode,
           textLimit,
           maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+            cfg: ctx.cfg,
+            discordConfig: ctx.discordConfig,
+            accountId,
+          }),
+          splitOnCodeBlocks: resolveDiscordSplitOnCodeBlocks({
             cfg: ctx.cfg,
             discordConfig: ctx.discordConfig,
             accountId,

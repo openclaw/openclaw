@@ -912,6 +912,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        splitOnCodeBlocks: {
+          type: "boolean",
+        },
         mediaMaxMb: {
           type: "number",
           exclusiveMinimum: 0,
@@ -2076,6 +2079,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              splitOnCodeBlocks: {
+                type: "boolean",
+              },
               mediaMaxMb: {
                 type: "number",
                 exclusiveMinimum: 0,
@@ -3060,6 +3066,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       maxLinesPerMessage: {
         label: "Discord Max Lines Per Message",
         help: "Soft max line count per Discord message (default: 17).",
+      },
+      splitOnCodeBlocks: {
+        label: "Discord Split On Code Blocks",
+        help: "Split mixed prose + fenced code responses into distinct Discord messages before normal chunking runs (default: false).",
       },
       "inboundWorker.runTimeoutMs": {
         label: "Discord Inbound Worker Timeout (ms)",

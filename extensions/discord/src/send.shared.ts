@@ -207,7 +207,12 @@ export const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 
 export function buildDiscordTextChunks(
   text: string,
-  opts: { maxLinesPerMessage?: number; chunkMode?: ChunkMode; maxChars?: number } = {},
+  opts: {
+    maxLinesPerMessage?: number;
+    chunkMode?: ChunkMode;
+    maxChars?: number;
+    splitOnCodeBlocks?: boolean;
+  } = {},
 ): string[] {
   if (!text) {
     return [];
@@ -216,6 +221,7 @@ export function buildDiscordTextChunks(
     maxChars: opts.maxChars ?? DISCORD_TEXT_LIMIT,
     maxLines: opts.maxLinesPerMessage,
     chunkMode: opts.chunkMode,
+    splitOnCodeBlocks: opts.splitOnCodeBlocks,
   });
   return resolveTextChunksWithFallback(text, chunks);
 }
@@ -305,6 +311,7 @@ async function sendDiscordText(
   components?: DiscordSendComponents,
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
+  splitOnCodeBlocks?: boolean,
   silent?: boolean,
 ) {
   if (!text.trim()) {
@@ -312,7 +319,11 @@ async function sendDiscordText(
   }
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode });
+  const chunks = buildDiscordTextChunks(text, {
+    maxLinesPerMessage,
+    chunkMode,
+    splitOnCodeBlocks,
+  });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
       components,
@@ -366,6 +377,7 @@ async function sendDiscordMedia(
   components?: DiscordSendComponents,
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
+  splitOnCodeBlocks?: boolean,
   silent?: boolean,
 ) {
   const media = await loadWebMedia(
@@ -378,7 +390,9 @@ async function sendDiscordMedia(
     media.fileName ||
     (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
     "upload";
-  const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
+  const chunks = text
+    ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, splitOnCodeBlocks })
+    : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
@@ -425,6 +439,7 @@ async function sendDiscordMedia(
       undefined,
       undefined,
       chunkMode,
+      splitOnCodeBlocks,
       silent,
     );
   }

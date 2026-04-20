@@ -10,6 +10,11 @@ export type ChunkDiscordTextOpts = {
    * by lines keeps long multi-paragraph replies readable.
    */
   maxLines?: number;
+  /**
+   * If true, split mixed prose + fenced code responses into distinct message
+   * groups before normal Discord chunking runs.
+   */
+  splitOnCodeBlocks?: boolean;
 };
 
 type OpenFence = {
@@ -99,6 +104,87 @@ function splitLongLine(
     out.push(remaining);
   }
   return out;
+}
+
+function splitLinesPreserveNewlines(text: string): string[] {
+  const matches = text.match(/[^\n]*\n|[^\n]+$/g);
+  return matches ?? [];
+}
+
+function trimTrailingNewline(line: string): string {
+  return line.endsWith("\n") ? line.slice(0, -1) : line;
+}
+
+function mergeWhitespaceOnlySegments(segments: string[]): string[] {
+  const merged = [...segments];
+  for (let i = 0; i < merged.length; i++) {
+    const segment = merged[i];
+    if (!segment || segment.trim().length > 0) {
+      continue;
+    }
+    const prevIndex = i - 1;
+    const nextIndex = i + 1;
+    if (prevIndex >= 0 && merged[prevIndex]) {
+      merged[prevIndex] += segment;
+      merged[i] = "";
+      continue;
+    }
+    if (nextIndex < merged.length && merged[nextIndex]) {
+      merged[nextIndex] = `${segment}${merged[nextIndex]}`;
+      merged[i] = "";
+    }
+  }
+  return merged.filter(Boolean);
+}
+
+export function splitDiscordTextOnCodeBlocks(text: string): string[] {
+  const body = text ?? "";
+  if (!body) {
+    return [];
+  }
+
+  const lines = splitLinesPreserveNewlines(body);
+  if (lines.length === 0) {
+    return [body];
+  }
+
+  const segments: string[] = [];
+  let current = "";
+  let openFence: OpenFence | null = null;
+
+  const flush = () => {
+    if (!current) {
+      return;
+    }
+    segments.push(current);
+    current = "";
+  };
+
+  for (const line of lines) {
+    const fenceInfo = parseFenceLine(trimTrailingNewline(line));
+    if (!openFence && fenceInfo) {
+      flush();
+      current = line;
+      openFence = fenceInfo;
+      continue;
+    }
+
+    current += line;
+
+    if (
+      openFence &&
+      fenceInfo &&
+      openFence.markerChar === fenceInfo.markerChar &&
+      fenceInfo.markerLen >= openFence.markerLen
+    ) {
+      flush();
+      openFence = null;
+    }
+  }
+
+  flush();
+  const merged = mergeWhitespaceOnlySegments(segments);
+  return merged.length > 0 ? merged : [body];
 }
 
 /**
@@ -212,6 +298,25 @@ export function chunkDiscordTextWithMode(
   text: string,
   opts: ChunkDiscordTextOpts & { chunkMode?: ChunkMode },
 ): string[] {
+  if (opts.splitOnCodeBlocks) {
+    const groups = splitDiscordTextOnCodeBlocks(text);
+    const chunks: string[] = [];
+    for (const group of groups) {
+      const nested = chunkDiscordTextWithMode(group, {
+        ...opts,
+        splitOnCodeBlocks: false,
+      });
+      if (!nested.length) {
+        if (group.trim()) {
+          chunks.push(group);
+        }
+        continue;
+      }
+      chunks.push(...nested);
+    }
+    return chunks;
+  }
+
   const chunkMode = opts.chunkMode ?? "length";
   if (chunkMode !== "newline") {
     return chunkDiscordText(text, opts);

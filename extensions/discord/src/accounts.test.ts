@@ -3,6 +3,7 @@ import {
   createDiscordActionGate,
   resolveDiscordAccount,
   resolveDiscordMaxLinesPerMessage,
+  resolveDiscordSplitOnCodeBlocks,
 } from "./accounts.js";
 
 describe("resolveDiscordAccount allowFrom precedence", () => {
@@ -159,5 +160,64 @@ describe("resolveDiscordMaxLinesPerMessage", () => {
     });
 
     expect(resolved).toBe(80);
+  });
+});
+
+describe("resolveDiscordSplitOnCodeBlocks", () => {
+  it("falls back to merged root discord splitOnCodeBlocks when runtime config omits it", () => {
+    const resolved = resolveDiscordSplitOnCodeBlocks({
+      cfg: {
+        channels: {
+          discord: {
+            splitOnCodeBlocks: true,
+            accounts: {
+              default: { token: "token-default" },
+            },
+          },
+        },
+      },
+      discordConfig: {},
+      accountId: "default",
+    });
+
+    expect(resolved).toBe(true);
+  });
+
+  it("prefers explicit runtime discord splitOnCodeBlocks over merged config", () => {
+    const resolved = resolveDiscordSplitOnCodeBlocks({
+      cfg: {
+        channels: {
+          discord: {
+            splitOnCodeBlocks: false,
+            accounts: {
+              default: { token: "token-default", splitOnCodeBlocks: false },
+            },
+          },
+        },
+      },
+      discordConfig: { splitOnCodeBlocks: true },
+      accountId: "default",
+    });
+
+    expect(resolved).toBe(true);
+  });
+
+  it("uses per-account discord splitOnCodeBlocks over the root value when runtime config omits it", () => {
+    const resolved = resolveDiscordSplitOnCodeBlocks({
+      cfg: {
+        channels: {
+          discord: {
+            splitOnCodeBlocks: false,
+            accounts: {
+              work: { token: "token-work", splitOnCodeBlocks: true },
+            },
+          },
+        },
+      },
+      discordConfig: {},
+      accountId: "work",
+    });
+
+    expect(resolved).toBe(true);
   });
 });

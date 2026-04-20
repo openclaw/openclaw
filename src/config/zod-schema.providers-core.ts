@@ -529,6 +529,7 @@ export const DiscordAccountSchema = z
     textChunkLimit: z.number().int().positive().optional(),
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
+    splitOnCodeBlocks: z.boolean().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
     actions: z

@@ -152,6 +152,7 @@ async function sendDiscordPayloadText(params: {
   accountId?: string;
   textLimit?: number;
   maxLinesPerMessage?: number;
+  splitOnCodeBlocks?: boolean;
   binding?: DiscordThreadBindingLookupRecord;
   chunkMode?: ChunkMode;
   username?: string;
@@ -169,6 +170,7 @@ async function sendDiscordPayloadText(params: {
       maxChars: chunkLimit,
       maxLines: params.maxLinesPerMessage,
       chunkMode: mode,
+      splitOnCodeBlocks: params.splitOnCodeBlocks,
     }),
   );
   for (const chunk of chunks) {
@@ -183,6 +185,7 @@ async function sendDiscordPayloadText(params: {
       rest: params.rest,
       accountId: params.accountId,
       maxLinesPerMessage: params.maxLinesPerMessage,
+      splitOnCodeBlocks: params.splitOnCodeBlocks,
       replyTo: params.resolveReplyTo(),
       binding: params.binding,
       chunkMode: params.chunkMode,
@@ -282,6 +285,7 @@ async function sendDiscordChunkWithFallback(params: {
   token: string;
   accountId?: string;
   maxLinesPerMessage?: number;
+  splitOnCodeBlocks?: boolean;
   rest?: RequestClient;
   replyTo?: string;
   binding?: DiscordThreadBindingLookupRecord;
@@ -334,6 +338,7 @@ async function sendDiscordChunkWithFallback(params: {
           undefined,
           undefined,
           params.chunkMode,
+          params.splitOnCodeBlocks,
         ),
       params.retryConfig,
     );
@@ -362,6 +367,7 @@ export async function deliverDiscordReply(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   maxLinesPerMessage?: number;
+  splitOnCodeBlocks?: boolean;
   replyToId?: string;
   replyToMode?: ReplyToMode;
   tableMode?: MarkdownTableMode;
@@ -399,6 +405,7 @@ export async function deliverDiscordReply(params: {
   const channelId = resolveTargetChannelId(params.target);
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const retryConfig = resolveDeliveryRetryConfig(account.config.retry);
+  const splitOnCodeBlocks = params.splitOnCodeBlocks ?? account.config.splitOnCodeBlocks;
   const request: RetryRunner | undefined = channelId
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
     : undefined;
@@ -426,6 +433,7 @@ export async function deliverDiscordReply(params: {
         accountId: params.accountId,
         textLimit: params.textLimit,
         maxLinesPerMessage: params.maxLinesPerMessage,
+        splitOnCodeBlocks,
         resolveReplyTo: resolvePayloadReplyTo,
         binding,
         chunkMode: params.chunkMode,

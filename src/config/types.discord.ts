@@ -260,6 +260,11 @@ export type DiscordAccountConfig = {
    * keeps replies readable in-channel. Default: 17.
    */
   maxLinesPerMessage?: number;
+  /**
+   * Split mixed prose + fenced code responses into distinct outbound Discord
+   * messages before normal chunking runs. Default: false.
+   */
+  splitOnCodeBlocks?: boolean;
   mediaMaxMb?: number;
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

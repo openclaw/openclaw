@@ -81,6 +81,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
   },
+  splitOnCodeBlocks: {
+    label: "Discord Split On Code Blocks",
+    help: "Split mixed prose + fenced code responses into distinct Discord messages before normal chunking runs (default: false).",
+  },
   "inboundWorker.runTimeoutMs": {
     label: "Discord Inbound Worker Timeout (ms)",
     help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",

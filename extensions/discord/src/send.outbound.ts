@@ -81,6 +81,7 @@ async function sendDiscordThreadTextChunks(params: {
   request: DiscordClientRequest;
   maxLinesPerMessage?: number;
   chunkMode: ReturnType<typeof resolveChunkMode>;
+  splitOnCodeBlocks?: boolean;
   silent?: boolean;
 }): Promise<void> {
   for (const chunk of params.chunks) {
@@ -94,6 +95,7 @@ async function sendDiscordThreadTextChunks(params: {
       undefined,
       undefined,
       params.chunkMode,
+      params.splitOnCodeBlocks,
       params.silent,
     );
   }
@@ -151,6 +153,7 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
+  const splitOnCodeBlocks = accountInfo.config.splitOnCodeBlocks;
   const mediaMaxBytes =
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
@@ -171,6 +174,7 @@ export async function sendMessageDiscord(
     const chunks = buildDiscordTextChunks(textWithMentions, {
       maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
       chunkMode,
+      splitOnCodeBlocks,
     });
     const starterContent = chunks[0]?.trim() ? chunks[0] : threadName;
     const starterComponents = resolveDiscordSendComponents({
@@ -230,6 +234,7 @@ export async function sendMessageDiscord(
           undefined,
           undefined,
           chunkMode,
+          splitOnCodeBlocks,
           opts.silent,
         );
         await sendDiscordThreadTextChunks({
@@ -239,6 +244,7 @@ export async function sendMessageDiscord(
           request,
           maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
           chunkMode,
+          splitOnCodeBlocks,
           silent: opts.silent,
         });
       } else {
@@ -249,6 +255,7 @@ export async function sendMessageDiscord(
           request,
           maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
           chunkMode,
+          splitOnCodeBlocks,
           silent: opts.silent,
         });
       }
@@ -293,6 +300,7 @@ export async function sendMessageDiscord(
         opts.components,
         opts.embeds,
         chunkMode,
+        splitOnCodeBlocks,
         opts.silent,
       );
     } else {
@@ -306,6 +314,7 @@ export async function sendMessageDiscord(
         opts.components,
         opts.embeds,
         chunkMode,
+        splitOnCodeBlocks,
         opts.silent,
       );
     }

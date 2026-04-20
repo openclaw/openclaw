@@ -43,7 +43,7 @@ import {
   stripReasoningTagsFromText,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordMaxLinesPerMessage, resolveDiscordSplitOnCodeBlocks } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -568,6 +568,11 @@ export async function processDiscordMessage(
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
+  const splitOnCodeBlocks = resolveDiscordSplitOnCodeBlocks({
+    cfg,
+    discordConfig,
+    accountId,
+  });
 
   // --- Discord draft stream (edit-based preview streaming) ---
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
@@ -615,6 +620,7 @@ export async function processDiscordMessage(
       maxChars: draftMaxChars,
       maxLines: maxLinesPerMessage,
       chunkMode,
+      splitOnCodeBlocks,
     });
     if (!chunks.length && formatted) {
       chunks.push(formatted);
@@ -840,6 +846,7 @@ export async function processDiscordMessage(
           replyToMode,
           textLimit,
           maxLinesPerMessage,
+          splitOnCodeBlocks,
           tableMode,
           chunkMode,
           sessionKey: ctxPayload.SessionKey,
