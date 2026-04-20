@@ -142,7 +142,8 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  if (!deliveryPlan.requested) {
+  const hasMessageTargetContext = deliveryPlan.mode !== "webhook" && deliveryPlan.to !== undefined;
+  if (!deliveryPlan.requested && !hasMessageTargetContext) {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -746,7 +747,9 @@ export async function runCronIsolatedAgentTurn(params: {
       lane: params.lane,
       resolvedDelivery: {
         channel: prepared.context.resolvedDelivery.channel,
+        to: prepared.context.resolvedDelivery.to,
         accountId: prepared.context.resolvedDelivery.accountId,
+        threadId: prepared.context.resolvedDelivery.threadId,
       },
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,
