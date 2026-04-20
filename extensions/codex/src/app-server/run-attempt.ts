@@ -18,8 +18,12 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import {
+  createCodexAppServerClientFactoryTestHooks,
+  defaultCodexAppServerClientFactory,
+} from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
@@ -31,17 +35,11 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
-import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
+import { clearSharedCodexAppServerClient } from "./shared-client.js";
 import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
-type CodexAppServerClientFactory = (
-  startOptions?: CodexAppServerStartOptions,
-  authProfileId?: string,
-) => Promise<CodexAppServerClient>;
-
-let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =>
-  getSharedCodexAppServerClient({ startOptions, authProfileId });
+let clientFactory = defaultCodexAppServerClientFactory;
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
@@ -487,12 +485,6 @@ function handleApprovalRequest(params: {
   });
 }
 
-export const __testing = {
-  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
-    clientFactory = factory;
-  },
-  resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = (startOptions, authProfileId) =>
-      getSharedCodexAppServerClient({ startOptions, authProfileId });
-  },
-} as const;
+export const __testing = createCodexAppServerClientFactoryTestHooks((factory) => {
+  clientFactory = factory;
+});
