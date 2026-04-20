@@ -46,7 +46,7 @@ function resolveMemoryFlushGateState<
   /**
    * Effective reserve tokens for this gate check. Callers are expected to pass
    * `max(compaction.reserveTokens, compaction.reserveTokensFloor)` — see
-   * `resolveEffectiveCompactionReserveTokens` in `agent-runner-memory.ts`.
+   * `resolveEffectiveCompactionReserveTokens` in `src/agents/pi-settings.ts`.
    * Named without the `Floor` suffix because the floor is only one input to
    * this value; using just the floor ignores a user-configured `reserveTokens`
    * above the floor and is the bug fixed in this commit.
