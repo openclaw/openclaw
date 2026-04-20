@@ -27,6 +27,7 @@ export type ResolvedWhatsAppInboundPolicy = {
   isSelfChat: boolean;
   providerMissingFallbackApplied: boolean;
   isSamePhone: (value?: string | null) => boolean;
+  isConfiguredGroupAdmin: (conversationId: string, senderE164?: string | null) => boolean;
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
   resolveConversationRequireMention: (
     conversationId: string,
@@ -125,6 +126,8 @@ export function resolveWhatsAppInboundPolicy(params: {
     groupPolicy,
     groups: account.groups,
   });
+  const isConfiguredGroupAdmin = (conversationId: string, senderE164?: string | null) =>
+    isGroupAdmin(account.groups, resolveGroupConversationId(conversationId), senderE164);
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
   return {
@@ -137,6 +140,7 @@ export function resolveWhatsAppInboundPolicy(params: {
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
+    isConfiguredGroupAdmin,
     resolveConversationGroupPolicy: (conversationId) =>
       resolveChannelGroupPolicy({
         cfg: resolvedGroupCfg,
@@ -145,15 +149,14 @@ export function resolveWhatsAppInboundPolicy(params: {
         hasGroupAllowFrom: groupAllowFrom.length > 0,
       }),
     resolveConversationRequireMention: (conversationId, senderE164) => {
-      const groupId = resolveGroupConversationId(conversationId);
       // Admins don't need to be mentioned
-      if (isGroupAdmin(account.groups, groupId, senderE164)) {
+      if (isConfiguredGroupAdmin(conversationId, senderE164)) {
         return false;
       }
       return resolveChannelGroupRequireMention({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
-        groupId,
+        groupId: resolveGroupConversationId(conversationId),
       });
     },
   };
@@ -232,7 +235,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     ? (policy.account.groups?.[groupId]?.admin ?? policy.account.groups?.["*"]?.admin)
     : undefined;
   const senderIsConfiguredAdmin =
-    isGroup && groupAdmin ? isGroupAdmin(policy.account.groups, groupId, groupSender) : false;
+    isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
 
   const access = await resolveWhatsAppIngressAccess({
     cfg: params.cfg,

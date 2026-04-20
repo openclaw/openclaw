@@ -73,6 +73,18 @@ export async function checkInboundAccessControl(params: {
   });
   const { senderAccess } = access;
   if (params.group && senderAccess.decision !== "allow") {
+    const senderIsConfiguredGroupAdmin =
+      params.senderE164 != null
+        ? policy.isConfiguredGroupAdmin(params.from, params.senderE164)
+        : false;
+    if (senderIsConfiguredGroupAdmin) {
+      return {
+        allowed: true,
+        shouldMarkRead: true,
+        isSelfChat: policy.isSelfChat,
+        resolvedAccountId: policy.account.accountId,
+      };
+    }
     if (senderAccess.reasonCode === "group_policy_disabled") {
       logWhatsAppVerbose(params.verbose, "Blocked group message (groupPolicy: disabled)");
     } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
