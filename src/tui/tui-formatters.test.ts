@@ -289,14 +289,21 @@ describe("sanitizeRenderableText", () => {
   function expectTokenWidthUnderLimit(input: string) {
     const sanitized = sanitizeRenderableText(input);
     const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
-    expect(longestSegment).toBeLessThanOrEqual(32);
+    expect(longestSegment).toBeLessThanOrEqual(128);
   }
 
   it.each([
-    { label: "very long", input: "a".repeat(140) },
-    { label: "moderately long", input: "b".repeat(90) },
+    { label: "very long", input: "a".repeat(300) },
+    { label: "moderately long", input: "b".repeat(150) },
   ])("breaks $label unbroken tokens to protect narrow terminals", ({ input }) => {
     expectTokenWidthUnderLimit(input);
+  });
+
+  it("preserves code-like tokens (dots and parens) to avoid breaking code snippets", () => {
+    const input = "user.has_opted_out?('work_break_notifications')";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
   });
 
   it("preserves long filesystem paths verbatim for copy safety", () => {

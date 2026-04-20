@@ -5,9 +5,9 @@ import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
-const MAX_TOKEN_CHARS = 32;
-const LONG_TOKEN_RE = /\S{33,}/g;
-const LONG_TOKEN_TEST_RE = /\S{33,}/;
+const MAX_TOKEN_CHARS = 128;
+const LONG_TOKEN_RE = /\S{129,}/g;
+const LONG_TOKEN_TEST_RE = /\S{129,}/;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
@@ -80,6 +80,11 @@ function isCopySensitiveToken(token: string): boolean {
     return true;
   }
   if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+    return true;
+  }
+
+  // Preserve code-like fragments (containing dots, parentheses, or brackets)
+  if (token.includes(".") || token.includes("(") || token.includes(")") || token.includes("[") || token.includes("]")) {
     return true;
   }
 
