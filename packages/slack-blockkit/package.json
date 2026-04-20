@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/slack-blockkit",
+  "version": "1.0.0",
+  "description": "Slack Block Kit renderer for OpenClaw agent messages",
+  "main": "src/index.js",
+  "dependencies": {
+    "@slack/web-api": "^6.9.0",
+    "dotenv": "^16.3.1"
+  }
+}
