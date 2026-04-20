@@ -95,6 +95,14 @@ export function resolveDiscordEffectiveRoute(params: {
     }
     return params.configuredRoute?.route ?? params.route;
   }
+  // configuredRoute is non-null only when the boundSessionKey came from a
+  // configured channel binding (not an explicit /focus thread bind). In that
+  // case an agent role @-mention should override the channel default.
+  // When configuredRoute is null the boundSessionKey is from a real /focus
+  // bind, which takes precedence over any mention.
+  if (params.mentionedRoleAgentId && params.configuredRoute != null) {
+    return params.route;
+  }
   return {
     ...params.route,
     sessionKey: boundSessionKey,
