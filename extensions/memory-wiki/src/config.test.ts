@@ -112,13 +112,28 @@ describe("vault path templating", () => {
     expect(resolved.vault.renderMode).toBe(base.vault.renderMode);
   });
 
-  it("supports agentId templating and leaves unresolved tokens as empty strings", () => {
+  it("preserves unresolved tokens literally so compound templates do not silently collapse", () => {
     const base = resolveMemoryWikiConfig(
       { vault: { path: "/tmp/{agentId}/{sessionKey}/wiki" } },
       { homedir: "/Users/tester" },
     );
     const resolved = resolveMemoryWikiConfigForCtx(base, { agentId: "abc" });
-    expect(resolved.vault.path).toBe("/tmp/abc/wiki");
+    // `{sessionKey}` stays as a literal path segment rather than collapsing
+    // into `/tmp/abc/wiki`, so downstream filesystem ops fail visibly instead
+    // of silently reading/writing another tenant's vault.
+    expect(resolved.vault.path).toBe("/tmp/abc/{sessionKey}/wiki");
+  });
+
+  it("preserves an entirely unresolved template rather than collapsing to filesystem root or CWD", () => {
+    const base = resolveMemoryWikiConfig(
+      { vault: { path: "{workspaceDir}/wiki" } },
+      { homedir: "/Users/tester" },
+    );
+    const resolved = resolveMemoryWikiConfigForCtx(base, {});
+    // Without this guard `{workspaceDir}/wiki` would expand to `/wiki` (root)
+    // or `./wiki` (process CWD) when a tool server invokes with a bare
+    // context — a data-integrity / cross-tenant failure mode.
+    expect(resolved.vault.path).toBe("{workspaceDir}/wiki");
   });
 });
 

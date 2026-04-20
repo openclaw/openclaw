@@ -229,9 +229,15 @@ export function containsVaultPathTemplate(candidatePath: string): boolean {
 
 /**
  * Expand `{workspaceDir}`, `{agentDir}`, `{agentId}`, `{sessionKey}` placeholders
- * in a vault path using the supplied tool invocation context. Missing values
- * expand to an empty string; the result is normalized so path-traversal
- * segments (e.g. `..`) collapse only after expansion.
+ * in a vault path using the supplied tool invocation context. Tokens whose
+ * context value is absent (or empty) are preserved literally in the output
+ * (e.g. `{workspaceDir}/wiki` stays `{workspaceDir}/wiki`) so downstream
+ * filesystem operations fail visibly instead of silently collapsing the path
+ * into a different tenant's vault, the process CWD, or the filesystem root —
+ * for example when a plugin tool server resolves tools with a context that
+ * does not populate workspace/agent/session fields. The result is normalized
+ * so path-traversal segments (e.g. `..`) collapse only after expansion of
+ * resolved tokens.
  */
 export function expandVaultPathTemplate(
   templatePath: string,
@@ -242,7 +248,10 @@ export function expandVaultPathTemplate(
   }
   const expanded = templatePath.replace(
     VAULT_PATH_TEMPLATE_PATTERN,
-    (_match, token: (typeof VAULT_PATH_TEMPLATE_TOKENS)[number]) => ctx[token] ?? "",
+    (match, token: (typeof VAULT_PATH_TEMPLATE_TOKENS)[number]) => {
+      const value = ctx[token];
+      return value != null && value !== "" ? value : match;
+    },
   );
   return path.normalize(expanded);
 }
