@@ -1,3 +1,5 @@
+import { parseDurationMs } from "../cli/parse-duration.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 
 export type ToolDisplayActionSpec = {
@@ -140,6 +142,78 @@ export function coerceDisplayValue(
     return values.length > maxArrayEntries ? `${preview}…` : preview;
   }
   return undefined;
+}
+
+function formatDurationDisplay(ms: number, fallback: string): string {
+  return formatDurationCompact(ms, { spaced: true }) ?? fallback;
+}
+
+function coerceDurationValue(
+  rawKey: string,
+  value: unknown,
+  opts: CoerceDisplayValueOptions = {},
+): string | undefined {
+  const key = rawKey.trim().toLowerCase();
+  if (!key) {
+    return undefined;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value === 0 && !opts.includeZero) {
+      return undefined;
+    }
+    if (key.endsWith("durationms") || key.endsWith("delayms")) {
+      return formatDurationDisplay(Math.max(0, Math.round(value)), `${Math.round(value)}ms`);
+    }
+    if (key.endsWith("seconds")) {
+      return formatDurationDisplay(Math.max(0, Math.round(value * 1000)), `${value}s`);
+    }
+    if (key.endsWith("minutes")) {
+      return formatDurationDisplay(Math.max(0, Math.round(value * 60_000)), `${value}m`);
+    }
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (
+    key === "duration" ||
+    key.endsWith("duration") ||
+    key.endsWith("timeout") ||
+    key.endsWith("seconds") ||
+    key.endsWith("minutes")
+  ) {
+    try {
+      const defaultUnit = key.endsWith("minutes") ? "m" : key.endsWith("seconds") ? "s" : undefined;
+      const ms = parseDurationMs(trimmed, defaultUnit ? { defaultUnit } : undefined);
+      if (ms === 0 && !opts.includeZero) {
+        return undefined;
+      }
+      return formatDurationDisplay(ms, trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+function coerceDisplayValueForKey(
+  key: string,
+  value: unknown,
+  opts: CoerceDisplayValueOptions = {},
+): string | undefined {
+  const durationDisplay = coerceDurationValue(key, value, opts);
+  if (durationDisplay) {
+    return durationDisplay;
+  }
+  return coerceDisplayValue(value, opts);
 }
 
 export function lookupValueByPath(args: unknown, path: string): unknown {
@@ -330,7 +404,7 @@ export function resolveDetailFromKeys(
   if (opts.mode === "first") {
     for (const key of keys) {
       const value = lookupValueByPath(args, key);
-      const display = coerceDisplayValue(value, opts.coerce);
+      const display = coerceDisplayValueForKey(key, value, opts.coerce);
       if (display) {
         return display;
       }
@@ -341,7 +415,7 @@ export function resolveDetailFromKeys(
   const entries: Array<{ label: string; value: string }> = [];
   for (const key of keys) {
     const value = lookupValueByPath(args, key);
-    const display = coerceDisplayValue(value, opts.coerce);
+    const display = coerceDisplayValueForKey(key, value, opts.coerce);
     if (!display) {
       continue;
     }

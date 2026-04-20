@@ -22,6 +22,7 @@ export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
   actionFingerprint?: string;
+  args?: Record<string, unknown>;
 };
 
 export type EmbeddedPiSubscribeState = {

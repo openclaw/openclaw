@@ -886,6 +886,9 @@ export async function runAgentTurnWithFallback(params: {
                         name: payload.name,
                         phase: "start",
                         toolCallId: payload.toolUseId,
+                        ...(payload.input && typeof payload.input === "object"
+                          ? { args: payload.input as Record<string, unknown> }
+                          : {}),
                       });
                     });
                   },
@@ -1112,7 +1115,16 @@ export async function runAgentTurnWithFallback(params: {
                       typeof evt.data.toolUseId === "string" ? evt.data.toolUseId : undefined;
                     if (phase === "start" || phase === "update") {
                       await params.typingSignals.signalToolStart();
-                      await params.opts?.onToolStart?.({ name, phase, toolCallId });
+                      await params.opts?.onToolStart?.({
+                        name,
+                        phase,
+                        toolCallId,
+                        ...(evt.data.args && typeof evt.data.args === "object"
+                          ? { args: evt.data.args as Record<string, unknown> }
+                          : evt.data.input && typeof evt.data.input === "object"
+                            ? { args: evt.data.input as Record<string, unknown> }
+                            : {}),
+                      });
                     }
                   }
                   if (evt.stream === "item") {

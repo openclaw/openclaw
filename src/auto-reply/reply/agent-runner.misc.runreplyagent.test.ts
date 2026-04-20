@@ -1532,7 +1532,12 @@ describe("runReplyAgent claude-cli routing", () => {
         text?: string;
         isReasoning?: boolean;
       }) => Promise<void> | void;
-      onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+      onToolStart?: (payload: {
+        name?: string;
+        phase?: string;
+        toolCallId?: string;
+        args?: Record<string, unknown>;
+      }) => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     };
@@ -1659,7 +1664,11 @@ describe("runReplyAgent claude-cli routing", () => {
           text: "Check_*files*\n\nThen_more",
           delta: "Check_*files*\n\nThen_more",
         });
-        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
+        params.onToolUseEvent?.({
+          name: "Read",
+          toolUseId: "toolu_1",
+          input: { file_path: "/tmp/README.md", offset: 5, limit: 2 },
+        });
         params.onToolResult?.({ toolUseId: "toolu_1", text: "README contents" });
         params.onAssistantTurn?.("Final answer");
         return {
@@ -1691,6 +1700,8 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(onToolStart).toHaveBeenCalledWith({
       name: "Read",
       phase: "start",
+      toolCallId: "toolu_1",
+      args: { file_path: "/tmp/README.md", offset: 5, limit: 2 },
     });
     expect(thinkingEvents).toEqual(["Check_*files*\n\nThen_more"]);
     expect(toolPhases).toEqual(expect.arrayContaining(["start", "result"]));

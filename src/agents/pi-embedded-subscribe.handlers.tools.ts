@@ -67,10 +67,13 @@ function isCronAddAction(args: unknown): boolean {
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
+  const argsRecord =
+    args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
   return {
     meta,
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
+    ...(argsRecord ? { args: argsRecord } : {}),
   };
 }
 
@@ -587,7 +590,12 @@ export function handleToolExecutionStart(
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     void ctx.params.onAgentEvent?.({
       stream: "tool",
-      data: { phase: "start", name: toolName, toolCallId },
+      data: {
+        phase: "start",
+        name: toolName,
+        toolCallId,
+        ...(args && typeof args === "object" ? { args: args as Record<string, unknown> } : {}),
+      },
     });
 
     if (isExecToolName(toolName)) {
@@ -696,6 +704,10 @@ export function handleToolExecutionUpdate(
       phase: "update",
       name: toolName,
       toolCallId,
+      ...(ctx.state.toolMetaById.get(toolCallId)?.args &&
+      typeof ctx.state.toolMetaById.get(toolCallId)?.args === "object"
+        ? { args: ctx.state.toolMetaById.get(toolCallId)?.args as Record<string, unknown> }
+        : {}),
     },
   });
   if (isExecToolName(toolName)) {

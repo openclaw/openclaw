@@ -4,6 +4,7 @@ import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
+  handleToolExecutionUpdate,
 } from "./pi-embedded-subscribe.handlers.tools.js";
 import type {
   ToolCallSummary,
@@ -129,6 +130,56 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemStartedCount).toBe(2);
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
+  });
+
+  it("stores tool args for later update events", async () => {
+    const { ctx } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-read-args",
+      args: { file_path: "/tmp/example.txt", offset: 3, limit: 2 },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.state.toolMetaById.get("tool-read-args")).toMatchObject({
+      args: { file_path: "/tmp/example.txt", offset: 3, limit: 2 },
+    });
+  });
+});
+
+describe("handleToolExecutionUpdate tool args forwarding", () => {
+  it("includes stored args in tool update agent events", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-read-update",
+      args: { file_path: "/tmp/example.txt", offset: 3, limit: 2 },
+    });
+
+    onAgentEvent.mockClear();
+
+    handleToolExecutionUpdate(ctx, {
+      type: "tool_execution_update",
+      toolName: "read",
+      toolCallId: "tool-read-update",
+      partialResult: "partial",
+    } as never);
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "update",
+          toolCallId: "tool-read-update",
+          args: { file_path: "/tmp/example.txt", offset: 3, limit: 2 },
+        }),
+      }),
+    );
   });
 });
 

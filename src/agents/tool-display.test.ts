@@ -52,6 +52,37 @@ describe("tool display details", () => {
     expect(detail).toContain("tools true");
   });
 
+  it("formats duration-like numeric detail fields into compact time labels", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: {
+          task: "double-message-bug-gpt",
+          runTimeoutSeconds: 90,
+        },
+      }),
+    );
+
+    expect(detail).toContain("double-message-bug-gpt");
+    expect(detail).toContain("timeout 1m 30s");
+  });
+
+  it("formats duration strings into minutes when tool calls provide shorthand values", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "nodes",
+        args: {
+          action: "camera_clip",
+          nodeId: "pixel-1",
+          duration: "75s",
+        },
+      }),
+    );
+
+    expect(detail).toContain("node pixel-1");
+    expect(detail).toContain("duration 1m 15s");
+  });
+
   it("formats read/write/edit with intent-first file detail", () => {
     const readDetail = formatToolDetail(
       resolveToolDisplay({

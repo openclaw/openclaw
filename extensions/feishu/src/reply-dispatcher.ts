@@ -9,6 +9,11 @@ import {
   stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  formatToolDetail as formatCoreToolDetail,
+  resolveToolDisplay as resolveCoreToolDisplay,
+} from "../../../src/agents/tool-display.js";
+import { formatDurationCompact } from "../../../src/infra/format-time/format-duration.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveMediaContentType } from "./media-types.js";
@@ -49,6 +54,7 @@ function shouldUseCard(text: string): boolean {
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 5 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
+const FEISHU_TOOL_SUMMARY_MAX_CHARS = 180;
 
 function resolveFinalDeliveryContent(text: string, mediaUrls: string[]): string {
   const normalized = text.trim();
@@ -76,6 +82,23 @@ function resolveFinalDeliveryContent(text: string, mediaUrls: string[]): string 
     })
     .filter((value): value is string => Boolean(value));
   return names.length > 0 ? names.join(", ") : "media";
+}
+
+function truncateFeishuToolSummary(
+  summary: string,
+  maxChars = FEISHU_TOOL_SUMMARY_MAX_CHARS,
+): string {
+  const trimmed = summary.trim();
+  if (!trimmed || trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  const budget = Math.max(1, maxChars - 1);
+  let truncated = trimmed.slice(0, budget).trimEnd();
+  const backticks = truncated.match(/`/g)?.length ?? 0;
+  if (backticks % 2 === 1) {
+    truncated += "`";
+  }
+  return `${truncated}…`;
 }
 
 function resolveMediaFileName(mediaUrl: string): string {
@@ -333,6 +356,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           action: "stop",
           error: err,
         }),
+      // Feishu Typing is a persistent reaction that should follow the actual
+      // reply/card lifecycle, not a generic fixed TTL. Cleanup happens on
+      // dispatcher idle/cleanup instead.
+      maxDurationMs: 0,
     },
   });
 
@@ -376,7 +403,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let hasVisibleTextInReply = false;
   let replaceNextPartialAfterTool = false;
   let streamPhase: "idle" | "thinking" | "tool" | "streaming" = "idle";
-  const activeTools: Array<{ toolCallId?: string; name: string; startedAt: number }> = [];
+  const activeTools: Array<{
+    toolCallId?: string;
+    name: string;
+    summary?: string;
+    startedAt: number;
+  }> = [];
+  const completedToolSummaries: string[] = [];
   const seenToolCallIds = new Set<string>();
   let toolElapsedTimer: ReturnType<typeof setInterval> | null = null;
   let streamingActivityTimer: ReturnType<typeof setInterval> | null = null;
@@ -500,9 +533,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const resolveTrackedToolName = (name: string | undefined): string =>
     normalizeToolName(name) ?? "tool";
 
+  const summarizeTrackedTool = (
+    name: string | undefined,
+    args: Record<string, unknown> | undefined,
+  ): string => {
+    const normalizedName = resolveTrackedToolName(name);
+    const display = resolveCoreToolDisplay({ name: normalizedName, args });
+    const detail = formatCoreToolDetail(display)
+      ?.replace(/^with\s+/i, "")
+      .trim();
+    return truncateFeishuToolSummary(detail ? `${display.label} — ${detail}` : display.label);
+  };
+
   const getActiveRunningToolName = (): string | undefined => {
     const current = activeTools[activeTools.length - 1];
-    return current?.name?.trim() ? current.name.trim() : undefined;
+    const label = current?.summary?.trim() || current?.name?.trim();
+    return label || undefined;
   };
 
   const clearToolElapsedTimer = (): void => {
@@ -534,28 +580,42 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingActivityTimer.unref?.();
   };
 
-  const removeActiveTool = (toolCallId: string | undefined): void => {
-    if (activeTools.length === 0) {
+  const rememberCompletedToolSummary = (summary: string | undefined): void => {
+    const trimmed = summary ? truncateFeishuToolSummary(summary) : undefined;
+    if (!trimmed) {
       return;
+    }
+    completedToolSummaries.push(trimmed);
+    if (completedToolSummaries.length > 3) {
+      completedToolSummaries.splice(0, completedToolSummaries.length - 3);
+    }
+  };
+
+  const removeActiveTool = (
+    toolCallId: string | undefined,
+  ): { toolCallId?: string; name: string; summary?: string; startedAt: number } | undefined => {
+    if (activeTools.length === 0) {
+      return undefined;
     }
     const normalizedId = toolCallId?.trim();
     if (normalizedId) {
       const index = activeTools.findIndex((entry) => entry.toolCallId === normalizedId);
       if (index >= 0) {
-        activeTools.splice(index, 1);
+        const [removed] = activeTools.splice(index, 1);
         if (activeTools.length === 0) {
           clearToolElapsedTimer();
         }
-        return;
+        return removed;
       }
     }
     logDispatcher(
       `removeActiveTool: toolCallId=${normalizedId ?? "none"} did not match any entry, falling back to pop`,
     );
-    activeTools.pop();
+    const removed = activeTools.pop();
     if (activeTools.length === 0) {
       clearToolElapsedTimer();
     }
+    return removed;
   };
 
   const noteToolCallSeen = (
@@ -578,16 +638,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       name?: string;
       phase?: string;
       toolCallId?: string;
+      args?: Record<string, unknown>;
     },
     options?: { allowUnnamed?: boolean },
   ) => {
     const isStartPhase = !payload?.phase || payload.phase === "start" || payload.phase === "update";
     if (isStartPhase) {
       const isNewToolCall = noteToolCallSeen(payload, options);
+      const trackedName = resolveTrackedToolName(payload?.name);
+      const trackedSummary = summarizeTrackedTool(payload?.name, payload?.args);
       if (isNewToolCall) {
-        const trackedName = resolveTrackedToolName(payload?.name);
         activeTools.push({
           name: trackedName,
+          summary: trackedSummary,
           toolCallId: payload.toolCallId?.trim() || undefined,
           startedAt: Date.now(),
         });
@@ -600,6 +663,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }, 10_000);
           toolElapsedTimer.unref?.();
+        }
+      } else if (payload.toolCallId?.trim()) {
+        const existing = activeTools.find(
+          (entry) => entry.toolCallId === payload.toolCallId?.trim(),
+        );
+        if (existing) {
+          existing.name = trackedName;
+          existing.summary = trackedSummary;
         }
       }
     }
@@ -625,6 +696,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (synthesizedToolCall) {
       activeTools.push({
         name: "Tool",
+        summary: "Tool",
         toolCallId: payload.toolCallId?.trim() || undefined,
         startedAt: Date.now(),
       });
@@ -633,7 +705,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       streamPhase = "tool";
       startStreaming();
     }
-    removeActiveTool(payload.toolCallId);
+    const removedTool = removeActiveTool(payload.toolCallId);
+    rememberCompletedToolSummary(removedTool?.summary ?? removedTool?.name);
     if (activeTools.length === 0 && streamPhase === "tool") {
       streamPhase = streamText ? "streaming" : "idle";
     }
@@ -738,23 +811,31 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!oldest) {
           return "";
         }
-        const elapsedSec = Math.round((Date.now() - oldest.startedAt) / 1000);
-        return elapsedSec >= 5 ? ` (${elapsedSec}s)` : "";
+        const elapsedMs = Date.now() - oldest.startedAt;
+        const elapsedLabel = formatDurationCompact(elapsedMs, { spaced: true });
+        return elapsedMs >= 5_000 && elapsedLabel ? ` (${elapsedLabel})` : "";
       };
       const toolStatus = currentRunningTool
         ? `⏳ Running ${currentRunningTool}...${elapsedSuffix()}`
         : !options?.final && streamPhase === "tool" && activeTools.length > 0
           ? `⏳ Running tool...${elapsedSuffix()}`
           : "";
+      const completedSummaryLines = completedToolSummaries.map((summary) => `✓ ${summary}`);
       if (toolOnlyPanel) {
         // Show a completed summary when no tool is actively running, instead
         // of a zero-width space that renders as a blank panel.
-        sections.push(toolStatus || genericActivityLine || `✓ ${toolCallCount} completed`);
+        sections.push(
+          toolStatus ||
+            genericActivityLine ||
+            completedSummaryLines.join("\n") ||
+            `✓ ${toolCallCount} completed`,
+        );
       } else {
         sections.push(
           [
             `🔧 Tool calls (${toolCallCount})`,
             ...(toolStatus || genericActivityLine ? ["", toolStatus || genericActivityLine] : []),
+            ...(completedSummaryLines.length > 0 ? ["", ...completedSummaryLines] : []),
           ].join("\n"),
         );
       }
@@ -1069,6 +1150,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       thinkingCollapsed = false;
       thinkingActivityTick = 0;
       activeTools.length = 0;
+      completedToolSummaries.length = 0;
       clearToolElapsedTimer();
       clearStreamingActivityTimer();
       seenToolCallIds.clear();
@@ -1127,6 +1209,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           clearToolElapsedTimer();
           clearStreamingActivityTimer();
           seenToolCallIds.clear();
+          completedToolSummaries.length = 0;
           toolCallCount = 0;
           lastRenderedStreamContent = "";
           replaceNextPartialAfterTool = false;
@@ -1427,7 +1510,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               : undefined;
         const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
         if (phase === "start" || phase === "update") {
-          handleToolStartLikeEvent({ name, phase, toolCallId });
+          handleToolStartLikeEvent({
+            name,
+            phase,
+            toolCallId,
+            args:
+              evt.data.args && typeof evt.data.args === "object"
+                ? (evt.data.args as Record<string, unknown>)
+                : evt.data.input && typeof evt.data.input === "object"
+                  ? (evt.data.input as Record<string, unknown>)
+                  : undefined,
+          });
           return;
         }
         if (phase === "result") {

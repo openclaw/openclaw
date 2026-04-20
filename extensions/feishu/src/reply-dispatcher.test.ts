@@ -323,6 +323,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("does not auto-stop typing on a fixed TTL while the reply is still active", async () => {
+    vi.useFakeTimers();
+    try {
+      createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: {} as never,
+        chatId: "oc_chat",
+        replyToMessageId: "om_parent",
+        messageCreateTimeMs: Date.now(),
+      });
+
+      const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+      await options.onReplyStart?.();
+
+      expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(removeTypingIndicatorMock).not.toHaveBeenCalled();
+
+      await options.onIdle?.();
+      await flushAsyncTasks();
+      expect(removeTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps auto mode plain text on non-streaming send path", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
@@ -859,7 +886,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running exec..."),
+      expect.stringContaining("⏳ Running Exec..."),
       { title: "🔧 Tool calls (3)" },
     );
   });
@@ -886,13 +913,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "memory_search", phase: "start" });
     await flushAsyncTasks();
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running memory_search..."),
+      expect.stringContaining("⏳ Running Memory Search..."),
       { title: "🔧 Tool calls (1)" },
     );
 
     await dispatcher.replyOptions.onToolResult?.({});
     await flushAsyncTasks();
-    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ Memory Search", {
       title: "🔧 Tool calls (1)",
     });
   });
@@ -925,7 +952,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
 
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ Tool", {
       title: "🔧 Tool calls (1)",
     });
   });
@@ -962,9 +989,130 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await flushAsyncTasks();
 
-    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ Read", {
       title: "🔧 Tool calls (1)",
     });
+  });
+
+  it("shows read targets in the feishu thinking panel when tool args are available", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onAgentEvent?.({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-read-path",
+        args: {
+          file_path: "/tmp/README.md",
+          offset: 10,
+          limit: 5,
+        },
+      },
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("Read — lines 10-14 from /tmp/README.md"),
+      { title: "🔧 Tool calls (1)" },
+    );
+  });
+
+  it("shows read targets in the feishu thinking panel when low-level tool events still use input", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onAgentEvent?.({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-read-input",
+        input: {
+          file_path: "/tmp/README.md",
+          offset: 10,
+          limit: 5,
+        },
+      },
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("Read — lines 10-14 from /tmp/README.md"),
+      { title: "🔧 Tool calls (1)" },
+    );
+  });
+
+  it("shows exec commands in the feishu thinking panel when tool args are available", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onAgentEvent?.({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-exec-command",
+        args: {
+          command: "cd /tmp/project && pnpm vitest run src/agents/tool-display.test.ts",
+        },
+      },
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("Exec — run pnpm vitest"),
+      { title: "🔧 Tool calls (1)" },
+    );
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining(
+        "`cd /tmp/project && pnpm vitest run src/agents/tool-display.test.ts`",
+      ),
+      { title: "🔧 Tool calls (1)" },
+    );
+  });
+
+  it("truncates very long tool summaries so feishu cards stay compact", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    const longPath = `/tmp/${"very-long-segment/".repeat(16)}ENDMARKER.txt`;
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onAgentEvent?.({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-read-long",
+        args: {
+          file_path: longPath,
+          offset: 10,
+          limit: 5,
+        },
+      },
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    const call = streamingInstances[0].updateThinking.mock.lastCall;
+    expect(call?.[1]).toEqual({ title: "🔧 Tool calls (1)" });
+    const panelText = String(call?.[0] ?? "");
+    expect(panelText).toContain("Read — lines 10-14 from /tmp/");
+    expect(panelText).toContain("…");
+    expect(panelText).not.toContain("ENDMARKER.txt");
+    expect(panelText.length).toBeLessThan(260);
   });
 
   it("clears running tool status as soon as assistant text starts streaming", async () => {
@@ -1193,7 +1341,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
 
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running tool..."),
+      expect.stringContaining("⏳ Running Tool..."),
       { title: "🔧 Tool calls (2)" },
     );
   });
@@ -1229,14 +1377,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await flushAsyncTasks();
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running exec..."),
+      expect.stringContaining("⏳ Running Exec..."),
       { title: "🔧 Tool calls (2)" },
     );
 
     await dispatcher.replyOptions.onToolResult?.({ toolCallId: "tool-memory" });
     await flushAsyncTasks();
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running exec..."),
+      expect.stringContaining("⏳ Running Exec..."),
       { title: "🔧 Tool calls (2)" },
     );
   });
@@ -1264,14 +1412,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
     await flushAsyncTasks();
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running exec..."),
+      expect.stringContaining("⏳ Running Exec..."),
       { title: "🔧 Tool calls (2)" },
     );
 
     await dispatcher.replyOptions.onToolResult?.({});
     await flushAsyncTasks();
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running memory_search..."),
+      expect.stringContaining("⏳ Running Memory Search..."),
       { title: "🔧 Tool calls (2)" },
     );
   });
@@ -1301,7 +1449,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
 
     expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
-      expect.stringContaining("⏳ Running exec..."),
+      expect.stringContaining("⏳ Running Exec..."),
       { title: "🔧 Tool calls (3)" },
     );
   });
