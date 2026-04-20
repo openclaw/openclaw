@@ -58,7 +58,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "core-runtime-infra",
       "core-runtime-media-ui",
       "core-runtime-shared",
-      "agentic-agents-plugins",
+      "agentic-plugins",
     ]);
   });
 
@@ -109,11 +109,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
-  it("splits the agentic lane into control-plane, commands, and agent/plugin shards", () => {
+  it("splits the agentic lane into control-plane, commands, agent, SDK, and plugin shards", () => {
     const shards = createNodeTestShards();
     const controlPlaneShard = shards.find((shard) => shard.shardName === "agentic-control-plane");
     const commandsShard = shards.find((shard) => shard.shardName === "agentic-commands");
-    const agentPluginShard = shards.find((shard) => shard.shardName === "agentic-agents-plugins");
+    const agentShard = shards.find((shard) => shard.shardName === "agentic-agents");
+    const pluginSdkShard = shards.find((shard) => shard.shardName === "agentic-plugin-sdk");
+    const pluginsShard = shards.find((shard) => shard.shardName === "agentic-plugins");
 
     expect(controlPlaneShard).toEqual({
       checkName: "checks-node-agentic-control-plane",
@@ -137,15 +139,25 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       ],
       requiresDist: false,
     });
-    expect(agentPluginShard).toEqual({
-      checkName: "checks-node-agentic-agents-plugins",
-      shardName: "agentic-agents-plugins",
+    expect(agentShard).toEqual({
+      checkName: "checks-node-agentic-agents",
+      shardName: "agentic-agents",
+      configs: ["test/vitest/vitest.agents.config.ts"],
+      requiresDist: false,
+    });
+    expect(pluginSdkShard).toEqual({
+      checkName: "checks-node-agentic-plugin-sdk",
+      shardName: "agentic-plugin-sdk",
       configs: [
-        "test/vitest/vitest.agents.config.ts",
         "test/vitest/vitest.plugin-sdk-light.config.ts",
         "test/vitest/vitest.plugin-sdk.config.ts",
-        "test/vitest/vitest.plugins.config.ts",
       ],
+      requiresDist: false,
+    });
+    expect(pluginsShard).toEqual({
+      checkName: "checks-node-agentic-plugins",
+      shardName: "agentic-plugins",
+      configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: true,
     });
   });
@@ -197,6 +209,18 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-commands-b",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-c",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-c",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-d",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-d",
       },
       {
         checkName: "checks-node-auto-reply-reply-dispatch-a",

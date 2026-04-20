@@ -66,21 +66,13 @@ function createAutoReplyReplySplitShards() {
   }
 
   return Object.entries(groups).flatMap(([groupName, includePatterns]) => {
-    const midpoint = Math.ceil(includePatterns.length / 2);
-    return [
-      {
-        shardName: `${groupName}-a`,
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        includePatterns: includePatterns.slice(0, midpoint),
-        requiresDist: false,
-      },
-      {
-        shardName: `${groupName}-b`,
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        includePatterns: includePatterns.slice(midpoint),
-        requiresDist: false,
-      },
-    ].filter((shard) => shard.includePatterns.length > 0);
+    const shardCount = groupName === "auto-reply-reply-commands" ? 4 : 2;
+    return Array.from({ length: shardCount }, (_, index) => ({
+      shardName: `${groupName}-${String.fromCharCode(97 + index)}`,
+      configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+      includePatterns: includePatterns.filter((_, fileIndex) => fileIndex % shardCount === index),
+      requiresDist: false,
+    })).filter((shard) => shard.includePatterns.length > 0);
   });
 }
 
@@ -164,13 +156,21 @@ const SPLIT_NODE_SHARDS = new Map([
         requiresDist: false,
       },
       {
-        shardName: "agentic-agents-plugins",
+        shardName: "agentic-agents",
+        configs: ["test/vitest/vitest.agents.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-plugin-sdk",
         configs: [
-          "test/vitest/vitest.agents.config.ts",
           "test/vitest/vitest.plugin-sdk-light.config.ts",
           "test/vitest/vitest.plugin-sdk.config.ts",
-          "test/vitest/vitest.plugins.config.ts",
         ],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-plugins",
+        configs: ["test/vitest/vitest.plugins.config.ts"],
         requiresDist: true,
       },
     ],

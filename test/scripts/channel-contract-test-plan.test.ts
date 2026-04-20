@@ -34,12 +34,32 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
         task: "contracts-channels",
       },
       {
+        checkName: "checks-fast-contracts-channels-registry-c",
+        runtime: "node",
+        task: "contracts-channels",
+      },
+      {
+        checkName: "checks-fast-contracts-channels-registry-d",
+        runtime: "node",
+        task: "contracts-channels",
+      },
+      {
         checkName: "checks-fast-contracts-channels-core-a",
         runtime: "node",
         task: "contracts-channels",
       },
       {
         checkName: "checks-fast-contracts-channels-core-b",
+        runtime: "node",
+        task: "contracts-channels",
+      },
+      {
+        checkName: "checks-fast-contracts-channels-core-c",
+        runtime: "node",
+        task: "contracts-channels",
+      },
+      {
+        checkName: "checks-fast-contracts-channels-core-d",
         runtime: "node",
         task: "contracts-channels",
       },

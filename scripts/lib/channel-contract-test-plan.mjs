@@ -14,31 +14,27 @@ function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
 
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
-  const groups = {
-    "checks-fast-contracts-channels-registry-a": [],
-    "checks-fast-contracts-channels-registry-b": [],
-    "checks-fast-contracts-channels-core-a": [],
-    "checks-fast-contracts-channels-core-b": [],
+  const suffixes = ["a", "b", "c", "d"];
+  const groups = Object.fromEntries(
+    ["registry", "core"].flatMap((family) =>
+      suffixes.map((suffix) => [`checks-fast-contracts-channels-${family}-${suffix}`, []]),
+    ),
+  );
+  const groupKeys = {
+    core: suffixes.map((suffix) => `checks-fast-contracts-channels-core-${suffix}`),
+    registry: suffixes.map((suffix) => `checks-fast-contracts-channels-registry-${suffix}`),
   };
-  const pushBalanced = (firstKey, secondKey, file) => {
-    const target = groups[firstKey].length <= groups[secondKey].length ? firstKey : secondKey;
+  const pushBalanced = (keys, file) => {
+    const target = keys.toSorted((a, b) => groups[a].length - groups[b].length)[0];
     groups[target].push(file);
   };
 
   for (const file of listContractTestFiles(rootDir)) {
     const name = relative(rootDir, file).replaceAll("\\", "/");
     if (name.startsWith("plugins-core.") || name.startsWith("plugin.")) {
-      pushBalanced(
-        "checks-fast-contracts-channels-core-a",
-        "checks-fast-contracts-channels-core-b",
-        file,
-      );
+      pushBalanced(groupKeys.core, file);
     } else {
-      pushBalanced(
-        "checks-fast-contracts-channels-registry-a",
-        "checks-fast-contracts-channels-registry-b",
-        file,
-      );
+      pushBalanced(groupKeys.registry, file);
     }
   }
 
