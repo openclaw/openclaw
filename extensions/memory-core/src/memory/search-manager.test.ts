@@ -126,6 +126,7 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./search-manager.js";
 const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 
+type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
 type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
@@ -344,8 +345,8 @@ describe("getMemorySearchManager caching", () => {
       withMemorySourceCounts: true,
     });
     createQmdManagerMock
-      .mockImplementationOnce(async () => firstPrimary as unknown as typeof mockPrimary)
-      .mockImplementationOnce(async () => secondPrimary as unknown as typeof mockPrimary);
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
 
     const first = await getMemorySearchManager({ cfg: firstCfg, agentId });
     const firstManager = requireManager(first);
@@ -403,8 +404,8 @@ describe("getMemorySearchManager caching", () => {
       withMemorySourceCounts: true,
     });
     createQmdManagerMock
-      .mockImplementationOnce(async () => firstPrimary as unknown as typeof mockPrimary)
-      .mockImplementationOnce(async () => secondPrimary as unknown as typeof mockPrimary);
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
 
     const first = await getMemorySearchManager({ cfg: firstCfg, agentId });
     const second = await getMemorySearchManager({ cfg: secondCfg, agentId });
@@ -428,7 +429,7 @@ describe("getMemorySearchManager caching", () => {
       withMemorySourceCounts: true,
     });
     createQmdManagerMock.mockImplementationOnce(
-      async () => firstPrimary as unknown as typeof mockPrimary,
+      async () => firstPrimary as unknown as QmdManagerInstance,
     );
     checkQmdBinaryAvailability
       .mockResolvedValueOnce({ available: true })
@@ -450,15 +451,13 @@ describe("getMemorySearchManager caching", () => {
   it("dedupes concurrent full qmd manager creation for the same agent", async () => {
     const agentId = "pending-qmd";
     const cfg = createQmdCfg(agentId);
-    const createGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    const createGate = createDeferred<QmdManagerInstance>();
     createQmdManagerMock.mockImplementationOnce(async () => await createGate.promise);
 
     const firstPromise = getMemorySearchManager({ cfg, agentId });
     const secondPromise = getMemorySearchManager({ cfg, agentId });
 
-    createGate.resolve(
-      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    createGate.resolve(mockPrimary as unknown as QmdManagerInstance);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     requireManager(first);
@@ -486,8 +485,8 @@ describe("getMemorySearchManager caching", () => {
       requestedProvider: "qmd",
       withMemorySourceCounts: true,
     });
-    const firstGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
-    const secondGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    const firstGate = createDeferred<QmdManagerInstance>();
+    const secondGate = createDeferred<QmdManagerInstance>();
     createQmdManagerMock
       .mockImplementationOnce(async () => await firstGate.promise)
       .mockImplementationOnce(async () => await secondGate.promise);
@@ -499,16 +498,12 @@ describe("getMemorySearchManager caching", () => {
       expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
     });
 
-    firstGate.resolve(
-      firstPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
     await vi.waitFor(() => {
       expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
     });
 
-    secondGate.resolve(
-      secondPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     requireManager(first);
@@ -545,8 +540,8 @@ describe("getMemorySearchManager caching", () => {
       requestedProvider: "qmd",
       withMemorySourceCounts: true,
     });
-    const firstGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
-    const secondGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    const firstGate = createDeferred<QmdManagerInstance>();
+    const secondGate = createDeferred<QmdManagerInstance>();
     createQmdManagerMock
       .mockImplementationOnce(async () => await firstGate.promise)
       .mockImplementationOnce(async () => await secondGate.promise);
@@ -558,16 +553,12 @@ describe("getMemorySearchManager caching", () => {
       expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
     });
 
-    firstGate.resolve(
-      firstPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    firstGate.resolve(firstPrimary as unknown as QmdManagerInstance);
     await vi.waitFor(() => {
       expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
     });
 
-    secondGate.resolve(
-      secondPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    secondGate.resolve(secondPrimary as unknown as QmdManagerInstance);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     requireManager(first);
@@ -593,16 +584,14 @@ describe("getMemorySearchManager caching", () => {
       ...createQmdCfg(agentId),
       session: { store: "/tmp/alternate-session-store.json" },
     } as OpenClawConfig;
-    const createGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    const createGate = createDeferred<QmdManagerInstance>();
     createQmdManagerMock.mockImplementationOnce(async () => await createGate.promise);
 
     const firstPromise = getMemorySearchManager({ cfg: firstCfg, agentId });
     await Promise.resolve();
     const secondPromise = getMemorySearchManager({ cfg: secondCfg, agentId });
 
-    createGate.resolve(
-      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    createGate.resolve(mockPrimary as unknown as QmdManagerInstance);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     requireManager(first);
@@ -735,8 +724,8 @@ describe("getMemorySearchManager caching", () => {
       withMemorySourceCounts: true,
     });
     createQmdManagerMock
-      .mockImplementationOnce(async () => firstPrimary as unknown as typeof mockPrimary)
-      .mockImplementationOnce(async () => secondStatusManager as unknown as typeof mockPrimary);
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondStatusManager as unknown as QmdManagerInstance);
 
     const full = await getMemorySearchManager({ cfg: firstCfg, agentId });
     const fullManager = requireManager(full);
@@ -842,7 +831,7 @@ describe("getMemorySearchManager caching", () => {
   it("waits for pending full qmd manager creation during global teardown", async () => {
     const agentId = "teardown-pending-qmd";
     const cfg = createQmdCfg(agentId);
-    const createGate = createDeferred<Awaited<ReturnType<typeof QmdMemoryManager.create>>>();
+    const createGate = createDeferred<QmdManagerInstance>();
     createQmdManagerMock.mockImplementationOnce(async () => await createGate.promise);
 
     const firstPromise = getMemorySearchManager({ cfg, agentId });
@@ -851,9 +840,7 @@ describe("getMemorySearchManager caching", () => {
     const closePromise = closeAllMemorySearchManagers();
     await Promise.resolve();
 
-    createGate.resolve(
-      mockPrimary as unknown as Awaited<ReturnType<typeof QmdMemoryManager.create>>,
-    );
+    createGate.resolve(mockPrimary as unknown as QmdManagerInstance);
 
     const first = await firstPromise;
     const firstManager = requireManager(first);
