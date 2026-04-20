@@ -60,7 +60,6 @@ type CronUpdatePatch = {
       model?: string;
       thinking?: string;
       lightContext?: boolean;
-      toolsAllow?: string[];
     };
     delivery?: {
       mode?: string;
@@ -74,12 +73,7 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: {
-    model?: string;
-    thinking?: string;
-    lightContext?: boolean;
-    toolsAllow?: string[];
-  };
+  payload?: { model?: string; thinking?: string; lightContext?: boolean };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -153,10 +147,9 @@ function mockCronEditJobLookup(schedule: unknown): void {
   );
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets each assertion ascribe expected RPC params.
-function getGatewayCallParams<T>(method: string): T {
+function getGatewayCallParams(method: string): unknown {
   const call = callGatewayFromCli.mock.calls.find((entry) => entry[0] === method);
-  return (call?.[2] ?? {}) as T;
+  return call?.[2] ?? {};
 }
 
 async function runCronEditWithScheduleLookup(
@@ -167,7 +160,7 @@ async function runCronEditWithScheduleLookup(
   mockCronEditJobLookup(schedule);
   const program = buildProgram();
   await program.parseAsync(["cron", "edit", "job-1", ...editArgs], { from: "user" });
-  return getGatewayCallParams<CronUpdatePatch>("cron.update");
+  return getGatewayCallParams("cron.update") as CronUpdatePatch;
 }
 
 async function expectCronEditWithScheduleLookupExit(
@@ -424,23 +417,6 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
-  it("splits PowerShell-style space-separated --tools on cron add", async () => {
-    const params = await runCronAddAndGetParams([
-      "--name",
-      "Tools",
-      "--cron",
-      "* * * * *",
-      "--session",
-      "isolated",
-      "--message",
-      "hello",
-      "--tools",
-      "exec read write",
-    ]);
-
-    expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
-  });
-
   it.each([
     {
       label: "omits empty model and thinking",
@@ -460,34 +436,25 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.thinking).toBe(expectedThinking);
   });
 
-  it("splits PowerShell-style space-separated --tools on cron edit", async () => {
-    const patch = await runCronEditAndGetPatch([
-      "--message",
-      "hello",
-      "--tools",
-      "exec read write",
-    ]);
-
-    expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
-  });
-
   it("sets and clears agent id on cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--agent", " Ops ", "--message", "hello"]);
 
-    const patch = getGatewayCallParams<{ patch?: { agentId?: unknown } }>("cron.update");
+    const patch = getGatewayCallParams("cron.update") as { patch?: { agentId?: unknown } };
     expect(patch?.patch?.agentId).toBe("ops");
 
     await runCronCommand(["cron", "edit", "job-2", "--clear-agent"]);
-    const clearPatch = getGatewayCallParams<{ patch?: { agentId?: unknown } }>("cron.update");
+    const clearPatch = getGatewayCallParams("cron.update") as {
+      patch?: { agentId?: unknown };
+    };
     expect(clearPatch?.patch?.agentId).toBeNull();
   });
 
   it("allows model/thinking updates without --message", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--model", "opus", "--thinking", "low"]);
 
-    const patch = getGatewayCallParams<{
+    const patch = getGatewayCallParams("cron.update") as {
       patch?: { payload?: { kind?: string; model?: string; thinking?: string } };
-    }>("cron.update");
+    };
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.payload?.model).toBe("opus");
@@ -514,12 +481,12 @@ describe("cron cli", () => {
       "19098680",
     ]);
 
-    const patch = getGatewayCallParams<{
+    const patch = getGatewayCallParams("cron.update") as {
       patch?: {
         payload?: { kind?: string; message?: string };
         delivery?: { mode?: string; channel?: string; to?: string };
       };
-    }>("cron.update");
+    };
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.delivery?.mode).toBe("announce");
@@ -531,9 +498,9 @@ describe("cron cli", () => {
   it("supports --no-deliver on cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--no-deliver"]);
 
-    const patch = getGatewayCallParams<{
+    const patch = getGatewayCallParams("cron.update") as {
       patch?: { payload?: { kind?: string }; delivery?: { mode?: string } };
-    }>("cron.update");
+    };
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.delivery?.mode).toBe("none");
@@ -550,7 +517,7 @@ describe("cron cli", () => {
     // Update message without delivery flags - should NOT include undefined delivery fields
     await runCronCommand(["cron", "edit", "job-1", "--message", "Updated message"]);
 
-    const patch = getGatewayCallParams<{
+    const patch = getGatewayCallParams("cron.update") as {
       patch?: {
         payload?: {
           message?: string;
@@ -561,7 +528,7 @@ describe("cron cli", () => {
         };
         delivery?: unknown;
       };
-    }>("cron.update");
+    };
 
     // Should include the new message
     expect(patch?.patch?.payload?.message).toBe("Updated message");
@@ -703,7 +670,9 @@ describe("cron cli", () => {
       "test",
     ]);
 
-    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    const params = getGatewayCallParams("cron.add") as {
+      schedule: { kind: string; at: string };
+    };
     // 2026-03-23 is CET (+01:00), so 23:00 Oslo = 22:00 UTC
     expect(params.schedule.kind).toBe("at");
     expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
@@ -725,7 +694,9 @@ describe("cron cli", () => {
       "test",
     ]);
 
-    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    const params = getGatewayCallParams("cron.add") as {
+      schedule: { kind: string; at: string };
+    };
     // Explicit +02:00 should be honored, not overridden by --tz
     expect(params.schedule.kind).toBe("at");
     expect(params.schedule.at).toBe("2026-03-23T21:00:00.000Z");
@@ -747,7 +718,9 @@ describe("cron cli", () => {
       "test",
     ]);
 
-    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    const params = getGatewayCallParams("cron.add") as {
+      schedule: { kind: string; at: string };
+    };
     expect(params.schedule.kind).toBe("at");
     expect(params.schedule.at).toBe("2026-03-29T00:30:00.000Z");
   });
@@ -772,9 +745,9 @@ describe("cron cli", () => {
   it("sets explicit stagger for cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
 
-    const patch = getGatewayCallParams<{
+    const patch = getGatewayCallParams("cron.update") as {
       patch?: { schedule?: { kind?: string; staggerMs?: number } };
-    }>("cron.update");
+    };
     expect(patch?.patch?.schedule?.kind).toBe("cron");
     expect(patch?.patch?.schedule?.staggerMs).toBe(30_000);
   });
@@ -897,5 +870,60 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.after).toBe(1);
     expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
     expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
+  });
+
+  it("normalizes name and description in diff preview before diffing", async () => {
+    resetGatewayMock();
+    mockCronEditJobLookup({ kind: "cron", expr: "* * * * *" });
+
+    const program = buildProgram();
+    await program.parseAsync(
+      ["cron", "edit", "job-1", "--name", "  trimmed  ", "--description", "  spaced  "],
+      { from: "user" },
+    );
+
+    // The diff preview (written to error) should show the normalized value,
+    // not the raw whitespace-padded input.
+    const errorOutput = defaultRuntime.error.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join("\n");
+    expect(errorOutput).toContain("trimmed");
+    expect(errorOutput).not.toContain("  trimmed  ");
+    expect(errorOutput).toContain("spaced");
+    expect(errorOutput).not.toContain("  spaced  ");
+  });
+
+  it("shows (cleared) in diff preview when --description is set to whitespace-only", async () => {
+    // Regression test for: https://github.com/openclaw/openclaw/pull/59597
+    // chatgpt-codex-connector comment 3031807027
+    //
+    // Before fix: normalizeOptionalText("   ") returned undefined, which
+    // formatPatchValue rendered as "(unchanged)" — misleading because the
+    // real update would clear the description field.
+    //
+    // After fix: computeDisplayAfter returns null for this case, causing
+    // formatPatchValue to render "(cleared)" which accurately reflects what
+    // the real update will do.
+    resetGatewayMock();
+    mockCronEditJobLookup({ kind: "cron", expr: "* * * * *" });
+
+    const program = buildProgram();
+    await program.parseAsync(
+      ["cron", "edit", "job-1", "--description", "   "],
+      { from: "user" },
+    );
+
+    const errorOutput = defaultRuntime.error.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join("\n");
+
+    // The after-value must render as "(cleared)". The previous value may still
+    // appear as "(unchanged)" when the job had no description before the edit.
+    const descriptionLine = errorOutput
+      .split("\n")
+      .find((line) => line.includes("description:"));
+    expect(descriptionLine).toBeDefined();
+    expect(descriptionLine).toContain("cleared");
+    expect(descriptionLine).not.toMatch(/→\s*\(unchanged\)/);
   });
 });

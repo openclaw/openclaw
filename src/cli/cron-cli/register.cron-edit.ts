@@ -12,12 +12,12 @@ import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
 } from "./schedule-options.js";
+import { getCronChannelOptions, parseDurationMs, warnIfCronSchedulerDisabled } from "./shared.js";
+import { resolveDefaultCronStaggerMs } from "../../cron/stagger.js";
 import {
-  getCronChannelOptions,
-  parseCronToolsAllow,
-  parseDurationMs,
-  warnIfCronSchedulerDisabled,
-} from "./shared.js";
+  normalizeRequiredName,
+} from "../../cron/service/normalize.js";
+import { theme } from "../../terminal/theme.js";
 
 const assignIf = (
   target: Record<string, unknown>,
@@ -29,6 +29,225 @@ const assignIf = (
     target[key] = value;
   }
 };
+
+function sortObjectKeys(val: unknown): unknown {
+  if (Array.isArray(val)) { return val.map(sortObjectKeys); }
+  if (val !== null && typeof val === "object") {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(val as Record<string, unknown>).toSorted()) {
+      sorted[key] = sortObjectKeys((val as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return val;
+}
+
+function formatPatchValue(val: unknown): string {
+  if (val === null) { return theme.muted("(cleared)"); }
+  if (val === undefined) { return theme.muted("(unchanged)"); }
+  if (typeof val === "object") { return JSON.stringify(sortObjectKeys(val)); }
+  // val is narrowed to string | number | boolean | bigint | symbol here
+  return String(val as string | number | boolean | bigint | symbol);
+}
+
+// Mirror the merge semantics of applyJobPatch so the preview diff is accurate.
+//
+// schedule: when kind==="cron" and patch omits staggerMs, the real update
+//   preserves the existing staggerMs. All other cases replace wholesale.
+//
+// payload: when patch.kind === existing.kind, the real update merges fields.
+//   When kind changes (or existing is absent), it replaces wholesale.
+
+function computeDisplayAfterSchedule(
+  patchVal: unknown,
+  existingVal: unknown,
+): unknown {
+  if (
+    patchVal !== null &&
+    typeof patchVal === "object" &&
+    !Array.isArray(patchVal)
+  ) {
+    const p = patchVal as Record<string, unknown>;
+    if (
+      p["kind"] === "cron" &&
+      p["staggerMs"] === undefined
+    ) {
+      if (
+        existingVal !== null &&
+        typeof existingVal === "object" &&
+        !Array.isArray(existingVal)
+      ) {
+        const e = existingVal as Record<string, unknown>;
+        if (e["kind"] === "cron") {
+          // Path 1: cron → cron — preserve existing staggerMs (or keep it absent if undefined),
+          // mirroring applyJobPatch which never synthesizes a default for an existing cron job.
+          return e["staggerMs"] !== undefined
+            ? { ...p, staggerMs: e["staggerMs"] }
+            : p;
+        }
+      }
+      // Path 2: non-cron → cron conversion — synthesize default stagger just as applyJobPatch does
+      if (typeof p["expr"] === "string") {
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(p["expr"]);
+        if (defaultStaggerMs !== undefined) {
+          return { ...p, staggerMs: defaultStaggerMs };
+        }
+      }
+    }
+  }
+  return patchVal;
+}
+
+function computeDisplayAfterPayload(
+  patchVal: unknown,
+  existingVal: unknown,
+): unknown {
+  if (
+    patchVal === null ||
+    typeof patchVal !== "object" ||
+    Array.isArray(patchVal)
+  ) {
+    return patchVal;
+  }
+  const p = patchVal as Record<string, unknown>;
+  if (
+    existingVal === null ||
+    typeof existingVal !== "object" ||
+    Array.isArray(existingVal)
+  ) {
+    return patchVal;
+  }
+  const e = existingVal as Record<string, unknown>;
+  // Different kind: real update replaces wholesale
+  if (p["kind"] !== e["kind"]) {
+    return patchVal;
+  }
+  // Same kind: real update merges fields — mirror that here.
+  // Also mirror the null-as-delete semantics used by mergeCronPayload:
+  // a null patch value means "clear this field", so remove it from the preview.
+  const merged: Record<string, unknown> = { ...e, ...p };
+  for (const k of Object.keys(merged)) {
+    if (merged[k] === null) {
+      delete merged[k];
+    }
+  }
+  return merged;
+}
+
+function computeDisplayAfter(
+  key: string,
+  patchVal: unknown,
+  existingVal: unknown,
+): unknown {
+  if (key === "schedule") {
+    return computeDisplayAfterSchedule(patchVal, existingVal);
+  }
+  if (key === "payload") {
+    return computeDisplayAfterPayload(patchVal, existingVal);
+  }
+  if (key === "name") {
+    return typeof patchVal === "string" ? normalizeRequiredName(patchVal) : patchVal;
+  }
+  if (key === "description") {
+    if (typeof patchVal === "string") {
+      const normalized = normalizeOptionalString(patchVal);
+      // normalizeOptionalString returns undefined when the value is blank/whitespace-only,
+      // which means the real update will clear the field. Return null here so
+      // formatPatchValue renders "(cleared)" instead of the misleading "(unchanged)".
+      return normalized === undefined ? null : normalized;
+    }
+    return patchVal;
+  }
+  // Default: shallow-merge objects, pass-through primitives/arrays
+  if (
+    patchVal !== null &&
+    typeof patchVal === "object" &&
+    !Array.isArray(patchVal) &&
+    existingVal !== null &&
+    typeof existingVal === "object" &&
+    !Array.isArray(existingVal)
+  ) {
+    return { ...existingVal, ...patchVal };
+  }
+  return patchVal;
+}
+
+function buildCronPatchDiff(existing: CronJob, patch: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+
+  // Determine whether the main-session side-effect block will handle `delivery`
+  // explicitly below. If so, skip `delivery` in the generic loop to avoid showing
+  // a contradictory intermediate state that cron.update never persists.
+  //
+  // Mirror applyJobPatch semantics exactly: delivery is cleared only when
+  // sessionTarget is "main" AND the effective delivery mode is NOT "webhook".
+  // Webhook delivery is valid for any sessionTarget and must show in the diff.
+  const effectiveSessionTarget =
+    typeof patch["sessionTarget"] === "string"
+      ? patch["sessionTarget"]
+      : existing.sessionTarget;
+  const effectiveDeliveryForSkip =
+    "delivery" in patch
+      ? computeDisplayAfter("delivery", patch["delivery"], existing.delivery)
+      : existing.delivery;
+  const effectiveDeliveryMode =
+    effectiveDeliveryForSkip !== null &&
+    typeof effectiveDeliveryForSkip === "object" &&
+    !Array.isArray(effectiveDeliveryForSkip)
+      ? (effectiveDeliveryForSkip as Record<string, unknown>)["mode"]
+      : undefined;
+  const willClearDeliveryForMain =
+    effectiveSessionTarget === "main" && effectiveDeliveryMode !== "webhook";
+
+  for (const [key, next] of Object.entries(patch)) {
+    // Skip delivery here when the main-session side-effect block will handle it.
+    if (key === "delivery" && willClearDeliveryForMain) {
+      continue;
+    }
+    const prev = (existing as Record<string, unknown>)[key];
+    const displayAfter = computeDisplayAfter(key, next, prev);
+    const prevStr = formatPatchValue(prev);
+    const nextStr = formatPatchValue(displayAfter);
+    if (prevStr !== nextStr) {
+      lines.push(
+        `  ${theme.muted(key + ":")} ${prevStr} ${theme.muted("→")} ${nextStr}`,
+      );
+    }
+  }
+
+  // Mirror the side-effect in applyJobPatch: when sessionTarget becomes "main",
+  // any non-webhook delivery config is silently cleared by the real update path.
+  // Show this as an explicit delivery → (cleared) line so the preview is accurate.
+  if (effectiveSessionTarget === "main") {
+    const effectiveDelivery =
+      "delivery" in patch
+        ? computeDisplayAfter("delivery", patch["delivery"], existing.delivery)
+        : existing.delivery;
+    const deliveryMode =
+      effectiveDelivery !== null &&
+      typeof effectiveDelivery === "object" &&
+      !Array.isArray(effectiveDelivery)
+        ? (effectiveDelivery as Record<string, unknown>)["mode"]
+        : undefined;
+    if (effectiveDelivery !== undefined && deliveryMode !== "webhook") {
+      // The real applyJobPatch will clear delivery; show that in the preview.
+      const prevDeliveryStr = formatPatchValue(
+        "delivery" in patch ? effectiveDelivery : existing.delivery,
+      );
+      const clearedStr = formatPatchValue(undefined);
+      if (prevDeliveryStr !== clearedStr) {
+        lines.push(
+          `  ${theme.muted("delivery:")} ${prevDeliveryStr} ${theme.muted("→")} ${theme.muted("(cleared — main jobs do not support channel delivery)")}`,
+        );
+      }
+    }
+  }
+
+  if (lines.length > 0) {
+    lines.unshift(theme.warn("Applying changes:"));
+  }
+  return lines;
+}
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
@@ -64,7 +283,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
-      .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
+      .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
       .option("--announce", "Announce summary to a chat (subagent-style)")
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
@@ -156,6 +375,8 @@ export function registerCronEditCommand(cron: Command) {
             patch.sessionKey = null;
           }
 
+          let prefetchedList: { jobs?: CronJob[] } | null = null;
+
           const scheduleRequest = resolveCronEditScheduleRequest({
             at: opts.at,
             cron: opts.cron,
@@ -167,10 +388,10 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const listed = (await callGatewayFromCli("cron.list", opts, {
+            prefetchedList = (await callGatewayFromCli("cron.list", opts, {
               includeDisabled: true,
             })) as { jobs?: CronJob[] } | null;
-            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            const existing = (prefetchedList?.jobs ?? []).find((job) => job.id === id);
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -180,7 +401,6 @@ export function registerCronEditCommand(cron: Command) {
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
-          const toolsAllow = parseCronToolsAllow(opts.tools);
           const timeoutSeconds = opts.timeoutSeconds
             ? Number.parseInt(String(opts.timeoutSeconds), 10)
             : undefined;
@@ -196,7 +416,6 @@ export function registerCronEditCommand(cron: Command) {
             hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
-            Array.isArray(opts.tools) ||
             opts.clearTools ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
@@ -224,8 +443,11 @@ export function registerCronEditCommand(cron: Command) {
             );
             if (opts.clearTools) {
               payload.toolsAllow = null;
-            } else if (toolsAllow) {
-              payload.toolsAllow = toolsAllow;
+            } else if (typeof opts.tools === "string" && opts.tools.trim()) {
+              payload.toolsAllow = opts.tools
+                .split(",")
+                .map((t: string) => t.trim())
+                .filter(Boolean);
             }
             patch.payload = payload;
           }
@@ -313,6 +535,25 @@ export function registerCronEditCommand(cron: Command) {
             patch.failureAlert = failureAlert;
           }
 
+          // Fetch current job to show a before/after diff before applying changes.
+          // Non-blocking: if listing fails, skip the diff but proceed with the update.
+          if (Object.keys(patch).length > 0) {
+            try {
+              const listed = prefetchedList ?? ((await callGatewayFromCli("cron.list", opts, {
+                includeDisabled: true,
+              })) as { jobs?: CronJob[] } | null);
+              const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+              if (existing) {
+                const diffLines = buildCronPatchDiff(existing, patch);
+                if (diffLines.length > 0) {
+                  defaultRuntime.error(diffLines.join("\n"));
+                }
+              }
+            } catch {
+              // Diff display is best-effort; listing failure should not block the update.
+            }
+          }
+
           const res = await callGatewayFromCli("cron.update", opts, {
             id,
             patch,
@@ -325,4 +566,25 @@ export function registerCronEditCommand(cron: Command) {
         }
       }),
   );
+}
+
+
+/**
+ * Test-only thin wrapper: runs the cron-edit command with the given argv and runtime.
+ *
+ * Builds a minimal Commander program, registers the cron-edit subcommand, and
+ * drives it with `program.parseAsync`. Designed for unit tests that need to
+ * exercise the action handler directly without constructing a full CLI program.
+ *
+ * @internal
+ */
+export async function registerCronEdit(
+  args: string[],
+  _runtime: typeof defaultRuntime,
+): Promise<void> {
+  const { Command } = await import("commander");
+  const program = new Command("openclaw").exitOverride();
+  const cron = program.command("cron").exitOverride();
+  registerCronEditCommand(cron);
+  await program.parseAsync(args, { from: "user" });
 }
