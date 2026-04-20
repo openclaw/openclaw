@@ -70,5 +70,9 @@ export async function resolveGroupActivationFor(params: {
     accountId: params.accountId,
   }).resolveConversationRequireMention(params.conversationId, params.senderE164 ?? null);
   const defaultActivation = !requireMention ? "always" : "mention";
-  return normalizeGroupActivation(activation) ?? defaultActivation;
+  const normalizedActivation = normalizeGroupActivation(activation);
+  if (normalizedActivation === "mention" && !requireMention) {
+    return "always";
+  }
+  return normalizedActivation ?? defaultActivation;
 }

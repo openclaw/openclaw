@@ -214,4 +214,37 @@ describe("resolveGroupActivationFor", () => {
 
     expect(activation).toBe("always");
   });
+
+  it("keeps admin senders on always activation even when the session persists mention mode", async () => {
+    const sessionKey = "agent:main:whatsapp:group:123@g.us";
+    const { storePath, cleanup } = await makeSessionStore({
+      [sessionKey]: {
+        groupActivation: "mention",
+      },
+    });
+    cleanups.push(cleanup);
+
+    const activation = await resolveGroupActivationFor({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groups: {
+              "*": {
+                requireMention: true,
+                admin: "+15550001111",
+              },
+            },
+          },
+        },
+        session: { store: storePath },
+      } as never,
+      accountId: "default",
+      agentId: "main",
+      sessionKey,
+      conversationId: "123@g.us",
+      senderE164: "+15550001111",
+    });
+
+    expect(activation).toBe("always");
+  });
 });
