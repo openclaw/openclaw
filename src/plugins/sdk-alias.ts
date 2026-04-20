@@ -260,6 +260,35 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".cts",
   ".cjs",
 ] as const;
+const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
+  /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
+
+function isUsableDistPluginSdkArtifact(candidate: string): boolean {
+  if (!fs.existsSync(candidate)) {
+    return false;
+  }
+  switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      break;
+    default:
+      return true;
+  }
+  try {
+    const source = fs.readFileSync(candidate, "utf-8");
+    for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
+      const specifier = match[1];
+      if (!specifier || fs.existsSync(path.resolve(path.dirname(candidate), specifier))) {
+        continue;
+      }
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   try {
@@ -283,7 +312,7 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
 
 function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-  if (fs.existsSync(distPath)) {
+  if (isUsableDistPluginSdkArtifact(distPath)) {
     return true;
   }
   return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
@@ -369,7 +398,7 @@ export function resolvePluginSdkScopedAliasMap(
     for (const kind of orderedKinds) {
       if (kind === "dist") {
         const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-        if (fs.existsSync(candidate)) {
+        if (isUsableDistPluginSdkArtifact(candidate)) {
           for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
             aliasMap[`${packageName}/${subpath}`] = candidate;
           }
@@ -482,13 +511,14 @@ function buildPluginLoaderJitiConfigCacheKey(params: {
   argv1?: string;
   moduleUrl: string;
   preferBuiltDist?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
   return [
     buildPluginLoaderAliasMapCacheKey({
       modulePath: params.modulePath,
       argv1: params.argv1,
       moduleUrl: params.moduleUrl,
-      pluginSdkResolution: "auto",
+      pluginSdkResolution: params.pluginSdkResolution ?? "auto",
     }),
     params.preferBuiltDist === true ? "prefer-built-dist" : "default-dist",
   ].join("\0");
@@ -647,6 +677,7 @@ export function resolvePluginLoaderJitiConfig(params: {
   argv1?: string;
   moduleUrl: string;
   preferBuiltDist?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
 }): {
   tryNative: boolean;
   aliasMap: Record<string, string>;
@@ -662,7 +693,12 @@ export function resolvePluginLoaderJitiConfig(params: {
     params.modulePath,
     params.preferBuiltDist ? { preferBuiltDist: true } : {},
   );
-  const aliasMap = buildPluginLoaderAliasMap(params.modulePath, params.argv1, params.moduleUrl);
+  const aliasMap = buildPluginLoaderAliasMap(
+    params.modulePath,
+    params.argv1,
+    params.moduleUrl,
+    params.pluginSdkResolution,
+  );
   const result = {
     tryNative,
     aliasMap,
