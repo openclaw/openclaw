@@ -165,4 +165,29 @@ describe("filterMessagesByRunId", () => {
     expect(filtered).toHaveLength(1);
     expect((filtered[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("dot");
   });
+
+  it("treats Unicode letters as token characters so non-ASCII runIds do not prefix-collide", () => {
+    // Without Unicode-aware boundaries, `会` would leak messages tagged
+    // with `会議` and vice versa.
+    const shortId = "会";
+    const longId = "会議";
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `[RUN_RESULT run_id=${shortId} status=done]` }],
+        __openclaw: { id: "short", seq: 7 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `[RUN_RESULT run_id=${longId} status=done]` }],
+        __openclaw: { id: "long", seq: 8 },
+      },
+    ];
+    const filteredShort = filterMessagesByRunId(messages, shortId);
+    expect(filteredShort).toHaveLength(1);
+    expect((filteredShort[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("short");
+    const filteredLong = filterMessagesByRunId(messages, longId);
+    expect(filteredLong).toHaveLength(1);
+    expect((filteredLong[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("long");
+  });
 });
