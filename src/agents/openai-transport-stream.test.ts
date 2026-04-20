@@ -1639,6 +1639,110 @@ describe("openai transport stream", () => {
     expect(params).toHaveProperty("tool_choice", "required");
   });
 
+  it("does not emit prompt_cache_key on openai-completions by default", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v3",
+        name: "DeepSeek V3",
+        api: "openai-completions",
+        provider: "volcengine",
+        baseUrl: "https://ark.example/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 64000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      { sessionId: "sess-123" } as never,
+    );
+    expect(params).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("emits prompt_cache_key on openai-completions when compat.supportsPromptCacheKey=true and sessionId is set", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3-next",
+        name: "Qwen3 Next",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+        compat: { supportsPromptCacheKey: true },
+      } as never,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      { sessionId: "sess-abc" } as never,
+    );
+    expect(params).toHaveProperty("prompt_cache_key", "sess-abc");
+  });
+
+  it("suppresses prompt_cache_key when cacheRetention is 'none' even with supportsPromptCacheKey=true", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3-next",
+        name: "Qwen3 Next",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+        compat: { supportsPromptCacheKey: true },
+      } as never,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      { sessionId: "sess-abc", cacheRetention: "none" } as never,
+    );
+    expect(params).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("suppresses prompt_cache_key when sessionId is missing even with supportsPromptCacheKey=true", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3-next",
+        name: "Qwen3 Next",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+        compat: { supportsPromptCacheKey: true },
+      } as never,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      undefined,
+    );
+    expect(params).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("does not emit prompt_cache_key when supportsPromptCacheKey is explicitly false", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek-v3",
+        name: "DeepSeek V3",
+        api: "openai-completions",
+        provider: "volcengine",
+        baseUrl: "https://ark.example/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 64000,
+        maxTokens: 4096,
+        compat: { supportsPromptCacheKey: false },
+      } as never,
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      { sessionId: "sess-xyz" } as never,
+    );
+    expect(params).not.toHaveProperty("prompt_cache_key");
+  });
+
   it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {
     const model = {
       id: "nemotron-3-super",

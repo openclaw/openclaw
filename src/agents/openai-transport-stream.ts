@@ -1504,6 +1504,18 @@ export function buildOpenAICompletionsParams(
     stream: true,
     stream_options: { include_usage: true },
   };
+  // OpenAI-compatible providers (vLLM, SGLang, Chutes, etc.) that honor
+  // prompt_cache_key on the Completions path can opt in via
+  // compat.supportsPromptCacheKey. Default stays off to preserve the
+  // conservative behavior from #49877 / #48155 (some proxies reject unknown
+  // fields). Mirrors the Responses API emission in buildOpenAIResponsesParams.
+  if (
+    model.compat?.supportsPromptCacheKey === true &&
+    resolveCacheRetention(options?.cacheRetention) !== "none" &&
+    options?.sessionId
+  ) {
+    params.prompt_cache_key = options.sessionId;
+  }
   if (compat.supportsStore) {
     params.store = false;
   }
