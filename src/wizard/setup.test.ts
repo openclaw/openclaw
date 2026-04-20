@@ -5,6 +5,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { AuthChoice } from "../commands/onboard-types.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
@@ -396,6 +397,38 @@ describe("runSetupWizard", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(prompter.outro).toHaveBeenCalled();
+  });
+
+  it("rejects an empty auth choice instead of silently returning", async () => {
+    const select = vi.fn(
+      async (_params: WizardSelectParams<unknown>) => "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime({ throwsOnExit: true });
+    writeConfigFile.mockClear();
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "" as AuthChoice,
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      ),
+    ).rejects.toThrow("exit:1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Invalid --auth-choice. Use a supported auth choice or omit the flag.",
+    );
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("skips prompts and setup steps when flags are set", async () => {
