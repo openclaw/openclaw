@@ -139,3 +139,156 @@ export async function spawnWithFallback(
 
   throw lastError;
 }
+
+export type SpawnWithOutputResult = {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+export async function spawnWithOutput(
+  argv: string[],
+  options: SpawnOptions = {},
+): Promise<SpawnWithOutputResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), {
+      ...options,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+
+    child.on('close', (code, signal) => {
+      resolve({
+        stdout,
+        stderr,
+        code,
+        signal,
+      });
+    });
+  });
+}
+
+export async function spawnWithTimeout(
+  argv: string[],
+  options: SpawnOptions = {},
+  timeoutMs: number,
+): Promise<SpawnWithOutputResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), {
+      ...options,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${argv.join(' ')}`));
+    }, timeoutMs);
+
+    child.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeoutId);
+      if (!timedOut) {
+        reject(err);
+      }
+    });
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timeoutId);
+      if (!timedOut) {
+        resolve({
+          stdout,
+          stderr,
+          code,
+          signal,
+        });
+      }
+    });
+  });
+}
+
+export async function spawnAndWait(
+  argv: string[],
+  options: SpawnOptions = {},
+): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), options);
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+
+    child.on('close', (code) => {
+      resolve(code);
+    });
+  });
+}
+
+export function spawnWithLogging(
+  argv: string[],
+  options: SpawnOptions = {},
+  logger?: { info: (message: string) => void; error: (message: string) => void },
+): ChildProcess {
+  const child = spawn(argv[0], argv.slice(1), {
+    ...options,
+    stdio: options.stdio || ['ignore', 'pipe', 'pipe'],
+  });
+
+  child.stdout?.on('data', (data) => {
+    if (logger) {
+      logger.info(data.toString().trim());
+    }
+  });
+
+  child.stderr?.on('data', (data) => {
+    if (logger) {
+      logger.error(data.toString().trim());
+    }
+  });
+
+  return child;
+}
+
+export function safeKillProcess(pid: number, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
