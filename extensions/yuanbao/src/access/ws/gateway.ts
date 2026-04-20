@@ -1,7 +1,4 @@
-/** WebSocket gateway adapter — integrates YuanbaoWsClient with the OpenClaw channel lifecycle. */
-
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
-import { buildSyncCommandsPayload } from "../../business/commands/slash-commands/index.js";
 import { handleInboundMessage } from "../../business/inbound/index.js";
 import { resolveTraceContext } from "../../business/trace/context.js";
 import { createLog } from "../../logger.js";
@@ -38,7 +35,6 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
   const { account, config, abortSignal, log, runtime, statusSink } = params;
   const gwlog = createLog("ws", log);
 
-  // Build auth info (requires async token signing)
   const auth = await resolveWsAuth(account, log);
 
   const client = new YuanbaoWsClient({
@@ -57,13 +53,6 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
           connected: true,
           wsConnectId: data.connectId,
           lastConnectedAt: Date.now(),
-        });
-
-        // Sync command list to the backend after connection is established
-        syncCommandsToServer(client, account.accountId, config).catch((err) => {
-          gwlog.warn(`[${account.accountId}] failed to sync command list (non-blocking)`, {
-            error: String(err),
-          });
         });
       },
       onDispatch: (pushEvent: WsPushEvent) => {
@@ -126,10 +115,8 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
 
   client.connect();
 
-  // Store client reference for multi-account use (used by outbound.sendText)
   setActiveWsClient(account.accountId, client);
 
-  // Return a Promise that resolves when abortSignal fires.
   return new Promise<void>((resolve) => {
     const onAbort = () => {
       gwlog.info(`[${account.accountId}] received stop signal, disconnecting WebSocket`);
@@ -152,41 +139,22 @@ export async function startYuanbaoWsGateway(params: StartWsGatewayParams): Promi
 }
 
 async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) {
-  const mlog = createLog("ws", log);
-  mlog.info(`[${account.accountId}] resolveWsAuth params:`, {
-    botId: account.botId,
-    token: account.token,
-  });
-  // If a pre-signed static token is available, use it directly
   if (account.token) {
-    const uid = account.botId || "";
-    mlog.info(`[${account.accountId}] using pre-configured static token`, {
-      uid,
-      botId: account.botId,
-      token: account.token,
-    });
     return {
       bizId: "ybBot",
-      uid,
+      uid: account.botId || "",
       source: "bot",
       token: account.token,
       routeEnv: account.config?.routeEnv,
     };
   }
   const tokenData = await getSignToken(account, log);
-  const uid = tokenData.bot_id || account.botId || "";
-
   if (tokenData.bot_id) {
     account.botId = tokenData.bot_id;
   }
-
-  mlog.info(
-    `[${account.accountId}] ✍️ sign-token done uid=${uid} (bot_id=${tokenData.bot_id}, botId=${account.botId})`,
-  );
-
   return {
     bizId: "ybBot",
-    uid,
+    uid: tokenData.bot_id || account.botId || "",
     source: tokenData.source || "bot",
     token: tokenData.token,
     routeEnv: account.config?.routeEnv,
@@ -194,23 +162,21 @@ async function resolveWsAuth(account: ResolvedYuanbaoAccount, log?: GatewayLog) 
 }
 
 function parsePushContentToMsgBody(content: unknown): YuanbaoMsgBodyElement[] | undefined {
-  if (typeof content === "string" && content.trim()) {
-    // Try JSON parse (push content may be a JSON string)
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed?.msg_body && Array.isArray(parsed.msg_body)) {
-        return parsed.msg_body;
-      }
-      // If it's another JSON format, try to extract the text field
-      if (parsed?.text) {
-        return [{ msg_type: "TIMTextElem", msg_content: { text: parsed.text } }];
-      }
-    } catch {
-      // Not JSON — treat as plain text
-    }
-    return [{ msg_type: "TIMTextElem", msg_content: { text: content } }];
+  if (typeof content !== "string" || !content.trim()) {
+    return undefined;
   }
-  return undefined;
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed?.msg_body && Array.isArray(parsed.msg_body)) {
+      return parsed.msg_body;
+    }
+    if (parsed?.text) {
+      return [{ msg_type: "TIMTextElem", msg_content: { text: parsed.text } }];
+    }
+  } catch {
+    /* not JSON */
+  }
+  return [{ msg_type: "TIMTextElem", msg_content: { text: content } }];
 }
 
 type InboundResult = { msg: YuanbaoInboundMessage; chatType: "c2c" | "group" };
@@ -220,37 +186,33 @@ function inferChatType(msg: Record<string, unknown>): "c2c" | "group" {
     return "group";
   }
   const cmd = msg.callback_command as string | undefined;
-  if (cmd === "Group.CallbackAfterRecallMsg" || cmd === "Group.CallbackAfterSendMsg") {
-    return "group";
-  }
-  return "c2c";
+  return cmd === "Group.CallbackAfterRecallMsg" || cmd === "Group.CallbackAfterSendMsg"
+    ? "group"
+    : "c2c";
 }
 
 function hasValidMsgFields(msg: Record<string, unknown>): boolean {
   return Boolean(msg.callback_command || msg.from_account || msg.msg_body);
 }
 
-function decodeFromProtobuf(rawData: Uint8Array, pushType: string): InboundResult | null {
+function decodeFromProtobuf(rawData: Uint8Array, _pushType: string): InboundResult | null {
   const decoded = decodeInboundMessage(rawData);
   if (!decoded || !hasValidMsgFields(decoded as Record<string, unknown>)) {
     return null;
   }
-  createLog("ws").debug(`[${pushType}] WS push event decoded`, { ...decoded });
   return { msg: decoded, chatType: inferChatType(decoded as Record<string, unknown>) };
 }
 
-function decodeFromRawDataJson(rawData: Uint8Array, pushType: string): InboundResult | null {
+function decodeFromRawDataJson(rawData: Uint8Array, _pushType: string): InboundResult | null {
   try {
     const rawJson = JSON.parse(new TextDecoder().decode(rawData));
     if (!rawJson || !hasValidMsgFields(rawJson)) {
       return null;
     }
     const msg = rawJson as YuanbaoInboundMessage;
-    // Back-fill trace_id from log_ext
     if (!msg.trace_id) {
       msg.trace_id = rawJson.log_ext?.trace_id;
     }
-    createLog("ws").info(`[${pushType}] WS push event decoded`, { ...msg });
     return { msg, chatType: inferChatType(msg as Record<string, unknown>) };
   } catch {
     return null;
@@ -262,28 +224,26 @@ function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
   if (!msgBody) {
     return null;
   }
-
-  let parsedContent: Record<string, unknown> = {};
+  let parsed: Record<string, unknown> = {};
   try {
-    parsedContent = JSON.parse(pushEvent.content as string);
+    parsed = JSON.parse(pushEvent.content as string);
   } catch {
-    /* Plain text content — JSON parse failure is expected */
+    /* plain text */
   }
-
-  const logExt = parsedContent.log_ext as { trace_id?: string } | undefined;
-  const chatType = parsedContent.group_code ? "group" : "c2c";
+  const logExt = parsed.log_ext as { trace_id?: string } | undefined;
+  const chatType = parsed.group_code ? "group" : "c2c";
   return {
     msg: {
       callback_command:
         chatType === "group" ? "Group.CallbackAfterSendMsg" : "C2C.CallbackAfterSendMsg",
-      from_account: parsedContent.from_account as string | undefined,
-      group_code: parsedContent.group_code as string | undefined,
+      from_account: parsed.from_account as string | undefined,
+      group_code: parsed.group_code as string | undefined,
       msg_body: msgBody,
-      msg_key: parsedContent.msg_key as string | undefined,
-      msg_seq: parsedContent.msg_seq as number | undefined,
-      msg_time: parsedContent.msg_time as number | undefined,
-      trace_id: logExt?.trace_id ?? (parsedContent.trace_id as string | undefined),
-      seq_id: parsedContent.seq_id as string | undefined,
+      msg_key: parsed.msg_key as string | undefined,
+      msg_seq: parsed.msg_seq as number | undefined,
+      msg_time: parsed.msg_time as number | undefined,
+      trace_id: logExt?.trace_id ?? (parsed.trace_id as string | undefined),
+      seq_id: parsed.seq_id as string | undefined,
     },
     chatType,
   };
@@ -291,49 +251,29 @@ function decodeFromContent(pushEvent: WsPushEvent): InboundResult | null {
 
 export function wsPushToInboundMessage(
   pushEvent: WsPushEvent,
-  log?: GatewayLog,
+  _log?: GatewayLog,
 ): InboundResult | null {
-  const wsLog = createLog("ws", log);
-
-  // First try decoding full ConnMsg.data directly (backend may omit the PushMsg wrapper)
+  const pushType = String(pushEvent.type ?? "");
   if (pushEvent.connData && pushEvent.connData.length > 0) {
-    wsLog.debug(
-      `[${pushEvent.type}] WS push decode via connData (connData.length=${pushEvent.connData.length})`,
-    );
-    const pushType = String(pushEvent.type ?? "");
     const result = decodeFromProtobuf(pushEvent.connData, pushType);
     if (result) {
       return result;
     }
   }
-
-  // connData decode failed — fallback to rawData (PushMsg.data)
   if (pushEvent.rawData && pushEvent.rawData.length > 0) {
-    const pushType = String(pushEvent.type ?? "rawData");
-    wsLog.debug(`[${pushType}] WS push decode via rawData`);
     const result =
       decodeFromProtobuf(pushEvent.rawData, pushType) ??
       decodeFromRawDataJson(pushEvent.rawData, pushType);
     if (result) {
       return result;
     }
-    wsLog.warn(`[${pushType}] WS push decode failed`);
   }
-
   if (pushEvent.content) {
-    wsLog.debug(`[${pushEvent.type || "content"}] WS push decode via content`, {
-      content: pushEvent.content,
-    });
     return decodeFromContent(pushEvent);
   }
-
   return null;
 }
 
-/**
- * Handle a push event received from WebSocket.
- * Converts the event into a YuanbaoInboundMessage and feeds it into the OpenClaw message pipeline.
- */
 function handleWsDispatchEvent(params: {
   account: ResolvedYuanbaoAccount;
   config: OpenClawConfig;
@@ -354,53 +294,22 @@ function handleWsDispatchEvent(params: {
     statusSink,
     abortSignal,
   } = params;
-  const dlog = createLog("ws", gwLog);
-
-  dlog.debug(
-    `[${account.accountId}][dispatch] cmd=${pushEvent.cmd}, module=${pushEvent.module}, msgId=${pushEvent.msgId}`,
-  );
-
   const converted = wsPushToInboundMessage(pushEvent, gwLog);
   if (!converted) {
-    dlog.debug(
-      `[${account.accountId}][dispatch] cmd=${pushEvent.cmd} (non-message event, skipping)`,
-    );
     return;
   }
-
   const { msg, chatType } = converted;
-
-  // Resolve / generate trace context
   const traceContext = resolveTraceContext({
     traceId: msg.trace_id,
     seqId: msg.seq_id ?? msg.msg_seq,
   });
   msg.trace_id = traceContext.traceId;
   msg.seq_id = traceContext.seqId;
-
   const isGroup = chatType === "group";
-
-  dlog.debug("[msg-trace] dispatch resolved", {
-    traceId: traceContext.traceId,
-    seqId: traceContext.seqId ?? "(none)",
-    traceparent: traceContext.traceparent,
-    account: account.accountId,
-  });
-  dlog.info(`[${account.accountId}][dispatch] received ${isGroup ? "group" : "direct"} message`);
-
-  // Report inbound status
-  if (statusSink) {
-    statusSink({ lastInboundAt: Date.now() });
-  }
-
-  // Feed into the message pipeline
+  statusSink?.({ lastInboundAt: Date.now() });
   if (!runtime) {
-    dlog.warn(
-      `[${account.accountId}][dispatch] PluginRuntime not provided, cannot process message`,
-    );
     return;
   }
-
   handleInboundMessage({
     msg,
     isGroup,
@@ -417,45 +326,6 @@ function handleWsDispatchEvent(params: {
     statusSink: statusSink as Parameters<typeof handleInboundMessage>[0]["statusSink"],
     abortSignal,
   }).catch((err) => {
-    dlog.error(
-      `[${account.accountId}][dispatch] WS ${isGroup ? "group " : ""} message handler failed: ${String(err)}`,
-    );
+    createLog("ws", gwLog).error(`[${account.accountId}][dispatch] handler failed: ${String(err)}`);
   });
-}
-
-/**
- * Sync the command list to the backend after connection is established.
- *
- * - bot_commands: dynamically obtained from the OpenClaw framework via listChatCommandsForConfig
- * - plugin_commands: commands collected during plugin registration
- * Sync failure does not affect normal operation — only a warning is logged.
- */
-async function syncCommandsToServer(
-  client: YuanbaoWsClient,
-  accountId: string,
-  config?: OpenClawConfig,
-): Promise<void> {
-  const slog = createLog("ws");
-  const payload = await buildSyncCommandsPayload(config);
-  slog.info(`[${accountId}] syncing command list, request payload:`, {
-    sync_type: payload.syncType,
-    bot_version: payload.botVersion,
-    plugin_version: payload.pluginVersion,
-    command_data: {
-      bot_commands: payload.commandData.botCommands,
-      plugin_commands: payload.commandData.pluginCommands,
-    },
-  });
-
-  const rsp = await client.syncInformation(payload);
-
-  slog.info(`[${accountId}] SyncInformationRsp:`, { code: rsp.code, msg: rsp.msg });
-
-  if (rsp.code !== 0) {
-    slog.warn(
-      `[${accountId}] sync command list returned non-zero code: code=${rsp.code}, msg=${rsp.msg}`,
-    );
-  } else {
-    slog.info(`[${accountId}] sync command list succeeded`);
-  }
 }

@@ -45,10 +45,9 @@ export const IMAGE_EXTS = new Set([
   ".ico",
 ]);
 
-/** Guess MIME type from filename extension. */
 export function guessMimeType(filename: string): string {
   const ext = extname(filename).toLowerCase();
-  const mime: Record<string, string> = {
+  const m: Record<string, string> = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
@@ -67,109 +66,87 @@ export function guessMimeType(filename: string): string {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".txt": "text/plain",
     ".zip": "application/zip",
-    ".tar": "application/x-tar",
-    ".gz": "application/gzip",
     ".mp3": "audio/mpeg",
     ".mp4": "video/mp4",
     ".wav": "audio/wav",
     ".ogg": "audio/ogg",
     ".webm": "video/webm",
   };
-  return mime[ext] ?? "application/octet-stream";
+  return m[ext] ?? "application/octet-stream";
 }
 
-/** Check if file is an image type (by MIME or extension). */
 function isImage(filename: string, mimeType?: string): boolean {
-  if (mimeType?.startsWith("image/")) {
-    return true;
-  }
-  return IMAGE_EXTS.has(extname(filename).toLowerCase());
+  return mimeType?.startsWith("image/") || IMAGE_EXTS.has(extname(filename).toLowerCase());
 }
 
-/**
- * Generate a random file ID.
- */
 function generateFileId(): string {
   return randomBytes(16).toString("hex");
 }
-
-/**
- * Compute MD5 hash of a Buffer, returning hex string.
- */
 function md5Hex(buffer: Buffer): string {
   return createHash("md5").update(buffer).digest("hex");
 }
 
 /** Parse image dimensions from Buffer (supports JPEG/PNG/GIF/WebP), no extra dependencies. */
 export function parseImageSize(buf: Buffer): { width: number; height: number } | undefined {
-  return parsePngSize(buf) ?? parseJpegSize(buf) ?? parseGifSize(buf) ?? parseWebpSize(buf);
-}
-
-function parsePngSize(buf: Buffer): { width: number; height: number } | undefined {
-  if (buf.length < 24) {
-    return undefined;
-  }
-  if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) {
-    return undefined;
-  }
-  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-}
-
-function parseJpegSize(buf: Buffer): { width: number; height: number } | undefined {
-  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) {
-    return undefined;
-  }
-  let i = 2;
-  while (i < buf.length - 9) {
-    if (buf[i] !== 0xff) {
-      i++;
-      continue;
-    }
-    const marker = buf[i + 1];
-    if (marker === 0xc0 || marker === 0xc2) {
-      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
-    }
-    if (i + 3 < buf.length) {
-      i += 2 + buf.readUInt16BE(i + 2);
-    } else {
-      break;
-    }
-  }
-  return undefined;
-}
-
-function parseGifSize(buf: Buffer): { width: number; height: number } | undefined {
   if (buf.length < 10) {
     return undefined;
   }
+  // PNG
+  if (
+    buf.length >= 24 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47
+  ) {
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  // JPEG
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i < buf.length - 9) {
+      if (buf[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      const m = buf[i + 1];
+      if (m === 0xc0 || m === 0xc2) {
+        return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+      }
+      if (i + 3 < buf.length) {
+        i += 2 + buf.readUInt16BE(i + 2);
+      } else {
+        break;
+      }
+    }
+    return undefined;
+  }
+  // GIF
   const sig = buf.toString("ascii", 0, 6);
-  if (sig !== "GIF87a" && sig !== "GIF89a") {
-    return undefined;
+  if (sig === "GIF87a" || sig === "GIF89a") {
+    return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
   }
-  return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
-}
-
-function parseWebpSize(buf: Buffer): { width: number; height: number } | undefined {
-  if (buf.length < 16) {
-    return undefined;
-  }
-  if (buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WEBP") {
-    return undefined;
-  }
-  const chunk = buf.toString("ascii", 12, 16);
-  if (chunk === "VP8 ") {
-    if (buf.length >= 30 && buf[23] === 0x9d && buf[24] === 0x01 && buf[25] === 0x2a) {
+  // WebP
+  if (
+    buf.length >= 16 &&
+    buf.toString("ascii", 0, 4) === "RIFF" &&
+    buf.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    const chunk = buf.toString("ascii", 12, 16);
+    if (
+      chunk === "VP8 " &&
+      buf.length >= 30 &&
+      buf[23] === 0x9d &&
+      buf[24] === 0x01 &&
+      buf[25] === 0x2a
+    ) {
       return { width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
     }
-  }
-  if (chunk === "VP8L") {
-    if (buf.length >= 25 && buf[20] === 0x2f) {
+    if (chunk === "VP8L" && buf.length >= 25 && buf[20] === 0x2f) {
       const bits = buf.readUInt32LE(21);
       return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
     }
-  }
-  if (chunk === "VP8X") {
-    if (buf.length >= 30) {
+    if (chunk === "VP8X" && buf.length >= 30) {
       return {
         width: (buf[24] | (buf[25] << 8) | (buf[26] << 16)) + 1,
         height: (buf[27] | (buf[28] << 8) | (buf[29] << 16)) + 1,
@@ -179,7 +156,6 @@ function parseWebpSize(buf: Buffer): { width: number; height: number } | undefin
   return undefined;
 }
 
-/** Check if a string is a local file path (not a remote URL). */
 function isLocalPath(s: string): boolean {
   return (
     s.startsWith("file://") ||
@@ -193,30 +169,25 @@ function isLocalPath(s: string): boolean {
     s.startsWith("../") ||
     s.startsWith(".\\") ||
     s.startsWith("..\\") ||
-    !s.includes("://") // No scheme -> local path (bare filename / bare relative path)
+    !s.includes("://")
   );
 }
 
-/** Normalize local path: trim, strip file://, expand ~, resolve relative paths. */
 function normalizePath(s: string): string {
   let p = s.trim();
   if (p.startsWith("file://")) {
     try {
       p = decodeURIComponent(new URL(p).pathname);
     } catch {
-      p = p.slice("file://".length);
+      p = p.slice(7);
     }
   }
   if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
     p = homedir() + p.slice(1);
   }
-  if (!path.isAbsolute(p)) {
-    p = path.resolve(p);
-  }
-  return p;
+  return path.isAbsolute(p) ? p : path.resolve(p);
 }
 
-/** Map content-type to file extension */
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
@@ -226,52 +197,35 @@ const MIME_TO_EXT: Record<string, string> = {
   "text/plain": ".txt",
 };
 
-/** Extract filename from content-disposition header (supports filename and filename*=UTF-8'' formats). */
 function extractFilenameFromContentDisposition(contentDisp: string): string {
   const match = contentDisp.match(/filename\*?=(?:UTF-8'')?["']?([^;"'\r\n]+)/i);
-  if (!match) {
-    return "";
-  }
-  return decodeURIComponent(match[1].replace(/"/g, "")).trim();
+  return match ? decodeURIComponent(match[1].replace(/"/g, "")).trim() : "";
 }
 
-/** Infer filename from HTTP response. Priority: content-disposition > URL path > random hex. */
 function inferFilenameFromResponse(
   response: Response,
   fetchUrl: string,
   contentType: string,
 ): string {
-  // 1. content-disposition
   const fromDisp = extractFilenameFromContentDisposition(
     response.headers.get("content-disposition") ?? "",
   );
   if (fromDisp) {
     return fromDisp;
   }
-
-  // 2. URL path last segment
   const fromPath = basename(new URL(fetchUrl).pathname).trim();
   if (fromPath) {
-    // No extension: supplement from content-type
-    const inferredExt =
+    const ext =
       MIME_TO_EXT[contentType] ??
       (contentType.startsWith("image/") ? `.${contentType.split("/")[1]}` : "");
-    return extname(fromPath) ? fromPath : `${fromPath}${inferredExt}`;
+    return extname(fromPath) ? fromPath : `${fromPath}${ext}`;
   }
-
-  // 3. Random fallback
-  const inferredExt = MIME_TO_EXT[contentType] ?? "";
-  return `${randomBytes(8).toString("hex")}${inferredExt}`;
+  return `${randomBytes(8).toString("hex")}${MIME_TO_EXT[contentType] ?? ""}`;
 }
 
-/** Resolve actual download URL: exchange resourceId param for real URL via Yuanbao API if present. */
 async function resolveFetchUrl(url: string, account?: ResolvedYuanbaoAccount): Promise<string> {
-  const parsed = new URL(url);
-  const resourceId = parsed.searchParams.get("resourceId");
-  if (resourceId && account) {
-    return apiGetDownloadUrl(account, resourceId);
-  }
-  return url;
+  const resourceId = new URL(url).searchParams.get("resourceId");
+  return resourceId && account ? apiGetDownloadUrl(account, resourceId) : url;
 }
 
 /** Download file from URL or local path to Buffer. Supports file://, absolute path, http(s)://. */
@@ -357,7 +311,7 @@ async function downloadMediaForLocal(
   return downloadMediaForYuanbao(url, account.mediaMaxMb, account);
 }
 
-/** Minimal COS upload implementation (Node.js Buffer, no browser API dependencies). */
+/** Minimal COS upload (Node.js Buffer). */
 async function uploadBufferToCos(params: {
   config: CosUploadConfig;
   data: Buffer;
@@ -366,34 +320,26 @@ async function uploadBufferToCos(params: {
   onProgress?: (percent: number) => void;
 }): Promise<string> {
   const { config, data, filename, mimeType } = params;
-
-  // Dynamic import to avoid errors when SDK is not installed
-  // cos-nodejs-sdk-v5 uses CommonJS export = syntax, needs compat handling
   let COS: unknown;
   try {
-    // Prefer require (Node.js CJS compat path)
     COS = require("cos-nodejs-sdk-v5");
     if ((COS as Record<string, unknown>)?.default) {
       COS = (COS as Record<string, unknown>).default;
     }
   } catch {
-    // CJS require failed, try ESM import
     try {
       const pkg = await import("cos-nodejs-sdk-v5" as string);
       COS = pkg.default ?? pkg;
     } catch {
-      // Both CJS and ESM failed, throw clear error
-      throw new Error("缺少依赖 cos-nodejs-sdk-v5，请运行 pnpm add cos-nodejs-sdk-v5");
+      throw new Error("Missing cos-nodejs-sdk-v5");
     }
   }
-
-  const COSConstructor = COS as new (opts: Record<string, unknown>) => {
-    putObject: (params: Record<string, unknown>) => Promise<unknown>;
-  };
-  const cos = new COSConstructor({
+  const cos = new (COS as new (o: Record<string, unknown>) => {
+    putObject: (p: Record<string, unknown>) => Promise<unknown>;
+  })({
     FileParallelLimit: 10,
-    getAuthorization(_: unknown, callback: (cred: object) => void) {
-      callback({
+    getAuthorization(_: unknown, cb: (c: object) => void) {
+      cb({
         TmpSecretId: config.encryptTmpSecretId,
         TmpSecretKey: config.encryptTmpSecretKey,
         SecurityToken: config.encryptToken,
@@ -404,19 +350,15 @@ async function uploadBufferToCos(params: {
     },
     UseAccelerate: true,
   });
-
-  // Construct request headers
-  const headers: Record<string, string> = {};
-  if (isImage(filename, mimeType)) {
-    headers["Content-Type"] = mimeType || `image/${extname(filename).slice(1)}`;
-    headers["Pic-Operations"] = JSON.stringify({
-      is_pic_info: 1,
-      rules: [{ fileid: config.location, rule: "imageMogr2/format/jpg" }],
-    });
-  } else {
-    headers["Content-Type"] = "application/octet-stream";
-  }
-
+  const headers: Record<string, string> = isImage(filename, mimeType)
+    ? {
+        "Content-Type": mimeType || `image/${extname(filename).slice(1)}`,
+        "Pic-Operations": JSON.stringify({
+          is_pic_info: 1,
+          rules: [{ fileid: config.location, rule: "imageMogr2/format/jpg" }],
+        }),
+      }
+    : { "Content-Type": "application/octet-stream" };
   await cos.putObject({
     Bucket: config.bucketName,
     Region: config.region,
@@ -424,40 +366,29 @@ async function uploadBufferToCos(params: {
     Body: data,
     Headers: headers,
     onProgress: params.onProgress
-      ? (progressData: { percent: number }) => {
-          params.onProgress!(Math.round(progressData.percent * 10000) / 100);
+      ? (p: { percent: number }) => {
+          params.onProgress!(Math.round(p.percent * 10000) / 100);
         }
       : undefined,
   });
-
   return config.resourceUrl;
 }
 
-/** Upload Buffer to COS (auto-fetches pre-signed config via api.ts). */
 export async function uploadMediaToCos(
   mediaFile: MediaFile,
   account: ResolvedYuanbaoAccount,
   onProgress?: (percent: number) => void,
 ): Promise<MediaUploadResult> {
   const { filename, data, mimeType } = mediaFile;
-  const maxBytes = account.mediaMaxMb * 1024 * 1024;
-
-  if (data.length > maxBytes) {
+  if (data.length > account.mediaMaxMb * 1024 * 1024) {
     throw new Error(
-      `文件过大: ${(data.length / 1024 / 1024).toFixed(1)} MB > ${account.mediaMaxMb} MB`,
+      `File too large: ${(data.length / 1024 / 1024).toFixed(1)} MB > ${account.mediaMaxMb} MB`,
     );
   }
-
-  const fileId = generateFileId();
   const uuid = md5Hex(data);
   const imageInfo = mimeType.startsWith("image/") ? parseImageSize(data) : undefined;
-
-  // 1. Get COS pre-signed config (with auth headers)
-  const cosConfig = await apiGetUploadInfo(account, filename, fileId);
-
-  // 2. Upload to COS
+  const cosConfig = await apiGetUploadInfo(account, filename, generateFileId());
   const url = await uploadBufferToCos({ config: cosConfig, data, filename, mimeType, onProgress });
-
   return {
     url,
     filename,
@@ -469,7 +400,6 @@ export async function uploadMediaToCos(
   };
 }
 
-/** Download from URL/local path/resourceId and upload to COS (one-stop). */
 export async function downloadAndUploadMedia(
   mediaUrl: string,
   core: PluginRuntime,
@@ -477,11 +407,13 @@ export async function downloadAndUploadMedia(
   mediaLocalRoots?: string[],
   onProgress?: (percent: number) => void,
 ): Promise<MediaUploadResult> {
-  const mediaFile = await downloadMediaForLocal(mediaUrl, core, mediaLocalRoots, account);
-  return uploadMediaToCos(mediaFile, account, onProgress);
+  return uploadMediaToCos(
+    await downloadMediaForLocal(mediaUrl, core, mediaLocalRoots, account),
+    account,
+    onProgress,
+  );
 }
 
-/** Build Tencent IM TIMImageElem message body. */
 export function buildImageMsgBody(params: {
   url: string;
   filename?: string;
@@ -509,7 +441,6 @@ export function buildImageMsgBody(params: {
   ];
 }
 
-/** Build Tencent IM TIMFileElem message body. */
 export function buildFileMsgBody(params: {
   url: string;
   filename: string;

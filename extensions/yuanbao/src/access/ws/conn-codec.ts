@@ -1,10 +1,3 @@
-/**
- * Connection-layer Protobuf codec
- *
- * Loads the conn.json descriptor via protobufjs and provides
- * encode / decode helpers for the ConnMsg wire protocol.
- */
-
 import protobuf from "protobufjs";
 import { createLog } from "../../logger.js";
 import jsonDescriptor from "./proto/conn.json" with { type: "json" };
@@ -18,12 +11,6 @@ function getRoot(): protobuf.Root {
   return root;
 }
 
-/**
- * Encode a protobuf message.
- * @param key - Fully-qualified message type, e.g. "trpc.yuanbao.conn_common.ConnMsg"
- * @param value - Object to encode
- * @returns Encoded Uint8Array, or null on failure
- */
 export function encodePB(key: string, value: Record<string, unknown>): Uint8Array | null {
   try {
     const type = getRoot().lookupType(key);
@@ -36,15 +23,11 @@ export function encodePB(key: string, value: Record<string, unknown>): Uint8Arra
   }
 }
 
-/**
- * Decode a protobuf message.
- */
 export function decodePB(key: string, data: Uint8Array | ArrayBuffer): unknown {
   try {
     const type = getRoot().lookupType(key);
     return type.decode(data instanceof Uint8Array ? data : new Uint8Array(data));
   } catch {
-    // Decode failure is expected when data doesn't match the message type; silently return null.
     return null;
   }
 }
@@ -67,7 +50,6 @@ export const CMD_TYPE = {
   PushAck: 3,
 } as const;
 
-/** Built-in command names */
 export const CMD = {
   AuthBind: "auth-bind",
   Ping: "ping",
@@ -75,7 +57,6 @@ export const CMD = {
   UpdateMeta: "update-meta",
 } as const;
 
-/** Built-in module names */
 export const MODULE = {
   ConnAccess: "conn_access",
 } as const;
@@ -96,14 +77,8 @@ export type PBConnMsg = {
 };
 
 let seqCounter = 0;
-
-/** Maximum safe sequence number before overflow */
 const SEQ_NO_OVERFLOW_RESET = Number.MAX_SAFE_INTEGER;
 
-/**
- * Generate the next incrementing sequence number.
- * Resets to 0 when approaching Number.MAX_SAFE_INTEGER to avoid precision loss.
- */
 export function nextSeqNo(): number {
   const next = seqCounter++;
   if (next >= SEQ_NO_OVERFLOW_RESET) {
@@ -112,9 +87,6 @@ export function nextSeqNo(): number {
   return next;
 }
 
-/**
- * Build a ConnMsg head.
- */
 export function createHead(cmd: string, module: string, msgId: string): PBHead {
   return {
     cmdType: CMD_TYPE.Request,
@@ -125,9 +97,6 @@ export function createHead(cmd: string, module: string, msgId: string): PBHead {
   };
 }
 
-/**
- * Encode a complete ConnMsg (head + data) into binary.
- */
 export function encodeConnMsg(head: PBHead, innerData: Uint8Array | null): Uint8Array | null {
   return encodePB(PB_MSG_TYPES.ConnMsg, {
     head,
@@ -135,9 +104,6 @@ export function encodeConnMsg(head: PBHead, innerData: Uint8Array | null): Uint8
   });
 }
 
-/**
- * Decode a ConnMsg binary frame.
- */
 export function decodeConnMsg(raw: Uint8Array | ArrayBuffer): PBConnMsg | null {
   return decodePB(PB_MSG_TYPES.ConnMsg, raw) as PBConnMsg | null;
 }
@@ -156,9 +122,6 @@ interface AuthBindParams {
   botVersion: string;
 }
 
-/**
- * Build an auth-bind request binary frame.
- */
 export function buildAuthBindMsg(params: AuthBindParams): Uint8Array | null {
   const authBindPayload: Record<string, unknown> = {
     bizId: params.bizId,
@@ -187,9 +150,6 @@ export function buildAuthBindMsg(params: AuthBindParams): Uint8Array | null {
   return encodeConnMsg(head, authBindData);
 }
 
-/**
- * Build a ping request binary frame.
- */
 export function buildPingMsg(msgId: string): Uint8Array | null {
   const pingData = encodePB(PB_MSG_TYPES.PingReq, {});
   if (!pingData) {
@@ -200,9 +160,6 @@ export function buildPingMsg(msgId: string): Uint8Array | null {
   return encodeConnMsg(head, pingData);
 }
 
-/**
- * Build a push ACK response.
- */
 export function buildPushAck(originalHead: PBHead): Uint8Array | null {
   const ackHead: PBHead = {
     ...originalHead,
@@ -212,9 +169,6 @@ export function buildPushAck(originalHead: PBHead): Uint8Array | null {
   return encodeConnMsg(ackHead, null);
 }
 
-/**
- * Build a business request ConnMsg.
- */
 export function buildBusinessConnMsg(
   cmd: string,
   module: string,

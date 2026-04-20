@@ -1,10 +1,3 @@
-/**
- * WebSocket module type definitions
- *
- * Based on the Yuanbao long-connection ConnMsg protobuf protocol,
- * adapted for the Tencent IM (YuanBao) scenario.
- */
-
 import type { YuanbaoMsgBodyElement } from "../../types.js";
 
 export type WsConnectionConfig = {
@@ -27,7 +20,6 @@ export type WsClientConfig = {
   reconnectDelays?: number[];
 };
 
-/** Client state */
 export type WsClientState =
   | "disconnected"
   | "connecting"
@@ -35,14 +27,12 @@ export type WsClientState =
   | "connected"
   | "reconnecting";
 
-/** Auth success event data */
 export type WsAuthBindResult = {
   connectId: string;
   timestamp: number;
   clientIp: string;
 };
 
-/** Client event callbacks */
 export type WsClientCallbacks = {
   onReady?: (data: WsAuthBindResult) => void;
   onDispatch?: (pushData: WsPushEvent) => void;
@@ -53,7 +43,6 @@ export type WsClientCallbacks = {
   onAuthFailed?: (code: number) => Promise<WsConnectionConfig["auth"] | null>;
 };
 
-/** Business push event (from DirectedPush or PushMsg) */
 export type WsPushEvent = {
   type?: number;
   content?: string;
@@ -64,7 +53,6 @@ export type WsPushEvent = {
   connData?: Uint8Array;
 };
 
-/** C2C message send request */
 export type WsSendC2CMessageData = {
   to_account: string;
   msg_body: YuanbaoMsgBodyElement[];
@@ -76,7 +64,6 @@ export type WsSendC2CMessageData = {
   trace_id?: string;
 };
 
-/** Group message send request */
 export type WsSendGroupMessageData = {
   group_code: string;
   msg_body: YuanbaoMsgBodyElement[];
@@ -89,32 +76,26 @@ export type WsSendGroupMessageData = {
   trace_id?: string;
 };
 
-/** Union type for outbound message requests */
 export type WsOutboundMessageData = WsSendC2CMessageData | WsSendGroupMessageData;
 
-/** Reply-status heartbeat enum values (matches EnumHeartbeat) */
 export const WS_HEARTBEAT = {
   UNKNOWN: 0,
   RUNNING: 1,
   FINISH: 2,
 } as const;
 
-/** Reply-status heartbeat enum type */
 export type WsHeartbeatValue = (typeof WS_HEARTBEAT)[keyof typeof WS_HEARTBEAT];
 
-/** Server response for a business request */
 export type WsSendMessageResponse = {
   msgId: string;
   code: number;
   message: string;
 };
 
-/** Query group info request */
 export type WsQueryGroupInfoData = {
   group_code: string;
 };
 
-/** Group info */
 export type WsGroupInfo = {
   group_name: string;
   group_owner_user_id: string;
@@ -122,7 +103,6 @@ export type WsGroupInfo = {
   group_size: number;
 };
 
-/** Query group info response */
 export type WsQueryGroupInfoResponse = {
   msgId: string;
   code: number;
@@ -130,19 +110,16 @@ export type WsQueryGroupInfoResponse = {
   group_info?: WsGroupInfo;
 };
 
-/** Get group member list request */
 export type WsGetGroupMemberListData = {
   group_code: string;
 };
 
-/** Group member info */
 export type WsGroupMember = {
   user_id: string;
   nick_name: string;
   user_type: number;
 };
 
-/** Get group member list response */
 export type WsGetGroupMemberListResponse = {
   msgId: string;
   code: number;
@@ -150,14 +127,12 @@ export type WsGetGroupMemberListResponse = {
   member_list: WsGroupMember[];
 };
 
-/** Direct chat reply-status heartbeat request */
 export type WsSendPrivateHeartbeatData = {
   from_account: string;
   to_account: string;
   heartbeat: WsHeartbeatValue;
 };
 
-/** Group chat reply-status heartbeat request */
 export type WsSendGroupHeartbeatData = {
   from_account: string;
   to_account: string;
@@ -166,37 +141,9 @@ export type WsSendGroupHeartbeatData = {
   heartbeat: WsHeartbeatValue;
 };
 
-/** Reply-status heartbeat response */
 export type WsHeartbeatResponse = {
   msgId: string;
   code: number;
   msg?: string;
   message?: string;
-};
-
-/** SyncInformation command item */
-export type WsSyncCommand = {
-  name: string;
-  description: string;
-};
-
-/** SyncInformation command data (sync_type=1) */
-export type WsSyncCommandsData = {
-  botCommands: WsSyncCommand[];
-  pluginCommands: WsSyncCommand[];
-};
-
-/** SyncInformation request data */
-export type WsSyncInformationData = {
-  syncType: number;
-  botVersion: string;
-  pluginVersion: string;
-  commandData?: WsSyncCommandsData;
-};
-
-/** SyncInformation response */
-export type WsSyncInformationResponse = {
-  msgId: string;
-  code: number;
-  msg: string;
 };

@@ -1,12 +1,3 @@
-/**
- * Sticker send module.
- *
- * Follows the structure of media/send.ts:
- * - buildStickerMsgBody: pure function, builds TIMFaceElem message body
- * - sendSticker: lookup sticker from cache → build message body → deliver
- * - searchSticker: query only, no sending
- */
-
 import type { YuanbaoMsgBodyElement } from "../../../types.js";
 import type { SendResult } from "../../outbound/types.js";
 import { deliver, type DeliverTarget } from "../deliver.js";
@@ -43,10 +34,6 @@ function normalizeStickerSearchLimit(params: Record<string, unknown>): number {
   return 10;
 }
 
-/**
- * Build sticker message body.
- * Pure function, converts cached sticker data to TIMFaceElem message body array.
- */
 export function buildStickerMsgBody(sticker: CachedSticker): YuanbaoMsgBodyElement[] {
   return [
     {
@@ -66,10 +53,6 @@ export function buildStickerMsgBody(sticker: CachedSticker): YuanbaoMsgBodyEleme
   ];
 }
 
-/**
- * Send sticker message.
- * Looks up sticker from cache, builds TIMFaceElem message body, delivers via deliver().
- */
 export async function sendSticker(params: SendStickerParams): Promise<SendResult> {
   const { stickerId, dt } = params;
 
@@ -82,9 +65,6 @@ export async function sendSticker(params: SendStickerParams): Promise<SendResult
   return deliver(dt, msgBody);
 }
 
-/**
- * Search cached stickers.
- */
 export function searchSticker(params: Record<string, unknown>): ActionResult {
   const query = normalizeStickerSearchQuery(params);
   const limit = normalizeStickerSearchLimit(params);

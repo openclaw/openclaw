@@ -1,5 +1,3 @@
-/** WebSocket client — connection management, auth, heartbeat, and auto-reconnect. */
-
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { msgBodyDesensitization } from "../../business/utils/utils.js";
@@ -18,8 +16,6 @@ import {
   decodeQueryGroupInfoRsp,
   encodeGetGroupMemberListReq,
   decodeGetGroupMemberListRsp,
-  encodeSyncInformationReq,
-  decodeSyncInformationRsp,
 } from "./biz-codec.js";
 import {
   decodeConnMsg,
@@ -49,10 +45,7 @@ import type {
   WsGetGroupMemberListData,
   WsGetGroupMemberListResponse,
   WsPushEvent,
-  WsSyncInformationData,
-  WsSyncInformationResponse,
 } from "./types.js";
-
 type PBAuthBindRsp = {
   code?: number;
   message?: string;
@@ -107,7 +100,6 @@ const AUTH_RETRYABLE_CODES = new Set([
   90003, // Downstream dependency failure
 ]);
 
-/** Number of consecutive heartbeat timeouts before triggering reconnect */
 const HEARTBEAT_TIMEOUT_THRESHOLD = 2;
 
 function generateMsgId(): string {
@@ -124,7 +116,6 @@ export const BIZ_CMD = {
   GetGroupMemberList: "get_group_member_list",
   SendPrivateHeartbeat: "send_private_heartbeat",
   SendGroupHeartbeat: "send_group_heartbeat",
-  SyncInformation: "sync_information",
 } as const;
 
 const BIZ_MODULE = "yuanbao_openclaw_proxy";
@@ -156,7 +147,6 @@ export class YuanbaoWsClient {
     {
       resolve: (resp: unknown) => void;
       timer: ReturnType<typeof setTimeout>;
-      /** Custom decoder; falls back to decodeSendMessageRsp when absent */
       decoder?: (data: Uint8Array | ArrayBuffer, msgId: string) => unknown;
     }
   >();
@@ -180,7 +170,6 @@ export class YuanbaoWsClient {
     this.callbacks = params.callbacks ?? {};
   }
 
-  /** Update auth info (used for reconnect after token refresh). */
   updateAuth(auth: WsConnectionConfig["auth"]): void {
     this.connectionConfig = {
       ...this.connectionConfig,
@@ -209,7 +198,6 @@ export class YuanbaoWsClient {
     return this.connectId;
   }
 
-  /** Send raw binary data. */
   sendBinary(data: Uint8Array): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.log.error(
@@ -221,35 +209,13 @@ export class YuanbaoWsClient {
     return true;
   }
 
-  /** Send a business request and wait for the response matching the same msgId. */
   sendAndWait(
     cmd: string,
     module: string,
     data: Uint8Array,
     timeoutMs = DEFAULT_SEND_TIMEOUT_MS,
   ): Promise<WsSendMessageResponse> {
-    const msgId = generateMsgId();
-    const binary = buildBusinessConnMsg(cmd, module, data, msgId);
-
-    if (!binary) {
-      return Promise.reject(new Error("Failed to encode business message"));
-    }
-
-    return new Promise<WsSendMessageResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingRequests.delete(msgId);
-        reject(new Error(`WS request timeout (${timeoutMs}ms) for msgId=${msgId}`));
-      }, timeoutMs);
-
-      this.pendingRequests.set(msgId, { resolve: resolve as (resp: unknown) => void, timer });
-
-      const sent = this.sendBinary(binary);
-      if (!sent) {
-        clearTimeout(timer);
-        this.pendingRequests.delete(msgId);
-        reject(new Error("WebSocket not connected, cannot send"));
-      }
-    });
+    return this.sendAndWaitWith(cmd, module, data, decodeSendMessageRsp, timeoutMs);
   }
 
   sendC2CMessage(data: WsSendC2CMessageData): Promise<WsSendMessageResponse> {
@@ -257,11 +223,11 @@ export class YuanbaoWsClient {
       to_account: data.to_account,
       body: msgBodyDesensitization(data.msg_body),
     });
-    const encoded = encodeSendC2CMessageReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode SendC2CMessageReq"));
-    }
-    return this.sendAndWait(BIZ_CMD.SendC2CMessage, BIZ_MODULE, encoded);
+    return this.encodeThenSend(
+      BIZ_CMD.SendC2CMessage,
+      encodeSendC2CMessageReq(data),
+      "SendC2CMessageReq",
+    );
   }
 
   sendGroupMessage(data: WsSendGroupMessageData): Promise<WsSendMessageResponse> {
@@ -270,14 +236,13 @@ export class YuanbaoWsClient {
       group_code: data.group_code,
       body: msgBodyDesensitization(data.msg_body),
     });
-    const encoded = encodeSendGroupMessageReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode SendGroupMessageReq"));
-    }
-    return this.sendAndWait(BIZ_CMD.SendGroupMessage, BIZ_MODULE, encoded);
+    return this.encodeThenSend(
+      BIZ_CMD.SendGroupMessage,
+      encodeSendGroupMessageReq(data),
+      "SendGroupMessageReq",
+    );
   }
 
-  /** Send a business request and wait for the response (supports custom decoders). */
   sendAndWaitWith<T>(
     cmd: string,
     module: string,
@@ -287,25 +252,20 @@ export class YuanbaoWsClient {
   ): Promise<T> {
     const msgId = generateMsgId();
     const binary = buildBusinessConnMsg(cmd, module, data, msgId);
-
     if (!binary) {
       return Promise.reject(new Error("Failed to encode business message"));
     }
-
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(msgId);
         reject(new Error(`WS request timeout (${timeoutMs}ms) for msgId=${msgId}`));
       }, timeoutMs);
-
       this.pendingRequests.set(msgId, {
         resolve: resolve as (resp: unknown) => void,
         timer,
         decoder: decoder as (data: Uint8Array | ArrayBuffer, msgId: string) => unknown,
       });
-
-      const sent = this.sendBinary(binary);
-      if (!sent) {
+      if (!this.sendBinary(binary)) {
         clearTimeout(timer);
         this.pendingRequests.delete(msgId);
         reject(new Error("WebSocket not connected, cannot send"));
@@ -313,96 +273,78 @@ export class YuanbaoWsClient {
     });
   }
 
-  /** Query group info. */
+  private encodeThenSend(
+    cmd: string,
+    encoded: Uint8Array | null,
+    label: string,
+  ): Promise<WsSendMessageResponse> {
+    if (!encoded) {
+      return Promise.reject(new Error(`Failed to encode ${label}`));
+    }
+    return this.sendAndWait(cmd, BIZ_MODULE, encoded);
+  }
+
+  private encodeThenSendWith<T>(
+    cmd: string,
+    encoded: Uint8Array | null,
+    label: string,
+    decoder: (data: Uint8Array | ArrayBuffer, msgId: string) => T | null,
+  ): Promise<T> {
+    if (!encoded) {
+      return Promise.reject(new Error(`Failed to encode ${label}`));
+    }
+    return this.sendAndWaitWith(cmd, BIZ_MODULE, encoded, decoder);
+  }
+
   queryGroupInfo(data: WsQueryGroupInfoData): Promise<WsQueryGroupInfoResponse> {
     this.log.debug("[group-info] querying group info", { group_code: data.group_code });
-    const encoded = encodeQueryGroupInfoReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode QueryGroupInfoReq"));
-    }
-    return this.sendAndWaitWith(
+    return this.encodeThenSendWith(
       BIZ_CMD.QueryGroupInfo,
-      BIZ_MODULE,
-      encoded,
+      encodeQueryGroupInfoReq(data),
+      "QueryGroupInfoReq",
       decodeQueryGroupInfoRsp,
     );
   }
 
-  /** Get group member list. */
   getGroupMemberList(data: WsGetGroupMemberListData): Promise<WsGetGroupMemberListResponse> {
     this.log.debug("[group-member] fetching group member list", { group_code: data.group_code });
-    const encoded = encodeGetGroupMemberListReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode GetGroupMemberListReq"));
-    }
-    return this.sendAndWaitWith(
+    return this.encodeThenSendWith(
       BIZ_CMD.GetGroupMemberList,
-      BIZ_MODULE,
-      encoded,
+      encodeGetGroupMemberListReq(data),
+      "GetGroupMemberListReq",
       decodeGetGroupMemberListRsp,
     );
   }
 
-  /** Send direct-chat reply status heartbeat. */
   sendPrivateHeartbeat(data: WsSendPrivateHeartbeatData): Promise<WsHeartbeatResponse> {
     this.log.debug("[C2C] sending reply heartbeat", {
       from_account: data.from_account,
       to_account: data.to_account,
       heartbeat: data.heartbeat,
     });
-    const encoded = encodeSendPrivateHeartbeatReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode SendPrivateHeartbeatReq"));
-    }
-    return this.sendAndWaitWith(
+    return this.encodeThenSendWith(
       BIZ_CMD.SendPrivateHeartbeat,
-      BIZ_MODULE,
-      encoded,
+      encodeSendPrivateHeartbeatReq(data),
+      "SendPrivateHeartbeatReq",
       decodeSendPrivateHeartbeatRsp,
     );
   }
 
-  /** Send group-chat reply status heartbeat. */
   sendGroupHeartbeat(data: WsSendGroupHeartbeatData): Promise<WsHeartbeatResponse> {
     this.log.debug("[group] sending reply heartbeat", {
       from_account: data.from_account,
       to_account: data.to_account,
       group_code: data.group_code,
-      send_time: data.send_time,
       heartbeat: data.heartbeat,
     });
-    const encoded = encodeSendGroupHeartbeatReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode SendGroupHeartbeatReq"));
-    }
-    return this.sendAndWaitWith(
+    return this.encodeThenSendWith(
       BIZ_CMD.SendGroupHeartbeat,
-      BIZ_MODULE,
-      encoded,
+      encodeSendGroupHeartbeatReq(data),
+      "SendGroupHeartbeatReq",
       decodeSendGroupHeartbeatRsp,
     );
   }
 
-  /** Sync information to the backend (command list, etc.). */
-  syncInformation(data: WsSyncInformationData): Promise<WsSyncInformationResponse> {
-    this.log.info("[sync] sending SyncInformation request", {
-      syncType: data.syncType,
-      botVersion: data.botVersion,
-      pluginVersion: data.pluginVersion,
-    });
-    const encoded = encodeSyncInformationReq(data);
-    if (!encoded) {
-      return Promise.reject(new Error("Failed to encode SyncInformationReq"));
-    }
-    return this.sendAndWaitWith(
-      BIZ_CMD.SyncInformation,
-      BIZ_MODULE,
-      encoded,
-      decodeSyncInformationRsp,
-    );
-  }
-
-  /** Establish WebSocket connection and bind event handlers. */
   private doConnect(): void {
     if (this.disposed) {
       return;
@@ -483,19 +425,16 @@ export class YuanbaoWsClient {
     const { head } = connMsg;
     const { cmdType } = head;
 
-    // cmdType=1: Response to an upstream request
     if (cmdType === CMD_TYPE.Response) {
       this.onResponse(connMsg);
       return;
     }
 
-    // cmdType=2: Downstream push
     if (cmdType === CMD_TYPE.Push) {
       this.onPush(connMsg);
       return;
     }
 
-    // Other cmdTypes (0=own request — never received, 3=ACK — no handling needed)
     this.log.debug(`received unhandled cmdType=${cmdType}, cmd=${head.cmd}`);
   }
 
@@ -503,19 +442,16 @@ export class YuanbaoWsClient {
     const { head, data } = connMsg;
     const { cmd } = head;
 
-    // Auth response
     if (cmd === CMD.AuthBind) {
       this.onAuthBindResponse(head, data);
       return;
     }
 
-    // Heartbeat response
     if (cmd === CMD.Ping) {
       this.onPingResponse(head, data);
       return;
     }
 
-    // Business response — match via msgId
     this.onBusinessResponse(head, data);
   }
 
@@ -548,184 +484,85 @@ export class YuanbaoWsClient {
     this.sendBinary(binary);
   }
 
-  /**
-   * Try triggering onAuthFailed callback for token refresh and reconnect.
-   * Uses the same scheduleReconnect delay strategy as close events.
-   */
   private tryAuthFailedRefresh(errorCode: number, source: string): boolean {
     if (!AUTH_FAILED_CODES.has(errorCode) || !this.callbacks.onAuthFailed) {
       return false;
     }
-
-    this.log.warn(
-      `[${source}] token invalid (code=${errorCode}), refreshing token then scheduleReconnect`,
-    );
+    this.log.warn(`[${source}] token invalid (code=${errorCode}), refreshing`);
     this.closeCurrentWs();
+    this.doAuthRefresh(errorCode, source);
+    return true;
+  }
+
+  private doAuthRefresh(errorCode: number, source: string): void {
+    if (this.disposed || !this.callbacks.onAuthFailed) {
+      this.setState("disconnected");
+      return;
+    }
     this.callbacks
       .onAuthFailed(errorCode)
       .then((newAuth) => {
         if (newAuth && !this.disposed) {
-          this.log.info(
-            `[${source}] token refreshed, reconnecting with new token via scheduleReconnect`,
-          );
           this.updateAuth(newAuth);
           this.scheduleReconnect();
         } else {
-          this.log.warn(
-            `[${source}] token refresh returned empty or client disposed, giving up reconnect`,
-          );
           this.setState("disconnected");
         }
       })
       .catch((err) => {
-        this.log.error(`[${source}] token refresh failed: ${String(err)}, retrying after delay`);
-        if (!this.disposed) {
-          // Skip pointless connection attempt with old (definitely invalid) token;
-          // consume one reconnect count and retry token refresh after delay
-          this.retryAuthRefreshAfterDelay(errorCode, source);
+        this.log.error(`[${source}] token refresh failed: ${String(err)}`);
+        if (!this.disposed && this.reconnectAttempts < this.clientConfig.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          this.setState("reconnecting");
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.doAuthRefresh(errorCode, source);
+          }, this.getReconnectDelay());
         } else {
           this.setState("disconnected");
         }
       });
-
-    return true;
   }
 
-  /**
-   * After token signing failure, consume one reconnect attempt and retry after a delay.
-   * Avoids wasting a reconnect attempt on a connection with a known-expired token.
-   */
-  private retryAuthRefreshAfterDelay(errorCode: number, source: string): void {
-    if (this.disposed) {
-      return;
-    }
-
-    if (this.reconnectAttempts >= this.clientConfig.maxReconnectAttempts) {
-      this.log.error(
-        `[${source}] max reconnect attempts (${this.clientConfig.maxReconnectAttempts}) reached, giving up token refresh`,
-      );
-      this.setState("disconnected");
-      this.callbacks.onError?.(
-        new Error(
-          `Max reconnect attempts (${this.clientConfig.maxReconnectAttempts}) exceeded during token refresh`,
-        ),
-      );
-      return;
-    }
-
-    const delay = this.getReconnectDelay();
-    this.reconnectAttempts++;
-    this.setState("reconnecting");
-    this.log.info(
-      `[${source}] will retry token refresh in ${delay}ms (attempt ${this.reconnectAttempts}/${this.clientConfig.maxReconnectAttempts})`,
-    );
-
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      if (this.disposed || !this.callbacks.onAuthFailed) {
-        return;
-      }
-
-      this.callbacks
-        .onAuthFailed(errorCode)
-        .then((newAuth) => {
-          if (newAuth && !this.disposed) {
-            this.log.info(
-              `[${source}] token retry succeeded, reconnecting with new token via scheduleReconnect`,
-            );
-            this.updateAuth(newAuth);
-            this.scheduleReconnect();
-          } else {
-            this.log.warn(
-              `[${source}] token retry returned empty or client disposed, giving up reconnect`,
-            );
-            this.setState("disconnected");
-          }
-        })
-        .catch((err) => {
-          this.log.error(
-            `[${source}] token retry still failed: ${String(err)}, retrying after delay`,
-          );
-          if (!this.disposed) {
-            this.retryAuthRefreshAfterDelay(errorCode, source);
-          } else {
-            this.setState("disconnected");
-          }
-        });
-    }, delay);
-  }
-
-  /** Handle auth response: verify status code, start heartbeat, fire onReady. */
   private onAuthBindResponse(head: PBConnMsg["head"], data: Uint8Array): void {
     const rsp = decodePB(PB_MSG_TYPES.AuthBindRsp, data) as PBAuthBindRsp | null;
-
-    // Check head.status non-zero (transport layer failure)
     if (head.status && head.status !== 0) {
-      this.log.error(
-        `auth-bind head.status non-zero: status=${head.status}, rsp.code=${rsp?.code}, rsp.message=${rsp?.message}`,
-      );
-
-      // Already authenticated — treat as success
       if (rsp?.code === AUTH_ALREADY_CODE) {
-        this.log.info(`received ALREADY_AUTH(${AUTH_ALREADY_CODE}), treating as auth success`);
-        // fall through to auth success logic below
+        this.log.info(`received ALREADY_AUTH(${AUTH_ALREADY_CODE}), treating as success`);
       } else {
         if (rsp?.code && this.tryAuthFailedRefresh(rsp.code, "auth-head-status")) {
           return;
         }
-
-        // Transient server error — reconnect via scheduleReconnect
         if (rsp?.code && AUTH_RETRYABLE_CODES.has(rsp.code)) {
-          this.log.warn?.(
-            `auth retryable error (code=${rsp.code}), reconnecting via scheduleReconnect`,
-          );
           this.closeCurrentWs();
           this.scheduleReconnect();
           return;
         }
-
-        // Non-recoverable auth failure — close to avoid dangling connection
         this.closeCurrentWs();
         this.setState("disconnected");
         this.callbacks.onError?.(new Error(`Auth-bind failed: status=${head.status}`));
         return;
       }
     }
-
-    // Check business layer code non-zero
     if (!rsp || (rsp.code !== 0 && rsp.code !== AUTH_ALREADY_CODE)) {
-      this.log.error(
-        `auth-bind response error: rsp.code=${rsp?.code}, rsp.message=${rsp?.message}`,
-      );
-
       if (rsp?.code && this.tryAuthFailedRefresh(rsp.code, "auth-rsp-code")) {
         return;
       }
-
-      // Transient server error — reconnect via scheduleReconnect
       if (rsp?.code && AUTH_RETRYABLE_CODES.has(rsp.code)) {
-        this.log.warn?.(
-          `auth retryable error (code=${rsp.code}), reconnecting via scheduleReconnect`,
-        );
         this.closeCurrentWs();
         this.scheduleReconnect();
         return;
       }
-
-      // Non-recoverable auth failure — close to avoid dangling connection
       this.closeCurrentWs();
       this.setState("disconnected");
       this.callbacks.onError?.(new Error(`Auth-bind response error: code=${rsp?.code}`));
       return;
     }
-
     this.connectId = rsp.connectId || null;
     this.log.info(`auth success: connectId=${this.connectId}`);
     this.reconnectAttempts = 0;
-
     this.setState("connected");
     this.startHeartbeat(true);
-
     this.callbacks.onReady?.({
       connectId: rsp.connectId || "",
       timestamp: Number(rsp.timestamp || 0),
@@ -755,7 +592,6 @@ export class YuanbaoWsClient {
     }
   }
 
-  /** Schedule the next sendPing call without resetting heartbeatAckReceived (for consecutive timeout detection) */
   private scheduleNextPingCheck(): void {
     this.stopHeartbeat();
     const delayMs = (this.heartbeatIntervalS - 1) * 1000;
@@ -768,61 +604,40 @@ export class YuanbaoWsClient {
   private sendPing(): void {
     if (!this.heartbeatAckReceived) {
       this.heartbeatTimeoutCount++;
-      const elapsed = Date.now() - this.lastHeartbeatAt;
       if (this.heartbeatTimeoutCount >= HEARTBEAT_TIMEOUT_THRESHOLD) {
-        this.log.warn(
-          `heartbeat timeout ${this.heartbeatTimeoutCount} consecutive times (${elapsed}ms no ack), triggering reconnect`,
-        );
+        this.log.warn(`heartbeat timeout ${this.heartbeatTimeoutCount} times, reconnecting`);
         this.heartbeatTimeoutCount = 0;
         this.closeCurrentWs();
         this.scheduleReconnect();
         return;
       }
-      this.log.warn(
-        `heartbeat timeout (${elapsed}ms no ack), ${this.heartbeatTimeoutCount}/${HEARTBEAT_TIMEOUT_THRESHOLD}, ${HEARTBEAT_TIMEOUT_THRESHOLD - this.heartbeatTimeoutCount} more before reconnect`,
-      );
-      // Only schedule next timeout check; don't reset ack so the next check still detects timeout
       this.scheduleNextPingCheck();
       return;
     }
-
-    const msgId = generateMsgId();
-    const binary = buildPingMsg(msgId);
+    const binary = buildPingMsg(generateMsgId());
     if (!binary) {
-      this.log.error("heartbeat message encode failed");
       return;
     }
-
     this.heartbeatAckReceived = false;
     this.lastHeartbeatAt = Date.now();
     this.sendBinary(binary);
-    this.log.debug("heartbeat sent");
   }
 
   private onPingResponse(head: PBConnMsg["head"], data: Uint8Array): void {
     this.heartbeatAckReceived = true;
     this.heartbeatTimeoutCount = 0;
-    const latency = Date.now() - this.lastHeartbeatAt;
-
     const rsp = decodePB(PB_MSG_TYPES.PingRsp, data) as PBPingRsp | null;
     if (rsp?.heartInterval && rsp.heartInterval > 1) {
       this.heartbeatIntervalS = rsp.heartInterval;
-      this.log.debug(`heartbeat ACK: latency=${latency}ms, next interval=${rsp.heartInterval}s`);
-    } else {
-      this.log.debug(`heartbeat ACK: latency=${latency}ms`);
     }
-
-    // Schedule next heartbeat
     this.startHeartbeat(false);
   }
 
-  /** Handle a downstream push (cmdType=2). Sends ACK, handles kickout, dispatches events. */
   private onPush(connMsg: PBConnMsg): void {
     const { head, data } = connMsg;
 
     this.log.debug("received push", { head });
 
-    // Send ACK if required
     if (head.needAck) {
       const ack = buildPushAck(head);
       if (ack) {
@@ -831,7 +646,6 @@ export class YuanbaoWsClient {
       }
     }
 
-    // Kickout handling
     if (head.cmd === CMD.Kickout) {
       const kickout = decodePB(PB_MSG_TYPES.KickoutMsg, data) as PBKickoutMsg | null;
       this.log.warn("kicked out", { kickout });
@@ -843,7 +657,6 @@ export class YuanbaoWsClient {
       return;
     }
 
-    // Try PushMsg first (more precise structure, less likely to false-match)
     const pushMsg = decodePB(PB_MSG_TYPES.PushMsg, data) as PBPushMsg | null;
     if (pushMsg && (pushMsg.cmd || pushMsg.module)) {
       const rawData = pushMsg.data;
@@ -858,7 +671,6 @@ export class YuanbaoWsClient {
       return;
     }
 
-    // Then try DirectedPush
     const directed = decodePB(PB_MSG_TYPES.DirectedPush, data) as PBDirectedPush | null;
     if (directed && (directed.type || directed.content)) {
       const pushEvent: WsPushEvent = {
@@ -872,7 +684,6 @@ export class YuanbaoWsClient {
       return;
     }
 
-    // Unrecognized push — pass raw data through
     this.callbacks.onDispatch?.({
       cmd: head.cmd,
       module: head.module,
@@ -881,7 +692,6 @@ export class YuanbaoWsClient {
     });
   }
 
-  /** Handle a business response (cmdType=1, non-auth/ping). Matches pending requests by msgId. */
   private onBusinessResponse(head: PBConnMsg["head"], data: Uint8Array): void {
     const { msgId } = head;
     if (!msgId) {
@@ -897,14 +707,11 @@ export class YuanbaoWsClient {
     clearTimeout(pending.timer);
     this.pendingRequests.delete(msgId);
 
-    // Try protobuf decode on the response
     if (data && data.length > 0) {
-      // Prefer custom decoder (QueryGroupInfo / GetGroupMemberList, etc.)
       const decoder = pending.decoder ?? decodeSendMessageRsp;
       const rsp = decoder(data, msgId) as Record<string, unknown> | null;
       this.log.debug("business response decoded", { rsp });
       if (rsp) {
-        // Override code if head.status is non-zero
         if (head.status && head.status !== 0) {
           rsp.code = head.status;
           if ("message" in rsp) {
@@ -919,7 +726,6 @@ export class YuanbaoWsClient {
       }
     }
 
-    // Protobuf decode failed — return a basic response based on head
     pending.resolve({
       msgId,
       code: head.status || 0,
@@ -937,25 +743,16 @@ export class YuanbaoWsClient {
     if (this.disposed) {
       return;
     }
-
     if (this.reconnectAttempts >= this.clientConfig.maxReconnectAttempts) {
-      this.log.error(
-        `max reconnect attempts (${this.clientConfig.maxReconnectAttempts}) reached, giving up`,
-      );
       this.setState("disconnected");
       this.callbacks.onError?.(
         new Error(`Max reconnect attempts (${this.clientConfig.maxReconnectAttempts}) exceeded`),
       );
       return;
     }
-
     const delay = customDelay ?? this.getReconnectDelay();
     this.reconnectAttempts++;
     this.setState("reconnecting");
-    this.log.info(
-      `will reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.clientConfig.maxReconnectAttempts})`,
-    );
-
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.disposed) {
@@ -965,54 +762,44 @@ export class YuanbaoWsClient {
   }
 
   private setState(next: WsClientState): void {
-    if (this.state === next) {
-      return;
+    if (this.state !== next) {
+      this.state = next;
+      this.callbacks.onStateChange?.(next);
     }
-    this.state = next;
-    this.callbacks.onStateChange?.(next);
   }
 
   private closeCurrentWs(): void {
     this.stopHeartbeat();
-    if (this.ws) {
-      try {
-        this.ws.removeAllListeners();
-        // Keep a noop error handler to prevent unhandled error crash
-        // after removeAllListeners when the server sends an abnormal close frame
-        this.ws.on("error", () => {});
-        if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-          this.ws.close(1000, "client closing");
-        }
-      } catch {
-        // ignore close errors
-      }
-      this.ws = null;
+    if (!this.ws) {
+      return;
     }
+    try {
+      this.ws.removeAllListeners();
+      this.ws.on("error", () => {});
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close(1000, "client closing");
+      }
+    } catch {
+      /* ignore */
+    }
+    this.ws = null;
   }
 
   private cleanup(): void {
     this.closeCurrentWs();
-
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
     }
-
     for (const [msgId, pending] of this.pendingRequests) {
       clearTimeout(pending.timer);
-      pending.resolve({
-        msgId,
-        code: -1,
-        message: "Client disconnected",
-      });
+      pending.resolve({ msgId, code: -1, message: "Client disconnected" });
     }
     this.pendingRequests.clear();
-
     this.setState("disconnected");
   }
 }

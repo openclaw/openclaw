@@ -1,19 +1,9 @@
-/**
- * Message delivery layer.
- *
- * Wraps C2C/group chat differences, auto-routes to the corresponding transport function based on SendTarget.
- * Used by create-sender and actions/xxx/send.ts.
- *
- * Internally calls transport.sendC2CMsgBody / transport.sendGroupMsgBody directly.
- */
-
 import type { YuanbaoWsClient } from "../../access/ws/client.js";
 import { sendC2CMsgBody, sendGroupMsgBody } from "../../infra/transport.js";
 import type { ResolvedYuanbaoAccount, YuanbaoMsgBodyElement } from "../../types.js";
 import type { SendResult } from "../outbound/types.js";
 import type { YuanbaoTraceContext } from "../trace/context.js";
 
-/** Minimal context required by deliver */
 export interface DeliverTarget {
   isGroup: boolean;
   groupCode?: string;
@@ -27,10 +17,6 @@ export interface DeliverTarget {
   traceContext?: YuanbaoTraceContext;
 }
 
-/**
- * Unified message delivery.
- * Auto-routes to C2C or group chat transport based on isGroup flag.
- */
 export async function deliver(
   dt: DeliverTarget,
   msgBody: YuanbaoMsgBodyElement[],

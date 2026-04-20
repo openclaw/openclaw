@@ -25,7 +25,6 @@ export const yuanbaoConfigSchema = {
         enum: ["stop", "split"],
         default: "split",
       },
-      /** off=no quote, first=quote only first reply per message, all=quote every reply */
       replyToMode: {
         type: "string",
         title: "群聊引用回复策略",
@@ -33,11 +32,6 @@ export const yuanbaoConfigSchema = {
         enum: ["off", "first", "all"],
         default: "first",
       },
-      /**
-       * Outbound queue strategy:
-       * - merge-text (default): aggregate text before sending, controlled by minChars/maxChars/idleMs
-       * - immediate: send each chunk immediately without buffering
-       */
       outboundQueueStrategy: {
         type: "string",
         title: "出站消息发送策略",
@@ -45,7 +39,6 @@ export const yuanbaoConfigSchema = {
         enum: ["immediate", "merge-text"],
         default: "merge-text",
       },
-      /** Default 2800 */
       minChars: {
         type: "integer",
         title: "消息聚合最小字符数",
@@ -53,7 +46,6 @@ export const yuanbaoConfigSchema = {
         minimum: 1,
         default: 2800,
       },
-      /** Default 3000 */
       maxChars: {
         type: "integer",
         title: "单条消息最大字符数",
@@ -61,7 +53,6 @@ export const yuanbaoConfigSchema = {
         minimum: 1,
         default: 3000,
       },
-      /** Default 5000 */
       idleMs: {
         type: "integer",
         title: "空闲自动发送超时 (ms)",
@@ -76,7 +67,6 @@ export const yuanbaoConfigSchema = {
         minimum: 1,
         default: 20,
       },
-      /** 0=disabled, default uses SDK built-in value */
       historyLimit: {
         type: "number",
         title: "群聊上下文历史条数",
@@ -84,28 +74,24 @@ export const yuanbaoConfigSchema = {
         minimum: 0,
         default: 100,
       },
-      /** Default false */
       disableBlockStreaming: {
         type: "boolean",
         title: "禁用分块流式输出",
         description: "开启后将关闭分块流式发送能力，改为非分块输出",
         default: false,
       },
-      /** Default true */
       requireMention: {
         type: "boolean",
         title: "群聊需要 @ 机器人",
         description: "开启后群聊消息必须 @ 机器人才会触发回复；关闭后机器人回复所有群消息",
         default: true,
       },
-      /** Automatically sent to the user when the AI model returns no reply content */
       fallbackReply: {
         type: "string",
         title: "兜底回复文案",
         description: "当 AI 未返回有效回复内容时，自动发送给用户的兜底文本",
         default: "暂时无法解答，你可以换个问题问问我哦",
       },
-      /** Default true; prevents model from wrapping entire reply in ```markdown fences */
       markdownHintEnabled: {
         type: "boolean",
         title: "注入 Markdown 格式指令",

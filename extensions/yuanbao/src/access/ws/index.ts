@@ -1,21 +1,8 @@
-export {
-  encodePB,
-  decodePB,
-  encodeConnMsg,
-  decodeConnMsg,
-  buildAuthBindMsg,
-  buildPingMsg,
-  buildPushAck,
-  buildBusinessConnMsg,
-  createHead,
-  nextSeqNo,
-  PB_MSG_TYPES,
-  CMD_TYPE,
-  CMD,
-  MODULE,
-} from "./conn-codec.js";
-export type { PBHead, PBConnMsg } from "./conn-codec.js";
-
+export { YuanbaoWsClient, BIZ_CMD } from "./client.js";
+export { startYuanbaoWsGateway, wsPushToInboundMessage } from "./gateway.js";
+export type { StartWsGatewayParams } from "./gateway.js";
+export { setActiveWsClient, getActiveWsClient, getAllActiveWsClients } from "./runtime.js";
+export { WS_HEARTBEAT } from "./types.js";
 export {
   encodeBizPB,
   decodeBizPB,
@@ -35,20 +22,25 @@ export {
   decodeQueryGroupInfoRsp,
   encodeGetGroupMemberListReq,
   decodeGetGroupMemberListRsp,
-  encodeSyncInformationReq,
-  decodeSyncInformationRsp,
   BIZ_MSG_TYPES,
 } from "./biz-codec.js";
-
-export { YuanbaoWsClient, BIZ_CMD } from "./client.js";
-
-export { startYuanbaoWsGateway, wsPushToInboundMessage } from "./gateway.js";
-export type { StartWsGatewayParams } from "./gateway.js";
-
-export { setActiveWsClient, getActiveWsClient, getAllActiveWsClients } from "./runtime.js";
-
-export { WS_HEARTBEAT } from "./types.js";
-
+export {
+  encodePB,
+  decodePB,
+  encodeConnMsg,
+  decodeConnMsg,
+  buildAuthBindMsg,
+  buildPingMsg,
+  buildPushAck,
+  buildBusinessConnMsg,
+  createHead,
+  nextSeqNo,
+  PB_MSG_TYPES,
+  CMD_TYPE,
+  CMD,
+  MODULE,
+} from "./conn-codec.js";
+export type { PBHead, PBConnMsg } from "./conn-codec.js";
 export type {
   WsConnectionConfig,
   WsClientConfig,
@@ -70,8 +62,4 @@ export type {
   WsGetGroupMemberListData,
   WsGetGroupMemberListResponse,
   WsGroupMember,
-  WsSyncInformationData,
-  WsSyncInformationResponse,
-  WsSyncCommand,
-  WsSyncCommandsData,
 } from "./types.js";

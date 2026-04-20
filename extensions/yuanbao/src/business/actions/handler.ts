@@ -1,16 +1,3 @@
-/**
- * Action handler.
- *
- * Calls createMessageSender directly to send messages, bypassing pipeline middlewares.
- * params already provide explicit send info (action, message, to, mediaUrl, stickerId, etc.),
- * no need for pipeline's layered transformations.
- *
- * Core design:
- * - resolveOutboundItems(): adapter, converts ActionParams to OutboundItem[]
- * - sender.send(item): existing type-dispatch strategy, handles all message types uniformly
- * - handler itself only orchestrates, does not dispatch
- */
-
 import { getActiveWsClient } from "../../access/ws/runtime.js";
 import { resolveYuanbaoAccount } from "../../accounts.js";
 import { createLog } from "../../logger.js";
@@ -21,7 +8,6 @@ import type { ActionParams } from "./resolve-target.js";
 import { resolveActionTarget } from "./resolve-target.js";
 import { searchSticker } from "./sticker/send.js";
 
-/** handleAction return type */
 export interface ActionHandlerResult {
   channel: "yuanbao";
   ok: boolean;
@@ -30,12 +16,6 @@ export interface ActionHandlerResult {
   data?: unknown;
 }
 
-/**
- * Convert ActionParams to OutboundItem list.
- *
- * This is the only place that needs to understand params structure;
- * after conversion, subsequent flow is entirely handled by sender.send() type dispatch.
- */
 function resolveOutboundItems(input: ActionParams): OutboundItem[] {
   const { params } = input;
   const action = params?.action ?? ((input as Record<string, unknown>).action as string) ?? "send";
@@ -43,13 +23,11 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
 
   switch (action) {
     case "send": {
-      // Extract text: params.message first, fallback to top-level text
       const text = params?.message ?? input.text ?? "";
       if (typeof text === "string" && text.trim()) {
         items.push({ type: "text", text });
       }
 
-      // Collect all media URLs
       const mediaUrl = params?.media ?? params?.mediaUrl ?? undefined;
       const mediaUrls = Array.isArray(params?.mediaUrls) ? params.mediaUrls : undefined;
       for (const url of mediaUrls ?? (mediaUrl ? [mediaUrl] : [])) {
@@ -62,7 +40,6 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
 
     case "sticker":
     case "react": {
-      // Extract sticker ID (compat string | string[])
       const rawStickerId = params?.sticker_id ?? params?.stickerId;
       const stickerId = Array.isArray(rawStickerId)
         ? String(rawStickerId[0] ?? "")
@@ -75,7 +52,6 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
       break;
     }
 
-    // sticker-search does not produce OutboundItem, handled by handler short-circuit
     default:
       break;
   }
@@ -83,14 +59,6 @@ function resolveOutboundItems(input: ActionParams): OutboundItem[] {
   return items;
 }
 
-/**
- * Handle Action request.
- *
- * Execution flow:
- * 1. sticker-search short-circuit → pure query, return directly
- * 2. resolveOutboundItems() → convert params to OutboundItem[]
- * 3. Create sender → sender.send(item) for each item
- */
 export async function handleAction(input: ActionParams): Promise<ActionHandlerResult> {
   const log = createLog("actions");
 
@@ -102,7 +70,6 @@ export async function handleAction(input: ActionParams): Promise<ActionHandlerRe
 
     log.info("send info", { action, to: params?.to || params?.target });
 
-    // sticker-search is a pure query, no need to create sender
     if (action === "sticker-search") {
       const result = searchSticker((params ?? {}) as Record<string, unknown>);
       return {

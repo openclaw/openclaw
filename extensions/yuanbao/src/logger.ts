@@ -24,18 +24,10 @@ let initialized = false;
 let verboseEnabled = false;
 
 const fallbackLogger: PluginLogger = {
-  info(message: string, meta?: Record<string, unknown>): void {
-    console.log(`${LOG_PREFIX} ${message}`, meta ?? "");
-  },
-  warn(message: string, meta?: Record<string, unknown>): void {
-    console.warn(`${LOG_PREFIX} ${message}`, meta ?? "");
-  },
-  error(message: string, meta?: Record<string, unknown>): void {
-    console.error(`${LOG_PREFIX} ${message}`, meta ?? "");
-  },
-  debug(message: string, meta?: Record<string, unknown>): void {
-    console.debug(`${LOG_PREFIX} ${message}`, meta ?? "");
-  },
+  info: (msg, meta) => console.log(`${LOG_PREFIX} ${msg}`, meta ?? ""),
+  warn: (msg, meta) => console.warn(`${LOG_PREFIX} ${msg}`, meta ?? ""),
+  error: (msg, meta) => console.error(`${LOG_PREFIX} ${msg}`, meta ?? ""),
+  debug: (msg, meta) => console.debug(`${LOG_PREFIX} ${msg}`, meta ?? ""),
 };
 
 export function initLogger(api: OpenClawPluginApi): void {
@@ -50,36 +42,14 @@ export function initLogger(api: OpenClawPluginApi): void {
 }
 
 function getActiveLogger(): PluginLogger {
-  if (initialized && childLogger) {
-    const cl = childLogger;
-    return {
-      info: (message: string, meta?: Record<string, unknown>) =>
-        meta ? cl.info(message, meta) : cl.info(message),
-      warn: (message: string, meta?: Record<string, unknown>) =>
-        meta ? cl.warn(message, meta) : cl.warn(message),
-      error: (message: string, meta?: Record<string, unknown>) =>
-        meta ? cl.error(message, meta) : cl.error(message),
-      debug: (message: string, meta?: Record<string, unknown>) =>
-        meta ? cl.debug?.(message, meta) : cl.debug?.(message),
-    };
-  }
-  return fallbackLogger;
+  return initialized && childLogger ? childLogger : fallbackLogger;
 }
 
-/** Shared plugin logger instance. */
 export const logger: PluginLogger = {
-  info(message: string, meta?: Record<string, unknown>): void {
-    getActiveLogger().info(message, meta);
-  },
-  warn(message: string, meta?: Record<string, unknown>): void {
-    getActiveLogger().warn(message, meta);
-  },
-  error(message: string, meta?: Record<string, unknown>): void {
-    getActiveLogger().error(message, meta);
-  },
-  debug(message: string, meta?: Record<string, unknown>): void {
-    getActiveLogger().debug(message, meta);
-  },
+  info: (msg, meta) => getActiveLogger().info(msg, meta),
+  warn: (msg, meta) => getActiveLogger().warn(msg, meta),
+  error: (msg, meta) => getActiveLogger().error(msg, meta),
+  debug: (msg, meta) => getActiveLogger().debug(msg, meta),
 };
 
 export function isVerbose(): boolean {
@@ -101,10 +71,7 @@ const debugBotIds = new Set<string>(parseEnvDebugBotIds());
 
 export function setDebugBotIds(ids: string[]): void {
   debugBotIds.clear();
-  for (const id of parseEnvDebugBotIds()) {
-    debugBotIds.add(id);
-  }
-  for (const id of ids) {
+  for (const id of [...parseEnvDebugBotIds(), ...ids]) {
     const trimmed = id.trim();
     if (trimmed) {
       debugBotIds.add(trimmed);
@@ -113,13 +80,9 @@ export function setDebugBotIds(ids: string[]): void {
 }
 
 export function isDebugBotId(botId?: string): boolean {
-  if (!botId) {
-    return false;
-  }
-  return debugBotIds.has(botId);
+  return botId ? debugBotIds.has(botId) : false;
 }
 
-/** Generic log sink interface — compatible with the logger singleton, ctx.log, and pass-through GatewayLog */
 export interface LogSink {
   info?: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -128,7 +91,6 @@ export interface LogSink {
   verbose?: (msg: string) => void;
 }
 
-/** Unified log interface returned by createLog */
 export interface ModuleLog {
   info(msg: string, data?: Record<string, unknown>): void;
   warn(msg: string, data?: Record<string, unknown>): void;
@@ -146,8 +108,7 @@ export function formatLog(
   if (data === undefined) {
     return `${prefix} ${msg}`;
   }
-  const serialized = skipSanitize ? JSON.stringify(data) : sanitize(data);
-  return `${prefix} ${msg} ${serialized}`;
+  return `${prefix} ${msg} ${skipSanitize ? JSON.stringify(data) : sanitize(data)}`;
 }
 
 export function createLog(module: string, sink?: LogSink, options?: { botId?: string }): ModuleLog {
@@ -194,25 +155,20 @@ export function sanitize(value: unknown): string {
   if (value === null || value === undefined) {
     return String(value);
   }
-
   if (typeof value === "string") {
-    // Try parsing JSON strings to sanitize inner fields
     try {
       const parsed: unknown = JSON.parse(value);
       if (typeof parsed === "object" && parsed !== null) {
         return JSON.stringify(sanitizeObj(parsed as Record<string, unknown>));
       }
     } catch {
-      // Not a JSON string — return as-is
+      /* not JSON */
     }
     return value;
   }
-
   if (typeof value === "object") {
     return JSON.stringify(sanitizeObj(value as Record<string, unknown>));
   }
-
-  // Primitives (number / boolean / bigint / symbol / function)
   return typeof value === "symbol"
     ? value.toString()
     : String(value as string | number | boolean | bigint);
@@ -224,9 +180,7 @@ function sanitizeObj(obj: Record<string, unknown>): Record<string, unknown> {
       typeof item === "object" && item !== null ? sanitizeObj(item) : item,
     ) as unknown as Record<string, unknown>;
   }
-
   const result: Record<string, unknown> = {};
-
   for (const [key, val] of Object.entries(obj)) {
     if (OMIT_KEYS.has(key.toLowerCase())) {
       continue;
@@ -239,6 +193,5 @@ function sanitizeObj(obj: Record<string, unknown>): Record<string, unknown> {
       result[key] = val;
     }
   }
-
   return result;
 }

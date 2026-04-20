@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { YuanbaoConfig } from "./types.js";
 
-/**
- * Parse "appKey:appSecret" format token string into appKey and appSecret.
- * Returns null if format is invalid.
- */
 function parseAppKeySecretToken(token: string): { appKey: string; appSecret: string } | null {
   const colonIdx = token.indexOf(":");
   if (colonIdx <= 0) {
@@ -18,12 +14,6 @@ function parseAppKeySecretToken(token: string): { appKey: string; appSecret: str
   return { appKey, appSecret };
 }
 
-/**
- * Non-interactive account config adapter.
- *
- * Supports credential setup via `openclaw channels add --channel yuanbao --token "appKey:appSecret"`
- * without entering the interactive wizard. Token uses colon-separated "appKey:appSecret" format.
- */
 export const yuanbaoSetupAdapter = {
   applyAccountConfig: ({
     cfg,

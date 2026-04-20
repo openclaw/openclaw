@@ -10,12 +10,8 @@ import {
   skipSelf,
   skipPlaceholder,
   resolveQuote,
-  recordMember,
-  guardSpecialCommand,
   guardCommand,
   resolveMention,
-  guardGroupCommand,
-  guardSendAccess,
   rewriteBody,
   downloadMedia,
   resolveRoute,
@@ -33,13 +29,9 @@ export function createPipeline(): MessagePipeline {
       .use(skipSelf) // Skip bot's own messages
       .use(skipPlaceholder) // Skip placeholder/empty messages
       .use(resolveQuote) // Parse quoted messages
-      .use(recordMember) // Record group member info (group chat)
       // Phase 2: Guards
-      .use(guardSpecialCommand) // Upgrade command / issue-log owner guard
       .use(guardCommand) // SDK resolveControlCommandGate
       .use(resolveMention) // SDK resolveMentionGatingWithBypass (group chat)
-      .use(guardGroupCommand) // Group command whitelist (group chat)
-      .use(guardSendAccess) // Send access control guard (C2C)
       // Phase 3: Message preprocessing
       .use(rewriteBody) // Command rewrite + quote concat + mentions concat
       .use(downloadMedia) // Media download

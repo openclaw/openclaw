@@ -1,5 +1,3 @@
-/** Yuanbao HTTP request base layer — token cache, signature, auth headers, and HTTP utilities. */
-
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getOpenclawVersion, getOperationSystem, getPluginVersion } from "../../infra/env.js";
 import { createLog } from "../../logger.js";
@@ -55,18 +53,11 @@ export const DOWNLOAD_INFO_PATH = "/api/resource/v1/download";
 const RETRYABLE_SIGN_CODE = 10099;
 const SIGN_MAX_RETRIES = 3;
 const SIGN_RETRY_DELAY_MS = 1000;
-
 const CACHE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-
-// Max safe setTimeout delay (ms): ~24 days, prevents 32-bit overflow
 const MAX_SAFE_TIMEOUT_MS = 24 * 24 * 3600 * 1000;
-
 const HTTP_AUTH_RETRY_MAX = 1;
-
 const tokenCacheMap = new Map<string, CacheEntry>();
-
 const tokenFetchPromises = new Map<string, Promise<SignTokenData>>();
-
 const tokenRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export function clearSignTokenCache(accountId: string): void {
@@ -254,7 +245,6 @@ export async function getSignToken(
   account: ResolvedYuanbaoAccount,
   log?: Log,
 ): Promise<SignTokenData> {
-  // Static token takes priority
   if (account.token) {
     return {
       bot_id: account.botId || "",
@@ -274,7 +264,6 @@ export async function getSignToken(
     return cached.data;
   }
 
-  // Singleflight: reuse in-flight request if one exists
   let fetchPromise = tokenFetchPromises.get(account.accountId);
   if (fetchPromise) {
     tlog.info(`[${account.accountId}] sign-token in progress, waiting for existing request`);
@@ -306,7 +295,6 @@ export async function forceRefreshSignToken(
   const flog = createLog("http", log);
   flog.warn(`[${account.accountId}][force-refresh] clearing cache and re-signing token`);
   clearSignTokenCache(account.accountId);
-  // Also clear in-flight singleflight promise to ensure a fresh request
   tokenFetchPromises.delete(account.accountId);
   return getSignToken(account, log);
 }

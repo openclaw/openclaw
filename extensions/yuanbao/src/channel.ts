@@ -21,7 +21,6 @@ import { yuanbaoConfigSchema } from "./config-schema.js";
 import { createLog, setDebugBotIds } from "./logger.js";
 import { getYuanbaoRuntime } from "./runtime.js";
 import { yuanbaoSetupAdapter } from "./setup.js";
-// import { yuanbaoOnboardingAdapter } from './onboarding.js';
 import type { ResolvedYuanbaoAccount } from "./types.js";
 
 const meta = {
@@ -37,14 +36,10 @@ const meta = {
   quickstartAllowFrom: true,
 };
 
-/**
- * Main channel plugin definition object, built using the createChatChannelPlugin factory function
- */
 export const yuanbaoPlugin: ChannelPlugin<ResolvedYuanbaoAccount> = createChatChannelPlugin({
   base: {
     id: "yuanbao",
     meta,
-    // onboarding: yuanbaoOnboardingAdapter,
     setup: yuanbaoSetupAdapter,
     actions: yuanbaoMessageActions as ChannelMessageActionAdapter,
     capabilities: {
@@ -121,9 +116,6 @@ export const yuanbaoPlugin: ChannelPlugin<ResolvedYuanbaoAccount> = createChatCh
         return buildMessageToolHints();
       },
     },
-
-    // Configure the OpenClaw built-in block-streaming coalescer:
-    // Deliver only after 2800 characters or 1s idle
     streaming: {
       blockStreamingCoalesceDefaults: {
         minChars: 2800,
@@ -156,9 +148,7 @@ export const yuanbaoPlugin: ChannelPlugin<ResolvedYuanbaoAccount> = createChatCh
         configured: account.configured,
         name: account.name,
         extra: {
-          // Framework uses tokenStatus to determine channel status; missing this field causes "no token" + SETUP
           tokenStatus: account.configured ? "available" : "missing",
-          // token is only set when user explicitly configures a static token; in normal ticket-signing mode token is undefined
           ...(account.token ? { token: account.token } : {}),
           dmPolicy: account.config.dm?.policy ?? "open",
         },
@@ -203,7 +193,6 @@ export const yuanbaoPlugin: ChannelPlugin<ResolvedYuanbaoAccount> = createChatCh
         });
       },
       stopAccount: async (ctx) => {
-        // Outbound queue lifecycle is managed by pipeline middleware; no global destruction needed
         ctx.setStatus({
           accountId: ctx.account.accountId,
           running: false,
@@ -212,8 +201,6 @@ export const yuanbaoPlugin: ChannelPlugin<ResolvedYuanbaoAccount> = createChatCh
       },
     },
   },
-
-  // Use createScopedDmSecurityResolver to simplify DM security policy resolution
   security: {
     resolveDmPolicy: createScopedDmSecurityResolver<ResolvedYuanbaoAccount>({
       channelKey: "yuanbao",
@@ -223,13 +210,9 @@ export const yuanbaoPlugin: ChannelPlugin<ResolvedYuanbaoAccount> = createChatCh
       normalizeEntry: (raw) => raw.trim().toLowerCase(),
     }),
   },
-
-  // Group chat reply-to strategy
   threading: {
     resolveReplyToMode: () => "all",
   },
-
-  // Outbound message configuration
   outbound: {
     deliveryMode: "direct",
     chunkerMode: "markdown",

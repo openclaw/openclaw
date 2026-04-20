@@ -1,11 +1,3 @@
-/**
- * Text message sending.
- *
- * Extracted from create-sender:
- * - Parses @mentions, Markdown image references, etc.
- * - Builds MsgBody and delivers via deliver()
- */
-
 import { getMember } from "../../../infra/cache/member.js";
 import type { YuanbaoMsgBodyElement } from "../../../types.js";
 import { prepareOutboundContent, buildOutboundMsgBody } from "../../messaging/handlers/index.js";
@@ -17,10 +9,6 @@ export interface SendTextParams {
   dt: DeliverTarget;
 }
 
-/**
- * Send text message.
- * Prepares content (parses @mentions, Markdown image refs), builds MsgBody, and delivers.
- */
 export async function sendText(params: SendTextParams): Promise<SendResult> {
   const { text, dt } = params;
 

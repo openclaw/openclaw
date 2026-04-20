@@ -2,33 +2,15 @@ import { createRequire } from "module";
 import os from "os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 
-/**
- * Plugin version number.
- */
 let _pluginVersion = "";
-/**
- * OpenClaw version number.
- */
 let _openclawVersion = "";
 
-/**
- * Get current plugin version number.
- */
 export const getPluginVersion = () => _pluginVersion;
 
-/**
- * Get current OpenClaw version number.
- */
 export const getOpenclawVersion = () => _openclawVersion;
 
-/**
- * Get current operating system.
- */
 export const getOperationSystem = () => os.type();
 
-/**
- * Initialize plugin and OpenClaw version numbers during plugin registration.
- */
 export const initEnv = (api: OpenClawPluginApi) => {
   _pluginVersion = api?.version || "";
   _openclawVersion = api?.config?.meta?.lastTouchedVersion || "";
@@ -38,9 +20,7 @@ export const initEnv = (api: OpenClawPluginApi) => {
   }
 };
 
-/**
- * Fallback: resolve versions from package.json relative to the install directory.
- */const legacyInitEnv = () => {
+const legacyInitEnv = () => {
   try {
     const _require = createRequire(import.meta.url);
     // Read plugin version (build output in dist/ws/get-env.js, two levels up to root)

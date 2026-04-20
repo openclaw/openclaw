@@ -14,36 +14,22 @@ export type YuanbaoConnectionMode = "websocket";
 export type YuanbaoAccountConfig = {
   name?: string;
   enabled?: boolean;
-
   appKey?: string;
   appSecret?: string;
   apiDomain?: string; // API domain
   logUploadApiUrl?: string; // issue-log upload API URL
   wsUrl?: string; // WebSocket URL
-  /** Skips automatic ticket signing if provided */
   token?: string;
-
   dm?: YuanbaoDmConfig;
   overflowPolicy?: YuanbaoOverflowPolicy;
-  /** off=no quote, first=quote only first reply per inbound message, all=quote every reply */
   replyToMode?: YuanbaoReplyToMode;
   routeEnv?: string;
-
-  /** Default 20 */
   mediaMaxMb?: number;
-
-  /** 0=disabled, defaults to SDK built-in value */
   historyLimit?: number;
-
-  /** Default false */
   disableBlockStreaming?: boolean;
-  /** Default true */
   requireMention?: boolean;
-  /** Automatically sent to the user when the AI model returns no reply content */
   fallbackReply?: string;
-  /** Default true; prevents model from wrapping entire reply in ```markdown fences */
   markdownHintEnabled?: boolean;
-  /** Logs for whitelisted bots are not sanitized */
   debugBotIds?: string[];
 };
 

@@ -1,10 +1,3 @@
-/**
- * Yuanbao business API.
- *
- * Upload pre-sign config retrieval, resource download URL retrieval, etc.
- * Auth and HTTP utilities are in request.ts.
- */
-
 import type { ResolvedYuanbaoAccount } from "../../types.js";
 import type { Log, CosUploadConfig } from "./request.js";
 import { yuanbaoPost, yuanbaoGet } from "./request.js";
@@ -12,9 +5,6 @@ import { yuanbaoPost, yuanbaoGet } from "./request.js";
 const UPLOAD_INFO_PATH = "/api/resource/genUploadInfo";
 const DOWNLOAD_INFO_PATH = "/api/resource/v1/download";
 
-/**
- * Get COS upload pre-sign config.
- */
 export async function apiGetUploadInfo(
   account: ResolvedYuanbaoAccount,
   fileName: string,
@@ -35,9 +25,6 @@ export async function apiGetUploadInfo(
   return data;
 }
 
-/**
- * Get COS download URL for a given resourceId.
- */
 export async function apiGetDownloadUrl(
   account: ResolvedYuanbaoAccount,
   resourceId: string,
@@ -52,7 +39,9 @@ export async function apiGetDownloadUrl(
 
   const downloadUrl = data.url ?? data.realUrl;
   if (!downloadUrl) {
-    throw new Error(`[yuanbao-api] resource/v1/download returned no valid URL: ${JSON.stringify(data)}`);
+    throw new Error(
+      `[yuanbao-api] resource/v1/download returned no valid URL: ${JSON.stringify(data)}`,
+    );
   }
 
   return downloadUrl;

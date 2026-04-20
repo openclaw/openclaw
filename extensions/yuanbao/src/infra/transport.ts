@@ -17,9 +17,6 @@ const firstReplyRefDb = new InMemoryTtlDb<string, true>({
   maxKeys: 100,
 });
 
-/**
- * Whether a quote reply should be attached
- */
 async function shouldAttachReplyRef(params: {
   account: ResolvedYuanbaoAccount;
   refMsgId?: string;
@@ -57,7 +54,6 @@ async function shouldAttachReplyRef(params: {
   return true;
 }
 
-/** Send a C2C message body via WebSocket. */
 export async function sendC2CMsgBody(params: {
   account: ResolvedYuanbaoAccount;
   toAccount: string;
@@ -102,7 +98,6 @@ export async function sendC2CMsgBody(params: {
   }
 }
 
-/** Send a group message body via WebSocket. */
 export async function sendGroupMsgBody(params: {
   account: ResolvedYuanbaoAccount;
   groupCode: string;

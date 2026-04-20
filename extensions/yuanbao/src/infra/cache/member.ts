@@ -10,8 +10,6 @@ export type UserRecord = {
   userType?: number;
 };
 
-// SessionMember — Group active user submodule (session cache layer)
-
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export class SessionMember {
@@ -22,21 +20,13 @@ export class SessionMember {
     if (!userId) {
       return;
     }
-
     if (!this.groupUsers.has(groupCode)) {
       this.groupUsers.set(groupCode, new Map());
     }
-
-    const users = this.groupUsers.get(groupCode)!;
-    users.set(userId, {
-      userId,
-      nickName: nickName || "unknown",
-      lastSeen: Date.now(),
-    });
-
+    this.groupUsers
+      .get(groupCode)!
+      .set(userId, { userId, nickName: nickName || "unknown", lastSeen: Date.now() });
     this.cleanExpired();
-
-    this.log.debug(`recorded user: ${nickName ?? "?"} (${userId}) in group=${groupCode}`);
   }
 
   lookupUsers(groupCode: string, nameFilter?: string): UserRecord[] {
@@ -44,37 +34,30 @@ export class SessionMember {
     if (!users || users.size === 0) {
       return [];
     }
-
     let results = Array.from(users.values());
-
     if (nameFilter) {
-      const filter = nameFilter.trim().toLowerCase();
-      results = results.filter((u) => u.nickName.toLowerCase().includes(filter));
+      const f = nameFilter.trim().toLowerCase();
+      results = results.filter((u) => u.nickName.toLowerCase().includes(f));
     }
-
-    results.sort((a, b) => b.lastSeen - a.lastSeen);
-
-    return results;
+    return results.toSorted((a, b) => b.lastSeen - a.lastSeen);
   }
 
   lookupUserByNickName(groupCode: string, nickName: string): UserRecord | undefined {
     const users = this.groupUsers.get(groupCode);
-    if (!users || users.size === 0) {
+    if (!users) {
       return undefined;
     }
-
     const target = nickName.trim().toLowerCase();
-    for (const record of users.values()) {
-      if (record.nickName.toLowerCase() === target) {
-        return record;
+    for (const r of users.values()) {
+      if (r.nickName.toLowerCase() === target) {
+        return r;
       }
     }
     return undefined;
   }
 
   lookupUserById(groupCode: string, userId: string): UserRecord | undefined {
-    const users = this.groupUsers.get(groupCode);
-    return users?.get(userId);
+    return this.groupUsers.get(groupCode)?.get(userId);
   }
 
   upsertUser(groupCode: string, record: UserRecord): void {
@@ -91,8 +74,8 @@ export class SessionMember {
   private cleanExpired(): void {
     const now = Date.now();
     for (const [code, users] of this.groupUsers) {
-      for (const [id, record] of users) {
-        if (now - record.lastSeen > SESSION_TTL_MS) {
+      for (const [id, r] of users) {
+        if (now - r.lastSeen > SESSION_TTL_MS) {
           users.delete(id);
         }
       }
@@ -112,27 +95,17 @@ type GroupMemberCache = {
   fetchedAt: number;
 };
 
-type GroupOwnerInfo = {
-  userId: string;
-  nickName: string;
-};
+type GroupOwnerInfo = { userId: string; nickName: string };
 
-/** Full group info (from queryGroupInfo API) */
 export interface GroupInfoData {
   groupName: string;
   ownerUserId: string;
   ownerNickName: string;
   groupSize: number;
 }
-type GroupOwnerCache = {
-  owner: GroupOwnerInfo;
-  fetchedAt: number;
-};
 
-type GroupInfoCache = {
-  info: GroupInfoData;
-  fetchedAt: number;
-};
+type GroupOwnerCache = { owner: GroupOwnerInfo; fetchedAt: number };
+type GroupInfoCache = { info: GroupInfoData; fetchedAt: number };
 
 export class GroupMember {
   private readonly accountId: string;
@@ -150,24 +123,14 @@ export class GroupMember {
   async getMembers(groupCode: string): Promise<UserRecord[]> {
     const cached = this.cache.get(groupCode);
     if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL_MS) {
-      this.log.debug(`cache hit for group=${groupCode}, ${cached.members.length} members`);
       return cached.members;
     }
-
-    // Cache expired or missing, try to fetch
     const fetched = await this.fetchFromApi(groupCode);
     if (fetched.length > 0) {
       this.cache.set(groupCode, { members: fetched, fetchedAt: Date.now() });
       return fetched;
     }
-
-    // Fetch failed; return stale cache if available (better than empty)
-    if (cached) {
-      this.log.debug(`fetch failed, returning stale cache for group=${groupCode}`);
-      return cached.members;
-    }
-
-    return [];
+    return cached?.members ?? [];
   }
 
   lookupUsers(groupCode: string, nameFilter?: string): UserRecord[] {
@@ -175,25 +138,16 @@ export class GroupMember {
     if (!cached) {
       return [];
     }
-
-    let results = cached.members;
-
-    if (nameFilter) {
-      const filter = nameFilter.trim().toLowerCase();
-      results = results.filter((u) => u.nickName.toLowerCase().includes(filter));
+    if (!nameFilter) {
+      return cached.members;
     }
-
-    return results;
+    const f = nameFilter.trim().toLowerCase();
+    return cached.members.filter((u) => u.nickName.toLowerCase().includes(f));
   }
 
   lookupUserByNickName(groupCode: string, nickName: string): UserRecord | undefined {
-    const cached = this.cache.get(groupCode);
-    if (!cached) {
-      return undefined;
-    }
-
     const target = nickName.trim().toLowerCase();
-    return cached.members.find((u) => u.nickName.toLowerCase() === target);
+    return this.cache.get(groupCode)?.members.find((u) => u.nickName.toLowerCase() === target);
   }
 
   hasCachedData(groupCode: string): boolean {
@@ -205,44 +159,35 @@ export class GroupMember {
     return this.getMembers(groupCode);
   }
 
+  private getWsClient(): ReturnType<typeof getActiveWsClient> | null {
+    const ws = getActiveWsClient(this.accountId);
+    if (!ws || ws.getState() !== "connected") {
+      return null;
+    }
+    return ws;
+  }
+
   async queryGroupOwner(groupCode: string): Promise<GroupOwnerInfo | null> {
     const cached = this.ownerCache.get(groupCode);
     if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL_MS) {
-      this.log.debug(`owner cache hit for group=${groupCode}`);
       return cached.owner;
     }
-
-    // Get wsClient
-    const wsClient = getActiveWsClient(this.accountId);
-    if (!wsClient) {
-      this.log.warn(`no active wsClient for account=${this.accountId}, skip queryGroupOwner`);
+    const ws = this.getWsClient();
+    if (!ws) {
       return cached?.owner ?? null;
     }
-
-    if (wsClient.getState() !== "connected") {
-      this.log.warn(`wsClient not connected (state=${wsClient.getState()}), skip queryGroupOwner`);
-      return cached?.owner ?? null;
-    }
-
     try {
-      this.log.debug(`querying group info: account=${this.accountId}, group=${groupCode}`);
-      const rsp = await wsClient.queryGroupInfo({ group_code: groupCode });
-
+      const rsp = await ws.queryGroupInfo({ group_code: groupCode });
       if (rsp.code !== 0 || !rsp.group_info) {
-        this.log.warn(`queryGroupInfo failed: code=${rsp.code}, msg=${rsp.msg}`);
         return cached?.owner ?? null;
       }
-
       const owner: GroupOwnerInfo = {
         userId: rsp.group_info.group_owner_user_id,
         nickName: rsp.group_info.group_owner_nickname || "unknown",
       };
-
-      this.log.info(`group owner: ${owner.nickName} (${owner.userId}) for group=${groupCode}`);
       this.ownerCache.set(groupCode, { owner, fetchedAt: Date.now() });
       return owner;
-    } catch (err) {
-      this.log.error(`queryGroupInfo error: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
       return cached?.owner ?? null;
     }
   }
@@ -250,85 +195,46 @@ export class GroupMember {
   async queryGroupInfo(groupCode: string): Promise<GroupInfoData | null> {
     const cached = this.infoCache.get(groupCode);
     if (cached && Date.now() - cached.fetchedAt < GROUP_CACHE_TTL_MS) {
-      this.log.debug(`group info cache hit for group=${groupCode}`);
       return cached.info;
     }
-
-    // Get wsClient
-    const wsClient = getActiveWsClient(this.accountId);
-    if (!wsClient) {
-      this.log.warn(`no active wsClient for account=${this.accountId}, skip queryGroupInfo`);
+    const ws = this.getWsClient();
+    if (!ws) {
       return cached?.info ?? null;
     }
-
-    if (wsClient.getState() !== "connected") {
-      this.log.warn(`wsClient not connected (state=${wsClient.getState()}), skip queryGroupInfo`);
-      return cached?.info ?? null;
-    }
-
     try {
-      this.log.debug(`querying full group info: account=${this.accountId}, group=${groupCode}`);
-      const rsp = await wsClient.queryGroupInfo({ group_code: groupCode });
-
+      const rsp = await ws.queryGroupInfo({ group_code: groupCode });
       if (rsp.code !== 0 || !rsp.group_info) {
-        this.log.warn(`queryGroupInfo failed: code=${rsp.code}, msg=${rsp.msg}`);
         return cached?.info ?? null;
       }
-
       const info: GroupInfoData = {
         groupName: rsp.group_info.group_name || "unknown",
         ownerUserId: rsp.group_info.group_owner_user_id,
         ownerNickName: rsp.group_info.group_owner_nickname || "unknown",
         groupSize: rsp.group_info.group_size ?? 0,
       };
-
-      this.log.info(
-        `group info: name=${info.groupName}, size=${info.groupSize}, owner=${info.ownerNickName} for group=${groupCode}`,
-      );
       this.infoCache.set(groupCode, { info, fetchedAt: Date.now() });
-
-      // Also update ownerCache
-      const owner: GroupOwnerInfo = { userId: info.ownerUserId, nickName: info.ownerNickName };
-      this.ownerCache.set(groupCode, { owner, fetchedAt: Date.now() });
-
+      this.ownerCache.set(groupCode, {
+        owner: { userId: info.ownerUserId, nickName: info.ownerNickName },
+        fetchedAt: Date.now(),
+      });
       return info;
-    } catch (err) {
-      this.log.error(
-        `queryGroupInfo (full) error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    } catch {
       return cached?.info ?? null;
     }
   }
 
   private async fetchFromApi(groupCode: string): Promise<UserRecord[]> {
-    const wsClient = getActiveWsClient(this.accountId);
-    if (!wsClient) {
-      this.log.warn(`no active wsClient for account=${this.accountId}, skip fetch`);
+    const ws = this.getWsClient();
+    if (!ws) {
       return [];
     }
-
-    if (wsClient.getState() !== "connected") {
-      this.log.warn(`wsClient not connected (state=${wsClient.getState()}), skip fetch`);
-      return [];
-    }
-
     try {
-      this.log.debug(`fetching group members: account=${this.accountId}, group=${groupCode}`);
-      const rsp = await wsClient.getGroupMemberList({ group_code: groupCode });
-
+      const rsp = await ws.getGroupMemberList({ group_code: groupCode });
       if (rsp.code !== 0) {
-        this.log.warn(`getGroupMemberList failed: code=${rsp.code}, msg=${rsp.message}`);
         return [];
       }
-
-      const apiMembers = rsp.member_list ?? [];
-      this.log.info(`got ${apiMembers.length} members from API for group=${groupCode}`);
-
-      // Convert to UserRecord and sync to SessionMember
       const now = Date.now();
-      const records: UserRecord[] = [];
-
-      for (const m of apiMembers) {
+      return (rsp.member_list ?? []).map((m) => {
         const existing = this.sessionMember.lookupUserById(groupCode, m.user_id);
         const record: UserRecord = {
           userId: m.user_id,
@@ -336,35 +242,22 @@ export class GroupMember {
           lastSeen: existing?.lastSeen ?? now,
           userType: m.user_type,
         };
-        // Sync to SessionMember to keep both layers consistent
         this.sessionMember.upsertUser(groupCode, record);
-        records.push(record);
-      }
-
-      return records;
-    } catch (err) {
-      this.log.error(
-        `getGroupMemberList error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+        return record;
+      });
+    } catch {
       return [];
     }
   }
 }
 
-// Member — Facade
-
-export type FormattedUserRecord = {
-  userId: string;
-  nickName: string;
-  lastSeen: string;
-};
+export type FormattedUserRecord = { userId: string; nickName: string; lastSeen: string };
 
 export class Member {
   readonly accountId: string;
   readonly session = new SessionMember();
   readonly group: GroupMember;
   private log = createLog("member");
-  /** Fixed per environment, reused after first query */
   private yuanbaoUserIdCache: string | null = null;
 
   constructor(accountId: string) {
@@ -377,51 +270,37 @@ export class Member {
   }
 
   async queryMembers(groupCode: string, nameFilter?: string): Promise<UserRecord[]> {
-    // Prioritize GroupMember
-    const groupMembers = await this.group.getMembers(groupCode);
-    if (groupMembers.length > 0) {
+    const members = await this.group.getMembers(groupCode);
+    if (members.length > 0) {
       if (!nameFilter) {
-        return groupMembers;
+        return members;
       }
-
-      const filter = nameFilter.trim().toLowerCase();
-      const filtered = groupMembers.filter((u) => u.nickName.toLowerCase().includes(filter));
+      const f = nameFilter.trim().toLowerCase();
+      const filtered = members.filter((u) => u.nickName.toLowerCase().includes(f));
       if (filtered.length > 0) {
         return filtered;
       }
     }
-
-    // Fall back to SessionMember
-    this.log.debug(
-      `GroupMember empty or no match, fallback to SessionMember for group=${groupCode}`,
-    );
     return this.session.lookupUsers(groupCode, nameFilter);
   }
 
   lookupUsers(groupCode: string, nameFilter?: string): UserRecord[] {
-    // Prioritize GroupMember cache
-    const groupResults = this.group.lookupUsers(groupCode, nameFilter);
-    if (groupResults.length > 0) {
-      return groupResults;
-    }
-
-    // Fall back to SessionMember
-    return this.session.lookupUsers(groupCode, nameFilter);
+    return this.group.lookupUsers(groupCode, nameFilter).length > 0
+      ? this.group.lookupUsers(groupCode, nameFilter)
+      : this.session.lookupUsers(groupCode, nameFilter);
   }
 
   lookupUserByNickName(groupCode: string, nickName: string): UserRecord | undefined {
-    // Prioritize GroupMember cache
     return (
       this.group.lookupUserByNickName(groupCode, nickName) ??
       this.session.lookupUserByNickName(groupCode, nickName)
     );
   }
 
-  async queryGroupOwner(groupCode: string): Promise<GroupOwnerInfo | null> {
+  queryGroupOwner(groupCode: string) {
     return this.group.queryGroupOwner(groupCode);
   }
-
-  async queryGroupInfo(groupCode: string): Promise<GroupInfoData | null> {
+  queryGroupInfo(groupCode: string) {
     return this.group.queryGroupInfo(groupCode);
   }
 
@@ -429,22 +308,15 @@ export class Member {
     if (this.yuanbaoUserIdCache) {
       return this.yuanbaoUserIdCache;
     }
-
     if (!groupCode) {
-      this.log.debug("queryYuanbaoUserId skipped: no cache and no groupCode");
       return null;
     }
-
     const members = await this.group.getMembers(groupCode);
-    // userType: 2=yuanbao, 3=bot; prefer yuanbao, bot as fallback
     const yuanbao = members.find((u) => u.userType === 2) ?? members.find((u) => u.userType === 3);
     if (!yuanbao?.userId) {
-      this.log.warn(`queryYuanbaoUserId failed: no yuanbao/bot found in group=${groupCode}`);
       return null;
     }
-
     this.yuanbaoUserIdCache = yuanbao.userId;
-    this.log.info(`cached yuanbaoUserId=${yuanbao.userId} from group=${groupCode}`);
     return this.yuanbaoUserIdCache;
   }
 
@@ -460,8 +332,6 @@ export class Member {
     }));
   }
 }
-
-// Multi-instance Runtime — Managed by accountId
 
 const activeMembers = new Map<string, Member>();
 const runtimeLog = createLog("member:runtime");

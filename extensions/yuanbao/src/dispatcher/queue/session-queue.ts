@@ -11,27 +11,16 @@ import { createLog } from "../../logger.js";
 export type SessionTask = () => Promise<void>;
 
 export class SessionQueue {
-  /** sessionKey → current promise chain */
   private chains = new Map<string, Promise<void>>();
-  /** sessionKey → current generation (for detecting superseded tasks) */
   private generations = new Map<string, number>();
   private log = createLog("session-queue");
 
-  /**
-   * Invalidate all queued tasks for a given sessionKey.
-   *
-   * Increments the generation counter; tasks enqueued before this point
-   * will skip execution when they detect the generation mismatch.
-   */
   invalidate(sessionKey: string): void {
     const gen = (this.generations.get(sessionKey) ?? 0) + 1;
     this.generations.set(sessionKey, gen);
     this.log.info(`[${sessionKey}] invalidated queued tasks (generation=${gen})`);
   }
 
-  /**
-   * Enqueue a task into the serial queue for a given sessionKey.
-   */
   enqueue(sessionKey: string, task: SessionTask): Promise<void> {
     // Record generation at enqueue time; compare before execution to detect superseded tasks
     const enqueuedGen = this.generations.get(sessionKey) ?? 0;
@@ -64,7 +53,6 @@ export class SessionQueue {
     return next;
   }
 
-  /** Number of currently active sessions (for debugging/monitoring) */
   get activeCount(): number {
     return this.chains.size;
   }
