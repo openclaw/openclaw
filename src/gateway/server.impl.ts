@@ -252,12 +252,13 @@ export async function startGatewayServer(
   });
   const startupTrace = createGatewayStartupTrace();
 
-  const configSnapshot = await startupTrace.measure("config.snapshot", () =>
+  const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
       log,
     }),
   );
+  const configSnapshot = startupConfigLoad.snapshot;
 
   const emitSecretsStateEvent = (
     code: "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED",
@@ -322,14 +323,14 @@ export async function startGatewayServer(
         }),
       );
   cfgAtStart = controlUiSeed.config;
-  // Always capture the final config hash after all startup writes (plugin
-  // auto-enable, auth token generation, control-UI origin seeding) so the
-  // config reloader can recognize its own startup writes and suppress the
-  // spurious hot-reload that would otherwise trigger a SIGUSR1 restart loop.
-  // Previously the hash was only captured when auth or control-UI persisted
-  // changes, missing the plugin auto-enable write performed earlier inside
-  // loadGatewayStartupConfigSnapshot().  See #67436.
-  {
+  // Capture the final config hash only after startup writes (plugin auto-enable,
+  // auth token generation, control-UI origin seeding) so the config reloader can
+  // suppress its own persistence events without rereading config on every boot.
+  if (
+    startupConfigLoad.wroteConfig ||
+    authBootstrap.persistedGeneratedToken ||
+    controlUiSeed.persistedAllowedOriginsSeed
+  ) {
     const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
       readConfigFileSnapshot(),
     );

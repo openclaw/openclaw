@@ -51,11 +51,17 @@ type GatewayStartupConfigOverrides = {
   tailscale?: GatewayTailscaleConfig;
 };
 
+export type GatewayStartupConfigSnapshotLoadResult = {
+  snapshot: ConfigFileSnapshot;
+  wroteConfig: boolean;
+};
+
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
-}): Promise<ConfigFileSnapshot> {
+}): Promise<GatewayStartupConfigSnapshotLoadResult> {
   let configSnapshot = await readConfigFileSnapshot();
+  let wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
@@ -68,6 +74,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         reason: "startup-invalid-config",
       });
       if (recovered) {
+        wroteConfig = true;
         params.log.warn(
           `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
         );
@@ -89,11 +96,12 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     ? { config: configSnapshot.config, changes: [] as string[] }
     : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length === 0) {
-    return configSnapshot;
+    return { snapshot: configSnapshot, wroteConfig };
   }
 
   try {
     await writeConfigFile(autoEnable.config);
+    wroteConfig = true;
     configSnapshot = await readConfigFileSnapshot();
     assertValidGatewayStartupConfigSnapshot(configSnapshot);
     params.log.info(
@@ -103,7 +111,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     params.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
   }
 
-  return configSnapshot;
+  return { snapshot: configSnapshot, wroteConfig };
 }
 
 export function createRuntimeSecretsActivator(params: {
