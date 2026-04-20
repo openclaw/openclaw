@@ -23,7 +23,8 @@ void gateway_client_shutdown(void);
 gboolean gateway_client_is_connected(void);
 void gateway_client_request_dependency_refresh(void);
 void gateway_client_invalidate_dependencies(gboolean invalidate_models,
-                                            gboolean invalidate_agents);
+                                            gboolean invalidate_agents,
+                                            gboolean invalidate_config_audit);
 
 #include "gateway_config.h"
 GatewayConfig* gateway_client_get_config(void);

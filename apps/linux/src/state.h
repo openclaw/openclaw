@@ -171,6 +171,8 @@ void state_set_model_catalog_fact(gboolean fetch_succeeded,
                                   gboolean selected_model_resolved);
 void state_set_agents_fact(gboolean fetch_succeeded,
                            guint agent_count);
+void state_set_config_audit_fact(gboolean fetch_succeeded,
+                                 guint issues_count);
 void state_reset_resolved_facts(void);
 
 AppState state_get_current(void);

@@ -18,6 +18,7 @@
 #include "gateway_http.h"
 #include "gateway_rpc.h"
 #include "gateway_ws.h"
+#include "gateway_data.h"
 #include "json_access.h"
 #include "runtime_paths.h"
 #include "device_pair_prompter.h"
@@ -36,6 +37,7 @@ typedef struct {
 typedef enum {
     DEP_REFRESH_MODELS = 1,
     DEP_REFRESH_AGENTS = 2,
+    DEP_REFRESH_CONFIG_AUDIT = 3,
 } DependencyRefreshKind;
 
 typedef struct {
@@ -57,11 +59,14 @@ static guint health_poll_timer_id = 0;
 static guint dependency_generation = 1;
 static gboolean dependency_models_in_flight = FALSE;
 static gboolean dependency_agents_in_flight = FALSE;
+static gboolean dependency_config_audit_in_flight = FALSE;
 static gint64 dependency_last_refresh_us = 0;
 static gboolean dependency_models_fresh = FALSE;
 static gboolean dependency_agents_fresh = FALSE;
+static gboolean dependency_config_audit_fresh = FALSE;
 static gint64 dependency_models_last_success_us = 0;
 static gint64 dependency_agents_last_success_us = 0;
+static gint64 dependency_config_audit_last_success_us = 0;
 #define DEPENDENCY_REFRESH_MIN_INTERVAL_US (2 * G_TIME_SPAN_SECOND)
 #define DEPENDENCY_REFRESH_STALE_AFTER_US (30 * G_TIME_SPAN_SECOND)
 
@@ -79,6 +84,7 @@ static void config_monitor_rearm(void);
 static void dependency_refresh_start(gboolean force);
 static void dependency_invalidate(gboolean invalidate_models,
                                   gboolean invalidate_agents,
+                                  gboolean invalidate_config_audit,
                                   gboolean cancel_in_flight,
                                   const gchar *reason);
 
@@ -113,9 +119,10 @@ static gboolean dependency_fact_is_stale(gboolean fresh,
 
 static void dependency_invalidate(gboolean invalidate_models,
                                   gboolean invalidate_agents,
+                                  gboolean invalidate_config_audit,
                                   gboolean cancel_in_flight,
                                   const gchar *reason) {
-    if (!invalidate_models && !invalidate_agents) {
+    if (!invalidate_models && !invalidate_agents && !invalidate_config_audit) {
         return;
     }
 
@@ -123,6 +130,7 @@ static void dependency_invalidate(gboolean invalidate_models,
         dependency_generation++;
         dependency_models_in_flight = FALSE;
         dependency_agents_in_flight = FALSE;
+        dependency_config_audit_in_flight = FALSE;
     }
 
     if (invalidate_models) {
@@ -135,13 +143,19 @@ static void dependency_invalidate(gboolean invalidate_models,
         dependency_agents_last_success_us = 0;
         state_set_agents_fact(FALSE, 0);
     }
+    if (invalidate_config_audit) {
+        dependency_config_audit_fresh = FALSE;
+        dependency_config_audit_last_success_us = 0;
+        state_set_config_audit_fact(FALSE, 0);
+    }
 
     dependency_last_refresh_us = 0;
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
-                 "dependency refresh invalidated models=%d agents=%d cancel_in_flight=%d reason=%s",
+                 "dependency refresh invalidated models=%d agents=%d config_audit=%d cancel_in_flight=%d reason=%s",
                  invalidate_models,
                  invalidate_agents,
+                 invalidate_config_audit,
                  cancel_in_flight,
                  reason ? reason : "(none)");
 }
@@ -238,17 +252,56 @@ static void on_dependency_agents_response(const GatewayRpcResponse *response, gp
     state_set_agents_fact(TRUE, json_array_get_length(arr));
 }
 
+static void on_dependency_config_audit_response(const GatewayRpcResponse *response, gpointer user_data) {
+    DependencyRefreshContext *ctx = (DependencyRefreshContext *)user_data;
+    if (dependency_refresh_context_is_stale(ctx)) {
+        dependency_refresh_context_free(ctx);
+        return;
+    }
+    dependency_refresh_context_free(ctx);
+    dependency_config_audit_in_flight = FALSE;
+
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+        dependency_config_audit_fresh = FALSE;
+        dependency_config_audit_last_success_us = 0;
+        state_set_config_audit_fact(FALSE, 0);
+        return;
+    }
+
+    GatewayConfigSnapshot *snapshot = gateway_data_parse_config_get(response->payload);
+    if (!snapshot) {
+        dependency_config_audit_fresh = FALSE;
+        dependency_config_audit_last_success_us = 0;
+        state_set_config_audit_fact(FALSE, 0);
+        return;
+    }
+
+    dependency_config_audit_fresh = TRUE;
+    dependency_config_audit_last_success_us = g_get_real_time();
+    state_set_config_audit_fact(TRUE,
+                                snapshot->n_issues > 0
+                                    ? (guint)snapshot->n_issues
+                                    : 0);
+    gateway_config_snapshot_free(snapshot);
+}
+
 static void dependency_refresh_start(gboolean force) {
     if (!gateway_can_refresh_dependencies()) return;
-    if (dependency_models_in_flight || dependency_agents_in_flight) return;
 
     gint64 now_us = g_get_real_time();
+    gboolean models_stale = dependency_fact_is_stale(
+        dependency_models_fresh, dependency_models_last_success_us, now_us);
+    gboolean agents_stale = dependency_fact_is_stale(
+        dependency_agents_fresh, dependency_agents_last_success_us, now_us);
+    gboolean config_audit_stale = dependency_fact_is_stale(
+        dependency_config_audit_fresh, dependency_config_audit_last_success_us, now_us);
+
+    gboolean need_models = force || models_stale;
+    gboolean need_agents = force || agents_stale;
+    gboolean need_config_audit = force || config_audit_stale;
+
     if (!force) {
-        gboolean models_stale = dependency_fact_is_stale(
-            dependency_models_fresh, dependency_models_last_success_us, now_us);
-        gboolean agents_stale = dependency_fact_is_stale(
-            dependency_agents_fresh, dependency_agents_last_success_us, now_us);
-        gboolean freshness_refresh_needed = models_stale || agents_stale;
+        gboolean freshness_refresh_needed = need_models || need_agents || need_config_audit;
 
         if (!freshness_refresh_needed &&
             dependency_last_refresh_us > 0 &&
@@ -256,31 +309,66 @@ static void dependency_refresh_start(gboolean force) {
             return;
         }
     }
-    dependency_last_refresh_us = now_us;
 
-    dependency_models_in_flight = TRUE;
-    dependency_agents_in_flight = TRUE;
-
-    DependencyRefreshContext *models_ctx = dependency_refresh_context_new(DEP_REFRESH_MODELS);
-    g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0,
-                                                       on_dependency_models_response, models_ctx);
-    if (!models_rid) {
-        dependency_refresh_context_free(models_ctx);
-        dependency_models_in_flight = FALSE;
-        dependency_models_fresh = FALSE;
-        dependency_models_last_success_us = 0;
-        state_set_model_catalog_fact(FALSE, 0, FALSE);
+    if (dependency_models_in_flight) {
+        need_models = FALSE;
+    }
+    if (dependency_agents_in_flight) {
+        need_agents = FALSE;
+    }
+    if (dependency_config_audit_in_flight) {
+        need_config_audit = FALSE;
     }
 
-    DependencyRefreshContext *agents_ctx = dependency_refresh_context_new(DEP_REFRESH_AGENTS);
-    g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0,
-                                                       on_dependency_agents_response, agents_ctx);
-    if (!agents_rid) {
-        dependency_refresh_context_free(agents_ctx);
-        dependency_agents_in_flight = FALSE;
-        dependency_agents_fresh = FALSE;
-        dependency_agents_last_success_us = 0;
-        state_set_agents_fact(FALSE, 0);
+    if (!need_models && !need_agents && !need_config_audit) {
+        return;
+    }
+
+    dependency_last_refresh_us = now_us;
+
+    if (need_models) {
+        dependency_models_in_flight = TRUE;
+
+        DependencyRefreshContext *models_ctx = dependency_refresh_context_new(DEP_REFRESH_MODELS);
+        g_autofree gchar *models_rid = gateway_rpc_request("models.list", NULL, 0,
+                                                           on_dependency_models_response, models_ctx);
+        if (!models_rid) {
+            dependency_refresh_context_free(models_ctx);
+            dependency_models_in_flight = FALSE;
+            dependency_models_fresh = FALSE;
+            dependency_models_last_success_us = 0;
+            state_set_model_catalog_fact(FALSE, 0, FALSE);
+        }
+    }
+
+    if (need_agents) {
+        dependency_agents_in_flight = TRUE;
+
+        DependencyRefreshContext *agents_ctx = dependency_refresh_context_new(DEP_REFRESH_AGENTS);
+        g_autofree gchar *agents_rid = gateway_rpc_request("agents.list", NULL, 0,
+                                                           on_dependency_agents_response, agents_ctx);
+        if (!agents_rid) {
+            dependency_refresh_context_free(agents_ctx);
+            dependency_agents_in_flight = FALSE;
+            dependency_agents_fresh = FALSE;
+            dependency_agents_last_success_us = 0;
+            state_set_agents_fact(FALSE, 0);
+        }
+    }
+
+    if (need_config_audit) {
+        dependency_config_audit_in_flight = TRUE;
+
+        DependencyRefreshContext *config_ctx = dependency_refresh_context_new(DEP_REFRESH_CONFIG_AUDIT);
+        g_autofree gchar *config_rid = gateway_rpc_request("config.get", NULL, 0,
+                                                           on_dependency_config_audit_response, config_ctx);
+        if (!config_rid) {
+            dependency_refresh_context_free(config_ctx);
+            dependency_config_audit_in_flight = FALSE;
+            dependency_config_audit_fresh = FALSE;
+            dependency_config_audit_last_success_us = 0;
+            state_set_config_audit_fact(FALSE, 0);
+        }
     }
 }
 
@@ -338,12 +426,6 @@ static void publish_health_state(gboolean http_ok, HttpProbeResult http_probe_re
     hs.wizard_last_run_at = current_config ? current_config->wizard_last_run_at : NULL;
     hs.wizard_last_run_mode = current_config ? current_config->wizard_last_run_mode : NULL;
     hs.wizard_marker_fail_reason = current_config ? current_config->wizard_marker_fail_reason : NULL;
-
-    /* TODO(MVP deferral): We do not populate config_audit_ok or config_issues_count 
-     * here because those are not yet extracted or tracked in the Linux MVP.
-     * Do NOT synthesize fake errors into these fields just to activate the
-     * STATE_RUNNING_WITH_WARNING branch.
-     */
 
     if (current_config) {
         hs.endpoint_host = g_strdup(current_config->host);
@@ -537,7 +619,8 @@ static gboolean on_health_poll_timer(gpointer user_data) {
 }
 
 static void teardown_transport(gboolean invalidate_models,
-                              gboolean invalidate_agents) {
+                              gboolean invalidate_agents,
+                              gboolean invalidate_config_audit) {
     if (health_poll_timer_id) {
         g_source_remove(health_poll_timer_id);
         health_poll_timer_id = 0;
@@ -553,6 +636,7 @@ static void teardown_transport(gboolean invalidate_models,
     current_health_generation++;
     dependency_invalidate(invalidate_models,
                           invalidate_agents,
+                          invalidate_config_audit,
                           TRUE,
                           "transport teardown");
     state_reset_resolved_facts();
@@ -920,6 +1004,7 @@ void gateway_client_refresh(void) {
     /* Config changed — always replace stored config */
     gboolean invalidate_models = TRUE;
     gboolean invalidate_agents = TRUE;
+    gboolean invalidate_config_audit = TRUE;
     if (current_config && new_config && current_config->valid && new_config->valid) {
         gboolean model_context_changed =
             current_config->has_provider_config != new_config->has_provider_config ||
@@ -930,7 +1015,9 @@ void gateway_client_refresh(void) {
             invalidate_models = FALSE;
         }
     }
-    teardown_transport(invalidate_models, invalidate_agents);
+    teardown_transport(invalidate_models,
+                       invalidate_agents,
+                       invalidate_config_audit);
     gateway_config_free(current_config);
     current_config = new_config;
 
@@ -951,7 +1038,7 @@ void gateway_client_shutdown(void) {
     /* Stop monitoring config file (Feature A) */
     config_monitor_clear();
 
-    teardown_transport(TRUE, TRUE);
+    teardown_transport(TRUE, TRUE, TRUE);
     gateway_ws_shutdown();
     gateway_http_shutdown();
     gateway_config_free(current_config);
@@ -971,9 +1058,11 @@ void gateway_client_request_dependency_refresh(void) {
 }
 
 void gateway_client_invalidate_dependencies(gboolean invalidate_models,
-                                            gboolean invalidate_agents) {
+                                            gboolean invalidate_agents,
+                                            gboolean invalidate_config_audit) {
     dependency_invalidate(invalidate_models,
                           invalidate_agents,
+                          invalidate_config_audit,
                           FALSE,
                           "explicit request");
 }

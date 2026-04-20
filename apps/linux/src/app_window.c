@@ -1644,7 +1644,7 @@ static void on_cfg_reload_models(GtkButton *button, gpointer user_data) {
         return;
     }
 
-    gateway_client_invalidate_dependencies(TRUE, FALSE);
+    gateway_client_invalidate_dependencies(TRUE, FALSE, FALSE);
     gateway_client_request_dependency_refresh();
 }
 
@@ -1843,7 +1843,7 @@ static void on_cfg_save_done(const GatewayRpcResponse *response, gpointer user_d
     if (cfg_setup_status_label) {
         gtk_label_set_text(GTK_LABEL(cfg_setup_status_label), "Saved provider/model config. Reloading baseline…");
     }
-    gateway_client_invalidate_dependencies(TRUE, TRUE);
+    gateway_client_invalidate_dependencies(TRUE, TRUE, TRUE);
     gateway_client_refresh();
     gateway_client_request_dependency_refresh();
     cfg_request_reload();
