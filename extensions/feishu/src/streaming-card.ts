@@ -63,12 +63,12 @@ export function sanitizeCardKitMarkdown(text: string): string {
   const codeBlocks: string[] = [];
   result = result.replace(/```[\s\S]*?```/g, (match) => {
     codeBlocks.push(match);
-    return `\x00CODEBLOCK${codeBlocks.length - 1}\x00`;
+    return `\uE001CODEBLOCK${codeBlocks.length - 1}\uE001`;
   });
   const codeSpans: string[] = [];
   result = result.replace(/`[^`\n]*`/g, (match) => {
     codeSpans.push(match);
-    return `\x00CODESPAN${codeSpans.length - 1}\x00`;
+    return `\uE002CODESPAN${codeSpans.length - 1}\uE002`;
   });
   result = result.replace(
     /<(?!\/?(?:a|b|i|em|strong|br|p|div|span|img|at|code|pre)\b)[^>\n]*$/gm,
@@ -76,8 +76,8 @@ export function sanitizeCardKitMarkdown(text: string): string {
       return m.replace(/</g, "\\<");
     },
   );
-  result = result.replace(/\x00CODESPAN(\d+)\x00/g, (_, idx) => codeSpans[Number(idx)]);
-  result = result.replace(/\x00CODEBLOCK(\d+)\x00/g, (_, idx) => codeBlocks[Number(idx)]);
+  result = result.replace(/\uE002CODESPAN(\d+)\uE002/g, (_, idx) => codeSpans[Number(idx)]);
+  result = result.replace(/\uE001CODEBLOCK(\d+)\uE001/g, (_, idx) => codeBlocks[Number(idx)]);
 
   return result;
 }
