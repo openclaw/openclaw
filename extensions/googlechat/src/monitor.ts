@@ -266,7 +266,14 @@ async function processMessageWithPipeline(params: {
   // after the reply pipeline is constructed.
   let onDeliver: (payload: DeliverPayload) => Promise<void> = async () => {};
 
-  const typingIndicator = account.config.typingIndicator;
+  const configuredTypingIndicator = account.config.typingIndicator ?? "message";
+  if (configuredTypingIndicator === "reaction") {
+    runtime.error?.(
+      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service accounts). Falling back to "message" mode.`,
+    );
+  }
+  const typingIndicator: "none" | "message" =
+    configuredTypingIndicator === "none" ? "none" : "message";
   let typingMessageName: string | undefined;
 
   // Start typing indicator and timeout race
