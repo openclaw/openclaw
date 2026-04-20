@@ -608,10 +608,18 @@ describe("sanitizeAssistantVisibleText", () => {
   });
 
   it("preserves literal channel delimiter mentions in ordinary prose", () => {
+    expect(sanitizeAssistantVisibleText("<channel|>Visible answer")).toBe("Visible answer");
+    expect(sanitizeAssistantVisibleText("<channel|>\nVisible answer")).toBe("Visible answer");
+    expect(sanitizeAssistantVisibleText("internal planning <channel|> Visible answer")).toBe(
+      "Visible answer",
+    );
     expect(sanitizeAssistantVisibleText("The marker <channel|> splits streams.")).toBe(
       "The marker <channel|> splits streams.",
     );
     expect(sanitizeAssistantVisibleText("Before <channel|> after")).toBe("Before <channel|> after");
+    expect(sanitizeAssistantVisibleText("<channel|> token marks the visible channel.")).toBe(
+      "<channel|> token marks the visible channel.",
+    );
     expect(sanitizeAssistantVisibleText("Tell it to reply with <channel|> to split streams")).toBe(
       "Tell it to reply with <channel|> to split streams",
     );

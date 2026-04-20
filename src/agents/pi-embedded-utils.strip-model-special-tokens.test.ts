@@ -24,10 +24,18 @@ describe("stripModelSpecialTokens", () => {
   });
 
   it("preserves literal channel delimiter mentions when they are part of ordinary prose", () => {
+    expect(stripModelSpecialTokens("<channel|>Visible answer")).toBe("Visible answer");
+    expect(stripModelSpecialTokens("<channel|>\nVisible answer")).toBe("\nVisible answer");
+    expect(stripModelSpecialTokens("internal planning <channel|> Visible answer")).toBe(
+      " Visible answer",
+    );
     expect(stripModelSpecialTokens("The marker <channel|> splits streams.")).toBe(
       "The marker <channel|> splits streams.",
     );
     expect(stripModelSpecialTokens("Before <channel|> after")).toBe("Before <channel|> after");
+    expect(stripModelSpecialTokens("<channel|> token marks the visible channel.")).toBe(
+      "<channel|> token marks the visible channel.",
+    );
     expect(stripModelSpecialTokens("Tell it to reply with <channel|> to split streams")).toBe(
       "Tell it to reply with <channel|> to split streams",
     );

@@ -22,6 +22,8 @@ const CHANNEL_DELIMITER_RE = /<channel\|>/gi;
 const CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE = /\b(?:internal planning|plan:)/i;
 const CHANNEL_DELIMITER_PREFIX_LONG_HINT_RE =
   /\b(?:reply with|reply to|final response|output content|general instruction|i will|i must)\b/i;
+const CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE =
+  /^(?:token\b|delimiter\b|marker\b|literal(?:ly)?\b|is\b|means?\b|identif(?:y|ies)\b|splits?\b|between\b|used?\b|inside\b|outside\b|in\b)/i;
 
 function overlapsCodeRegion(
   start: number,
@@ -48,18 +50,24 @@ function getChannelDelimiterAttachment(text: string, start: number, end: number)
 function looksLikeLeakedChannelDelimiterPrefix(
   prefix: string,
   attachment: { attachedBefore: boolean; attachedAfter: boolean },
+  suffix: string,
 ): boolean {
   const trimmed = prefix.trim();
-  if (!trimmed) {
-    return false;
+  const trimmedSuffix = suffix.trimStart();
+  if (!trimmedSuffix) {
+    return CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(trimmed);
   }
 
-  if (!attachment.attachedBefore && !attachment.attachedAfter) {
-    return false;
+  if (!trimmed) {
+    return !CHANNEL_DELIMITER_LITERAL_SUFFIX_HINT_RE.test(trimmedSuffix);
   }
 
   if (CHANNEL_DELIMITER_PREFIX_HARD_HINT_RE.test(trimmed)) {
     return true;
+  }
+
+  if (!attachment.attachedBefore && !attachment.attachedAfter) {
+    return false;
   }
 
   return (
@@ -127,6 +135,7 @@ function stripModelSpecialTokensImpl(text: string): string {
       looksLikeLeakedChannelDelimiterPrefix(
         getRecentChannelDelimiterPrefix(text, start),
         attachment,
+        text.slice(end),
       )
     ) {
       channelDelimiterMatches.push({ start, end });
