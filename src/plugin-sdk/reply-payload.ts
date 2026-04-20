@@ -1,7 +1,7 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
-
+export { resolveToolDeliveryPayload } from "./reply-payload-tool-delivery.js";
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;

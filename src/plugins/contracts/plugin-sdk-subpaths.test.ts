@@ -432,6 +432,7 @@ describe("plugin-sdk subpath exports", () => {
       "sendTextMediaPayload",
       "sendPayloadWithChunkedTextAndMedia",
     ]);
+    expectSourceOmitsImportPattern("reply-payload", "../auto-reply/reply/reply-payloads.js");
     expectSourceMentions("media-runtime", [
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
