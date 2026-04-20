@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -10,10 +11,20 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  clearDetachedTaskLifecycleRuntimeRegistration,
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskLifecycleRuntime,
+  type DetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
+import {
+  clearPluginInteractiveHandlers,
+  resolvePluginInteractiveNamespaceMatch,
+} from "./interactive-registry.js";
 import {
   __testing,
   clearPluginLoaderCache,
@@ -60,6 +71,26 @@ import {
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
+
+function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
+  const fail = (name: string): never => {
+    throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
+  };
+  return {
+    createQueuedTaskRun: () => fail("createQueuedTaskRun"),
+    createRunningTaskRun: () => fail("createRunningTaskRun"),
+    startTaskRunByRunId: () => fail("startTaskRunByRunId"),
+    recordTaskRunProgressByRunId: () => fail("recordTaskRunProgressByRunId"),
+    completeTaskRunByRunId: () => fail("completeTaskRunByRunId"),
+    failTaskRunByRunId: () => fail("failTaskRunByRunId"),
+    setDetachedTaskDeliveryStatusByRunId: () => fail("setDetachedTaskDeliveryStatusByRunId"),
+    cancelDetachedTaskRunById: async () => ({
+      found: true,
+      cancelled: true,
+    }),
+  };
+}
+
 const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
   id: "telegram",
   register(api) {
@@ -1160,6 +1191,39 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "rejects async register functions instead of silently loading them",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "async-register",
+          filename: "async-register.cjs",
+          body: `module.exports = {
+  id: "async-register",
+  async register(api) {
+    await Promise.resolve();
+    api.registerGatewayMethod("async-register.ping", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["async-register"],
+            },
+          },
+        });
+
+        const loaded = registry.plugins.find((entry) => entry.id === "async-register");
+        expect(loaded?.status).toBe("error");
+        expect(loaded?.failurePhase).toBe("register");
+        expect(loaded?.error).toContain("plugin register must be synchronous");
+        expect(Object.keys(registry.gatewayHandlers)).not.toContain("async-register.ping");
+      },
+    },
+    {
       label: "limits imports to the requested plugin ids",
       run: () => {
         useNoBundledPlugins();
@@ -1737,6 +1801,90 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
+  it("rolls back global side effects when registration fails", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-side-effects",
+      filename: "failing-side-effects.cjs",
+      body: `module.exports = {
+        id: "failing-side-effects",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("should-not-run");
+            },
+            { name: "failing-side-effects-hook" },
+          );
+          api.registerCommand({
+            name: "failme",
+            description: "Fail me",
+            handler: async () => ({ text: "nope" }),
+          });
+          api.registerReload({
+            onConfigReload: async () => {},
+          });
+          api.registerNodeHostCommand({
+            command: "failme",
+            description: "failme",
+            run: async () => ({ ok: true }),
+          });
+          api.registerSecurityAuditCollector({
+            id: "failme",
+            collect: async () => [],
+          });
+          api.registerInteractiveHandler({
+            channel: "slack",
+            namespace: "failme",
+            handle: async () => ({ handled: true }),
+          });
+          api.registerContextEngine("failme-context", () => ({
+            info: { id: "failme-context", name: "Failme Context" },
+            ingest: async () => {},
+            assemble: async () => ({ messages: [] }),
+          }));
+          throw new Error("boom");
+        },
+      };`,
+    });
+
+    clearInternalHooks();
+    clearPluginCommands();
+    clearPluginInteractiveHandlers();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-side-effects"],
+        },
+      },
+      onlyPluginIds: ["failing-side-effects"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-side-effects")?.status).toBe(
+      "error",
+    );
+    expect(getRegisteredEventKeys()).toEqual([]);
+    expect(getPluginCommandSpecs()).toEqual([]);
+    expect(registry.reloads).toEqual([]);
+    expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.securityAuditCollectors).toEqual([]);
+    expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
+    expect(getContextEngineFactory("failme-context")).toBeUndefined();
+    expect(listContextEngineIds()).not.toContain("failme-context");
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+    expect(event.messages).toEqual([]);
+
+    clearInternalHooks();
+    clearPluginCommands();
+    clearPluginInteractiveHandlers();
+  });
+
   it("can scope bundled provider loads to deepseek without hanging", () => {
     const scoped = loadOpenClawPlugins({
       cache: false,
@@ -1901,6 +2049,155 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toEqual([]);
+  });
+
+  it("does not replace the active detached task runtime during non-activating loads", () => {
+    useNoBundledPlugins();
+    const activeRuntime = createDetachedTaskRuntimeStub("active");
+    registerDetachedTaskLifecycleRuntime("active-runtime", activeRuntime);
+
+    const plugin = writePlugin({
+      id: "snapshot-detached-runtime",
+      filename: "snapshot-detached-runtime.cjs",
+      body: `module.exports = {
+        id: "snapshot-detached-runtime",
+        register(api) {
+          api.registerDetachedTaskRuntime({
+            createQueuedTaskRun() { throw new Error("snapshot createQueuedTaskRun should not run"); },
+            createRunningTaskRun() { throw new Error("snapshot createRunningTaskRun should not run"); },
+            startTaskRunByRunId() { throw new Error("snapshot startTaskRunByRunId should not run"); },
+            recordTaskRunProgressByRunId() { throw new Error("snapshot recordTaskRunProgressByRunId should not run"); },
+            completeTaskRunByRunId() { throw new Error("snapshot completeTaskRunByRunId should not run"); },
+            failTaskRunByRunId() { throw new Error("snapshot failTaskRunByRunId should not run"); },
+            setDetachedTaskDeliveryStatusByRunId() { throw new Error("snapshot setDetachedTaskDeliveryStatusByRunId should not run"); },
+            async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
+          });
+        },
+      };`,
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-detached-runtime"],
+        },
+      },
+      onlyPluginIds: ["snapshot-detached-runtime"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-detached-runtime")?.status).toBe(
+      "loaded",
+    );
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toMatchObject({
+      pluginId: "active-runtime",
+      runtime: activeRuntime,
+    });
+  });
+
+  it("clears newly-registered detached task runtimes when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "failing-detached-runtime",
+      filename: "failing-detached-runtime.cjs",
+      body: `module.exports = {
+        id: "failing-detached-runtime",
+        register(api) {
+          api.registerDetachedTaskRuntime({
+            createQueuedTaskRun() { throw new Error("failing createQueuedTaskRun should not run"); },
+            createRunningTaskRun() { throw new Error("failing createRunningTaskRun should not run"); },
+            startTaskRunByRunId() { throw new Error("failing startTaskRunByRunId should not run"); },
+            recordTaskRunProgressByRunId() { throw new Error("failing recordTaskRunProgressByRunId should not run"); },
+            completeTaskRunByRunId() { throw new Error("failing completeTaskRunByRunId should not run"); },
+            failTaskRunByRunId() { throw new Error("failing failTaskRunByRunId should not run"); },
+            setDetachedTaskDeliveryStatusByRunId() { throw new Error("failing setDetachedTaskDeliveryStatusByRunId should not run"); },
+            async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
+          });
+          throw new Error("detached runtime register failed");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-detached-runtime"],
+        },
+      },
+      onlyPluginIds: ["failing-detached-runtime"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-detached-runtime")?.status).toBe(
+      "error",
+    );
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+  });
+
+  it("restores cached detached task runtime registrations on cache hits", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-detached-runtime",
+      filename: "cached-detached-runtime.cjs",
+      body: `module.exports = {
+        id: "cached-detached-runtime",
+        register(api) {
+          api.registerDetachedTaskRuntime({
+            createQueuedTaskRun() { throw new Error("cached createQueuedTaskRun should not run"); },
+            createRunningTaskRun() { throw new Error("cached createRunningTaskRun should not run"); },
+            startTaskRunByRunId() { throw new Error("cached startTaskRunByRunId should not run"); },
+            recordTaskRunProgressByRunId() { throw new Error("cached recordTaskRunProgressByRunId should not run"); },
+            completeTaskRunByRunId() { throw new Error("cached completeTaskRunByRunId should not run"); },
+            failTaskRunByRunId() { throw new Error("cached failTaskRunByRunId should not run"); },
+            setDetachedTaskDeliveryStatusByRunId() { throw new Error("cached setDetachedTaskDeliveryStatusByRunId should not run"); },
+            async cancelDetachedTaskRunById() { return { found: true, cancelled: true }; },
+          });
+        },
+      };`,
+    });
+
+    const loadOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-detached-runtime"],
+        },
+      },
+      onlyPluginIds: ["cached-detached-runtime"],
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    loadOpenClawPlugins(loadOptions);
+    expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+
+    clearDetachedTaskLifecycleRuntimeRegistration();
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
+
+    loadOpenClawPlugins(loadOptions);
+
+    expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
+  });
+
+  it("clears stale detached task runtime registrations on active reloads when no plugin re-registers one", () => {
+    useNoBundledPlugins();
+    registerDetachedTaskLifecycleRuntime("stale-runtime", createDetachedTaskRuntimeStub("stale"));
+
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [] },
+          allow: [],
+        },
+      },
+    });
+
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toBeUndefined();
   });
 
   it("restores cached memory capability public artifacts on cache hits", async () => {
@@ -2700,12 +2997,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ] as const;
 
     runSinglePluginRegistryScenarios(
-      scenarios.map((scenario) => ({
-        ...scenario,
-        body: `module.exports = { id: "${scenario.pluginId}", register(api) {
+      scenarios.map((scenario) =>
+        Object.assign({}, scenario, {
+          body: `module.exports = { id: "${scenario.pluginId}", register(api) {
   api.registerHttpRoute(${scenario.routeOptions});
 } };`,
-      })),
+        }),
+      ),
     );
   });
 

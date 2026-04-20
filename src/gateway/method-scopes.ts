@@ -66,6 +66,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.rename",
   ],
   [READ_SCOPE]: [
+    "assistant.media.get",
     "health",
     "doctor.memory.status",
     "doctor.memory.dreamDiary",
@@ -146,6 +147,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "channels.start",
     "channels.logout",
     "agents.create",
     "agents.update",

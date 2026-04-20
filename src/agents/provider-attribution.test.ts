@@ -620,6 +620,55 @@ describe("provider attribution", () => {
     });
   });
 
+  it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
+    // compat.supportsPromptCacheKey = true disables the strip even on a
+    // proxy-like endpoint that would otherwise trigger it.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: true },
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      shouldStripResponsesPromptCache: false,
+    });
+
+    // compat.supportsPromptCacheKey = false forces the strip even on a
+    // native OpenAI endpoint that would otherwise forward the field.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: false },
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      shouldStripResponsesPromptCache: true,
+    });
+
+    // compat.supportsPromptCacheKey unset preserves the existing default
+    // (strip on proxy-like responses endpoints, preserving the fix from
+    // #48155 for providers that reject the field).
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
   it("resolves shared compat families and native streaming-usage gates", () => {
     expect(
       resolveProviderRequestCapabilities({
@@ -663,13 +712,15 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "ollama",
-        modelId: "kimi-k2.5:cloud",
+        provider: "custom-local",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
         capability: "llm",
         transport: "stream",
       }),
     ).toMatchObject({
-      compatibilityFamily: "moonshot",
+      endpointClass: "local",
+      supportsNativeStreamingUsageCompat: false,
     });
   });
 
@@ -904,6 +955,28 @@ describe("provider attribution", () => {
           allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native OpenAI Codex responses",
+        input: {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "openai-codex",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: true,
+          supportsOpenAIReasoningCompatPayload: true,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: false,
           supportsNativeStreamingUsageCompat: false,
         },
