@@ -348,7 +348,11 @@ function resolveMergedSessionKeySource(
   override: Exclude<HookTransformResult, null>,
 ): HookSessionKeyTemplateSource | undefined {
   if (typeof override.sessionKey === "string") {
-    return override.sessionKeySource ?? "templated";
+    const normalizedSessionKey = normalizeOptionalString(override.sessionKey);
+    if (!normalizedSessionKey) {
+      return undefined;
+    }
+    return override.sessionKeySource === "static" ? "static" : "templated";
   }
   return baseAgent?.sessionKeySource;
 }

@@ -397,6 +397,7 @@ describe("gateway hooks helpers", () => {
         hooks: {
           enabled: true,
           token: "secret",
+          allowRequestSessionKey: true,
           mappings: [
             {
               match: { path: "gmail" },
@@ -408,7 +409,7 @@ describe("gateway hooks helpers", () => {
         },
       } as OpenClawConfig),
     ).toThrow(
-      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates",
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
     );
   });
 });

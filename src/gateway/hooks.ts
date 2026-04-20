@@ -93,7 +93,7 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
     !allowedSessionKeyPrefixes
   ) {
     throw new Error(
-      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates",
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
     );
   }
   return {
