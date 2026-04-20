@@ -45,12 +45,16 @@ describe("secrets configure plan helpers", () => {
               MC_API_KEY: "plaintext-mcp-api-key", // pragma: allowlist secret
               AUTH: "plaintext-mcp-auth", // pragma: allowlist secret
               SERVICE_KEY: "plaintext-service-key", // pragma: allowlist secret
+              AUTH_ENABLED: "enabled",
+              TOKEN_REFRESH: "disabled",
             },
             headers: {
               "X-Feature-Flag": "enabled",
               Authorization: "Bearer plaintext-mcp-header", // pragma: allowlist secret
               "X-Custom-Auth": "plaintext-custom-mcp-header", // pragma: allowlist secret
               "X-Access-Key": "plaintext-access-key", // pragma: allowlist secret
+              "X-Auth-Mode": "enabled",
+              "X-Token-Refresh": "disabled",
             },
           },
         },
@@ -64,7 +68,11 @@ describe("secrets configure plan helpers", () => {
     expect(paths).toContain("mcp.servers.mission-control.headers.Authorization");
     expect(paths).toContain("mcp.servers.mission-control.headers.X-Custom-Auth");
     expect(paths).toContain("mcp.servers.mission-control.headers.X-Access-Key");
+    expect(paths).not.toContain("mcp.servers.mission-control.env.AUTH_ENABLED");
+    expect(paths).not.toContain("mcp.servers.mission-control.env.TOKEN_REFRESH");
     expect(paths).not.toContain("mcp.servers.mission-control.env.MC_URL");
+    expect(paths).not.toContain("mcp.servers.mission-control.headers.X-Auth-Mode");
+    expect(paths).not.toContain("mcp.servers.mission-control.headers.X-Token-Refresh");
     expect(paths).not.toContain("mcp.servers.mission-control.headers.X-Feature-Flag");
   });
 

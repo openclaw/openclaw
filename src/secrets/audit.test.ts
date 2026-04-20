@@ -760,6 +760,69 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
+  it("does not flag benign literals at sensitive core mcp names as plaintext secrets", async () => {
+    await writeJsonFile(fixture.configPath, {
+      mcp: {
+        servers: {
+          demo: {
+            command: "node",
+            env: {
+              AUTH_ENABLED: "enabled",
+              TOKEN_REFRESH: "disabled",
+            },
+            headers: {
+              "X-Auth-Mode": "enabled",
+              "X-Token-Refresh": "disabled",
+            },
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "mcp.servers.demo.env.AUTH_ENABLED",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "mcp.servers.demo.env.TOKEN_REFRESH",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "mcp.servers.demo.headers.X-Auth-Mode",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "mcp.servers.demo.headers.X-Token-Refresh",
+      ),
+    ).toBe(false);
+  });
+
   it("does not flag ordinary custom core mcp literals as plaintext secrets", async () => {
     await writeJsonFile(fixture.configPath, {
       mcp: {
