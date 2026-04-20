@@ -162,16 +162,25 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });
-  const sinkRedaction = resolveRedactOptions();
+  // Resolve redaction lazily so the silent fast path (default Vitest runs with no
+  // external transport) does not touch logging config. Cache on first use so the
+  // file-sink hot path and all external transports share a single resolution.
+  let cachedRedaction: ResolvedRedactOptions | undefined;
+  const getSinkRedaction = (): ResolvedRedactOptions =>
+    (cachedRedaction ??= resolveRedactOptions());
 
   // Silent logging does not write files; skip all filesystem setup in this path.
   if (settings.level === "silent") {
-    for (const transport of externalTransports) {
-      attachExternalTransport(logger, transport, sinkRedaction);
+    if (externalTransports.size > 0) {
+      const redaction = getSinkRedaction();
+      for (const transport of externalTransports) {
+        attachExternalTransport(logger, transport, redaction);
+      }
     }
     return logger;
   }
 
+  const sinkRedaction = getSinkRedaction();
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (isRollingPath(settings.file)) {
