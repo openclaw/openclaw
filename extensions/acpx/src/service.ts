@@ -148,7 +148,9 @@ export function createAcpxRuntimeService(
           }
           ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
         }
-      })();
+      })().catch((err) => {
+        ctx.logger?.error(`embedded acpx runtime probe threw: ${formatErrorMessage(err)}`);
+      });
     },
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;
