@@ -388,6 +388,7 @@ static void on_edit_job(GtkButton *btn, gpointer user_data) {
     GtkWidget *target_combo = adw_combo_row_new();
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(target_combo), "Target Session");
     adw_combo_row_set_model(ADW_COMBO_ROW(target_combo), G_LIST_MODEL(target_model));
+    g_object_unref(target_model);
     /* Select based on current value */
     gint target_idx = session_target_to_index(job_target);
     adw_combo_row_set_selected(ADW_COMBO_ROW(target_combo), target_idx);
@@ -400,6 +401,7 @@ static void on_edit_job(GtkButton *btn, gpointer user_data) {
     GtkWidget *wake_combo = adw_combo_row_new();
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(wake_combo), "Wake Mode");
     adw_combo_row_set_model(ADW_COMBO_ROW(wake_combo), G_LIST_MODEL(wake_model));
+    g_object_unref(wake_model);
     /* Select based on current value */
     gint wake_idx = 0; /* default "next-heartbeat" */
     if (job_wake && g_strcmp0(job_wake, "now") == 0) wake_idx = 1;
@@ -555,6 +557,7 @@ static void on_create_job(GtkButton *btn, gpointer user_data) {
     GtkWidget *target_combo = adw_combo_row_new();
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(target_combo), "Target Session");
     adw_combo_row_set_model(ADW_COMBO_ROW(target_combo), G_LIST_MODEL(target_model));
+    g_object_unref(target_model);
     gtk_box_append(GTK_BOX(vbox), target_combo);
 
     GtkStringList *wake_model = gtk_string_list_new((const char * const[]){
@@ -563,6 +566,7 @@ static void on_create_job(GtkButton *btn, gpointer user_data) {
     GtkWidget *wake_combo = adw_combo_row_new();
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(wake_combo), "Wake Mode");
     adw_combo_row_set_model(ADW_COMBO_ROW(wake_combo), G_LIST_MODEL(wake_model));
+    g_object_unref(wake_model);
     gtk_box_append(GTK_BOX(vbox), wake_combo);
 
     adw_alert_dialog_set_extra_child(dialog, vbox);
