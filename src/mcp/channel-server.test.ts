@@ -67,6 +67,11 @@ function attachReadyGateway(
   ).resolveReady();
 }
 
+async function flushMcpNotifications() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
@@ -190,9 +195,8 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          await vi.waitFor(() => {
-            expect(channelNotifications).toHaveLength(1);
-          });
+          await flushMcpNotifications();
+          expect(channelNotifications).toHaveLength(1);
           expect(channelNotifications[0]).toMatchObject({
             content: "hello Claude",
             meta: expect.objectContaining({
@@ -229,9 +233,8 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          await vi.waitFor(() => {
-            expect(permissionNotifications).toHaveLength(1);
-          });
+          await flushMcpNotifications();
+          expect(permissionNotifications).toHaveLength(1);
           expect(permissionNotifications[0]).toEqual({
             request_id: "abcde",
             behavior: "allow",
@@ -253,9 +256,8 @@ describe("openclaw channel mcp server", () => {
             },
           });
 
-          await vi.waitFor(() => {
-            expect(channelNotifications).toHaveLength(2);
-          });
+          await flushMcpNotifications();
+          expect(channelNotifications).toHaveLength(2);
           expect(channelNotifications[1]).toMatchObject({
             content: "plain string user turn",
             meta: expect.objectContaining({
