@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type {
   AgentApprovalEventData,
@@ -241,15 +242,32 @@ async function persistPlanModeEnter(
         // entry.planMode.mode is "normal" at that point so we hit this
         // fresh-entry branch). Reading from `current` covers both
         // pre-armed (normal/none w/ autoApprove) and fresh (no entry).
+        //
+        // PR #68939 follow-up (gate-state-unavailable fix): MUST
+        // initialize `cycleId` and `blockingSubagentRunIds` here too,
+        // matching the user-side `sessions-patch.ts` { planMode: "plan" }
+        // toggle path. Without these, the agent-driven enter_plan_mode
+        // creates a half-formed planMode object — the persister later
+        // spreads it with approvalRunId/title/approvalId, but cycleId
+        // and blockingSubagentRunIds stay missing. Then the approval
+        // gate's `isModernPlanCycleState && !parentCtx && !hasPersisted`
+        // fail-closed branch fires (because pendingInteraction is
+        // present from the persister but blockingSubagentRunIds is
+        // null, so `hasPersistedGateState` is false), and every approval
+        // attempt is rejected with PLAN_APPROVAL_GATE_STATE_UNAVAILABLE.
+        // This affects EVERY agent-driven plan cycle (the common case
+        // for auto-approve), not just edge cases.
         wasFreshEntry = true;
         const carryAutoApprove = current?.autoApprove === true;
         return {
           planMode: {
             mode: "plan",
             approval: "none",
+            cycleId: randomUUID(),
             enteredAt: now,
             updatedAt: now,
             rejectionCount: 0,
+            blockingSubagentRunIds: [],
             ...(carryAutoApprove ? { autoApprove: true } : {}),
           },
         };
