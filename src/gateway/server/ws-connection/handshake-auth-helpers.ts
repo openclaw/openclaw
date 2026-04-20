@@ -96,9 +96,7 @@ function isCliContainerLocalEquivalent(params: {
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
-  const isCliClient =
-    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
-    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
+  const isCliClient = params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     isCliClient &&

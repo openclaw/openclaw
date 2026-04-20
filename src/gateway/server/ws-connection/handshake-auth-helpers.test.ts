@@ -265,23 +265,35 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
-  it("classifies CLI loopback/private-host connects as cli_container_local only with shared auth", () => {
+  it("classifies CLI-mode loopback/private-host connects as cli_container_local only with shared auth", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       },
     } as ConnectParams;
+    const internalToolConnectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.TEST,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    } as ConnectParams;
+    const sharedAuthLoopbackParams = {
+      isLocalClient: false,
+      requestHost: "172.17.0.2:18789",
+      remoteAddress: "127.0.0.1",
+      hasProxyHeaders: false,
+      hasBrowserOriginHeader: false,
+      sharedAuthOk: true,
+      authMethod: "token" as const,
+    };
+    expect(resolvePairingLocality({ connectParams, ...sharedAuthLoopbackParams })).toBe(
+      "cli_container_local",
+    );
     expect(
       resolvePairingLocality({
-        connectParams,
-        isLocalClient: false,
-        requestHost: "172.17.0.2:18789",
-        remoteAddress: "127.0.0.1",
-        hasProxyHeaders: false,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
+        connectParams: internalToolConnectParams,
+        ...sharedAuthLoopbackParams,
       }),
     ).toBe("cli_container_local");
     expect(
@@ -322,7 +334,7 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
-  it("keeps non-CLI clients remote when only the Docker CLI fallback conditions match", () => {
+  it("keeps non-CLI-mode clients remote when only the Docker CLI fallback conditions match", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
