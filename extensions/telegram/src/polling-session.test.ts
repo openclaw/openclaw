@@ -278,6 +278,47 @@ describe("TelegramPollingSession", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds the persisted offset confirmation getUpdates call", async () => {
+    const abort = new AbortController();
+    const timeoutSignal = new AbortController().signal;
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+    const bot = makeBot();
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    runMock.mockReturnValueOnce({
+      task: async () => {
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => 41,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: undefined,
+    });
+
+    try {
+      await session.runUntilAbort();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+      expect(bot.api.getUpdates).toHaveBeenCalledWith(
+        { offset: 42, limit: 1, timeout: 0 },
+        timeoutSignal,
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("forces a restart when polling stalls without getUpdates activity", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
