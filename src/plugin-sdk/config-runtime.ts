@@ -4,7 +4,6 @@
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
@@ -46,7 +45,10 @@ export {
   resolveTelegramCustomCommands,
 } from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
-export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
+export {
+  resolveAgentMaxConcurrent,
+  resolveSessionLaneMaxConcurrent,
+} from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
 export { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
@@ -101,14 +103,13 @@ export {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
+  resolveSessionKey,
+  resolveStorePath,
   updateLastRoute,
   updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
-export { resolveSessionKey } from "../config/sessions/session-key.js";
-export { resolveStorePath } from "../config/sessions/paths.js";
-export type { SessionResetMode } from "../config/sessions/reset.js";
-export type { SessionScope } from "../config/sessions/types.js";
+  type SessionResetMode,
+  type SessionScope,
+} from "../config/sessions.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
@@ -118,6 +119,7 @@ export {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
+export { resolveSessionStoreEntry } from "../config/sessions/store.js";
 export {
   isDangerousNameMatchingEnabled,
   resolveDangerousNameMatchingEnabled,

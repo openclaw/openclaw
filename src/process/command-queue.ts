@@ -1,8 +1,9 @@
 import {
-  diagnosticLogger as diag,
-  logLaneDequeue,
-  logLaneEnqueue,
-} from "../logging/diagnostic-runtime.js";
+  DEFAULT_SESSION_LANE_MAX_CONCURRENT,
+  resolveSessionLaneMaxConcurrent,
+} from "../config/agent-limits.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -61,6 +62,15 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
 }
 
+export function setSessionLaneConcurrency(configOrValue: OpenClawConfig | number): void {
+  const state = getQueueState();
+  if (typeof configOrValue === "number") {
+    state.defaultSessionLaneMaxConcurrent = Math.max(1, Math.floor(configOrValue));
+  } else {
+    state.defaultSessionLaneMaxConcurrent = resolveSessionLaneMaxConcurrent(configOrValue);
+  }
+}
+
 /**
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
@@ -73,6 +83,7 @@ function getQueueState() {
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     nextTaskId: 1,
+    defaultSessionLaneMaxConcurrent: DEFAULT_SESSION_LANE_MAX_CONCURRENT,
   }));
   // Schema migration: the singleton may have been created by an older code
   // version (e.g. v2026.4.2) that did not include `activeTaskWaiters`.  After
@@ -82,6 +93,9 @@ function getQueueState() {
   // valid Set instead of `undefined`.
   if (!state.activeTaskWaiters) {
     state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  if (state.defaultSessionLaneMaxConcurrent === undefined) {
+    state.defaultSessionLaneMaxConcurrent = DEFAULT_SESSION_LANE_MAX_CONCURRENT;
   }
   return state;
 }
@@ -100,11 +114,13 @@ function getLaneState(lane: string): LaneState {
   if (existing) {
     return existing;
   }
+  // Session lanes (per-chat) use configurable concurrency; command lanes use hardcoded defaults
+  const isSessionLane = lane.startsWith("session:");
   const created: LaneState = {
     lane,
     queue: [],
     activeTaskIds: new Set(),
-    maxConcurrent: 1,
+    maxConcurrent: isSessionLane ? getQueueState().defaultSessionLaneMaxConcurrent : 1,
     draining: false,
     generation: 0,
   };
