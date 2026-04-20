@@ -323,22 +323,25 @@ export async function getReplyFromConfig(
     });
   }
 
-  const channelModelOverride = resolveChannelModelOverride({
-    cfg,
-    channel:
-      groupResolution?.channel ??
-      sessionEntry.channel ??
-      sessionEntry.origin?.provider ??
-      (typeof finalized.OriginatingChannel === "string"
-        ? finalized.OriginatingChannel
-        : undefined) ??
-      finalized.Provider,
-    groupId: groupResolution?.id ?? sessionEntry.groupId,
-    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
-    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
-    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-    parentSessionKey: sessionCtx.ParentSessionKey,
-  });
+  const channelModelOverride = cfg.channels?.modelByChannel
+    ? resolveChannelModelOverride({
+        cfg,
+        channel:
+          groupResolution?.channel ??
+          sessionEntry.channel ??
+          sessionEntry.origin?.provider ??
+          (typeof finalized.OriginatingChannel === "string"
+            ? finalized.OriginatingChannel
+            : undefined) ??
+          finalized.Provider,
+        groupId: groupResolution?.id ?? sessionEntry.groupId,
+        groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
+        groupChannel:
+          sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
+        groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+        parentSessionKey: sessionCtx.ParentSessionKey,
+      })
+    : null;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
