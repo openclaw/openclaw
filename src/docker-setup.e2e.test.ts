@@ -301,6 +301,51 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_TZ=Asia/Shanghai");
   });
 
+  it("passes --platform to docker build when OPENCLAW_DOCKER_PLATFORM is set", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await writeFile(join(activeSandbox.rootDir, "Dockerfile.sandbox"), "FROM scratch\n");
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_DOCKER_PLATFORM: "linux/arm64",
+      OPENCLAW_SANDBOX: "1",
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_DOCKER_PLATFORM=linux/arm64");
+    const buildLines = (await readDockerLogLines(activeSandbox)).filter((line) =>
+      line.startsWith("build "),
+    );
+    expect(buildLines.length).toBeGreaterThanOrEqual(2);
+    expect(buildLines.every((line) => line.includes("--platform linux/arm64"))).toBe(true);
+  });
+
+  it("omits --platform from docker build when OPENCLAW_DOCKER_PLATFORM is unset", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox);
+
+    expect(result.status).toBe(0);
+    const buildLines = (await readDockerLogLines(activeSandbox)).filter((line) =>
+      line.startsWith("build "),
+    );
+    expect(buildLines.length).toBeGreaterThanOrEqual(1);
+    expect(buildLines.every((line) => !line.includes("--platform"))).toBe(true);
+  });
+
+  it("rejects invalid OPENCLAW_DOCKER_PLATFORM values", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_DOCKER_PLATFORM: "linux amd64",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENCLAW_DOCKER_PLATFORM must be a Docker platform string");
+  });
+
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");

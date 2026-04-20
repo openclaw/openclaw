@@ -11,6 +11,7 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+DOCKER_PLATFORM="${OPENCLAW_DOCKER_PLATFORM:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -261,6 +262,15 @@ if [[ -n "$TIMEZONE" ]]; then
     fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
   fi
 fi
+if [[ -n "$DOCKER_PLATFORM" ]]; then
+  if contains_disallowed_chars "$DOCKER_PLATFORM"; then
+    fail "OPENCLAW_DOCKER_PLATFORM contains unsupported control characters."
+  fi
+  # Accept Docker platform strings like linux/amd64, linux/arm64, linux/arm/v7.
+  if [[ ! "$DOCKER_PLATFORM" =~ ^[A-Za-z0-9][A-Za-z0-9/_.+\-]*$ ]]; then
+    fail "OPENCLAW_DOCKER_PLATFORM must be a Docker platform string (e.g. linux/amd64)."
+  fi
+fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
@@ -284,6 +294,7 @@ export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
+export OPENCLAW_DOCKER_PLATFORM="$DOCKER_PLATFORM"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -469,11 +480,13 @@ upsert_env "$ENV_FILE" \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
+  OPENCLAW_TZ \
+  OPENCLAW_DOCKER_PLATFORM
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   run_docker_build \
+    ${OPENCLAW_DOCKER_PLATFORM:+--platform "$OPENCLAW_DOCKER_PLATFORM"} \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
@@ -542,6 +555,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
     run_docker_build \
+      ${OPENCLAW_DOCKER_PLATFORM:+--platform "$OPENCLAW_DOCKER_PLATFORM"} \
       -t "openclaw-sandbox:bookworm-slim" \
       -f "$ROOT_DIR/Dockerfile.sandbox" \
       "$ROOT_DIR"

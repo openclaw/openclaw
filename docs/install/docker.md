@@ -133,6 +133,7 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
 | `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
 | `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+| `OPENCLAW_DOCKER_PLATFORM`     | Target platform for local image builds (e.g. `linux/amd64`)      |
 
 ### Health checks
 
