@@ -597,3 +597,121 @@ describe("renderFullPlanArchetypeMarkdown (PR-14)", () => {
     expect(out).toContain("# Untitled plan");
   });
 });
+
+// R3 (C1 follow-up): adversarial XSS / injection hardening for plan
+// title across every render format that reaches a user surface.
+// Titles are the highest-risk field because they come from the model
+// (potentially prompt-injected) and render into: webchat DOM, Telegram
+// HTML captions, markdown-attachment files, and Slack mrkdwn. Any
+// executable payload smuggled in must render inert on every surface.
+describe("plan title XSS / injection hardening", () => {
+  const FIXED_DATE = new Date("2026-04-18T12:00:00Z");
+  const minimalSteps: PlanStepForRender[] = [{ step: "Step 1", status: "pending" }];
+
+  const XSS_PAYLOADS: ReadonlyArray<[string, string]> = [
+    // [label, title]
+    ["script tag", "<script>alert('xss')</script>"],
+    ["img onerror", `<img src=x onerror="alert(1)">`],
+    ["svg onload", `<svg/onload=alert(1)>`],
+    ["javascript: href", `<a href="javascript:alert(1)">click</a>`],
+    ["HTML entity escape attempt", "&lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["mixed case tag", "<ScRiPt>alert(1)</ScRiPt>"],
+    ["nested quotes", `"><script>alert(1)</script>`],
+    ["data: URL", `<a href="data:text/html,<script>alert(1)</script>">x</a>`],
+  ];
+
+  describe("renderPlanWithHeader (channel-delivered plan)", () => {
+    for (const [label, title] of XSS_PAYLOADS) {
+      it(`html format: ${label} renders as escaped text, not executable markup`, () => {
+        const out = renderPlanWithHeader(title, minimalSteps, "html");
+        // No raw script tag (case-insensitive, since the renderer must
+        // also neutralize `<ScRiPt>` variants that browsers normalize).
+        expect(out.toLowerCase()).not.toContain("<script");
+        expect(out.toLowerCase()).not.toContain("</script");
+        // Event-handler attributes must not survive as executable
+        // attributes — the `<` before them must be escaped.
+        expect(out).not.toMatch(/<[a-z][^>]*\bonerror\s*=/i);
+        expect(out).not.toMatch(/<[a-z][^>]*\bonload\s*=/i);
+        // javascript:/data: hrefs must not survive as live URLs inside
+        // a `<a>` tag. The escape chain converts `<` to `&lt;` so any
+        // href attribute is no longer attached to a live element.
+        if (title.includes("javascript:") || title.includes("data:")) {
+          expect(out).not.toMatch(/<a\s+href\s*=/i);
+        }
+      });
+
+      it(`markdown format: ${label} survives as plain text (markdown cannot execute)`, () => {
+        const out = renderPlanWithHeader(title, minimalSteps, "markdown");
+        // Markdown renderers may produce <script> if the source contains
+        // raw HTML. Our renderer escapes markdown special chars but NOT
+        // HTML — defense-in-depth is the consumer-side sanitizer. This
+        // test pins that the title doesn't get injected as a raw markdown
+        // link construction (`[text](url)`) which a markdown renderer
+        // WOULD turn into a live link.
+        // Square brackets and parens from adversarial titles must be
+        // backslash-escaped so they don't form `[text](url)` links.
+        if (title.includes("[") || title.includes("(")) {
+          expect(out).toMatch(/\\[[\]()]/);
+        }
+      });
+
+      it(`plaintext format: ${label} passes through without active markup`, () => {
+        const out = renderPlanWithHeader(title, minimalSteps, "plaintext");
+        // Plaintext is the terminal/SMS/iMessage rendering — no
+        // sanitization required, but no format should *introduce*
+        // executable markup either. The title appears verbatim on the
+        // first line. Verify it does not truncate or double-escape.
+        expect(out.split("\n")[0]).toBe(title.replace(/[\n\r]+/g, " ").trim());
+      });
+
+      it(`slack-mrkdwn format: ${label} has < and > escaped so Slack does not lex tags`, () => {
+        const out = renderPlanWithHeader(title, minimalSteps, "slack-mrkdwn");
+        // Slack treats `<url|text>` as a link and `<@id>` as a mention.
+        // The escape chain converts `<` and `>` to fullwidth variants
+        // so a crafted title cannot forge a link or mention.
+        if (title.includes("<")) {
+          // Either escaped to &lt; (HTML-style) or kept benign by
+          // mention-neutralization. Raw `<` followed by an alphanumeric
+          // character must NOT survive (would be parsed as a Slack
+          // tag).
+          expect(out).not.toMatch(/<[a-zA-Z0-9!@#/]/);
+        }
+      });
+    }
+  });
+
+  describe("renderFullPlanArchetypeMarkdown (attachment file)", () => {
+    for (const [label, title] of XSS_PAYLOADS) {
+      it(`${label} in title: markdown H1 escapes brackets/parens/HTML metachars`, () => {
+        const out = renderFullPlanArchetypeMarkdown({
+          title,
+          plan: minimalSteps,
+          generatedAt: FIXED_DATE,
+        });
+        // Title always appears as `# <escaped-title>`.
+        const h1Match = out.match(/^# (.+)$/m);
+        expect(h1Match).toBeTruthy();
+        // Square brackets / parens must be escaped so markdown renderers
+        // don't interpret them as `[text](url)` links.
+        if (title.includes("[") || title.includes("(")) {
+          expect(h1Match?.[1]).toMatch(/\\[[\]()]/);
+        }
+      });
+    }
+  });
+
+  it("path-traversal-shaped title renders with escaped metacharacters", () => {
+    const out = renderFullPlanArchetypeMarkdown({
+      title: "../../etc/passwd",
+      plan: minimalSteps,
+      generatedAt: FIXED_DATE,
+    });
+    // The escape chain converts `.` to `\.` so a markdown renderer
+    // cannot turn the title into a link or interpret the traversal
+    // as a file reference. Filesystem defense is handled separately
+    // by `buildPlanFilenameSlug` in plan-archetype-prompt.ts.
+    expect(out).toContain("\\.\\./\\.\\./etc/passwd");
+    // No extra blank H1 from adversarial newlines.
+    expect(out).not.toMatch(/\n\n# /);
+  });
+});

@@ -132,9 +132,9 @@ This prevents the agent from acting on partial subagent results.
 - The card may have gone stale (session timed out, another channel resolved it, etc.). Refresh the page; the stale card auto-dismisses on the next session-state update.
 - If the runtime rejected approval because subagents are still running, wait for those child runs to settle, then approve again.
 
-**`Plan approval failed: planApproval requires an active plan-mode session`:**
+**`Plan approval failed: planApproval requires an active plan-mode session` (error code `PLAN_APPROVAL_EXPIRED`):**
 
-- The card lifecycle is out of sync with server state. Refresh the page.
+- The approval window is out of sync with server state — usually because another surface already resolved it, `/plan off` ran, or the session lost plan-mode state. The Control UI auto-dismisses the card when this code comes back; refresh if the card persists.
 - If it persists, check the gateway log: `tail -F ~/.openclaw/logs/gateway.err.log | grep plan-approval-gate`
 
 **Agent calls `update_plan` but never `exit_plan_mode`:**

@@ -37,6 +37,17 @@ export interface PersistPlanArchetypeMarkdownInput {
    * The agentId is appended under this base.
    */
   baseDir?: string;
+  /**
+   * R4 test-only hook: override the writeFile function used for the
+   * final markdown write. Lets tests inject ENOSPC/EACCES/EIO without
+   * having to mock the ESM module namespace. Production never sets it;
+   * omit → uses `fsp.writeFile` directly.
+   */
+  _writeFileForTest?: (
+    path: string,
+    data: string,
+    options: { encoding: "utf8"; flag: "wx" },
+  ) => Promise<void>;
 }
 
 export interface PersistPlanArchetypeMarkdownResult {
@@ -150,24 +161,57 @@ export async function persistPlanArchetypeMarkdown(
   // with `O_CREAT | O_EXCL`, so the OS rejects the open with EEXIST
   // when the file already exists. We catch EEXIST and try the next
   // suffix in the same loop. All other errors propagate.
+  const writeFileFn = input._writeFileForTest ?? fsp.writeFile;
   let candidateName = baseName;
   let n = 1;
   let absPath = path.join(dir, candidateName);
   while (n <= MAX_COLLISION_SUFFIX) {
     try {
-      await fsp.writeFile(absPath, input.markdown, { encoding: "utf8", flag: "wx" });
+      await writeFileFn(absPath, input.markdown, { encoding: "utf8", flag: "wx" });
       return { absPath, filename: candidateName };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code !== "EEXIST") {
-        throw err;
+      if (code === "EEXIST") {
+        n += 1;
+        candidateName = baseName.replace(/\.md$/, `-${n}.md`);
+        absPath = path.join(dir, candidateName);
+        continue;
       }
-      n += 1;
-      candidateName = baseName.replace(/\.md$/, `-${n}.md`);
-      absPath = path.join(dir, candidateName);
+      // R4 (C1 follow-up): classify recoverable system-admin errors
+      // with a distinctive prefix so the caller's catch can surface
+      // an actionable message instead of a generic "persist failed".
+      // ENOSPC = disk full, EACCES = permissions, EIO = underlying
+      // storage I/O error. All are remediable by the operator, not
+      // by retrying the agent turn.
+      if (code === "ENOSPC" || code === "EACCES" || code === "EIO") {
+        throw new PlanPersistStorageError(
+          `persistPlanArchetypeMarkdown: storage error (${code}) writing ${absPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          code,
+        );
+      }
+      throw err;
     }
   }
   throw new Error(
     `persistPlanArchetypeMarkdown: collision-suffix cap reached (${MAX_COLLISION_SUFFIX}) for ${baseName}`,
   );
+}
+
+/**
+ * Recoverable storage errors (disk full, permission denied, I/O
+ * failure) surface as this class so the bridge can emit an
+ * actionable operator-facing log message without confusing the path
+ * with a genuine bug. Plan-mode treats these as non-fatal — the
+ * plan approval still proceeds; only the durable audit artifact is
+ * lost.
+ */
+export class PlanPersistStorageError extends Error {
+  readonly code: "ENOSPC" | "EACCES" | "EIO";
+  constructor(message: string, code: "ENOSPC" | "EACCES" | "EIO") {
+    super(message);
+    this.name = "PlanPersistStorageError";
+    this.code = code;
+  }
 }

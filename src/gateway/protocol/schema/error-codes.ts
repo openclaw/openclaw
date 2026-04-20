@@ -45,6 +45,23 @@ export const ErrorCodes = {
    * cleanup does not silently bypass the gate.
    */
   PLAN_APPROVAL_GATE_STATE_UNAVAILABLE: "PLAN_APPROVAL_GATE_STATE_UNAVAILABLE",
+  /**
+   * Returned by `sessions.patch { planApproval: { action: "approve" |
+   * "edit" | "reject" } }` when the target session no longer has
+   * `planMode` state — the plan cycle has ended via one of:
+   *   - `/plan off` toggled mode back to `normal`
+   *   - another channel (or another tab) already resolved this
+   *     approval, clearing `planMode.approval`
+   *   - the approval timeout watchdog fired (C3 follow-up)
+   *   - session compaction / restart lost the plan-mode state
+   *
+   * The UI treats this code as terminal (it never becomes valid again
+   * for the same approvalId) and auto-dismisses the approval card
+   * with an "Approval window expired" toast instead of leaving it
+   * hanging. Mirrors the `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS`
+   * toast-fallback pattern but without a retry.
+   */
+  PLAN_APPROVAL_EXPIRED: "PLAN_APPROVAL_EXPIRED",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

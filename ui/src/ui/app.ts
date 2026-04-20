@@ -1155,7 +1155,15 @@ export class OpenClawApp extends LitElement {
         err && typeof err === "object" && "details" in err
           ? (err as { details?: unknown }).details
           : undefined;
+      // Bug B (C1 follow-up): PLAN_APPROVAL_EXPIRED is the canonical
+      // code for "session is no longer in plan mode" (timeout, /plan
+      // off, resolved on another channel, compaction loss). Keep the
+      // message-substring fallbacks for transports that flatten the
+      // error to a string.
       const staleStateError =
+        errCode === "PLAN_APPROVAL_EXPIRED" ||
+        errMsg.includes("PLAN_APPROVAL_EXPIRED") ||
+        errMsg.includes("requires an active plan-mode session") ||
         errMsg.includes("requires a pending approval") ||
         errMsg.includes("current state: none") ||
         errMsg.includes("stale approvalId") ||
