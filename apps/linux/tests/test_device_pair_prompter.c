@@ -49,13 +49,22 @@ void gateway_ws_event_unsubscribe(guint listener_id) {
  * the deviceId propagation path set g_ws_device_id to a sentinel value
  * before injecting an event. */
 static const gchar *g_ws_device_id = NULL;
+static gboolean g_ws_pairing_required = FALSE;
 
 const gchar* gateway_ws_get_device_id(void) {
     return g_ws_device_id;
 }
 
+gboolean gateway_ws_is_pairing_required(void) {
+    return g_ws_pairing_required;
+}
+
 G_GNUC_UNUSED static void set_ws_device_id_for_test(const gchar *value) {
     g_ws_device_id = value;
+}
+
+G_GNUC_UNUSED static void set_ws_pairing_required_for_test(gboolean value) {
+    g_ws_pairing_required = value;
 }
 
 static GPtrArray *g_rpc_calls = NULL; /* array of "method|requestId" strings */
@@ -102,6 +111,7 @@ void pairing_bootstrap_window_show(GtkWindow   *parent,
 {
     (void)parent;
     g_bootstrap_shows++;
+    g_bootstrap_visible = TRUE;
     g_clear_pointer(&g_bootstrap_last_request_id, g_free);
     g_clear_pointer(&g_bootstrap_last_device_id, g_free);
     g_clear_pointer(&g_bootstrap_last_detail, g_free);
@@ -216,6 +226,7 @@ static void reset_globals(void) {
     g_clear_pointer(&g_dismiss_last_request_id, g_free);
     g_raise_calls = 0;
     g_ws_device_id = NULL;
+    g_ws_pairing_required = FALSE;
     g_ws_event_cb = NULL;
     g_ws_event_user = NULL;
     g_ws_event_listener_id_counter = 0;
@@ -503,6 +514,46 @@ static void test_resolved_while_active_dismisses_dialog(void) {
     device_pair_prompter_test_set_present_hook(NULL, NULL);
     device_pair_prompter_shutdown();
     g_ptr_array_free(p.seen_request_ids, TRUE);
+}
+
+static void test_raise_reopens_pairing_required_bootstrap_after_dismiss(void) {
+    reset_globals();
+    set_ws_device_id_for_test("dev-reopen");
+    set_ws_pairing_required_for_test(TRUE);
+    device_pair_prompter_init(NULL);
+
+    g_autoptr(JsonBuilder) b = json_builder_new();
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "requestId");
+    json_builder_add_string_value(b, "req-reopen");
+    json_builder_set_member_name(b, "detail");
+    json_builder_add_string_value(b, "approval pending");
+    json_builder_end_object(b);
+    g_autoptr(JsonNode) payload = json_builder_get_root(b);
+
+    g_assert_nonnull(g_ws_event_cb);
+    g_ws_event_cb("device.pairing.required", payload, g_ws_event_user);
+
+    g_assert_cmpint(g_bootstrap_shows, ==, 1);
+    g_assert_true(g_bootstrap_visible);
+    g_assert_cmpstr(g_bootstrap_last_request_id, ==, "req-reopen");
+    g_assert_cmpstr(g_bootstrap_last_device_id, ==, "dev-reopen");
+    g_assert_cmpstr(g_bootstrap_last_detail, ==, "approval pending");
+
+    pairing_bootstrap_window_hide();
+    g_assert_cmpint(g_bootstrap_hides, ==, 1);
+    g_assert_false(g_bootstrap_visible);
+
+    device_pair_prompter_raise();
+
+    g_assert_cmpint(g_bootstrap_shows, ==, 2);
+    g_assert_cmpint(g_bootstrap_raises, ==, 0);
+    g_assert_true(g_bootstrap_visible);
+    g_assert_cmpstr(g_bootstrap_last_request_id, ==, "req-reopen");
+    g_assert_cmpstr(g_bootstrap_last_device_id, ==, "dev-reopen");
+    g_assert_cmpstr(g_bootstrap_last_detail, ==, "approval pending");
+
+    device_pair_prompter_shutdown();
 }
 
 static void test_resolved_while_queued_drops_silently(void) {
@@ -1045,6 +1096,8 @@ int main(int argc, char **argv) {
                     test_raise_with_no_pending_is_noop);
     g_test_add_func("/device_pair_prompter/raise_when_bootstrap_visible_uses_raise_primitive",
                     test_raise_when_bootstrap_visible_uses_raise_primitive);
+    g_test_add_func("/device_pair_prompter/raise_reopens_pairing_required_bootstrap_after_dismiss",
+                    test_raise_reopens_pairing_required_bootstrap_after_dismiss);
     g_test_add_func("/device_pair_prompter/raise_with_active_dialog",
                     test_raise_with_active_dialog_raises_it);
     g_test_add_func("/pairing_bootstrap/cli_command_has_request_id",
