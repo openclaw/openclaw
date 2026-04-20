@@ -329,4 +329,59 @@ describe("server-context hot-reload profiles", () => {
     expect(runtime?.lastTargetId).toBe("tab-remote");
     expect(runtime?.reconcile).toBeNull();
   });
+
+  it("does not reconcile remote cdp runtime when only headless changes", async () => {
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://10.0.0.42:9222",
+      color: "#0066CC",
+      headless: true,
+    };
+
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const remoteProfile = resolveProfile(resolved, "remote");
+    expect(remoteProfile).toBeTruthy();
+    expect(remoteProfile?.driver).toBe("openclaw");
+    expect(remoteProfile?.attachOnly).toBe(false);
+    expect(remoteProfile?.cdpIsLoopback).toBe(false);
+    expect(remoteProfile?.headless).toBe(true);
+
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "remote",
+          {
+            profile: remoteProfile!,
+            running: { pid: 789 } as never,
+            lastTargetId: "tab-remote-cdp",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://10.0.0.42:9222",
+      color: "#0066CC",
+      headless: false,
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("remote");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.driver).toBe("openclaw");
+    expect(runtime?.profile.cdpIsLoopback).toBe(false);
+    expect(runtime?.profile.headless).toBe(false);
+    expect(runtime?.lastTargetId).toBe("tab-remote-cdp");
+    expect(runtime?.reconcile).toBeNull();
+  });
 });

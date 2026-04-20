@@ -7,8 +7,10 @@ function changedProfileInvariants(
   next: ResolvedBrowserProfile,
 ): string[] {
   const changed: string[] = [];
-  const currentUsesLocalManagedLaunch = current.driver === "openclaw" && !current.attachOnly;
-  const nextUsesLocalManagedLaunch = next.driver === "openclaw" && !next.attachOnly;
+  const currentUsesLocalManagedLaunch =
+    current.driver === "openclaw" && !current.attachOnly && current.cdpIsLoopback;
+  const nextUsesLocalManagedLaunch =
+    next.driver === "openclaw" && !next.attachOnly && next.cdpIsLoopback;
   if (current.cdpUrl !== next.cdpUrl) {
     changed.push("cdpUrl");
   }
