@@ -2,6 +2,14 @@ import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
+const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
+  vi.fn(async (hostname: string) => ({
+    hostname,
+    addresses: ["93.184.216.34"],
+    lookup: vi.fn(),
+  })),
+);
+
 // Mock http and https modules before importing the client
 vi.mock("node:https", () => {
   const mockRequest = vi.fn();
@@ -13,6 +21,14 @@ vi.mock("node:http", () => {
   const mockRequest = vi.fn();
   const mockGet = vi.fn();
   return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+});
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/ssrf-runtime");
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+  };
 });
 
 const https = await import("node:https");
@@ -32,7 +48,7 @@ type MockRequestHandler = (
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
   res.statusCode = statusCode;
-  return res as IncomingMessage;
+  return res;
 }
 
 function createMockRequestEmitter(): ClientRequest {
@@ -40,7 +56,7 @@ function createMockRequestEmitter(): ClientRequest {
   req.write = vi.fn() as ClientRequest["write"];
   req.end = vi.fn() as ClientRequest["end"];
   req.destroy = vi.fn() as ClientRequest["destroy"];
-  return req as ClientRequest;
+  return req;
 }
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
@@ -79,6 +95,12 @@ function installFakeTimerHarness() {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resolvePinnedHostnameWithPolicyMock.mockReset();
+    resolvePinnedHostnameWithPolicyMock.mockImplementation(async (hostname: string) => ({
+      hostname,
+      addresses: ["93.184.216.34"],
+      lookup: vi.fn(),
+    }));
     vi.useFakeTimers();
     fakeNowMs += 10_000;
     vi.setSystemTime(fakeNowMs);
@@ -154,6 +176,34 @@ describe("sendFileUrl", () => {
     );
     const httpsRequest = vi.mocked(https.request);
     expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("validates the remote hostname before posting file_url", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("example.com");
+  });
+
+  it("rejects non-http(s) file URLs", async () => {
+    await expect(
+      sendFileUrl("https://nas.example.com/incoming", "file:///etc/passwd"),
+    ).rejects.toThrow(/http or https/i);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
+  });
+
+  it("blocks private/internal file URLs before posting to the NAS", async () => {
+    resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
+      new Error("Blocked: resolves to private/internal/special-use IP address"),
+    );
+    await expect(
+      sendFileUrl(
+        "https://nas.example.com/incoming",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+      ),
+    ).rejects.toThrow(/private\/internal\/special-use IP address/i);
+    expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 });
 

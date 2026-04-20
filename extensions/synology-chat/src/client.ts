@@ -6,6 +6,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
@@ -131,6 +132,7 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
+  await assertSafeWebhookFileUrl(fileUrl);
   const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   try {
@@ -240,6 +242,17 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   }
 
   return undefined;
+}
+
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<void> {
+  const parsed = new URL(fileUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Synology Chat file_url must use http or https");
+  }
+  if (!parsed.hostname) {
+    throw new Error("Synology Chat file_url must include a hostname");
+  }
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
 }
 
 function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
