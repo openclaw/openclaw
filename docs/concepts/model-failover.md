@@ -328,6 +328,10 @@ reply runner can use that to build a more specific message such as "all models
 are temporarily rate-limited" and include the soonest cooldown expiry when one
 is known.
 
+By default, successful fallback transitions stay quiet unless verbose mode is
+enabled. To prepend the existing one-line fallback notice even in normal reply
+mode, set `agents.defaults.notifyOnModelFallback: true`.
+
 That cooldown summary is model-aware:
 
 - unrelated model-scoped rate limits are ignored for the attempted
@@ -345,6 +349,7 @@ See [Gateway configuration](/gateway/configuration) for:
 - `auth.cooldowns.overloadedProfileRotations` / `auth.cooldowns.overloadedBackoffMs`
 - `auth.cooldowns.rateLimitedProfileRotations`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
+- `agents.defaults.notifyOnModelFallback`
 - `agents.defaults.imageModel` routing
 
 See [Models](/concepts/models) for the broader model selection and fallback overview.

@@ -1140,6 +1140,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.notifyOnModelFallback":
+    "When true, prepend a one-line notice when a reply falls back to another chat model outside verbose mode.",
   "agents.defaults.embeddedHarness":
     "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
   "agents.defaults.embeddedHarness.runtime":

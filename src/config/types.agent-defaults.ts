@@ -181,6 +181,8 @@ export type AgentDefaultsConfig = {
   mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
+  /** Show a one-line notice when a reply falls back to another chat model. */
+  notifyOnModelFallback?: boolean;
   /** Maximum PDF file size in megabytes (default: 10). */
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */

@@ -1475,6 +1475,7 @@ export async function runReplyAgent(params: {
     // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
+    const notifyOnFallback = cfg.agents?.defaults?.notifyOnModelFallback === true;
 
     if (verboseEnabled && activeIsNewSession) {
       verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
@@ -1496,7 +1497,7 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      if (verboseEnabled) {
+      if (verboseEnabled || notifyOnFallback) {
         const fallbackNotice = buildFallbackNotice({
           selectedProvider,
           selectedModel,
@@ -1523,7 +1524,7 @@ export async function runReplyAgent(params: {
           previousActiveModel: fallbackTransition.previousState.activeModel,
         },
       });
-      if (verboseEnabled) {
+      if (verboseEnabled || notifyOnFallback) {
         verboseNotices.push({
           text: buildFallbackClearedNotice({
             selectedProvider,
