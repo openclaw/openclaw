@@ -454,6 +454,65 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.get hides transcript-only OpenClaw assistant entries", async () => {
+    const { dir } = await createSessionStoreDir();
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            content: [{ type: "text", text: "mirrored copy" }],
+            timestamp: 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "gateway-injected",
+            content: [{ type: "text", text: "bootstrap copy" }],
+            timestamp: 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "real reply" }],
+            timestamp: 3,
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const result = await rpcReq<{ messages?: Array<{ content?: Array<{ text?: string }> }> }>(
+      ws,
+      "sessions.get",
+      { key: "main" },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.payload?.messages).toHaveLength(1);
+    expect(result.payload?.messages?.[0]?.content?.[0]?.text).toBe("real reply");
+
+    ws.close();
+  });
+
   test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
     await createSessionStoreDir();
     const { ws } = await openClient();
@@ -2534,7 +2593,9 @@ describe("gateway server sessions", () => {
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+    const event = (
+      subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][]
+    )[0]?.[0] as
       | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
       | undefined;
     expect(event).toMatchObject({
@@ -2850,7 +2911,9 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.key).toBe("agent:main:subagent:worker");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+    const event = (
+      subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][]
+    )[0]?.[0] as
       | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
       | undefined;
     expect(event).toMatchObject({

@@ -20,6 +20,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../config/sessions/transcript.js";
 import {
   hasInternalHookListeners,
   triggerInternalHook,
@@ -1458,7 +1459,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile).filter(
+      (message) => !isTranscriptOnlyOpenClawAssistantMessage(message),
+    );
     const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
     respond(true, { messages }, undefined);
   },

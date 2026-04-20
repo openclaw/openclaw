@@ -501,6 +501,36 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("hides transcript-only OpenClaw assistant entries from session history HTTP", async () => {
+    const { storePath } = await seedSession({ text: "hello" });
+
+    await withGatewayHarness(async (harness) => {
+      await appendTranscriptMessage({
+        sessionKey: "agent:main:main",
+        storePath,
+        message: makeTranscriptAssistantMessage({ text: "mirrored copy" }),
+        emitInlineMessage: false,
+      });
+      await appendTranscriptMessage({
+        sessionKey: "agent:main:main",
+        storePath,
+        message: {
+          ...makeTranscriptAssistantMessage({ text: "bootstrap copy" }),
+          model: "gateway-injected",
+        },
+        emitInlineMessage: false,
+      });
+
+      const historyRes = await fetchSessionHistory(harness.port, "agent:main:main");
+      expect(historyRes.status).toBe(200);
+      const body = (await historyRes.json()) as {
+        messages?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+
+      expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual(["hello"]);
+    });
+  });
+
   test("streams session history updates over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 

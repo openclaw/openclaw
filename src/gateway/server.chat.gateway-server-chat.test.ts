@@ -565,6 +565,39 @@ describe("gateway server chat", () => {
     expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
   });
 
+  test("chat.history hides transcript-only OpenClaw assistant entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "mirrored copy" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "bootstrap copy" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
+  });
+
   test("chat.history hides assistant announce/reply skip-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

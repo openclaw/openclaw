@@ -12,6 +12,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../config/sessions/transcript.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -898,6 +899,9 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   const entry = message as { role?: unknown };
   if (entry.role !== "assistant") {
     return false;
+  }
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return true;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
     return true;

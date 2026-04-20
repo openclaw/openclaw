@@ -3,13 +3,13 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../config/sessions/transcript.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -73,15 +73,6 @@ const coerceText = (value: unknown): string => {
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
-}
-
-function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const provider = normalizeOptionalString(message.provider) ?? "";
-  const model = normalizeOptionalString(message.model) ?? "";
-  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {

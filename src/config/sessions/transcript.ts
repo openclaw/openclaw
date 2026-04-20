@@ -3,6 +3,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -14,6 +15,19 @@ import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
+
+export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const typed = message as { role?: unknown; provider?: unknown; model?: unknown };
+  if (typed.role !== "assistant") {
+    return false;
+  }
+  const provider = normalizeOptionalString(typed.provider) ?? "";
+  const model = normalizeOptionalString(typed.model) ?? "";
+  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
 
 async function ensureSessionHeader(params: {
   sessionFile: string;
