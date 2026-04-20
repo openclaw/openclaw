@@ -129,19 +129,34 @@ actor GatewayEndpointStore {
     private static func resolveConfigPassword(isRemote: Bool, root: [String: Any]) -> String? {
         if isRemote {
             if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let password = remote["password"] as? String
+               let remote = gateway["remote"] as? [String: Any]
             {
-                return password.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let password = remote["password"] as? String {
+                    let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { return trimmed }
+                }
             }
             return nil
         }
 
         if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let password = auth["password"] as? String
+           let auth = gateway["auth"] as? [String: Any]
         {
-            return password.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let password = auth["password"] as? String {
+                let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+            // Handle SecretRef format for passwords too
+            if let ref = auth["password"] as? [String: Any],
+               let provider = ref["provider"] as? String,
+               provider == "keychain",
+               let id = ref["id"] as? String
+            {
+                let service = ref["service"] as? String ?? "openclaw"
+                if let resolved = resolveKeychainToken(service: service, account: id) {
+                    return resolved
+                }
+            }
         }
         return nil
     }
@@ -192,12 +207,51 @@ actor GatewayEndpointStore {
         }
 
         if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let token = auth["token"] as? String
+           let auth = gateway["auth"] as? [String: Any]
         {
-            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let token = auth["token"] as? String {
+                let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+            // Handle SecretRef format: { source: "exec", provider: "keychain", id: "<keychain-account>" }
+            if let ref = auth["token"] as? [String: Any],
+               let provider = ref["provider"] as? String,
+               provider == "keychain",
+               let id = ref["id"] as? String
+            {
+                let service = ref["service"] as? String ?? "openclaw"
+                if let resolved = resolveKeychainToken(service: service, account: id) {
+                    return resolved
+                }
+            }
         }
         return nil
+    }
+
+    /// Resolve a gateway token from the macOS keychain.
+    private static func resolveKeychainToken(service: String, account: String) -> String? {
+        let trimmed = securityFindGenericPassword(service: service, account: account)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Invoke `security find-generic-password -s <service> -a <account> -w` and return the password.
+    private static func securityFindGenericPassword(service: String, account: String) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", service, "-a", account, "-w"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return "" }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            return ""
+        }
     }
 
     private static func warnEnvOverrideOnce(
