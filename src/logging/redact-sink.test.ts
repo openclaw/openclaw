@@ -197,4 +197,42 @@ describe("redact-sink", () => {
 
     expect(sanitized.secret).toBe(MASKED);
   });
+
+  it("forces masking for credential toJSON strings with characters outside shouldMaskDirectString", () => {
+    // Regression: toJSON returning a string with '/' was not forced-masked because
+    // sanitizeValueForSink called sanitizeStringForSink without the explicit
+    // forced-mask fallback that sanitizeFieldValueForSink applies. Now the string
+    // branch in sanitizeValueForSink mirrors the array branch: pattern-redact first,
+    // unconditionally maskDirectSecret if unchanged.
+    const slashSecret = "abcd/efghijklmnopqrstu";
+    const record = {
+      token: {
+        toJSON() {
+          return slashSecret;
+        },
+      },
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as unknown as {
+      token: string;
+    };
+
+    expect(sanitized.token).not.toBe(slashSecret);
+    expect(sanitized.token).toBe("abcd/e…rstu");
+  });
+
+  it("does not mask ISO-8601 timestamps in non-credential fields", () => {
+    // Regression: shouldMaskDirectString regex /^[A-Za-z0-9._:+\-=]{18,}$/ matched
+    // ISO timestamps, causing them to be silently masked in message/time fields.
+    const isoTs = "2026-04-20T12:00:00.000Z";
+    const record = {
+      message: isoTs,
+      time: isoTs,
+    };
+
+    const sanitized = sanitizeLogRecordForSink(record, resolved);
+
+    expect(sanitized.message).toBe(isoTs);
+    expect(sanitized.time).toBe(isoTs);
+  });
 });

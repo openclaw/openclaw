@@ -46,7 +46,10 @@ function maskDirectSecret(value: string): string {
 }
 
 function shouldMaskDirectString(value: string): boolean {
-  return /^[A-Za-z0-9._:+\-=]{18,}$/.test(value);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(value)) {
+    return false; // ISO-8601 timestamps are not secrets
+  }
+  return /^[A-Za-z0-9._:+\-=]{18,}$/u.test(value);
 }
 
 export function sanitizeStringForSink(
@@ -163,6 +166,13 @@ function sanitizeValueForSink(
   options?: { allowDirectMask?: boolean },
 ): unknown {
   if (typeof value === "string") {
+    if (options?.allowDirectMask) {
+      // Under a credential-named field, apply the same forced-mask logic as
+      // sanitizeFieldValueForSink: pattern-redact first, then unconditionally
+      // mask if the pattern did not match — regardless of charset.
+      const textSanitized = sanitizeStringForSink(value, resolved, { allowDirectMask: true });
+      return textSanitized === value ? maskDirectSecret(value) : textSanitized;
+    }
     return sanitizeStringForSink(value, resolved, options);
   }
   if (
