@@ -74,6 +74,30 @@ describe("getShellConfig", () => {
     const { shell } = getShellConfig();
     expect(shell).toBe("sh");
   });
+
+  it("falls back to sh on PATH when SHELL is /usr/bin/false", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("falls back to sh on PATH when SHELL is /sbin/nologin", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.SHELL = "/sbin/nologin";
+    process.env.PATH = binDir;
+    const { shell } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "sh"));
+  });
+
+  it("falls back to bare sh when SHELL is a placeholder and no sh is on PATH", () => {
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = "";
+    const { shell } = getShellConfig();
+    expect(shell).toBe("sh");
+  });
 });
 
 describe("resolveShellFromPath", () => {
