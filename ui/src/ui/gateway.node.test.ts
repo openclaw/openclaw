@@ -123,6 +123,14 @@ function parseLatestConnectFrame(ws: MockWebSocket): ConnectFrame {
   return JSON.parse(ws.sent.at(-1) ?? "{}") as ConnectFrame;
 }
 
+async function flushAsyncWork() {
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(0);
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 async function continueConnect(ws: MockWebSocket, nonce = "nonce-1") {
   ws.emitOpen();
   ws.emitMessage({
@@ -130,17 +138,31 @@ async function continueConnect(ws: MockWebSocket, nonce = "nonce-1") {
     event: "connect.challenge",
     payload: { nonce },
   });
-  if (vi.isFakeTimers()) {
-    await vi.advanceTimersByTimeAsync(0);
-  } else {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
+  await flushAsyncWork();
   expect(ws.sent.length).toBeGreaterThan(0);
   return { ws, connectFrame: parseLatestConnectFrame(ws) };
 }
 
 async function expectSocketClosed(ws: MockWebSocket) {
   await vi.waitFor(() => expect(ws.readyState).toBe(3), { interval: 1, timeout: 50 });
+}
+
+async function emitConnectHello(
+  ws: MockWebSocket,
+  connectId: string | undefined,
+  payload: Record<string, unknown> = {},
+) {
+  ws.emitMessage({
+    type: "res",
+    id: connectId,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: 3,
+      ...payload,
+    },
+  });
+  await flushAsyncWork();
 }
 
 async function startConnect(client: InstanceType<typeof GatewayBrowserClient>, nonce = "nonce-1") {
@@ -396,6 +418,83 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("reconnects before the canvas capability expires when hello.canvasHostUrl is present", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws: ws1, connectFrame } = await startConnect(client);
+    await emitConnectHello(ws1, connectFrame.id, {
+      canvasHostUrl: "http://127.0.0.1:18789/__openclaw__/cap/cap_123",
+    });
+
+    await vi.advanceTimersByTimeAsync(539_999);
+    expect(wsInstances).toHaveLength(1);
+    expect(ws1.readyState).toBe(MockWebSocket.OPEN);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expectSocketClosed(ws1);
+    ws1.emitClose(4000, "canvas capability refresh");
+
+    await vi.advanceTimersByTimeAsync(800);
+    expect(wsInstances).toHaveLength(2);
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
+  it("clears the scheduled canvas capability refresh when stopped", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    await emitConnectHello(ws, connectFrame.id, {
+      canvasHostUrl: "http://127.0.0.1:18789/__openclaw__/cap/cap_123",
+    });
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    expect(ws.readyState).toBe(3);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("clears the scheduled canvas capability refresh after the socket closes", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws: ws1, connectFrame } = await startConnect(client);
+    await emitConnectHello(ws1, connectFrame.id, {
+      canvasHostUrl: "http://127.0.0.1:18789/__openclaw__/cap/cap_123",
+    });
+
+    ws1.emitClose(1006, "socket lost");
+    await vi.advanceTimersByTimeAsync(800);
+
+    const ws2 = getLatestWebSocket();
+    expect(ws2).not.toBe(ws1);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(wsInstances).toHaveLength(2);
+    expect(ws2.readyState).toBe(MockWebSocket.OPEN);
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
   it("cancels a queued connect send when stopped before the timeout fires", async () => {
     vi.useFakeTimers();
 
@@ -433,6 +532,25 @@ describe("GatewayBrowserClient", () => {
 
     expect(wsInstances).toHaveLength(1);
 
+    vi.useRealTimers();
+  });
+
+  it("does not schedule a canvas capability refresh when canvasHostUrl is absent", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    await emitConnectHello(ws, connectFrame.id);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(wsInstances).toHaveLength(1);
+    expect(ws.readyState).toBe(MockWebSocket.OPEN);
+
+    client.stop();
     vi.useRealTimers();
   });
 

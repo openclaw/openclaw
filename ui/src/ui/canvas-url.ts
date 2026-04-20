@@ -15,22 +15,56 @@ function isExternalHttpUrl(entry: URL): boolean {
   return entry.protocol === "http:" || entry.protocol === "https:";
 }
 
+type SanitizedCanvasEntry =
+  | {
+      kind: "external";
+      url: string;
+    }
+  | {
+      kind: "protected-canvas";
+      url: string;
+    };
+
 function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
-): string | undefined {
+): SanitizedCanvasEntry | undefined {
   try {
     const entry = new URL(rawEntryUrl, "http://localhost");
     if (entry.origin !== "http://localhost") {
       if (!allowExternalEmbedUrls || !isExternalHttpUrl(entry)) {
         return undefined;
       }
-      return entry.toString();
+      return {
+        kind: "external",
+        url: entry.toString(),
+      };
     }
     if (!isCanvasHttpPath(entry.pathname)) {
       return undefined;
     }
-    return `${entry.pathname}${entry.search}${entry.hash}`;
+    return {
+      kind: "protected-canvas",
+      url: `${entry.pathname}${entry.search}${entry.hash}`,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveScopedCanvasHostUrl(canvasHostUrl: string): URL | undefined {
+  try {
+    const scopedHostUrl = new URL(canvasHostUrl);
+    const scopedPrefix = scopedHostUrl.pathname.replace(/\/+$/, "");
+    const capabilityPrefix = `${CANVAS_CAPABILITY_PATH_PREFIX}/`;
+    if (!scopedPrefix.startsWith(capabilityPrefix)) {
+      return undefined;
+    }
+    const capability = scopedPrefix.slice(capabilityPrefix.length);
+    if (!capability || capability.includes("/")) {
+      return undefined;
+    }
+    return scopedHostUrl;
   } catch {
     return undefined;
   }
@@ -49,26 +83,21 @@ export function resolveCanvasIframeUrl(
   if (!safeEntryUrl) {
     return undefined;
   }
-  if (!canvasHostUrl?.trim()) {
-    return safeEntryUrl;
+  if (safeEntryUrl.kind === "external") {
+    return safeEntryUrl.url;
   }
-  try {
-    const scopedHostUrl = new URL(canvasHostUrl);
-    const scopedPrefix = scopedHostUrl.pathname.replace(/\/+$/, "");
-    if (!scopedPrefix.startsWith(CANVAS_CAPABILITY_PATH_PREFIX)) {
-      return safeEntryUrl;
-    }
-    const entry = new URL(safeEntryUrl, scopedHostUrl.origin);
-    if (!isCanvasHttpPath(entry.pathname)) {
-      return safeEntryUrl;
-    }
-    entry.protocol = scopedHostUrl.protocol;
-    entry.username = scopedHostUrl.username;
-    entry.password = scopedHostUrl.password;
-    entry.host = scopedHostUrl.host;
-    entry.pathname = `${scopedPrefix}${entry.pathname}`;
-    return entry.toString();
-  } catch {
-    return safeEntryUrl;
+  const scopedHostUrl = canvasHostUrl?.trim()
+    ? resolveScopedCanvasHostUrl(canvasHostUrl)
+    : undefined;
+  if (!scopedHostUrl) {
+    return undefined;
   }
+  const scopedPrefix = scopedHostUrl.pathname.replace(/\/+$/, "");
+  const entry = new URL(safeEntryUrl.url, scopedHostUrl.origin);
+  entry.protocol = scopedHostUrl.protocol;
+  entry.username = scopedHostUrl.username;
+  entry.password = scopedHostUrl.password;
+  entry.host = scopedHostUrl.host;
+  entry.pathname = `${scopedPrefix}${entry.pathname}`;
+  return entry.toString();
 }
