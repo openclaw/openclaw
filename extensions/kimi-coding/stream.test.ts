@@ -75,7 +75,7 @@ describe("kimi tool-call markup wrapper", () => {
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     ) as FakeStream;
@@ -147,7 +147,7 @@ describe("kimi tool-call markup wrapper", () => {
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     ) as FakeStream;
@@ -169,7 +169,7 @@ describe("kimi tool-call markup wrapper", () => {
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = (await wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     )) as FakeStream;
@@ -202,7 +202,7 @@ describe("kimi tool-call markup wrapper", () => {
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
     const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     ) as FakeStream;
@@ -243,7 +243,7 @@ describe("kimi tool-call markup wrapper", () => {
       streamFn: baseStreamFn,
     } as never);
     const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { api: "openai-completions", provider: "kimi", id: "k2p5" } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     ) as FakeStream;
