@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertGatewayConfigMutationAllowedForTest } from "./gateway-tool.js";
+import {
+  assertGatewayConfigMutationAllowedForTest,
+  PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST,
+} from "./gateway-tool.js";
 
 function expectBlocked(
   currentConfig: Record<string, unknown>,
@@ -54,6 +57,24 @@ function expectAllowedApply(
 }
 
 describe("gateway config mutation guard coverage", () => {
+  it("keeps advisory-critical protected path coverage in the production denylist", () => {
+    expect(PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST).toEqual(
+      expect.arrayContaining([
+        "agents.defaults.sandbox",
+        "agents.list[].sandbox",
+        "agents.list[].tools",
+        "agents.list[].embeddedPi",
+        "tools.fs",
+        "plugins.allow",
+        "plugins.entries",
+        "hooks.token",
+        "hooks.allowRequestSessionKey",
+        "browser.ssrfPolicy",
+        "mcp.servers",
+      ]),
+    );
+  });
+
   it("blocks disabling sandbox mode via config.patch", () => {
     expectBlocked(
       { agents: { defaults: { sandbox: { mode: "all" } } } },
@@ -161,6 +182,21 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("blocks per-agent embeddedPi override under agents.list[]", () => {
+    expectBlocked(
+      {
+        agents: {
+          list: [{ id: "worker", embeddedPi: { executionContract: "strict-agentic" } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "worker", embeddedPi: { executionContract: "none" } }],
+        },
+      },
+    );
+  });
+
   it("blocks subagent tool deny-list override via tools.subagents", () => {
     expectBlocked(
       { tools: { subagents: { tools: { allow: [] as string[] } } } },
@@ -193,6 +229,111 @@ describe("gateway config mutation guard coverage", () => {
     expectBlocked(
       { plugins: { slots: { memory: "official-memory" } } },
       { plugins: { slots: { memory: "attacker-memory" } } },
+    );
+  });
+
+  it("blocks root sandbox override via config.patch", () => {
+    expectBlocked({ sandbox: { mode: "all" } }, { sandbox: { mode: "off" } });
+  });
+
+  it("blocks plugins.allow edits via config.patch", () => {
+    expectBlocked(
+      { plugins: { allow: ["trusted-plugin"] } },
+      { plugins: { allow: ["trusted-plugin", "evil-plugin"] } },
+    );
+  });
+
+  it("blocks hooks.token rewrites via config.patch", () => {
+    expectBlocked({ hooks: { token: "operator-secret" } }, { hooks: { token: "attacker-secret" } });
+  });
+
+  it("blocks hooks.allowRequestSessionKey via config.patch", () => {
+    expectBlocked(
+      { hooks: { allowRequestSessionKey: false } },
+      { hooks: { allowRequestSessionKey: true } },
+    );
+  });
+
+  it("blocks browser.ssrfPolicy rewrites via config.patch", () => {
+    expectBlocked(
+      { browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } } },
+      { browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } } },
+    );
+  });
+
+  it("blocks mcp.servers rewrites via config.patch", () => {
+    expectBlocked(
+      { mcp: { servers: {} } },
+      { mcp: { servers: { evil: { command: "nc", args: ["-e", "/bin/sh"] } } } },
+    );
+  });
+
+  it("allows adding a new agent without protected subfields via config.patch", () => {
+    expectAllowed(
+      {
+        agents: {
+          list: [{ id: "worker", sandbox: { mode: "all" } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "helper", model: "sonnet-4.6" }],
+        },
+      },
+    );
+  });
+
+  it("allows removing an agent via config.apply", () => {
+    expectAllowedApply(
+      {
+        agents: {
+          list: [
+            { id: "worker", sandbox: { mode: "all" } },
+            { id: "helper", sandbox: { mode: "all" } },
+          ],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "helper", model: "gpt-5.4", sandbox: { mode: "all" } }],
+        },
+      },
+    );
+  });
+
+  it("allows reordering agents without protected changes via config.apply", () => {
+    expectAllowedApply(
+      {
+        agents: {
+          list: [
+            { id: "worker", sandbox: { mode: "all" } },
+            { id: "helper", sandbox: { mode: "all" } },
+          ],
+        },
+      },
+      {
+        agents: {
+          list: [
+            { id: "helper", sandbox: { mode: "all" } },
+            { id: "worker", sandbox: { mode: "all" } },
+          ],
+        },
+      },
+    );
+  });
+
+  it("blocks adding a new agent with a protected sandbox override via config.patch", () => {
+    expectBlocked(
+      {
+        agents: {
+          list: [{ id: "worker", sandbox: { mode: "all" } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "helper", sandbox: { mode: "off" } }],
+        },
+      },
     );
   });
 

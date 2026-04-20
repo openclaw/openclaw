@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectPluginConfigContractMatches,
@@ -12,6 +13,21 @@ function formatDangerousConfigFlagValue(value: string | number | boolean | null)
 
 export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
   const enabledFlags: string[] = [];
+
+  const collectSandboxDockerDangerousFlags = (
+    docker: Record<string, unknown> | undefined,
+    pathPrefix: string,
+  ): void => {
+    if (!isRecord(docker)) {
+      return;
+    }
+    for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
+      if (docker[key] === true) {
+        enabledFlags.push(`${pathPrefix}.${key}=true`);
+      }
+    }
+  };
+
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
   }
@@ -31,8 +47,31 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
       }
     }
   }
+  if (cfg.hooks?.allowRequestSessionKey === true) {
+    enabledFlags.push("hooks.allowRequestSessionKey=true");
+  }
+  if (cfg.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork === true) {
+    enabledFlags.push("browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true");
+  }
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
+  }
+  if (cfg.tools?.fs?.workspaceOnly === false) {
+    enabledFlags.push("tools.fs.workspaceOnly=false");
+  }
+  collectSandboxDockerDangerousFlags(
+    isRecord(cfg.agents?.defaults?.sandbox?.docker)
+      ? cfg.agents?.defaults?.sandbox?.docker
+      : undefined,
+    "agents.defaults.sandbox.docker",
+  );
+  if (Array.isArray(cfg.agents?.list)) {
+    for (const [index, agent] of cfg.agents.list.entries()) {
+      collectSandboxDockerDangerousFlags(
+        isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
+        `agents.list[${index}].sandbox.docker`,
+      );
+    }
   }
 
   const pluginEntries = cfg.plugins?.entries;

@@ -167,11 +167,24 @@ function isProtectedPathEqual(
     return true;
   }
 
-  const readProjectedEntries = (list: unknown): Array<{ id?: string; value: unknown }> => {
+  const readProjectedEntries = (
+    list: unknown,
+  ): {
+    duplicateIds: boolean;
+    hasUnkeyedProtectedValue: boolean;
+    keyedValues: Map<string, unknown>;
+  } => {
     if (!Array.isArray(list)) {
-      return [];
+      return {
+        duplicateIds: false,
+        hasUnkeyedProtectedValue: false,
+        keyedValues: new Map<string, unknown>(),
+      };
     }
-    return list.map((entry) => {
+    let duplicateIds = false;
+    let hasUnkeyedProtectedValue = false;
+    const keyedValues = new Map<string, unknown>();
+    for (const entry of list) {
       const id =
         entry &&
         typeof entry === "object" &&
@@ -184,11 +197,38 @@ function isProtectedPathEqual(
         !subPath || !entry || typeof entry !== "object" || Array.isArray(entry)
           ? entry
           : getValueAtCanonicalPath(entry as Record<string, unknown>, subPath);
-      return { id, value };
-    });
+      if (!id) {
+        hasUnkeyedProtectedValue ||= value !== undefined;
+        continue;
+      }
+      if (keyedValues.has(id)) {
+        duplicateIds = true;
+        continue;
+      }
+      keyedValues.set(id, value);
+    }
+    return { duplicateIds, hasUnkeyedProtectedValue, keyedValues };
   };
 
-  return isDeepStrictEqual(readProjectedEntries(currentList), readProjectedEntries(nextList));
+  const currentProjected = readProjectedEntries(currentList);
+  const nextProjected = readProjectedEntries(nextList);
+  if (nextProjected.duplicateIds || nextProjected.hasUnkeyedProtectedValue) {
+    return false;
+  }
+  for (const [id, currentValue] of currentProjected.keyedValues) {
+    if (!nextProjected.keyedValues.has(id)) {
+      continue;
+    }
+    if (!isDeepStrictEqual(currentValue, nextProjected.keyedValues.get(id))) {
+      return false;
+    }
+  }
+  for (const [id, nextValue] of nextProjected.keyedValues) {
+    if (!currentProjected.keyedValues.has(id) && nextValue !== undefined) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function assertGatewayConfigMutationAllowed(params: {

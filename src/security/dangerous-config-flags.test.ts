@@ -78,4 +78,55 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       ),
     ).toEqual([]);
   });
+
+  it("collects dangerous sandbox, hook, browser, and fs flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlags(
+        asConfig({
+          agents: {
+            defaults: {
+              sandbox: {
+                docker: {
+                  dangerouslyAllowReservedContainerTargets: true,
+                  dangerouslyAllowContainerNamespaceJoin: true,
+                },
+              },
+            },
+            list: [
+              {
+                id: "worker",
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowExternalBindSources: true,
+                  },
+                },
+              },
+            ],
+          },
+          hooks: {
+            allowRequestSessionKey: true,
+          },
+          browser: {
+            ssrfPolicy: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+          },
+          tools: {
+            fs: {
+              workspaceOnly: false,
+            },
+          },
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
+        "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
+        "agents.list[0].sandbox.docker.dangerouslyAllowExternalBindSources=true",
+        "hooks.allowRequestSessionKey=true",
+        "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true",
+        "tools.fs.workspaceOnly=false",
+      ]),
+    );
+  });
 });
