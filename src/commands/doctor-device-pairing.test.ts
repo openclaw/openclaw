@@ -216,6 +216,53 @@ describe("noteDevicePairingHealth", () => {
     expect(message).not.toContain("control-ui\tclient");
   });
 
+  it("quotes untrusted device pairing fields in suggested commands", async () => {
+    callGatewayMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-gateway-1",
+          deviceId: "device; echo pwn",
+          publicKey: "pending-pubkey",
+          role: "operator",
+          roles: ["operator"],
+          scopes: ["operator.read"],
+          clientId: "control-ui",
+          clientMode: "webchat",
+          displayName: "Dashboard",
+          ts: 1,
+          isRepair: true,
+        },
+      ],
+      paired: [
+        {
+          deviceId: "device; echo pwn",
+          publicKey: "paired-pubkey",
+          displayName: "Dashboard",
+          clientId: "control-ui",
+          clientMode: "webchat",
+          role: "operator; touch /tmp/pwn",
+          roles: ["operator; touch /tmp/pwn"],
+          scopes: [],
+          approvedScopes: [],
+          tokens: [],
+          createdAtMs: 1,
+          approvedAtMs: 1,
+        },
+      ],
+    });
+
+    await noteDevicePairingHealth({
+      cfg: { gateway: { mode: "remote" } },
+      healthOk: true,
+    });
+
+    const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("openclaw devices remove 'device; echo pwn'");
+    expect(message).toContain(
+      "openclaw devices rotate --device 'device; echo pwn' --role 'operator; touch /tmp/pwn'",
+    );
+  });
+
   it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
     await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
       await withEnvAsync(

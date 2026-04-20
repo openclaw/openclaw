@@ -184,6 +184,17 @@ function formatRoles(roles: string[]): string {
   return roles.length > 0 ? roles.join(", ") : "none";
 }
 
+function quoteCliArg(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function formatCliArgs(args: string[]): string {
+  return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
 function describeDevice(params: {
   deviceId: string;
   displayName?: string;
@@ -241,8 +252,8 @@ function resolvePendingPairingIssue(
     displayName: pending.displayName,
     clientId: pending.clientId,
   });
-  const approveCommand = formatCliCommand(`openclaw devices approve ${pending.requestId}`);
-  const inspectCommand = formatCliCommand("openclaw devices list");
+  const approveCommand = formatCliArgs(["openclaw", "devices", "approve", pending.requestId]);
+  const inspectCommand = formatCliArgs(["openclaw", "devices", "list"]);
   if (!paired) {
     return {
       kind: "first-time",
@@ -259,7 +270,7 @@ function resolvePendingPairingIssue(
       deviceLabel,
       approveCommand,
       inspectCommand,
-      removeCommand: formatCliCommand(`openclaw devices remove ${pending.deviceId}`),
+      removeCommand: formatCliArgs(["openclaw", "devices", "remove", pending.deviceId]),
     };
   }
   const requestedRoles = uniqueStrings(pending.roles, pending.role);
@@ -346,9 +357,15 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): string[] {
     }
     for (const role of approvedRoles) {
       const token = findTokenSummary(device, role);
-      const rotateCommand = formatCliCommand(
-        `openclaw devices rotate --device ${device.deviceId} --role ${role}`,
-      );
+      const rotateCommand = formatCliArgs([
+        "openclaw",
+        "devices",
+        "rotate",
+        "--device",
+        device.deviceId,
+        "--role",
+        role,
+      ]);
       if (!token) {
         lines.push(
           `- Paired device ${deviceLabel} has no active ${role} device token even though the role is approved. This commonly ends in pairing-required or device-token-mismatch. Rotate a fresh token with ${rotateCommand}.`,
@@ -456,9 +473,15 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
     if (!role) {
       continue;
     }
-    const rotateCommand = formatCliCommand(
-      `openclaw devices rotate --device ${paired.deviceId} --role ${role}`,
-    );
+    const rotateCommand = formatCliArgs([
+      "openclaw",
+      "devices",
+      "rotate",
+      "--device",
+      paired.deviceId,
+      "--role",
+      role,
+    ]);
     const pairedToken = findTokenSummary(paired, role);
     if (!pairedToken) {
       if (approvedRoles.has(role)) {
