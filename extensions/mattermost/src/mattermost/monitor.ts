@@ -274,7 +274,10 @@ type MattermostDraftPreviewDeliverParams = {
   payload: ReplyPayload;
   info: { kind: "tool" | "block" | "final" };
   client: MattermostClient;
-  draftStream: Pick<ReturnType<typeof createMattermostDraftStream>, "flush" | "postId" | "clear">;
+  draftStream: Pick<
+    ReturnType<typeof createMattermostDraftStream>,
+    "flush" | "postId" | "clear" | "stop"
+  >;
   effectiveReplyToId?: string;
   resolvePreviewFinalText: (text?: string) => string | undefined;
   previewState: MattermostDraftPreviewState;
@@ -310,6 +313,9 @@ export async function deliverMattermostReplyWithDraftPreview(
       })
     ) {
       try {
+        // Seal the preview before the final edit so late draft events cannot
+        // patch over the finalized visible message.
+        await params.draftStream.stop();
         await updateMattermostPost(params.client, previewPostId, {
           message: previewFinalText,
         });

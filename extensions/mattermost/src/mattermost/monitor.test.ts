@@ -66,6 +66,7 @@ function createDraftStreamMock(postId: string | undefined = "preview-post-1") {
     flush: vi.fn(async () => {}),
     postId: vi.fn(() => postId),
     clear: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
   };
 }
 
@@ -314,6 +315,10 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       expect.anything(),
       "preview-post-1",
       expect.objectContaining({ message: "Final answer" }),
+    );
+    expect(draftStream.stop).toHaveBeenCalledTimes(1);
+    expect(draftStream.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(deliverFinal).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
