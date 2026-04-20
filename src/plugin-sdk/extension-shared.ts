@@ -1,5 +1,7 @@
 import type { z } from "zod";
+import type { OpenClawConfig } from "../config/config.js";
 import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
@@ -189,6 +191,22 @@ export function mapPluginConfigIssues(
     path: normalizePluginConfigIssuePath(issue.path),
     message: formatPluginConfigIssue(issue, options),
   }));
+}
+
+export function canResolveEnvSecretRefInReadOnlyPath(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
 }
 
 export function readPluginPackageVersion(params: {
