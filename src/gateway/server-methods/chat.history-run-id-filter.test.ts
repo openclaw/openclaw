@@ -96,4 +96,73 @@ describe("filterMessagesByRunId", () => {
     const filtered = filterMessagesByRunId(messages, runIdA);
     expect(filtered).toHaveLength(1);
   });
+
+  it("does not treat a shorter runId as a prefix match for a longer one", () => {
+    // chat.send takes `idempotencyKey` as the runId and only constrains it to
+    // NonEmptyString, so prefix-based ids are possible.  `run-1` must never
+    // pull in messages tagged with `run-10`.
+    const shortId = "run-1";
+    const longId = "run-10";
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `[RUN_RESULT run_id=${shortId} status=done]` }],
+        __openclaw: { id: "short", seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `[RUN_RESULT run_id=${longId} status=done]` }],
+        __openclaw: { id: "long", seq: 2 },
+      },
+    ];
+    const filteredShort = filterMessagesByRunId(messages, shortId);
+    expect(filteredShort).toHaveLength(1);
+    expect((filteredShort[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("short");
+    const filteredLong = filterMessagesByRunId(messages, longId);
+    expect(filteredLong).toHaveLength(1);
+    expect((filteredLong[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("long");
+  });
+
+  it("matches runIds that contain characters JSON.stringify would escape", () => {
+    // Quotes, backslashes and control chars get escaped inside the serialized
+    // message record.  The matcher encodes the runId the same way so those
+    // markers are still found.
+    const trickyId = 'run"with\\weird\nchars';
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `[RUN_RESULT run_id=${trickyId} status=done]` }],
+        __openclaw: { id: "tricky", seq: 3 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "no marker here" }],
+        __openclaw: { id: "noise", seq: 4 },
+      },
+    ];
+    const filtered = filterMessagesByRunId(messages, trickyId);
+    expect(filtered).toHaveLength(1);
+    expect((filtered[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("tricky");
+  });
+
+  it("escapes regex metacharacters in the runId before matching", () => {
+    // `.` is a regex wildcard; without escaping, the matcher would accept
+    // arbitrary characters and cross-pollinate runs.
+    const dotId = "run.1";
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `[RUN_RESULT run_id=${dotId} status=done]` }],
+        __openclaw: { id: "dot", seq: 5 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[RUN_RESULT run_id=runX1 status=done]" }],
+        __openclaw: { id: "x", seq: 6 },
+      },
+    ];
+    const filtered = filterMessagesByRunId(messages, dotId);
+    expect(filtered).toHaveLength(1);
+    expect((filtered[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("dot");
+  });
 });
