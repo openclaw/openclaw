@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
@@ -356,6 +357,32 @@ export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): An
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
 
+function resolveWorkspaceSkillAliasPath(filePath: string, root: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  const prefix = "/app/skills/";
+  if (!normalized.startsWith(prefix) || !normalized.endsWith("/SKILL.md")) {
+    return filePath;
+  }
+  const relative = normalized.slice(prefix.length);
+  const parts = relative.split("/").filter(Boolean);
+  if (parts.length !== 2 || parts[1] !== "SKILL.md") {
+    return filePath;
+  }
+  const skillName = parts[0]?.trim();
+  if (!skillName || skillName === "." || skillName === "..") {
+    return filePath;
+  }
+  const bundledTarget = path.posix.normalize(normalized);
+  if (existsSync(bundledTarget)) {
+    return filePath;
+  }
+  const workspaceTarget = path.resolve(root, "skills", skillName, "SKILL.md");
+  if (!existsSync(workspaceTarget)) {
+    return filePath;
+  }
+  return workspaceTarget;
+}
+
 function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
@@ -374,6 +401,7 @@ function mapContainerPathToWorkspaceRoot(params: {
   }
 
   let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
+  candidate = resolveWorkspaceSkillAliasPath(candidate, params.root);
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
     if (localFilePath) {

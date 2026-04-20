@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -46,9 +47,50 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
   beforeAll(loadModule);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.assertSandboxPath.mockReset();
     mocks.assertSandboxPath.mockImplementation(assertSandboxPathImpl);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("rewrites stale /app skill paths to workspace skills when the alias target exists", async () => {
+    const { tool } = createToolHarness();
+    await fs.mkdir(path.join(root, "skills", "ops-workflow-governor"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "skills", "ops-workflow-governor", "SKILL.md"),
+      "# skill\n",
+      "utf8",
+    );
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-workspace-skill-alias", {
+      path: "/app/skills/ops-workflow-governor/SKILL.md",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.join(root, "skills", "ops-workflow-governor", "SKILL.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not rewrite stale /app skill paths when no workspace skill alias exists", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-missing-workspace-skill-alias", {
+      path: "/app/skills/ops-workflow-governor/SKILL.md",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "/app/skills/ops-workflow-governor/SKILL.md",
+      cwd: root,
+      root,
+    });
   });
 
   it("maps container workspace paths to host workspace root", async () => {
