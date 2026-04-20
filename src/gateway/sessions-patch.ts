@@ -788,7 +788,15 @@ export async function applySessionsPatchToStore(params: {
     } else {
       // Existing approve/reject/edit path.
       if (!next.planMode) {
-        return invalid("planApproval requires an active plan-mode session");
+        // Bug B (C1 follow-up): return a distinct code so the UI can
+        // auto-dismiss the stale approval card instead of leaving
+        // it in a "clicked but nothing happened" state. Triggers when
+        // the session has already exited plan mode by any route
+        // (/plan off, another channel approved, timeout, compaction).
+        return invalid(
+          "planApproval requires an active plan-mode session (the approval window may have expired or been resolved on another channel)",
+          ErrorCodes.PLAN_APPROVAL_EXPIRED,
+        );
       }
       // PR-11 review fix (Copilot #3104741699): require a pending
       // approval before allowing approve/edit/reject. Pre-fix the

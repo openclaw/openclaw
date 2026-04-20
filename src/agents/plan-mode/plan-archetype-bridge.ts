@@ -21,7 +21,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
  */
 import type { AgentApprovalPlanStep } from "../../infra/agent-events.js";
 import { renderFullPlanArchetypeMarkdown } from "../plan-render.js";
-import { persistPlanArchetypeMarkdown } from "./plan-archetype-persist.js";
+import { persistPlanArchetypeMarkdown, PlanPersistStorageError } from "./plan-archetype-persist.js";
 
 export interface DispatchPlanArchetypeAttachmentInput {
   sessionKey: string;
@@ -197,6 +197,21 @@ export async function dispatchPlanArchetypeAttachment(
       `plan-bridge: telegram attachment skipped (PR-14 awaiting re-wire to new plugin-sdk location); plan markdown persisted at ${absPath}`,
     );
   } catch (err) {
+    // R4 (C1 follow-up): recoverable storage errors are not bugs —
+    // they're operator-actionable conditions (full disk, bad
+    // permissions, hardware I/O). Emit a distinctive log line so
+    // operators can grep their gateway log for
+    // `[plan-bridge/storage]` without digging through
+    // unrelated plan-bridge failures. Plan approval still proceeds;
+    // only the durable audit artifact is lost for this cycle.
+    if (err instanceof PlanPersistStorageError) {
+      log?.warn?.(
+        `[plan-bridge/storage] markdown persist failed (${err.code}) — ` +
+          `plan approval proceeds but audit artifact was NOT written. ` +
+          `Operator action: check ~/.openclaw free space / permissions. Detail: ${err.message}`,
+      );
+      return;
+    }
     log?.warn?.(
       `plan-bridge attachment failed: ${err instanceof Error ? err.message : String(err)}`,
     );

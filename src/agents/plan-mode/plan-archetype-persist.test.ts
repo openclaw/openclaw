@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { persistPlanArchetypeMarkdown } from "./plan-archetype-persist.js";
+import { persistPlanArchetypeMarkdown, PlanPersistStorageError } from "./plan-archetype-persist.js";
 
 describe("persistPlanArchetypeMarkdown (PR-14)", () => {
   let tmpBase: string;
@@ -152,5 +152,98 @@ describe("persistPlanArchetypeMarkdown (PR-14)", () => {
     expect(result.absPath).toBe(
       path.join(tmpBase, "kimi-coder.v2_test", "plans", "plan-2026-04-18-plan.md"),
     );
+  });
+
+  // R4 (C1 follow-up): graceful handling of recoverable storage
+  // errors. Disk full / permission denied / I/O failure should
+  // throw the typed PlanPersistStorageError so the bridge can emit
+  // a distinctive operator-facing log line instead of burying the
+  // disk condition under a generic "persist failed". Uses the
+  // `_writeFileForTest` DI hook to inject the errno without touching
+  // the ESM fs namespace (which vitest cannot spy on).
+  describe("R4: recoverable storage errors (C1 follow-up)", () => {
+    const makeErrnoWriter = (sysCode: string) => {
+      return async () => {
+        const err = new Error(`simulated ${sysCode}`) as NodeJS.ErrnoException;
+        err.code = sysCode;
+        throw err;
+      };
+    };
+
+    for (const code of ["ENOSPC", "EACCES", "EIO"] as const) {
+      it(`${code} from writeFile is wrapped in PlanPersistStorageError`, async () => {
+        await expect(
+          persistPlanArchetypeMarkdown({
+            agentId: "main",
+            title: "Disk test",
+            markdown: "payload",
+            now: FIXED_DATE,
+            baseDir: tmpBase,
+            _writeFileForTest: makeErrnoWriter(code),
+          }),
+        ).rejects.toMatchObject({
+          name: "PlanPersistStorageError",
+          code,
+        });
+      });
+    }
+
+    it("PlanPersistStorageError is recognizable by the caller via instanceof", async () => {
+      let caught: unknown = null;
+      try {
+        await persistPlanArchetypeMarkdown({
+          agentId: "main",
+          title: "Disk test",
+          markdown: "payload",
+          now: FIXED_DATE,
+          baseDir: tmpBase,
+          _writeFileForTest: makeErrnoWriter("ENOSPC"),
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(PlanPersistStorageError);
+      expect((caught as PlanPersistStorageError).code).toBe("ENOSPC");
+    });
+
+    it("non-storage errors (e.g. simulated EROFS) propagate unchanged, NOT wrapped", async () => {
+      // EROFS = read-only filesystem — deliberately NOT in our
+      // classified set (it's usually a config/mount issue, not a
+      // transient storage condition), so the raw error should bubble
+      // up unchanged.
+      let caught: unknown = null;
+      try {
+        await persistPlanArchetypeMarkdown({
+          agentId: "main",
+          title: "Readonly test",
+          markdown: "payload",
+          now: FIXED_DATE,
+          baseDir: tmpBase,
+          _writeFileForTest: makeErrnoWriter("EROFS"),
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught).not.toBeInstanceOf(PlanPersistStorageError);
+      expect((caught as Error).message).toContain("simulated EROFS");
+    });
+
+    it("EEXIST collision path still loops and eventually reports the cap — storage classification does NOT hijack", async () => {
+      // Return EEXIST on every attempt to force the collision loop
+      // to exhaust. This pins that the EEXIST branch stays above the
+      // storage-error branch — a misordered catch could turn normal
+      // collision retries into a PlanPersistStorageError.
+      await expect(
+        persistPlanArchetypeMarkdown({
+          agentId: "main",
+          title: "Collision exhaustion",
+          markdown: "payload",
+          now: FIXED_DATE,
+          baseDir: tmpBase,
+          _writeFileForTest: makeErrnoWriter("EEXIST"),
+        }),
+      ).rejects.toThrow("collision-suffix cap reached");
+    });
   });
 });
