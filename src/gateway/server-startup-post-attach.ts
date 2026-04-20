@@ -11,7 +11,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
-import { logGatewayStartup } from "./server-startup-log.js";
+import type { logGatewayStartup } from "./server-startup-log.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
@@ -269,7 +269,7 @@ type Awaitable<T> = T | Promise<T>;
 
 type GatewayPostAttachRuntimeDeps = {
   getGlobalHookRunner: () => Awaitable<ReturnType<typeof getGlobalHookRunner>>;
-  logGatewayStartup: typeof logGatewayStartup;
+  logGatewayStartup: (params: Parameters<typeof logGatewayStartup>[0]) => Awaitable<void>;
   scheduleGatewayUpdateCheck: (
     ...args: Parameters<typeof scheduleGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
@@ -282,7 +282,8 @@ type GatewayPostAttachRuntimeDeps = {
 const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   getGlobalHookRunner: async () =>
     (await import("../plugins/hook-runner-global.js")).getGlobalHookRunner(),
-  logGatewayStartup,
+  logGatewayStartup: async (params) =>
+    (await import("./server-startup-log.js")).logGatewayStartup(params),
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
@@ -326,10 +327,12 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unavailableGatewayMethods: Set<string>;
+    onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
+    onSidecarsReady?: () => void;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
-  runtimeDeps.logGatewayStartup({
+  await runtimeDeps.logGatewayStartup({
     cfg: params.cfgAtStart,
     bindHost: params.bindHost,
     bindHosts: params.bindHosts,
@@ -359,19 +362,21 @@ export async function startGatewayPostAttachRuntime(
 
   const tailscaleCleanupPromise = params.minimalTestGateway
     ? Promise.resolve(null)
-    : Promise.resolve(
-        runtimeDeps.startGatewayTailscaleExposure({
-          tailscaleMode: params.tailscaleMode,
-          resetOnExit: params.resetOnExit,
-          port: params.port,
-          controlUiBasePath: params.controlUiBasePath,
-          logTailscale: params.logTailscale,
-        }),
-      );
+    : params.tailscaleMode === "off" && !params.resetOnExit
+      ? Promise.resolve(null)
+      : Promise.resolve(
+          runtimeDeps.startGatewayTailscaleExposure({
+            tailscaleMode: params.tailscaleMode,
+            resetOnExit: params.resetOnExit,
+            port: params.port,
+            controlUiBasePath: params.controlUiBasePath,
+            logTailscale: params.logTailscale,
+          }),
+        );
 
   const sidecarsPromise = params.minimalTestGateway
     ? Promise.resolve({ pluginServices: null })
-    : (async () => {
+    : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
         params.log.info("starting channels and sidecars...");
         const result = await runtimeDeps.startGatewaySidecars({
           cfg: params.gatewayPluginConfigAtStart,
@@ -386,25 +391,35 @@ export async function startGatewayPostAttachRuntime(
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
+        params.onPluginServices?.(result.pluginServices);
+        params.onSidecarsReady?.();
         return result;
-      })();
+      });
 
-  const [stopGatewayUpdateCheck, tailscaleCleanup, { pluginServices }] = await Promise.all([
+  void sidecarsPromise
+    .then(async () => {
+      if (params.minimalTestGateway) {
+        return;
+      }
+      const hookRunner = await runtimeDeps.getGlobalHookRunner();
+      if (hookRunner?.hasHooks("gateway_start")) {
+        void hookRunner
+          .runGatewayStart({ port: params.port }, { port: params.port })
+          .catch((err) => {
+            params.log.warn(`gateway_start hook failed: ${String(err)}`);
+          });
+      }
+    })
+    .catch((err) => {
+      params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
+    });
+
+  const [stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
     stopGatewayUpdateCheckPromise,
     tailscaleCleanupPromise,
-    sidecarsPromise,
   ]);
 
-  if (!params.minimalTestGateway) {
-    const hookRunner = await runtimeDeps.getGlobalHookRunner();
-    if (hookRunner?.hasHooks("gateway_start")) {
-      void hookRunner.runGatewayStart({ port: params.port }, { port: params.port }).catch((err) => {
-        params.log.warn(`gateway_start hook failed: ${String(err)}`);
-      });
-    }
-  }
-
-  return { stopGatewayUpdateCheck, tailscaleCleanup, pluginServices };
+  return { stopGatewayUpdateCheck, tailscaleCleanup, pluginServices: null };
 }
 
 export const __testing = {

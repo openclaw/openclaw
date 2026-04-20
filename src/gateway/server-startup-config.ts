@@ -209,12 +209,15 @@ export async function prepareGatewayStartupConfig(params: {
     auth: params.authOverride,
     tailscale: params.tailscaleOverride,
   });
-  const preflightConfig = (
-    await params.activateRuntimeSecrets(startupPreflightConfig, {
-      reason: "startup",
-      activate: false,
-    })
-  ).config;
+  const needsAuthSecretPreflight = hasActiveGatewayAuthSecretRef(startupPreflightConfig);
+  const preflightConfig = needsAuthSecretPreflight
+    ? (
+        await params.activateRuntimeSecrets(startupPreflightConfig, {
+          reason: "startup",
+          activate: false,
+        })
+      ).config
+    : startupPreflightConfig;
   const preflightAuthOverride =
     typeof preflightConfig.gateway?.auth?.token === "string" ||
     typeof preflightConfig.gateway?.auth?.password === "string"
@@ -251,6 +254,18 @@ export async function prepareGatewayStartupConfig(params: {
     ...authBootstrap,
     cfg: activatedConfig,
   };
+}
+
+function hasActiveGatewayAuthSecretRef(config: OpenClawConfig): boolean {
+  const states = evaluateGatewayAuthSurfaceStates({
+    config,
+    defaults: config.secrets?.defaults,
+    env: process.env,
+  });
+  return GATEWAY_AUTH_SURFACE_PATHS.some((path) => {
+    const state = states[path];
+    return state.hasSecretRef && state.active;
+  });
 }
 
 function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConfig {

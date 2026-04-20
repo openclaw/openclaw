@@ -35,6 +35,7 @@ function shouldIgnoreReadinessFailure(
 export function createReadinessChecker(deps: {
   channelManager: ChannelManager;
   startedAt: number;
+  getStartupPending?: () => boolean;
   cacheTtlMs?: number;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
@@ -51,6 +52,9 @@ export function createReadinessChecker(deps: {
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const failing: string[] = [];
+    if (deps.getStartupPending?.()) {
+      failing.push("startup-sidecars");
+    }
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
       if (!accounts) {

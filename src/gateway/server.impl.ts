@@ -455,6 +455,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
+  let startupSidecarsReady = minimalTestGateway;
   const channelManager = createChannelManager({
     loadConfig: () =>
       applyPluginAutoEnable({
@@ -468,6 +469,7 @@ export async function startGatewayServer(
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
+    getStartupPending: () => !startupSidecarsReady,
   });
   log.info("starting HTTP server...");
   const {
@@ -821,11 +823,17 @@ export async function startGatewayServer(
         logHooks,
         logChannels,
         unavailableGatewayMethods,
+        onPluginServices: (pluginServices) => {
+          runtimeState.pluginServices = pluginServices;
+        },
+        onSidecarsReady: () => {
+          startupSidecarsReady = true;
+        },
       }),
     ));
     startupTrace.mark("ready");
 
-    // Keep scheduled work inert until post-attach sidecars finish.
+    // HTTP is live before sidecars finish; /readyz stays red until the startup sidecars settle.
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,

@@ -130,12 +130,17 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const onSidecarsReady = vi.fn();
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
       unavailableGatewayMethods,
+      onSidecarsReady,
     });
 
+    await vi.waitFor(() => {
+      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+    });
     expect([...unavailableGatewayMethods]).toEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
@@ -155,7 +160,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
 
-    const startup = startGatewayPostAttachRuntime(
+    await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
@@ -174,8 +179,9 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
 
     resumeSidecars();
-    await startup;
-
+    await vi.waitFor(() => {
+      expect([...unavailableGatewayMethods]).toEqual([]);
+    });
     expect([...unavailableGatewayMethods]).toEqual([]);
     expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
   });
