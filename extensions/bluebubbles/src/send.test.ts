@@ -77,16 +77,29 @@ function installSsrFPolicyCapture(policies: unknown[]) {
 
 describe("send", () => {
   describe("resolveChatGuidForTarget", () => {
-    const resolveHandleTargetGuid = async (data: Array<Record<string, unknown>>) => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ data }),
-      });
+    const resolveHandleTargetGuid = async (
+      data: Array<Record<string, unknown>>,
+      service: "imessage" | "sms" | "auto" = "imessage",
+    ) => {
+      // First page returns the provided chats; second page is empty so the
+      // pagination loop exits cleanly. We can't break early on participant or
+      // non-preferred direct matches — a stronger preferred-service direct
+      // match could still appear on a later page — so we always need to mock
+      // at least one trailing empty page.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
 
       const target: BlueBubblesSendTarget = {
         kind: "handle",
         address: "+15551234567",
-        service: "imessage",
+        service,
       };
       return await resolveChatGuidForTarget({
         baseUrl: "http://localhost:1234",
@@ -218,6 +231,256 @@ describe("send", () => {
       ]);
 
       expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("prefers iMessage over SMS when both chats exist for the same handle", async () => {
+      // Both chats exist; we should never silently downgrade to SMS.
+      const result = await resolveHandleTargetGuid([
+        {
+          guid: "SMS;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+        {
+          guid: "iMessage;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+      ]);
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("prefers iMessage over SMS even when SMS appears first", async () => {
+      const result = await resolveHandleTargetGuid([
+        {
+          guid: "SMS;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+        {
+          guid: "iMessage;-;+15559999999",
+          participants: [{ address: "+15559999999" }],
+        },
+        {
+          guid: "iMessage;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+      ]);
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("falls back to SMS when no iMessage chat exists for the handle", async () => {
+      // First page: SMS-only DM. Second page: empty (stops pagination).
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "SMS;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("SMS;-;+15551234567");
+    });
+
+    it("respects explicit service: 'sms' and prefers SMS direct match over iMessage", async () => {
+      // Regression: when caller passes `sms:+15551234567` (target.service ===
+      // 'sms'), explicit SMS intent must beat the default iMessage preference.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+                {
+                  guid: "SMS;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "sms",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("SMS;-;+15551234567");
+    });
+
+    it("falls back to iMessage when service: 'sms' is requested but no SMS chat exists", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "sms",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("prefers a later-page direct iMessage match over an earlier participant iMessage match", async () => {
+      // Regression: a participant-based iMessage match must NOT short-circuit
+      // pagination and beat a direct `iMessage;-;<handle>` match on a later page.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;alt-handle",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("prefers a later-page iMessage participant match over an earlier unknown-service direct match", async () => {
+      // Regression: an unknown-service direct match on page 1 must NOT short-circuit
+      // pagination and beat a real iMessage participant match on page 2.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "WeirdService;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;alt-handle",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;alt-handle");
+    });
+
+    it("prefers iMessage over SMS via participant match", async () => {
+      const result = await resolveHandleTargetGuid([
+        {
+          guid: "SMS;-;alt-handle",
+          participants: [{ address: "+15551234567" }],
+        },
+        {
+          guid: "iMessage;-;alt-handle",
+          participants: [{ address: "+15551234567" }],
+        },
+      ]);
+
+      expect(result).toBe("iMessage;-;alt-handle");
     });
 
     it("returns null when handle only exists in group chat (not DM)", async () => {
