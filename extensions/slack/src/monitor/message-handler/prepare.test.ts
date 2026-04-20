@@ -8,6 +8,7 @@ import { expectChannelInboundContextContract as expectInboundContextContract } f
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
   createInboundSlackTestContext,
@@ -698,6 +699,91 @@ describe("prepareSlackMessage sender prefix", () => {
     const body = result?.ctxPayload.Body ?? "";
     expect(body).toContain("Alice (U1): <@BOT> hello");
     expect(result?.ctxPayload.RawBody).toBe("<@BOT> hello");
+  });
+
+  it("caps Slack mention username lookups per inbound message and leaves overflow mentions raw", async () => {
+    const mentionIds = Array.from(
+      { length: 22 },
+      (_, index) => `U${String(index + 1).padStart(2, "0")}`,
+    );
+    const resolveUserName = vi.fn(async (userId: string) => ({ name: `Name ${userId}` }));
+
+    const result = await resolveSlackMessageContent({
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        user: "U1",
+        text: mentionIds.map((userId) => `<@${userId}>`).join(" "),
+        ts: "1700000000.0003",
+        event_ts: "1700000000.0003",
+      } as SlackMessageEvent,
+      isThreadReply: false,
+      threadStarter: null,
+      isBotMessage: false,
+      botToken: "xoxb-test",
+      mediaMaxBytes: 1000,
+      resolveUserName,
+    });
+
+    expect(result?.rawBody).toContain("<@U01> (Name U01)");
+    expect(result?.rawBody).toContain("<@U20> (Name U20)");
+    expect(result?.rawBody).toContain("<@U21>");
+    expect(result?.rawBody).toContain("<@U22>");
+    expect(result?.rawBody).not.toContain("<@U21> (");
+    expect(result?.rawBody).not.toContain("<@U22> (");
+    expect(resolveUserName).toHaveBeenCalledTimes(20);
+    expect(resolveUserName.mock.calls.map(([userId]) => userId)).toEqual(mentionIds.slice(0, 20));
+  });
+
+  it("shares the per-message mention lookup budget across message text and attachment text", async () => {
+    const messageMentionIds = Array.from(
+      { length: 15 },
+      (_, index) => `U${String(index + 1).padStart(2, "0")}`,
+    );
+    const attachmentMentionIds = [
+      "U10",
+      ...Array.from({ length: 10 }, (_, index) => `U${String(index + 16).padStart(2, "0")}`),
+    ];
+    const resolveUserName = vi.fn(async (userId: string) => ({ name: `Name ${userId}` }));
+
+    const result = await resolveSlackMessageContent({
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        user: "U1",
+        text: messageMentionIds.map((userId) => `<@${userId}>`).join(" "),
+        attachments: [
+          {
+            is_share: true,
+            text: attachmentMentionIds.map((userId) => `<@${userId}>`).join(" "),
+          },
+        ],
+        ts: "1700000000.0004",
+        event_ts: "1700000000.0004",
+      } as SlackMessageEvent,
+      isThreadReply: false,
+      threadStarter: null,
+      isBotMessage: false,
+      botToken: "xoxb-test",
+      mediaMaxBytes: 1000,
+      resolveUserName,
+    });
+
+    expect(result?.rawBody).toContain("<@U10> (Name U10)");
+    expect(result?.rawBody).toContain("<@U20> (Name U20)");
+    expect(result?.rawBody).toContain("<@U21>");
+    expect(result?.rawBody).not.toContain("<@U21> (");
+    expect(resolveUserName).toHaveBeenCalledTimes(20);
+    expect(resolveUserName.mock.calls.map(([userId]) => userId)).toEqual([
+      ...messageMentionIds,
+      "U16",
+      "U17",
+      "U18",
+      "U19",
+      "U20",
+    ]);
   });
 
   it("detects /new as control command when prefixed with Slack mention", async () => {
