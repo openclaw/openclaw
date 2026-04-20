@@ -84,7 +84,6 @@ const BENIGN_MCP_LITERAL_VALUES = new Set([
 ]);
 
 const URL_LIKE_MCP_LITERAL = /^(?:https?|wss?):\/\/\S+$/i;
-const INTEGER_LIKE_MCP_LITERAL = /^[+-]?\d+$/;
 const MIME_LIKE_MCP_LITERAL = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:\s*;.*)?$/i;
 const SENSITIVE_MCP_VALUE_FRAGMENTS = [
   "api-key",
@@ -122,7 +121,6 @@ function isBenignMcpLiteralValue(value: unknown): boolean {
   return (
     BENIGN_MCP_LITERAL_VALUES.has(literal.normalized) ||
     (URL_LIKE_MCP_LITERAL.test(literal.trimmed) && !hasSensitiveMcpUrlValue(literal.trimmed)) ||
-    INTEGER_LIKE_MCP_LITERAL.test(literal.trimmed) ||
     MIME_LIKE_MCP_LITERAL.test(literal.trimmed)
   );
 }
