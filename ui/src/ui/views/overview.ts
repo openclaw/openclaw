@@ -111,9 +111,6 @@ export function renderOverview(props: OverviewProps) {
     }
     const copy = PAIRING_HINT_COPY[pairingState.kind];
     const title = copy.titleKey ? t(copy.titleKey) : t("overview.pairing.hint");
-    const approveCommand = pairingState.requestId
-      ? `openclaw devices approve ${pairingState.requestId}`
-      : "openclaw devices approve --latest";
     return html`
       <div class="muted" style="margin-top: 8px">
         ${title}
@@ -121,7 +118,10 @@ export function renderOverview(props: OverviewProps) {
           ? html`<div style="margin-top: 6px">${t(copy.summaryKey)}</div>`
           : nothing}
         <div style="margin-top: 6px">
-          <span class="mono">${approveCommand}</span><br />
+          ${pairingState.requestId
+            ? html`<span class="mono">openclaw devices approve ${pairingState.requestId}</span
+                ><br />`
+            : nothing}
           <span class="mono">openclaw devices list</span>
         </div>
         <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
