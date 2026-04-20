@@ -18,11 +18,15 @@ static gint stub_device_pair_prompter_init_calls = 0;
 static gint stub_onboarding_show_calls = 0;
 static gint stub_app_window_show_calls = 0;
 static gint stub_app_window_navigate_calls = 0;
+static gint stub_app_window_refresh_snapshot_calls = 0;
 static gint stub_product_state_set_seen_calls = 0;
+static gint stub_product_state_set_connection_mode_calls = 0;
+static gboolean stub_product_state_set_connection_mode_result = TRUE;
 static AppSection stub_last_navigate_section = SECTION_DASHBOARD;
 static guint stub_onboarding_seen_version = 0;
 static guint stub_last_persisted_onboarding_seen_version = 0;
 static AppState stub_current_state = STATE_NEEDS_SETUP;
+static ProductConnectionMode stub_connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
 static AppState stub_last_routing_state = STATE_ERROR;
 static gint stub_last_routing_seen_version = -1;
 static gint stub_last_routing_current_version = -1;
@@ -41,11 +45,15 @@ static void stub_reset(void) {
     stub_onboarding_show_calls = 0;
     stub_app_window_show_calls = 0;
     stub_app_window_navigate_calls = 0;
+    stub_app_window_refresh_snapshot_calls = 0;
     stub_product_state_set_seen_calls = 0;
+    stub_product_state_set_connection_mode_calls = 0;
+    stub_product_state_set_connection_mode_result = TRUE;
     stub_last_navigate_section = SECTION_DASHBOARD;
     stub_onboarding_seen_version = 0;
     stub_last_persisted_onboarding_seen_version = 0;
     stub_current_state = STATE_NEEDS_SETUP;
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
     stub_last_routing_state = STATE_ERROR;
     stub_last_routing_seen_version = -1;
     stub_last_routing_current_version = -1;
@@ -98,8 +106,31 @@ void app_window_navigate_to(AppSection section) {
     stub_last_navigate_section = section;
 }
 
+void app_window_refresh_snapshot(void) {
+    stub_app_window_refresh_snapshot_calls++;
+}
+
 void product_state_init(void) {
     stub_product_state_init_calls++;
+}
+
+ProductConnectionMode product_state_get_connection_mode(void) {
+    return stub_connection_mode;
+}
+
+ProductConnectionMode product_state_get_effective_connection_mode(void) {
+    return stub_connection_mode == PRODUCT_CONNECTION_MODE_REMOTE
+        ? PRODUCT_CONNECTION_MODE_REMOTE
+        : PRODUCT_CONNECTION_MODE_LOCAL;
+}
+
+gboolean product_state_set_connection_mode(ProductConnectionMode mode) {
+    stub_product_state_set_connection_mode_calls++;
+    if (!stub_product_state_set_connection_mode_result) {
+        return FALSE;
+    }
+    stub_connection_mode = mode;
+    return TRUE;
 }
 
 guint product_state_get_onboarding_seen_version(void) {
@@ -144,6 +175,7 @@ static void test_activate_boots_runtime_lanes_once(void) {
 static void test_reconcile_startup_presentation_shows_onboarding(void) {
     stub_reset();
     stub_current_state = STATE_NEEDS_ONBOARDING;
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
     stub_onboarding_seen_version = 0;
     stub_route = ONBOARDING_SHOW_FULL;
 
@@ -160,6 +192,7 @@ static void test_reconcile_startup_presentation_shows_onboarding(void) {
 static void test_reconcile_startup_presentation_skips_when_completed(void) {
     stub_reset();
     stub_current_state = STATE_RUNNING;
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
     stub_onboarding_seen_version = ONBOARDING_CURRENT_VERSION;
     stub_route = ONBOARDING_SKIP;
 
@@ -168,6 +201,23 @@ static void test_reconcile_startup_presentation_skips_when_completed(void) {
     g_assert_cmpint(stub_onboarding_show_calls, ==, 0);
     g_assert_cmpint(stub_last_routing_state, ==, STATE_RUNNING);
     g_assert_cmpint(stub_last_routing_seen_version, ==, ONBOARDING_CURRENT_VERSION);
+
+    stub_reset();
+}
+
+static void test_reconcile_startup_presentation_remote_incomplete_is_noop(void) {
+    stub_reset();
+    stub_current_state = STATE_NEEDS_ONBOARDING;
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_REMOTE;
+    stub_onboarding_seen_version = 0;
+    stub_route = ONBOARDING_SHOW_FULL;
+
+    product_coordinator_reconcile_startup_presentation();
+
+    g_assert_cmpint(stub_onboarding_show_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_show_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_navigate_calls, ==, 0);
+    g_assert_cmpint(stub_last_routing_state, ==, STATE_ERROR);
 
     stub_reset();
 }
@@ -197,11 +247,26 @@ static void test_request_show_section_routes_to_main_window(void) {
 
 static void test_request_rerun_onboarding_shows_onboarding(void) {
     stub_reset();
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
 
     product_coordinator_request_rerun_onboarding();
 
     g_assert_cmpint(stub_onboarding_show_calls, ==, 1);
     g_assert_cmpint(stub_app_window_show_calls, ==, 0);
+
+    stub_reset();
+}
+
+static void test_request_rerun_onboarding_remote_routes_to_general(void) {
+    stub_reset();
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_REMOTE;
+
+    product_coordinator_request_rerun_onboarding();
+
+    g_assert_cmpint(stub_onboarding_show_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_show_calls, ==, 1);
+    g_assert_cmpint(stub_app_window_navigate_calls, ==, 1);
+    g_assert_cmpint(stub_last_navigate_section, ==, SECTION_GENERAL);
 
     stub_reset();
 }
@@ -218,14 +283,68 @@ static void test_notify_onboarding_completed_persists_and_opens_main(void) {
     stub_reset();
 }
 
+static void test_request_set_connection_mode_remote_routes_to_general(void) {
+    stub_reset();
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
+
+    g_assert_true(product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_REMOTE));
+
+    g_assert_cmpint(stub_product_state_set_connection_mode_calls, ==, 1);
+    g_assert_cmpint(stub_connection_mode, ==, PRODUCT_CONNECTION_MODE_REMOTE);
+    g_assert_cmpint(stub_onboarding_show_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_show_calls, ==, 1);
+    g_assert_cmpint(stub_app_window_navigate_calls, ==, 1);
+    g_assert_cmpint(stub_last_navigate_section, ==, SECTION_GENERAL);
+    g_assert_cmpint(stub_app_window_refresh_snapshot_calls, ==, 0);
+
+    stub_reset();
+}
+
+static void test_request_set_connection_mode_local_incomplete_shows_onboarding(void) {
+    stub_reset();
+    stub_connection_mode = PRODUCT_CONNECTION_MODE_REMOTE;
+    stub_onboarding_seen_version = 0;
+
+    g_assert_true(product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_LOCAL));
+
+    g_assert_cmpint(stub_product_state_set_connection_mode_calls, ==, 1);
+    g_assert_cmpint(stub_connection_mode, ==, PRODUCT_CONNECTION_MODE_LOCAL);
+    g_assert_cmpint(stub_app_window_refresh_snapshot_calls, ==, 1);
+    g_assert_cmpint(stub_onboarding_show_calls, ==, 1);
+    g_assert_cmpint(stub_app_window_navigate_calls, ==, 0);
+
+    stub_reset();
+}
+
+static void test_request_set_connection_mode_failure_restores_noop(void) {
+    stub_reset();
+    stub_product_state_set_connection_mode_result = FALSE;
+
+    g_assert_false(product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_REMOTE));
+
+    g_assert_cmpint(stub_product_state_set_connection_mode_calls, ==, 1);
+    g_assert_cmpint(stub_connection_mode, ==, PRODUCT_CONNECTION_MODE_LOCAL);
+    g_assert_cmpint(stub_onboarding_show_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_show_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_navigate_calls, ==, 0);
+    g_assert_cmpint(stub_app_window_refresh_snapshot_calls, ==, 0);
+
+    stub_reset();
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     g_test_add_func("/product_coordinator/activate_boots_runtime_lanes_once", test_activate_boots_runtime_lanes_once);
     g_test_add_func("/product_coordinator/reconcile_startup_presentation_shows_onboarding", test_reconcile_startup_presentation_shows_onboarding);
     g_test_add_func("/product_coordinator/reconcile_startup_presentation_skips_when_completed", test_reconcile_startup_presentation_skips_when_completed);
+    g_test_add_func("/product_coordinator/reconcile_startup_presentation_remote_incomplete_is_noop", test_reconcile_startup_presentation_remote_incomplete_is_noop);
     g_test_add_func("/product_coordinator/request_show_main_presents_main_window", test_request_show_main_presents_main_window);
     g_test_add_func("/product_coordinator/request_show_section_routes_to_main_window", test_request_show_section_routes_to_main_window);
     g_test_add_func("/product_coordinator/request_rerun_onboarding_shows_onboarding", test_request_rerun_onboarding_shows_onboarding);
+    g_test_add_func("/product_coordinator/request_rerun_onboarding_remote_routes_to_general", test_request_rerun_onboarding_remote_routes_to_general);
     g_test_add_func("/product_coordinator/notify_onboarding_completed_persists_and_opens_main", test_notify_onboarding_completed_persists_and_opens_main);
+    g_test_add_func("/product_coordinator/request_set_connection_mode_remote_routes_to_general", test_request_set_connection_mode_remote_routes_to_general);
+    g_test_add_func("/product_coordinator/request_set_connection_mode_local_incomplete_shows_onboarding", test_request_set_connection_mode_local_incomplete_shows_onboarding);
+    g_test_add_func("/product_coordinator/request_set_connection_mode_failure_restores_noop", test_request_set_connection_mode_failure_restores_noop);
     return g_test_run();
 }

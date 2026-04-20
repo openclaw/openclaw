@@ -34,7 +34,19 @@ static void product_state_apply_defaults(ProductStateSnapshot *state) {
 }
 
 static ProductConnectionMode product_state_normalize_connection_mode(ProductConnectionMode mode) {
-    if (mode == PRODUCT_CONNECTION_MODE_LOCAL) return PRODUCT_CONNECTION_MODE_LOCAL;
+    switch (mode) {
+    case PRODUCT_CONNECTION_MODE_UNSPECIFIED:
+    case PRODUCT_CONNECTION_MODE_LOCAL:
+    case PRODUCT_CONNECTION_MODE_REMOTE:
+        return mode;
+    default:
+        return PRODUCT_CONNECTION_MODE_UNSPECIFIED;
+    }
+}
+
+static ProductConnectionMode product_state_effective_connection_mode(ProductConnectionMode mode) {
+    ProductConnectionMode normalized = product_state_normalize_connection_mode(mode);
+    if (normalized == PRODUCT_CONNECTION_MODE_REMOTE) return PRODUCT_CONNECTION_MODE_REMOTE;
     return PRODUCT_CONNECTION_MODE_LOCAL;
 }
 
@@ -44,12 +56,21 @@ static void product_state_normalize(ProductStateSnapshot *state) {
 }
 
 static const gchar* product_connection_mode_to_string(ProductConnectionMode mode) {
-    if (product_state_normalize_connection_mode(mode) == PRODUCT_CONNECTION_MODE_LOCAL) return "local";
-    return "local";
+    switch (product_state_normalize_connection_mode(mode)) {
+    case PRODUCT_CONNECTION_MODE_REMOTE:
+        return "remote";
+    case PRODUCT_CONNECTION_MODE_LOCAL:
+        return "local";
+    case PRODUCT_CONNECTION_MODE_UNSPECIFIED:
+    default:
+        return "unspecified";
+    }
 }
 
 static ProductConnectionMode product_connection_mode_from_string(const gchar *value) {
+    if (g_strcmp0(value, "unspecified") == 0) return PRODUCT_CONNECTION_MODE_UNSPECIFIED;
     if (g_strcmp0(value, "local") == 0) return PRODUCT_CONNECTION_MODE_LOCAL;
+    if (g_strcmp0(value, "remote") == 0) return PRODUCT_CONNECTION_MODE_REMOTE;
     return PRODUCT_CONNECTION_MODE_UNSPECIFIED;
 }
 
@@ -132,11 +153,11 @@ static gboolean product_state_load_from_disk(ProductStateSnapshot *state,
                                                                      PRODUCT_STATE_KEY_CONNECTION_MODE,
                                                                      NULL);
                 ProductConnectionMode parsed_mode = product_connection_mode_from_string(mode_value);
-                if (parsed_mode == PRODUCT_CONNECTION_MODE_UNSPECIFIED) {
+                if (g_strcmp0(mode_value, "unspecified") != 0 &&
+                    parsed_mode == PRODUCT_CONNECTION_MODE_UNSPECIFIED) {
                     needs_flush = TRUE;
-                } else {
-                    state->connection_mode = parsed_mode;
                 }
+                state->connection_mode = parsed_mode;
             } else {
                 needs_flush = TRUE;
             }
@@ -202,6 +223,11 @@ void product_state_get_snapshot(ProductStateSnapshot *out) {
 ProductConnectionMode product_state_get_connection_mode(void) {
     product_state_ensure_initialized();
     return g_store.snapshot.connection_mode;
+}
+
+ProductConnectionMode product_state_get_effective_connection_mode(void) {
+    product_state_ensure_initialized();
+    return product_state_effective_connection_mode(g_store.snapshot.connection_mode);
 }
 
 gboolean product_state_set_connection_mode(ProductConnectionMode mode) {

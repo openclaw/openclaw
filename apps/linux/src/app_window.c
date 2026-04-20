@@ -44,6 +44,7 @@
 #include "ui_model_utils.h"
 #include "runtime_paths.h"
 #include "log.h"
+#include "product_state.h"
 #include "product_coordinator.h"
 
 /* ── Section metadata ── */
@@ -878,6 +879,10 @@ static void refresh_dashboard_content(void) {
 static GtkWidget *gen_status_label = NULL;
 static GtkWidget *gen_runtime_label = NULL;
 static GtkWidget *gen_service_notice_label = NULL;
+static GtkWidget *gen_connection_mode_dropdown = NULL;
+static GtkStringList *gen_connection_mode_dropdown_model = NULL;
+static GtkWidget *gen_connection_mode_detail_label = NULL;
+static gboolean gen_connection_mode_programmatic_change = FALSE;
 
 /* General widget refs — gateway info */
 static GtkWidget *gen_endpoint_label = NULL;
@@ -922,6 +927,65 @@ static void on_gen_quit(GtkButton *b, gpointer d) {
     (void)b; (void)d;
     GApplication *app = g_application_get_default();
     if (app) g_application_quit(app);
+}
+
+static guint gen_connection_mode_selection_for_mode(ProductConnectionMode mode) {
+    return mode == PRODUCT_CONNECTION_MODE_REMOTE ? 1u : 0u;
+}
+
+static ProductConnectionMode gen_connection_mode_for_selection(guint selected) {
+    return selected == 1u ? PRODUCT_CONNECTION_MODE_REMOTE : PRODUCT_CONNECTION_MODE_LOCAL;
+}
+
+static const gchar* gen_connection_mode_detail_text(ProductConnectionMode stored_mode,
+                                                    ProductConnectionMode effective_mode) {
+    if (effective_mode == PRODUCT_CONNECTION_MODE_REMOTE) {
+        return "Remote mode is saved, but Linux remote connection flow is not implemented yet. Open General for guidance or switch back to Local to use onboarding on this machine.";
+    }
+
+    if (stored_mode == PRODUCT_CONNECTION_MODE_UNSPECIFIED) {
+        return "Local is currently the effective default on Linux. Choose a mode here to save it explicitly.";
+    }
+
+    return "Use this Linux machine's local gateway and onboarding flow.";
+}
+
+static void refresh_general_connection_mode_controls(void) {
+    ProductConnectionMode stored_mode = product_state_get_connection_mode();
+    ProductConnectionMode effective_mode = product_state_get_effective_connection_mode();
+    guint selected = gen_connection_mode_selection_for_mode(effective_mode);
+
+    if (gen_connection_mode_dropdown && GTK_IS_DROP_DOWN(gen_connection_mode_dropdown)) {
+        gen_connection_mode_programmatic_change = TRUE;
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(gen_connection_mode_dropdown), selected);
+        gen_connection_mode_programmatic_change = FALSE;
+    }
+
+    if (gen_connection_mode_detail_label) {
+        gtk_label_set_text(GTK_LABEL(gen_connection_mode_detail_label),
+                           gen_connection_mode_detail_text(stored_mode, effective_mode));
+    }
+}
+
+static void on_gen_connection_mode_selected_notify(GObject *object,
+                                                   GParamSpec *pspec,
+                                                   gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+
+    if (gen_connection_mode_programmatic_change || !GTK_IS_DROP_DOWN(object)) {
+        return;
+    }
+
+    guint selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(object));
+    if (selected == GTK_INVALID_LIST_POSITION) {
+        refresh_general_connection_mode_controls();
+        return;
+    }
+
+    if (!product_coordinator_request_set_connection_mode(gen_connection_mode_for_selection(selected))) {
+        refresh_general_connection_mode_controls();
+    }
 }
 
 static void general_resolve_effective_paths(RuntimeEffectivePaths *out) {
@@ -1015,6 +1079,47 @@ static GtkWidget* build_general_section(void) {
     gtk_label_set_wrap(GTK_LABEL(gen_service_notice_label), TRUE);
     gtk_widget_set_visible(gen_service_notice_label, FALSE);
     gtk_box_append(GTK_BOX(page), gen_service_notice_label);
+
+    GtkWidget *connection_heading = gtk_label_new("Connection");
+    gtk_widget_add_css_class(connection_heading, "heading");
+    gtk_label_set_xalign(GTK_LABEL(connection_heading), 0.0);
+    gtk_widget_set_margin_top(connection_heading, 12);
+    gtk_box_append(GTK_BOX(page), connection_heading);
+
+    GtkWidget *connection_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(connection_row, 4);
+
+    GtkWidget *connection_mode_label = gtk_label_new("Connection Mode");
+    gtk_widget_add_css_class(connection_mode_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(connection_mode_label), 0.0);
+    gtk_widget_set_size_request(connection_mode_label, 120, -1);
+    gtk_box_append(GTK_BOX(connection_row), connection_mode_label);
+
+    gen_connection_mode_dropdown = gtk_drop_down_new(NULL, NULL);
+    gtk_widget_set_hexpand(gen_connection_mode_dropdown, TRUE);
+    gtk_box_append(GTK_BOX(connection_row), gen_connection_mode_dropdown);
+    gtk_box_append(GTK_BOX(page), connection_row);
+
+    GtkStringList *connection_mode_model = gtk_string_list_new(NULL);
+    gtk_string_list_append(connection_mode_model, "Local (this machine)");
+    gtk_string_list_append(connection_mode_model, "Remote (coming soon)");
+    ui_dropdown_replace_model(gen_connection_mode_dropdown,
+                              (gpointer *)&gen_connection_mode_dropdown_model,
+                              G_LIST_MODEL(connection_mode_model),
+                              0,
+                              TRUE);
+    g_signal_connect(gen_connection_mode_dropdown,
+                     "notify::selected",
+                     G_CALLBACK(on_gen_connection_mode_selected_notify),
+                     NULL);
+
+    gen_connection_mode_detail_label = gtk_label_new("");
+    gtk_widget_add_css_class(gen_connection_mode_detail_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(gen_connection_mode_detail_label), 0.0);
+    gtk_label_set_wrap(GTK_LABEL(gen_connection_mode_detail_label), TRUE);
+    gtk_widget_set_margin_top(gen_connection_mode_detail_label, 2);
+    gtk_box_append(GTK_BOX(page), gen_connection_mode_detail_label);
+    refresh_general_connection_mode_controls();
 
     /* ── Product actions ── */
     GtkWidget *sep1 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
@@ -1208,6 +1313,8 @@ static void refresh_general_content(void) {
 
     runtime_path_status_clear(&general_paths);
     runtime_effective_paths_clear(&effective_paths);
+
+    refresh_general_connection_mode_controls();
 
     /* Button sensitivity */
     gtk_widget_set_sensitive(gen_btn_start, dm.can_start);
@@ -2609,6 +2716,10 @@ static void on_window_destroy(GtkWindow *window, gpointer user_data) {
     gen_status_label = NULL;
     gen_runtime_label = NULL;
     gen_service_notice_label = NULL;
+    ui_dropdown_detach_model(gen_connection_mode_dropdown, (gpointer *)&gen_connection_mode_dropdown_model);
+    gen_connection_mode_dropdown = NULL;
+    gen_connection_mode_detail_label = NULL;
+    gen_connection_mode_programmatic_change = FALSE;
     gen_endpoint_label = NULL;
     gen_version_label = NULL;
     gen_auth_mode_label = NULL;
