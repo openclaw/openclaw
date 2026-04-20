@@ -1,3 +1,5 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
 
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
@@ -7,7 +9,110 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+function listTestFiles(rootDir) {
+  if (!existsSync(rootDir)) {
+    return [];
+  }
+
+  const files = [];
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".test.ts")) {
+        files.push(path.replaceAll("\\", "/"));
+      }
+    }
+  };
+
+  visit(rootDir);
+  return files.toSorted((a, b) => a.localeCompare(b));
+}
+
+function createAutoReplyReplySplitShards() {
+  const files = listTestFiles("src/auto-reply/reply");
+  const groups = {
+    "auto-reply-reply-agent-runner": [],
+    "auto-reply-reply-commands": [],
+    "auto-reply-reply-dispatch": [],
+    "auto-reply-reply-state-routing": [],
+  };
+
+  for (const file of files) {
+    const name = relative("src/auto-reply/reply", file).replaceAll("\\", "/");
+    if (
+      name.startsWith("agent-runner") ||
+      name.startsWith("acp-") ||
+      name === "abort.test.ts" ||
+      name === "bash-command.stop.test.ts" ||
+      name.startsWith("block-")
+    ) {
+      groups["auto-reply-reply-agent-runner"].push(file);
+    } else if (name.startsWith("commands")) {
+      groups["auto-reply-reply-commands"].push(file);
+    } else if (
+      name.startsWith("directive-") ||
+      name.startsWith("dispatch") ||
+      name.startsWith("followup-") ||
+      name.startsWith("get-reply")
+    ) {
+      groups["auto-reply-reply-dispatch"].push(file);
+    } else {
+      groups["auto-reply-reply-state-routing"].push(file);
+    }
+  }
+
+  return Object.entries(groups).map(([shardName, includePatterns]) => ({
+    shardName,
+    configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+    includePatterns,
+    requiresDist: false,
+  }));
+}
+
 const SPLIT_NODE_SHARDS = new Map([
+  [
+    "core-runtime",
+    [
+      {
+        shardName: "core-runtime-infra",
+        configs: [
+          "test/vitest/vitest.infra.config.ts",
+          "test/vitest/vitest.hooks.config.ts",
+          "test/vitest/vitest.runtime-config.config.ts",
+          "test/vitest/vitest.secrets.config.ts",
+          "test/vitest/vitest.logging.config.ts",
+          "test/vitest/vitest.process.config.ts",
+        ],
+        requiresDist: true,
+      },
+      {
+        shardName: "core-runtime-media-ui",
+        configs: [
+          "test/vitest/vitest.media.config.ts",
+          "test/vitest/vitest.media-understanding.config.ts",
+          "test/vitest/vitest.tui.config.ts",
+          "test/vitest/vitest.ui.config.ts",
+          "test/vitest/vitest.wizard.config.ts",
+        ],
+        requiresDist: true,
+      },
+      {
+        shardName: "core-runtime-shared",
+        configs: [
+          "test/vitest/vitest.acp.config.ts",
+          "test/vitest/vitest.cron.config.ts",
+          "test/vitest/vitest.shared-core.config.ts",
+          "test/vitest/vitest.tasks.config.ts",
+          "test/vitest/vitest.utils.config.ts",
+        ],
+        requiresDist: true,
+      },
+    ],
+  ],
   [
     "auto-reply",
     [
@@ -21,11 +126,7 @@ const SPLIT_NODE_SHARDS = new Map([
         configs: ["test/vitest/vitest.auto-reply-top-level.config.ts"],
         requiresDist: false,
       },
-      {
-        shardName: "auto-reply-reply",
-        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-        requiresDist: false,
-      },
+      ...createAutoReplyReplySplitShards(),
     ],
   ],
   [
@@ -97,6 +198,7 @@ export function createNodeTestShards() {
             checkName: formatNodeTestShardCheckName(splitShard.shardName),
             shardName: splitShard.shardName,
             configs: splitConfigs,
+            ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
             requiresDist: splitShard.requiresDist,
           },
         ];
