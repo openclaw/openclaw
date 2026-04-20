@@ -7,6 +7,10 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import {
+  checkAcceptEditsConstraint,
+  extractApplyPatchTargetPaths,
+} from "./plan-mode/accept-edits-gate.js";
 import { checkMutationGate, type PlanMode } from "./plan-mode/index.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -28,6 +32,37 @@ export type HookContext = {
    * session store on every tool call.
    */
   planMode?: PlanMode;
+  /**
+   * Bug 3+4 fix: live-read accessor for the session's current planMode.
+   * Returns the LATEST mode from the in-memory SessionEntry on every
+   * call (O(1) map lookup, no disk I/O), bypassing the stale
+   * `planMode` snapshot captured at run-start. Used by the mutation
+   * gate below to handle mid-turn approval transitions where the
+   * cached `planMode` is stale (sessions.patch flipped mode → "normal"
+   * but the runtime still has "plan" cached for the rest of the
+   * current run).
+   *
+   * Returning `undefined` is fine — caller falls back to the cached
+   * `planMode` snapshot. Optional so test contexts and unit fixtures
+   * don't have to provide it.
+   */
+  getLatestPlanMode?: () => PlanMode | undefined;
+  /**
+   * Live-read accessor for the session's `postApprovalPermissions.
+   * acceptEdits` flag. Returns `true` only when the user explicitly
+   * approved the plan with the "Accept, allow edits" button; `false`
+   * otherwise (including disk-read failures — fail-closed on the
+   * permission read, fail-open on the subsequent gate).
+   *
+   * When `true`, the acceptEdits constraint gate
+   * (src/agents/plan-mode/accept-edits-gate.ts) runs in normal-mode
+   * tool calls and blocks the three hard-constraint categories
+   * (destructive, self-restart, config-change).
+   *
+   * Optional so test contexts and unit fixtures don't have to
+   * provide it. When absent, the acceptEdits gate is not invoked.
+   */
+  getLatestAcceptEdits?: () => boolean;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -199,7 +234,34 @@ export async function runBeforeToolCallHook(args: {
   // detection should still trip on stuck patterns even in plan mode)
   // and BEFORE the plugin hookRunner (so plugins can't bypass the gate
   // by handling the call earlier in the pipeline).
-  if (args.ctx?.planMode === "plan") {
+  //
+  // Bug 3+4 + iter-2 Bug A fix: read the LATEST known planMode for
+  // every tool call. `getLatestPlanMode` (wired in
+  // agent-runner-execution.ts) is the live lookup for the latest
+  // mode for this session; `undefined` means there is no live value
+  // available to this call path. When the callback is wired and
+  // returns a value, USE IT — do NOT fall back to the stale cached
+  // snapshot captured at run start. The fallback to
+  // `args.ctx.planMode` is reserved for environments without the
+  // callback (test contexts) or when no live data is available.
+  //
+  // Copilot review #68939 (2026-04-19): the comment used to assert
+  // a "TRUE fresh disk read" — that's the implementation detail of
+  // the current backing store. Restated in terms of CONTRACT
+  // (returns latest known mode; `undefined` means "no live data")
+  // so future re-implementations of the callback (e.g., in-memory
+  // event-driven cache) don't invalidate the doc.
+  //
+  // Iter-2 Bug A root cause was the previous `??` fallback chain:
+  // `getLatestPlanMode() ?? planMode`. A semantic "no live data"
+  // result was treated the same as a concrete mode, so when approval
+  // deleted planMode on disk and the helper returned undefined, the
+  // stale "plan" snapshot kept blocking post-approval mutation
+  // calls. Now the helper returns "normal" on deletion AND the
+  // fallback is an explicit "no live data" branch.
+  const liveMode = args.ctx?.getLatestPlanMode?.();
+  const latestPlanMode = liveMode !== undefined ? liveMode : args.ctx?.planMode;
+  if (latestPlanMode === "plan") {
     let execCommand: string | undefined;
     if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {
       const cmd = params.command;
@@ -207,11 +269,60 @@ export async function runBeforeToolCallHook(args: {
         execCommand = cmd;
       }
     }
-    const gateResult = checkMutationGate(toolName, args.ctx.planMode, execCommand);
+    const gateResult = checkMutationGate(toolName, latestPlanMode, execCommand);
     if (gateResult.blocked) {
       return {
         blocked: true,
         reason: gateResult.reason ?? `Tool "${toolName}" is blocked while plan mode is active.`,
+      };
+    }
+  } else if (latestPlanMode === "normal" && args.ctx?.getLatestAcceptEdits?.()) {
+    // Post-approval acceptEdits gate. Only runs when:
+    //   (a) mode is "normal" (plan already approved + closed), AND
+    //   (b) the user granted acceptEdits via "Accept, allow edits".
+    // Blocks the three hard constraints (destructive / self-restart /
+    // config-change) that override acceptEdits regardless of agent
+    // confidence. Fail-open otherwise — general mutations stay
+    // unblocked in post-approval execution.
+    let execCommand: string | undefined;
+    let filePath: string | undefined;
+    if ((toolName === "exec" || toolName === "bash") && isPlainObject(params)) {
+      const cmd = params.command;
+      if (typeof cmd === "string") {
+        execCommand = cmd;
+      }
+    }
+    if (isPlainObject(params)) {
+      const candidate = params.path ?? params.filePath ?? params.file_path;
+      if (typeof candidate === "string") {
+        filePath = candidate;
+      }
+    }
+    // Codex P2 review #68939 (post-nuclear-fix-stack): for
+    // `apply_patch`, the target paths live in `params.input` (a
+    // patch text with `*** Update File: <path>` / `*** Add File:
+    // <path>` / `*** Delete File: <path>` headers). Extract them
+    // and feed into the gate's `additionalPaths` so the
+    // protected-config-path block fires for patches that touch
+    // ~/.openclaw/* etc.
+    let additionalPaths: string[] | undefined;
+    if (toolName === "apply_patch" && isPlainObject(params)) {
+      const extracted = extractApplyPatchTargetPaths(params.input);
+      if (extracted.length > 0) {
+        additionalPaths = extracted;
+      }
+    }
+    const acceptEditsResult = checkAcceptEditsConstraint({
+      toolName,
+      execCommand,
+      filePath,
+      ...(additionalPaths ? { additionalPaths } : {}),
+    });
+    if (acceptEditsResult.blocked) {
+      return {
+        blocked: true,
+        reason:
+          acceptEditsResult.reason ?? `Tool "${toolName}" is blocked under acceptEdits permission.`,
       };
     }
   }

@@ -220,6 +220,14 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        /**
+         * PR-9 Tier 1: outer-loop turn budget for the embedded Pi runner.
+         * When set, fully replaces the default (which scales with auth-profile
+         * count and is now floored at 500). Use this to give long research /
+         * build runs more headroom. Range [1, 100_000]. Subagents keep a
+         * separate lower cap and ignore this setting.
+         */
+        maxIterations: z.number().int().min(1).max(100_000).optional(),
       })
       .strict()
       .optional(),
@@ -228,6 +236,21 @@ export const AgentDefaultsSchema = z
       .object({
         /** Master switch. Registers enter_plan_mode/exit_plan_mode tools and arms the runtime mutation gate. Default: false. */
         enabled: z.boolean().optional(),
+        /**
+         * Optional model-id regex patterns. When a session's model matches AND the user hasn't toggled plan mode, the
+         * runtime auto-enters plan mode at session start. Default: empty (no auto-enable).
+         */
+        autoEnableFor: z.array(z.string()).optional(),
+        /**
+         * Live-test iter-2 Bug D: opt-in plan-mode debug log toggle.
+         * When true, enables `[plan-mode/<kind>]` lifecycle lines in
+         * gateway.err.log at every state transition / gate decision /
+         * tool call / synthetic injection / approval event. Off by
+         * default. Equivalent to `OPENCLAW_DEBUG_PLAN_MODE=1` env var
+         * but persistent in config so it survives gateway restarts
+         * and works around macOS launchd env-propagation quirks.
+         */
+        debug: z.boolean().optional(),
       })
       .strict()
       .optional(),

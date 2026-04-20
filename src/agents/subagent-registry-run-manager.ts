@@ -1,14 +1,17 @@
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  drainCompletedSubagentFromParents,
+  replaceOpenSubagentRunIdInParents,
+} from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -16,10 +19,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import {
-  emitSubagentEndedHookOnce,
-  shouldUpdateRunOutcome,
-} from "./subagent-registry-completion.js";
+import { emitSubagentEndedHookOnce, runOutcomesEqual } from "./subagent-registry-completion.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -131,17 +131,13 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       const waitError = typeof wait.error === "string" ? wait.error : undefined;
-      const baseOutcome: SubagentRunOutcome =
+      const outcome: SubagentRunOutcome =
         wait.status === "error"
           ? { status: "error", error: waitError }
           : wait.status === "timeout"
             ? { status: "timeout" }
             : { status: "ok" };
-      const outcome = withSubagentOutcomeTiming(baseOutcome, {
-        startedAt: entry.startedAt,
-        endedAt: entry.endedAt,
-      });
-      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+      if (!runOutcomesEqual(entry.outcome, outcome)) {
         entry.outcome = outcome;
         mutated = true;
       }
@@ -158,6 +154,13 @@ export function createSubagentRunManager(params: {
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
       });
+      // PR-8 follow-up: drain this child from any parent's
+      // `openSubagentRunIds` so `exit_plan_mode` no longer blocks on it.
+      // Pass `requesterSessionKey` as fallback so the persist layer
+      // can scrub `blockingSubagentRunIds` even when the parent ctx was
+      // already evicted (the auto-approve flow makes this the common
+      // case — see drainCompletedSubagentFromParents docstring).
+      drainCompletedSubagentFromParents(runId, entry?.requesterSessionKey);
     } catch {
       // ignore
     }
@@ -227,6 +230,7 @@ export function createSubagentRunManager(params: {
       if (shouldDeleteAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
       }
+      replaceOpenSubagentRunIdInParents(previousRunId, nextRunId);
       params.runs.delete(previousRunId);
       params.resumedRuns.delete(previousRunId);
     }
@@ -425,17 +429,16 @@ export function createSubagentRunManager(params: {
         continue;
       }
       entry.endedAt = now;
-      entry.outcome = withSubagentOutcomeTiming(
-        { status: "error", error: reason },
-        {
-          startedAt: entry.startedAt,
-          endedAt: now,
-        },
-      );
+      entry.outcome = { status: "error", error: reason };
       entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
       entry.cleanupHandled = true;
       entry.cleanupCompletedAt = now;
       entry.suppressAnnounceReason = "killed";
+      // PR-8 follow-up: drain killed runs from parents' open-sets too,
+      // otherwise a killed child would block exit_plan_mode indefinitely.
+      // Pass `requesterSessionKey` as fallback so the persist layer can
+      // scrub `blockingSubagentRunIds` when the parent ctx is gone.
+      drainCompletedSubagentFromParents(runId, entry.requesterSessionKey);
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
         entriesByChildSessionKey.set(entry.childSessionKey, entry);
       }

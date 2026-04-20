@@ -254,6 +254,36 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
     },
+    enter_plan_mode: {
+      emoji: "🧭",
+      title: "Enter Plan Mode",
+      detailKeys: ["reason"],
+    },
+    exit_plan_mode: {
+      emoji: "✅",
+      title: "Exit Plan Mode",
+      detailKeys: ["title", "summary", "plan.0.step"],
+    },
+    // iter-3 D6: read-only introspection tool. Display-config required
+    // by `tool-display:check`; the tool ignores args entirely so the
+    // detail-keys list is empty (the runtime renders just the title).
+    plan_mode_status: {
+      emoji: "🔍",
+      title: "Plan Mode Status",
+      detailKeys: [],
+    },
+    // Copilot review #68939 (2026-04-19): the prior detailKeys
+    // (`question.prompt` / `question.options.0.label`) didn't match
+    // the actual tool result shape — `ask-user-question-tool.ts:113`
+    // returns a FLAT details record (`{ question: string, options:
+    // string[], allowFreetext, ... }`), not a nested
+    // `question.prompt` object. The nested keys resolved to undefined
+    // and the display rendered empty. Realign to the flat shape.
+    ask_user_question: {
+      emoji: "❓",
+      title: "Ask User",
+      detailKeys: ["question", "options.0"],
+    },
     gateway: {
       emoji: "🔌",
       title: "Gateway",

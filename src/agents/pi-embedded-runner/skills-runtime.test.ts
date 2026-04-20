@@ -137,11 +137,16 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
   });
 
-  it("skips skill entry loading when resolved snapshot skills are present", () => {
+  it("skips skill entry loading when resolved snapshot has both resolvedSkills + resolvedPlanTemplates", () => {
+    // PR-E review fix (Codex P2 #3096508609): the old-snapshot fallback
+    // requires `resolvedPlanTemplates` to be present (even as []) so the
+    // seeder knows to trust the snapshot's "no templates" signal. Test
+    // updated to include the field so reload is skipped.
     const snapshot: SkillSnapshot = {
       prompt: "skills prompt",
       skills: [{ name: "diffs" }],
       resolvedSkills: [],
+      resolvedPlanTemplates: [],
     };
 
     const result = resolveEmbeddedRunSkillEntries({
@@ -155,5 +160,28 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       skillEntries: [],
     });
     expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+  });
+
+  it("forces reload when snapshot is from older session (resolvedPlanTemplates undefined)", () => {
+    // PR-E review fix (Codex P2 #3096508609): a snapshot from a session
+    // that predates the `resolvedPlanTemplates` field has it as
+    // undefined. Without the fallback, plan-template seeding would
+    // silently no-op. The fallback forces a fresh entry load so the
+    // seeder can find templates from the workspace files directly.
+    const snapshot: SkillSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "diffs" }],
+      resolvedSkills: [],
+      // resolvedPlanTemplates intentionally undefined (old snapshot)
+    };
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      skillsSnapshot: snapshot,
+    });
+
+    expect(result.shouldLoadSkillEntries).toBe(true);
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledOnce();
   });
 });

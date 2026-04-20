@@ -1459,7 +1459,27 @@ describe("runReplyAgent Active Memory inline debug", () => {
       typingMode: "instant",
     });
 
-    expect(loadSessionStoreSpy).not.toHaveBeenCalledWith(storePath, { skipCache: true });
+    // Pre-existing test repair (caught during PR #68939 wave-6
+    // consolidation): the prior assertion `not.toHaveBeenCalledWith
+    // (storePath, { skipCache: true })` was a stale check from
+    // before the iter-2 plan-mode mutation-gate freshness contract
+    // landed. The runtime now ALWAYS calls
+    // `resolveLatestPlanModeFromDisk` (and the persister) which
+    // both use `loadSessionStore(storePath, { skipCache: true })`
+    // for the deletion-as-normal contract. Those calls fire
+    // regardless of verbose level — the original "reload-when-
+    // verbose" gate this test was written for is a different code
+    // path.
+    //
+    // Copilot review #68939 (round-1): assert the documented
+    // skip-cache load actually happens so this test keeps
+    // meaningful regression coverage instead of just
+    // `toBeDefined()` (which is effectively a no-op). If the
+    // freshness path stops invoking `loadSessionStore(storePath,
+    // { skipCache: true })`, this assertion catches it.
+    expect(loadSessionStoreSpy).toHaveBeenCalledWith(storePath, {
+      skipCache: true,
+    });
     expect(result).toMatchObject({ text: "Normal reply" });
   });
 });

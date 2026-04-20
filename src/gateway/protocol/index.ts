@@ -44,8 +44,6 @@ import {
   AgentsListResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
-  type ChannelsStartParams,
-  ChannelsStartParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
   type TalkConfigParams,
@@ -139,6 +137,7 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type ErrorCode,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -433,8 +432,6 @@ export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakRes
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
-export const validateChannelsStartParams =
-  ajv.compile<ChannelsStartParams>(ChannelsStartParamsSchema);
 export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
@@ -620,7 +617,6 @@ export {
   TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
-  ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
@@ -678,6 +674,10 @@ export {
   ErrorCodes,
   errorShape,
 };
+// Live-test iteration 1 Bug 3: re-export the closed `ErrorCode` union
+// type so server-method modules can construct typed error responses
+// (e.g. `invalid(message, ErrorCodes.PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS, details)`).
+export type { ErrorCode } from "./schema/error-codes.js";
 
 export type {
   GatewayFrame,
@@ -725,7 +725,6 @@ export type {
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
-  ChannelsStartParams,
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,

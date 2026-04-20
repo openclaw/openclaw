@@ -72,7 +72,6 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionPreviewItemsFromTranscript,
-  resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -214,6 +213,28 @@ function emitSessionsChanged(
             runtimeMs: sessionRow.runtimeMs,
             compactionCheckpointCount: sessionRow.compactionCheckpointCount,
             latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+            // PR-8 / #67721: surface mode-state to the UI so the chat
+            // chip renders the current selection rather than always
+            // defaulting to Ask.
+            // Copilot review #68939 (2026-04-19): include `execHost` so
+            // the mode-chip preset stays in sync with the full
+            // permission tuple (security + ask + host) on every
+            // sessions.changed broadcast — pre-fix the chip could
+            // render a stale execHost after a /security host:gateway
+            // toggle landed via sessions.patch.
+            execSecurity: sessionRow.execSecurity,
+            execAsk: sessionRow.execAsk,
+            execHost: sessionRow.execHost,
+            planMode: sessionRow.planMode,
+            pendingInteraction: sessionRow.pendingInteraction,
+            // Codex P2 review #68939 (2026-04-19): mirror the
+            // `pendingQuestionApprovalId` carry-forward so the
+            // webchat /plan answer path sees fresh question
+            // approvalId after the persister writes it. Without
+            // this, the UI's cached `sessionsResult.sessions[..]`
+            // wouldn't refresh and `/plan answer` would submit
+            // without (or with stale) approvalId.
+            pendingQuestionApprovalId: sessionRow.pendingQuestionApprovalId,
           }
         : {}),
     },
@@ -462,20 +483,7 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { cfg, entry, canonicalKey, storePath } = loadSessionEntry(key);
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
-  if (deletedAgentId !== null) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Agent "${deletedAgentId}" no longer exists in configuration`,
-      ),
-    );
-    return;
-  }
+  const { entry, canonicalKey, storePath } = loadSessionEntry(key);
   if (!entry?.sessionId) {
     params.respond(
       false,

@@ -1,0 +1,404 @@
+/**
+ * Live-test iteration 1 Bug 3: approval-side subagent gate.
+ *
+ * The tool-side gate at `src/agents/tools/exit-plan-mode-tool.ts:230`
+ * blocks the plan submission when subagents are open at submission
+ * time. But that check fires ONCE — if a NEW subagent is spawned
+ * during the user's approval window (between the approval card showing
+ * and the user clicking Approve), the original gate is irrelevant and
+ * the approval would proceed against in-flight subagents.
+ *
+ * This suite validates the second-line defense: `sessions.patch
+ * { planApproval: { action: "approve" | "edit" } }` rejects when the
+ * parent run's `openSubagentRunIds` is non-empty, with the error code
+ * `PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS` so the UI can route the error
+ * to a bottom-of-chat fallback toast (see `chat.ts` toast region).
+ *
+ * `reject` is intentionally NOT gated — the user can always reject a
+ * plan regardless of subagent state.
+ */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-events.js";
+import { ErrorCodes } from "./protocol/index.js";
+import { applySessionsPatchToStore } from "./sessions-patch.js";
+
+const PLAN_MODE_CFG = {
+  agents: { defaults: { planMode: { enabled: true } } },
+} as unknown as OpenClawConfig;
+const SESSION_KEY = "agent:main:main";
+const APPROVAL_RUN_ID = "test-run-approval-gate";
+
+function makePendingPlanModeStore(overrides?: Partial<SessionEntry>): Record<string, SessionEntry> {
+  return {
+    [SESSION_KEY]: {
+      sessionId: "session-1",
+      updatedAt: 1_000,
+      pendingInteraction: {
+        kind: "plan",
+        approvalId: "plan-approval-1",
+        title: "Test plan",
+        createdAt: 1_000,
+        status: "pending",
+        cycleId: "cycle-1",
+      },
+      ...overrides,
+      planMode: {
+        mode: "plan",
+        approval: "pending",
+        cycleId: "cycle-1",
+        rejectionCount: 0,
+        approvalId: "plan-approval-1",
+        approvalRunId: APPROVAL_RUN_ID,
+        title: "Test plan",
+        blockingSubagentRunIds: [],
+        ...overrides?.planMode,
+      },
+    },
+  };
+}
+
+describe("sessions.patch planApproval — subagent gate (Bug 3)", () => {
+  beforeEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+  afterEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+
+  it("approve with no open subagents → succeeds", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, { openSubagentRunIds: new Set() });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store: makePendingPlanModeStore(),
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("approve with 1+ open subagents → throws PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      openSubagentRunIds: new Set(["child-run-abc"]),
+    });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store: makePendingPlanModeStore(),
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS);
+    expect(result.error.message).toContain("child-run-abc");
+    expect((result.error.details as { openSubagentRunIds?: string[] }).openSubagentRunIds).toEqual([
+      "child-run-abc",
+    ]);
+  });
+
+  it("edit action with open subagents → also throws (same gate as approve)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      openSubagentRunIds: new Set(["child-run-1", "child-run-2"]),
+    });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store: makePendingPlanModeStore(),
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "edit", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS);
+  });
+
+  it("reject action with open subagents → DOES NOT throw (user can always reject)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      openSubagentRunIds: new Set(["child-run-stuck"]),
+    });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store: makePendingPlanModeStore(),
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: {
+          action: "reject",
+          approvalId: "plan-approval-1",
+          feedback: "not what I wanted",
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("approval gate still allows legacy sessions without approvalRunId", async () => {
+    const store = makePendingPlanModeStore();
+    delete (store[SESSION_KEY].planMode as { approvalRunId?: string }).approvalRunId;
+    delete (store[SESSION_KEY].planMode as { cycleId?: string }).cycleId;
+    delete (store[SESSION_KEY].planMode as { blockingSubagentRunIds?: string[] })
+      .blockingSubagentRunIds;
+    delete (store[SESSION_KEY] as { pendingInteraction?: SessionEntry["pendingInteraction"] })
+      .pendingInteraction;
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("approval gate fails closed when modern session loses both ctx and persisted gate state", async () => {
+    const store = makePendingPlanModeStore();
+    delete (store[SESSION_KEY].planMode as { blockingSubagentRunIds?: string[] })
+      .blockingSubagentRunIds;
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_GATE_STATE_UNAVAILABLE);
+  });
+
+  it("approval gate uses persisted blocking subagents when ctx is missing", async () => {
+    const store = makePendingPlanModeStore({
+      planMode: {
+        blockingSubagentRunIds: ["child-run-persisted"],
+      } as SessionEntry["planMode"],
+    });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_BLOCKED_BY_SUBAGENTS);
+  });
+
+  it("error message lists up to 5 subagents + 'and N more' suffix", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      openSubagentRunIds: new Set(["r1", "r2", "r3", "r4", "r5", "r6", "r7"]),
+    });
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store: makePendingPlanModeStore(),
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.message).toMatch(/r1.*r2.*r3.*r4.*r5/);
+    expect(result.error.message).toContain("and 2 more");
+  });
+});
+
+describe("sessions.patch planApproval — subagent grace window (wave-3)", () => {
+  beforeEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+  afterEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+
+  it("approve rejected with PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE when settled < 10s ago", async () => {
+    // Register a parent context with a fresh settle timestamp (within
+    // the 10-second grace window). This mimics a subagent that just
+    // drained but whose announce-turn may still be mid-flight.
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 2_000, // 2s ago, well within grace
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE);
+    expect(result.error.message).toContain("Subagent recently settled");
+  });
+
+  it("approve succeeds when settled > 10s ago (grace window expired)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 11_000, // 11s ago, outside grace
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("approve succeeds when lastSubagentSettledAt is undefined (no subagents ever spawned)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      // no lastSubagentSettledAt
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "approve", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("reject is NOT gated by the grace window (user can always reject)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 1_000,
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: {
+          action: "reject",
+          feedback: "trying again",
+          approvalId: "plan-approval-1",
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("edit also gated by the grace window (same posture as approve)", async () => {
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(),
+      lastSubagentSettledAt: Date.now() - 3_000,
+    });
+    const store = makePendingPlanModeStore();
+    const result = await applySessionsPatchToStore({
+      cfg: PLAN_MODE_CFG,
+      store,
+      storeKey: SESSION_KEY,
+      patch: {
+        key: SESSION_KEY,
+        planApproval: { action: "edit", approvalId: "plan-approval-1" },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe(ErrorCodes.PLAN_APPROVAL_WAITING_FOR_SUBAGENT_SETTLE);
+  });
+});
+
+describe("drainCompletedSubagentFromParents — lastSubagentSettledAt stamp (wave-3)", () => {
+  beforeEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+  afterEach(() => {
+    clearAgentRunContext(APPROVAL_RUN_ID);
+  });
+
+  it("stamps lastSubagentSettledAt when the last subagent drains", async () => {
+    const { drainCompletedSubagentFromParents } = await import("../infra/agent-events.js");
+    const runIds = new Set<string>();
+    runIds.add("child-1");
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: runIds,
+    });
+    const before = Date.now();
+    drainCompletedSubagentFromParents("child-1");
+    const after = Date.now();
+    const { getAgentRunContext } = await import("../infra/agent-events.js");
+    const ctx = getAgentRunContext(APPROVAL_RUN_ID);
+    expect(ctx?.lastSubagentSettledAt).toBeDefined();
+    expect(ctx?.lastSubagentSettledAt).toBeGreaterThanOrEqual(before);
+    expect(ctx?.lastSubagentSettledAt).toBeLessThanOrEqual(after);
+    expect(ctx?.openSubagentRunIds?.size).toBe(0);
+  });
+
+  it("does NOT stamp when drained runId wasn't in the set", async () => {
+    const { drainCompletedSubagentFromParents, getAgentRunContext } =
+      await import("../infra/agent-events.js");
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(["child-other"]),
+    });
+    drainCompletedSubagentFromParents("child-different");
+    const ctx = getAgentRunContext(APPROVAL_RUN_ID);
+    expect(ctx?.lastSubagentSettledAt).toBeUndefined();
+    expect(ctx?.openSubagentRunIds?.size).toBe(1);
+  });
+
+  it("does NOT stamp when set still non-empty after drain", async () => {
+    const { drainCompletedSubagentFromParents, getAgentRunContext } =
+      await import("../infra/agent-events.js");
+    registerAgentRunContext(APPROVAL_RUN_ID, {
+      sessionKey: SESSION_KEY,
+      openSubagentRunIds: new Set(["child-1", "child-2"]),
+    });
+    drainCompletedSubagentFromParents("child-1");
+    const ctx = getAgentRunContext(APPROVAL_RUN_ID);
+    expect(ctx?.lastSubagentSettledAt).toBeUndefined();
+    expect(ctx?.openSubagentRunIds?.size).toBe(1);
+  });
+});

@@ -3,22 +3,21 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentPlanEvent, getAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentAutoContinue,
   resolveAgentExecutionContract,
+  resolveAgentMaxIterations,
   resolveSessionAgentIds,
-  resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
@@ -91,6 +90,7 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
+  SUBAGENT_MAX_RUN_RETRY_ITERATIONS,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
@@ -100,6 +100,8 @@ import {
 import {
   AUTO_CONTINUE_FAST_PATH_INSTRUCTION,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_PLAN_APPROVED_YIELD_RETRY_LIMIT,
+  DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
   extractPlanningOnlyPlanDetails,
@@ -107,8 +109,10 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolvePlanModeAckOnlyRetryInstruction,
   resolveEscalatingPlanningRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveYieldDuringApprovedPlanInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -260,10 +264,6 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
-      const canonicalWorkspace = resolveUserPath(
-        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-      );
-      const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -461,7 +461,28 @@ export async function runEmbeddedPiAgent(
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      // PR-9 Tier 1: optional per-agent / per-defaults override for the
+      // outer-loop budget. Without it the new scaled formula (floor 500)
+      // applies — vastly higher than the old 32-160 cap that was
+      // cutting long research/build runs short.
+      //
+      // Subagents (lightContext) use a separate lower cap because they
+      // are typically narrow research tasks; if a subagent chews through
+      // 200 turns it's almost certainly stuck. Per-agent override can
+      // still raise both — but defaults to the subagent floor when
+      // lightweight bootstrap is in use and no explicit override is set.
+      const isLightweightSubagent = params.bootstrapContextMode === "lightweight";
+      const userMaxIterationsOverride = resolveAgentMaxIterations(
+        params.config,
+        sessionAgentId ?? params.agentId,
+      );
+      const effectiveMaxOverride =
+        userMaxIterationsOverride ??
+        (isLightweightSubagent ? SUBAGENT_MAX_RUN_RETRY_ITERATIONS : undefined);
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
+        profileCandidates.length,
+        effectiveMaxOverride,
+      );
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
@@ -473,6 +494,19 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      // PR-8 follow-up: counter for plan-mode-acknowledge-only retry
+      // (separate from planningOnlyRetryAttempts because the planning-
+      // only detector short-circuits in plan mode at incomplete-turn.ts:568,
+      // while this detector specifically handles the plan-mode case where
+      // the agent acknowledged but didn't call exit_plan_mode).
+      let planModeAckOnlyRetryAttempts = 0;
+      const maxPlanModeAckOnlyRetryAttempts = DEFAULT_PLAN_MODE_ACK_ONLY_RETRY_LIMIT;
+      // PR-8 follow-up Round 2: counter for yield-after-plan-approval
+      // detector — catches the case where the agent gets approval then
+      // yields to wait for subagent results instead of continuing
+      // execution.
+      let planApprovedYieldRetryAttempts = 0;
+      const maxPlanApprovedYieldRetryAttempts = DEFAULT_PLAN_APPROVED_YIELD_RETRY_LIMIT;
       let autoContinueCycles = 0;
       let autoContinueAccumulatedMutation = false;
       // Codex P2 (PR #67538 r3096325365): use the session-resolved agent id
@@ -719,9 +753,7 @@ export async function runEmbeddedPiAgent(
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
-            isCanonicalWorkspace,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
@@ -1789,6 +1821,112 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
+          // PR-8 follow-up: plan-mode-acknowledge-only detector. Sister
+          // to the planning-only retry above (which short-circuits in
+          // plan mode at incomplete-turn.ts:568). Triggers when the
+          // session is in plan mode and the agent's response had no
+          // exit_plan_mode call AND no investigative tool call AND
+          // clean stop. Reuses the planningOnlyRetryInstruction
+          // injection slot (already wired into prompt-additions, also
+          // reused by auto-continue at line ~1850 — established pattern).
+          // Bug 4 + iter-2 Bug A fix: read the LATEST planMode from
+          // the in-memory SessionEntry on every ACK-retry decision.
+          // The cached `params.planMode` is stale after the user
+          // approves the plan (mode flips to "normal", or planMode
+          // is DELETED entirely, while the runtime still has "plan"
+          // cached for the rest of the current run). ACK retry
+          // should fire ONLY when the agent is genuinely still
+          // planning, NOT when it's executing post-approval — otherwise
+          // we pressure the agent to call exit_plan_mode again on
+          // every status update during execution.
+          //
+          // Iter-2 Bug A: the previous `??` chain false-positived when
+          // planMode was deleted on disk (helper returned undefined,
+          // fallback was the stale "plan" snapshot). Now the helper
+          // returns "normal" on deletion AND we explicitly prefer
+          // its return value over the cached snapshot whenever the
+          // helper provided one.
+          const ackRetryAckCtx = getAgentRunContext(params.runId);
+          const liveAckMode = ackRetryAckCtx?.getLatestPlanMode?.();
+          const ackRetryLatestPlanMode =
+            liveAckMode !== undefined
+              ? liveAckMode
+              : params.planMode === "plan"
+                ? "plan"
+                : "normal";
+          const planModeAckOnlyInstruction = resolvePlanModeAckOnlyRetryInstruction({
+            planModeActive: ackRetryLatestPlanMode === "plan",
+            // Post-approval grace: the ack-only failure (text without
+            // tool) is a real stall in the first few minutes after
+            // approval while the agent orients to unlocked mutation
+            // tools. sessions-patch clears planMode on approve/edit so
+            // `planModeActive` goes false; `recentlyApprovedAt`
+            // survives the deletion at SessionEntry root, letting this
+            // detector fire during the grace window.
+            ...(typeof ackRetryAckCtx?.recentlyApprovedAt === "number"
+              ? { recentlyApprovedAt: ackRetryAckCtx.recentlyApprovedAt }
+              : {}),
+            aborted,
+            timedOut,
+            attempt,
+            retryAttemptIndex: planModeAckOnlyRetryAttempts,
+          });
+          if (
+            planModeAckOnlyInstruction &&
+            planModeAckOnlyRetryAttempts < maxPlanModeAckOnlyRetryAttempts
+          ) {
+            planModeAckOnlyRetryAttempts += 1;
+            planningOnlyRetryInstruction = planModeAckOnlyInstruction;
+            log.warn(
+              `plan-mode ack-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying ` +
+                `${planModeAckOnlyRetryAttempts}/${maxPlanModeAckOnlyRetryAttempts} ` +
+                `with exit_plan_mode steer`,
+            );
+            continue;
+          }
+
+          // PR-8 follow-up Round 2: yield-after-plan-approval detector —
+          // fires when the agent yielded the turn right after getting
+          // plan approval without taking any main-lane action.
+          // Eva's post-mortem: "I went into orchestration/wait mode for
+          // subagents instead of continuing execution." Reuses the
+          // planningOnlyRetryInstruction slot like ack-only does.
+          //
+          // `planApproval` is mirrored onto AgentRunContext at context-
+          // registration time (agent-runner-execution.ts) rather than
+          // threaded as a separate param.
+          const yieldCtx = getAgentRunContext(params.runId);
+          const planApprovedYieldInstruction = resolveYieldDuringApprovedPlanInstruction({
+            planModeActive: params.planMode === "plan",
+            planApproval: yieldCtx?.planApproval,
+            // PR-11 review fix (Codex P2 #3105311664): forward the
+            // post-transition `recentlyApprovedAt` timestamp so the
+            // detector can fire within the grace window even after
+            // sessions.patch has cleared planMode on approve/edit.
+            ...(yieldCtx?.recentlyApprovedAt !== undefined
+              ? { recentlyApprovedAt: yieldCtx.recentlyApprovedAt }
+              : {}),
+            aborted,
+            timedOut,
+            attempt,
+            retryAttemptIndex: planApprovedYieldRetryAttempts,
+          });
+          if (
+            planApprovedYieldInstruction &&
+            planApprovedYieldRetryAttempts < maxPlanApprovedYieldRetryAttempts
+          ) {
+            planApprovedYieldRetryAttempts += 1;
+            planningOnlyRetryInstruction = planApprovedYieldInstruction;
+            log.warn(
+              `plan-approved yield detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying ` +
+                `${planApprovedYieldRetryAttempts}/${maxPlanApprovedYieldRetryAttempts} ` +
+                `with continue-execution steer`,
+            );
+            continue;
+          }
+
           if (
             !nextPlanningOnlyRetryInstruction &&
             nextReasoningOnlyRetryInstruction &&
@@ -1869,7 +2007,7 @@ export async function runEmbeddedPiAgent(
                   ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
                   data: planEventData,
                 });
-                void params.onAgentEvent?.({
+                params.onAgentEvent?.({
                   stream: "plan",
                   data: planEventData,
                 });

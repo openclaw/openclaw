@@ -480,6 +480,41 @@ CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
+
+RECIPE — RESUME AFTER WAIT (PR-9 Wave B2):
+Use this when your work has a hard wait period (VM boot, build, external
+service propagation) and you want to come back later instead of polling
+or staying idle. The wake-up turn fires inside YOUR CURRENT session, so
+your live plan state, transcript, and persisted SessionEntry.planMode
+(including lastPlanSteps) are automatically available to the resumed
+turn. There is no manual "context handoff" — the session IS the handoff.
+
+  cron {
+    "action": "add",
+    "job": {
+      "name": "resume-vm-boot-check",
+      "schedule": { "kind": "at", "at": "<ISO time +10min from now>" },
+      "sessionTarget": "current",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "Resuming plan: VM provisioning step. Run an ssh connect-timeout probe against the host; if it succeeds mark plan step 4 complete and continue. If still booting, schedule another resume in 10 min."
+      },
+      "deleteAfterRun": true
+    }
+  }
+
+Notes:
+- "deleteAfterRun: true" is the default for "kind: at" schedules (one-shots).
+- The wake-up message should briefly state WHICH plan step is being
+  resumed and the verification command — the resumed turn won't have
+  short-term memory of why it's running.
+- If the wait is uncertain (e.g., "boot done in 5-15 min"), schedule
+  the first wake at the optimistic end and have the resumed turn
+  schedule another if needed. Don't over-schedule — that just creates
+  noise.
+- DO NOT use sessionTarget="current" for periodic polling — that
+  burns prompt-cache invalidation. Use sessionTarget="isolated" for
+  pure observation, then enqueue a systemEvent if action is needed.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 WAKE MODES (for wake action):
