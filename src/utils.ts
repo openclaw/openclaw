@@ -210,8 +210,8 @@ export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
-export function uniqueBy<T, K>(arr: T[], keyFn: (item: T) => K): T[] {
-  const seen = new Set<K>();
+export function uniqueBy<T>(arr: T[], keyFn: (item: T) => unknown): T[] {
+  const seen = new Set<unknown>();
   const result: T[] = [];
   for (const item of arr) {
     const key = keyFn(item);
@@ -249,7 +249,10 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function formatNumber(num: number, options?: { thousandsSeparator?: string; decimalSeparator?: string }): string {
+export function formatNumber(
+  num: number,
+  options?: { thousandsSeparator?: string; decimalSeparator?: string },
+): string {
   const { thousandsSeparator = ",", decimalSeparator = "." } = options ?? {};
   const [integerPart, fractionalPart] = num.toFixed(2).split(".");
   const formattedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, thousandsSeparator);
@@ -259,7 +262,9 @@ export function formatNumber(num: number, options?: { thousandsSeparator?: strin
 }
 
 export function capitalize(str: string): string {
-  if (!str) return str;
+  if (!str) {
+    return str;
+  }
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
@@ -281,7 +286,7 @@ export function waitFor(
 ): Promise<void> {
   const { timeoutMs = 10000, intervalMs = 100 } = options ?? {};
   const startTime = Date.now();
-  
+
   return new Promise((resolve, reject) => {
     const check = async () => {
       const result = await condition();
@@ -290,10 +295,10 @@ export function waitFor(
       } else if (Date.now() - startTime > timeoutMs) {
         reject(new Error("Timeout waiting for condition"));
       } else {
-        setTimeout(check, intervalMs);
+        setTimeout(() => void check(), intervalMs);
       }
     };
-    check();
+    void check();
   });
 }
 
@@ -312,7 +317,7 @@ export function memoize<T, R>(fn: (arg: T) => R): (arg: T) => R {
 export function debounce<T extends (...args: unknown[]) => unknown>(
   fn: T,
   waitMs: number,
-): ((...args: Parameters<T>) => void) {
+): (...args: Parameters<T>) => void {
   let timeoutId: NodeJS.Timeout | null = null;
   return (...args: Parameters<T>) => {
     if (timeoutId !== null) {

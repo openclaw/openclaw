@@ -53,24 +53,24 @@ OpenClaw 有三个协同工作的层：
 
 这些工具随 OpenClaw 一起提供，无需安装任何插件即可使用：
 
-| 工具                                       | 功能                                                              | 页面                                        |
-| ------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------- |
-| `exec` / `process`                         | 运行 shell 命令，管理后台进程                                     | [Exec](/tools/exec)                         |
-| `code_execution`                           | 运行沙盒化的远程 Python 分析                                      | [代码执行](/tools/code-execution)           |
-| `browser`                                  | 控制 Chromium 浏览器（导航、点击、截图）                           | [浏览器](/tools/browser)                    |
-| `web_search` / `x_search` / `web_fetch`    | 搜索网络，搜索 X 帖子，获取页面内容                               | [Web](/tools/web)                           |
-| `read` / `write` / `edit`                  | 工作区中的文件 I/O                                                |                                             |
-| `apply_patch`                              | 多块文件补丁                                                     | [应用补丁](/tools/apply-patch)              |
-| `message`                                  | 跨所有频道发送消息                                               | [代理发送](/tools/agent-send)               |
-| `canvas`                                   | 驱动节点画布（显示、评估、快照）                                  |                                             |
-| `nodes`                                    | 发现并定位配对设备                                               |                                             |
-| `cron` / `gateway`                         | 管理计划任务；检查、修补、重启或更新网关                         |                                             |
-| `image` / `image_generate`                 | 分析或生成图像                                                   | [图像生成](/tools/image-generation)         |
-| `music_generate`                           | 生成音乐曲目                                                     | [音乐生成](/tools/music-generation)         |
-| `video_generate`                           | 生成视频                                                         | [视频生成](/tools/video-generation)         |
-| `tts`                                      | 一次性文本到语音转换                                             | [TTS](/tools/tts)                           |
-| `sessions_*` / `subagents` / `agents_list` | 会话管理、状态和子代理编排                                       | [子代理](/tools/subagents)                  |
-| `session_status`                           | 轻量级 `/status` 风格的回读和会话模型覆盖                         | [会话工具](/concepts/session-tool)          |
+| 工具                                       | 功能                                      | 页面                                |
+| ------------------------------------------ | ----------------------------------------- | ----------------------------------- |
+| `exec` / `process`                         | 运行 shell 命令，管理后台进程             | [Exec](/tools/exec)                 |
+| `code_execution`                           | 运行沙盒化的远程 Python 分析              | [代码执行](/tools/code-execution)   |
+| `browser`                                  | 控制 Chromium 浏览器（导航、点击、截图）  | [浏览器](/tools/browser)            |
+| `web_search` / `x_search` / `web_fetch`    | 搜索网络，搜索 X 帖子，获取页面内容       | [Web](/tools/web)                   |
+| `read` / `write` / `edit`                  | 工作区中的文件 I/O                        |                                     |
+| `apply_patch`                              | 多块文件补丁                              | [应用补丁](/tools/apply-patch)      |
+| `message`                                  | 跨所有频道发送消息                        | [代理发送](/tools/agent-send)       |
+| `canvas`                                   | 驱动节点画布（显示、评估、快照）          |                                     |
+| `nodes`                                    | 发现并定位配对设备                        |                                     |
+| `cron` / `gateway`                         | 管理计划任务；检查、修补、重启或更新网关  |                                     |
+| `image` / `image_generate`                 | 分析或生成图像                            | [图像生成](/tools/image-generation) |
+| `music_generate`                           | 生成音乐曲目                              | [音乐生成](/tools/music-generation) |
+| `video_generate`                           | 生成视频                                  | [视频生成](/tools/video-generation) |
+| `tts`                                      | 一次性文本到语音转换                      | [TTS](/tools/tts)                   |
+| `sessions_*` / `subagents` / `agents_list` | 会话管理、状态和子代理编排                | [子代理](/tools/subagents)          |
+| `session_status`                           | 轻量级 `/status` 风格的回读和会话模型覆盖 | [会话工具](/concepts/session-tool)  |
 
 对于图像工作，使用 `image` 进行分析，使用 `image_generate` 进行生成或编辑。如果您目标是 `openai/*`、`google/*`、`fal/*` 或其他非默认图像提供商，请先配置该提供商的认证/API 密钥。
 
@@ -128,31 +128,31 @@ OpenClaw 有三个协同工作的层：
 `tools.profile` 在应用 `allow`/`deny` 之前设置基础允许列表。
 按代理覆盖：`agents.list[].tools.profile`。
 
-| 配置文件    | 包含内容                                                                                                                                  |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | 无限制（与未设置相同）                                                                                                                    |
+| 配置文件    | 包含内容                                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `full`      | 无限制（与未设置相同）                                                                                                                            |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                     |
-| `minimal`   | 仅 `session_status`                                                                                                                         |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
+| `minimal`   | 仅 `session_status`                                                                                                                               |
 
 ### 工具组
 
 在允许/拒绝列表中使用 `group:*` 简写：
 
-| 组              | 工具                                                                                                     |
-| ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `group:runtime`  | exec, process, code_execution（`bash` 被接受为 `exec` 的别名）                                            |
-| `group:fs`       | read, write, edit, apply_patch                                                                            |
-| `group:sessions` | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
-| `group:memory`   | memory_search, memory_get                                                                                 |
-| `group:web`      | web_search, x_search, web_fetch                                                                           |
-| `group:ui`       | browser, canvas                                                                                           |
+| 组                 | 工具                                                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | exec, process, code_execution（`bash` 被接受为 `exec` 的别名）                                            |
+| `group:fs`         | read, write, edit, apply_patch                                                                            |
+| `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
+| `group:memory`     | memory_search, memory_get                                                                                 |
+| `group:web`        | web_search, x_search, web_fetch                                                                           |
+| `group:ui`         | browser, canvas                                                                                           |
 | `group:automation` | cron, gateway                                                                                             |
-| `group:messaging` | message                                                                                                   |
-| `group:nodes`    | nodes                                                                                                     |
-| `group:agents`   | agents_list                                                                                               |
-| `group:media`    | image, image_generate, music_generate, video_generate, tts                                                |
-| `group:openclaw` | 所有内置 OpenClaw 工具（不包括插件工具）                                                               |
+| `group:messaging`  | message                                                                                                   |
+| `group:nodes`      | nodes                                                                                                     |
+| `group:agents`     | agents_list                                                                                               |
+| `group:media`      | image, image_generate, music_generate, video_generate, tts                                                |
+| `group:openclaw`   | 所有内置 OpenClaw 工具（不包括插件工具）                                                                  |
 
 `sessions_history` 返回一个有界的、经过安全过滤的回忆视图。它从助手文本中剥离
 思考标签、`<relevant-memories>` 脚手架、纯文本工具调用 XML

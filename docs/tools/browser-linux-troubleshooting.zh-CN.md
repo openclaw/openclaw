@@ -112,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### 配置参考
 
-| 选项                    | 描述                                                          | 默认值                                                     |
-| ----------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `browser.enabled`       | 启用浏览器控制                                               | `true`                                                      |
-| `browser.executablePath`| 基于 Chromium 的浏览器二进制文件路径（Chrome/Brave/Edge/Chromium） | 自动检测（当基于 Chromium 时优先选择默认浏览器） |
-| `browser.headless`      | 无 GUI 运行                                                      | `false`                                                     |
-| `browser.noSandbox`     | 添加 `--no-sandbox` 标志（某些 Linux 设置需要）               | `false`                                                     |
-| `browser.attachOnly`    | 不启动浏览器，仅附加到现有浏览器                        | `false`                                                     |
-| `browser.cdpPort`       | Chrome DevTools Protocol 端口                                        | `18800`                                                     |
+| 选项                     | 描述                                                               | 默认值                                           |
+| ------------------------ | ------------------------------------------------------------------ | ------------------------------------------------ |
+| `browser.enabled`        | 启用浏览器控制                                                     | `true`                                           |
+| `browser.executablePath` | 基于 Chromium 的浏览器二进制文件路径（Chrome/Brave/Edge/Chromium） | 自动检测（当基于 Chromium 时优先选择默认浏览器） |
+| `browser.headless`       | 无 GUI 运行                                                        | `false`                                          |
+| `browser.noSandbox`      | 添加 `--no-sandbox` 标志（某些 Linux 设置需要）                    | `false`                                          |
+| `browser.attachOnly`     | 不启动浏览器，仅附加到现有浏览器                                   | `false`                                          |
+| `browser.cdpPort`        | Chrome DevTools Protocol 端口                                      | `18800`                                          |
 
 ### 问题："No Chrome tabs found for profile=\"user\""
 

@@ -73,15 +73,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## 配置参考
 
-| 键          | 类型     | 默认值                                     | 描述                         |
-| ------------ | -------- | ------------------------------------------- | ----------------------------------- |
+| 键           | 类型     | 默认值                                      | 描述                        |
+| ------------ | -------- | ------------------------------------------- | --------------------------- |
 | `privateKey` | string   | required                                    | `nsec` 或十六进制格式的私钥 |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | 中继 URL（WebSocket）              |
-| `dmPolicy`   | string   | `pairing`                                   | DM 访问策略                    |
-| `allowFrom`  | string[] | `[]`                                        | 允许的发送者公钥              |
-| `enabled`    | boolean  | `true`                                      | 启用/禁用频道              |
-| `name`       | string   | -                                           | 显示名称                        |
-| `profile`    | object   | -                                           | NIP-01 配置文件元数据             |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | 中继 URL（WebSocket）       |
+| `dmPolicy`   | string   | `pairing`                                   | DM 访问策略                 |
+| `allowFrom`  | string[] | `[]`                                        | 允许的发送者公钥            |
+| `enabled`    | boolean  | `true`                                      | 启用/禁用频道               |
+| `name`       | string   | -                                           | 显示名称                    |
+| `profile`    | object   | -                                           | NIP-01 配置文件元数据       |
 
 ## 配置文件元数据
 
@@ -174,12 +174,12 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## 协议支持
 
-| NIP    | 状态    | 描述                           |
-| ------ | --------- | ------------------------------------- |
+| NIP    | 状态 | 描述                          |
+| ------ | ---- | ----------------------------- |
 | NIP-01 | 支持 | 基本事件格式 + 配置文件元数据 |
-| NIP-04 | 支持 | 加密 DM（`kind:4`）              |
-| NIP-17 | 计划   | 礼品包装 DM                      |
-| NIP-44 | 计划   | 版本化加密                  |
+| NIP-04 | 支持 | 加密 DM（`kind:4`）           |
+| NIP-17 | 计划 | 礼品包装 DM                   |
+| NIP-44 | 计划 | 版本化加密                    |
 
 ## 测试
 

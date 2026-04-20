@@ -102,13 +102,7 @@ const IMAGE_FILE_EXTENSIONS = new Set([
   ".bmp",
 ]);
 
-const VIDEO_FILE_EXTENSIONS = new Set([
-  ".mp4",
-  ".mov",
-  ".webm",
-  ".avi",
-  ".mkv",
-]);
+const VIDEO_FILE_EXTENSIONS = new Set([".mp4", ".mov", ".webm", ".avi", ".mkv"]);
 
 const DOCUMENT_FILE_EXTENSIONS = new Set([
   ".pdf",
@@ -316,8 +310,12 @@ export function isAudioMime(mime?: string | null): boolean {
 
 export function isDocumentMime(mime?: string | null): boolean {
   const normalized = normalizeMimeType(mime);
-  if (!normalized) return false;
-  return normalized === "application/pdf" || 
-         normalized.startsWith("text/") || 
-         (normalized.startsWith("application/") && !normalized.startsWith("application/octet-stream"));
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "application/pdf" ||
+    normalized.startsWith("text/") ||
+    (normalized.startsWith("application/") && !normalized.startsWith("application/octet-stream"))
+  );
 }

@@ -8,7 +8,7 @@ read_when:
 
 # Pi集成架构
 
-本文档描述了OpenClaw如何与[pi-coding-agent](<https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)及其兄弟包（`pi-ai`、`pi-agent-core`、`pi-tui`）集成，以支持其AI代理功能。>
+本文档描述了OpenClaw如何与[pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)及其兄弟包（`pi-ai`、`pi-agent-core`、`pi-tui`）集成，以支持其AI代理功能。
 
 ## 概述
 

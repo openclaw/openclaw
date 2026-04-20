@@ -24,11 +24,11 @@ await web_fetch({ url: "https://example.com/article" });
 
 ## 工具参数
 
-| 参数 | 类型 | 描述 |
-| --- | --- | --- |
-| `url` | `string` | 要获取的 URL（必需，仅 http/https） |
-| `extractMode` | `string` | `"markdown"`（默认）或 `"text"` |
-| `maxChars` | `number` | 将输出截断到此字符数 |
+| 参数          | 类型     | 描述                                |
+| ------------- | -------- | ----------------------------------- |
+| `url`         | `string` | 要获取的 URL（必需，仅 http/https） |
+| `extractMode` | `string` | `"markdown"`（默认）或 `"text"`     |
+| `maxChars`    | `number` | 将输出截断到此字符数                |
 
 ## 工作原理
 

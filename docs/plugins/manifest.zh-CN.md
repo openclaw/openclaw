@@ -227,7 +227,7 @@ OpenClaw 在提供商运行时加载之前读取此信息。
 
 |`cliFlag`| 否 |`string`| CLI 标志名称，例如`--openrouter-api-key`。 |
 
-|`cliOption`| 否 |`string`| 完整的 CLI 选项形状，例如`--openrouter-api-key `key``。 |
+|`cliOption`| 否 |`string`| 完整的 CLI 选项形状，例如`--openrouter-api-key key`。 |
 
 |`cliDescription`| 否 |`string`| CLI 帮助中使用的描述。 |
 

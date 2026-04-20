@@ -19,11 +19,11 @@ read_when:
 
 OpenClaw 为 OpenAI 和 Codex 形状的访问提供单独的路由：
 
-| 模型引用              | 运行时路径                                 | 使用场景                                                                |
-| ---------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
-| `openai/gpt-5.4`       | 通过 OpenClaw/PI 管道的 OpenAI 提供商 | 你想要使用 `OPENAI_API_KEY` 直接访问 OpenAI Platform API。       |
-| `openai-codex/gpt-5.4` | 通过 PI 的 OpenAI Codex OAuth 提供商       | 你想要 ChatGPT/Codex OAuth 而不需要 Codex 应用服务器执行器。      |
-| `codex/gpt-5.4`        | 捆绑的 Codex 提供商加上 Codex 执行器    | 你想要为嵌入式代理轮次使用原生 Codex 应用服务器执行。 |
+| 模型引用               | 运行时路径                            | 使用场景                                                     |
+| ---------------------- | ------------------------------------- | ------------------------------------------------------------ |
+| `openai/gpt-5.4`       | 通过 OpenClaw/PI 管道的 OpenAI 提供商 | 你想要使用 `OPENAI_API_KEY` 直接访问 OpenAI Platform API。   |
+| `openai-codex/gpt-5.4` | 通过 PI 的 OpenAI Codex OAuth 提供商  | 你想要 ChatGPT/Codex OAuth 而不需要 Codex 应用服务器执行器。 |
+| `codex/gpt-5.4`        | 捆绑的 Codex 提供商加上 Codex 执行器  | 你想要为嵌入式代理轮次使用原生 Codex 应用服务器执行。        |
 
 Codex 执行器仅声明 `codex/*` 模型引用。现有的 `openai/*`、`openai-codex/*`、Anthropic、Gemini、xAI、本地和自定义提供商引用保持其正常路径。
 
@@ -283,19 +283,19 @@ codex app-server --listen stdio://
 
 支持的 `appServer` 字段：
 
-| 字段               | 默认值                                  | 含义                                                                  |
-| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
-| `transport`         | `"stdio"`                                | `"stdio"` 启动 Codex；`"websocket"` 连接到 `url`。                 |
-| `command`           | `"codex"`                                | stdio 传输的可执行文件。                                          |
-| `args`              | `["app-server", "--listen", "stdio://"]` | stdio 传输的参数。                                           |
-| `url`               | 未设置                                    | WebSocket 应用服务器 URL。                                                |
-| `authToken`         | 未设置                                    | WebSocket 传输的 Bearer 令牌。                                    |
-| `headers`           | `{}`                                     | 额外的 WebSocket 标头。                                                 |
-| `requestTimeoutMs`  | `60000`                                  | 应用服务器控制平面调用的超时时间。                              |
-| `approvalPolicy`    | `"never"`                                | 发送到线程启动/恢复/轮次的原生 Codex 审批策略。           |
-| `sandbox`           | `"workspace-write"`                      | 发送到线程启动/恢复的原生 Codex 沙盒模式。                   |
+| 字段                | 默认值                                   | 含义                                                     |
+| ------------------- | ---------------------------------------- | -------------------------------------------------------- |
+| `transport`         | `"stdio"`                                | `"stdio"` 启动 Codex；`"websocket"` 连接到 `url`。       |
+| `command`           | `"codex"`                                | stdio 传输的可执行文件。                                 |
+| `args`              | `["app-server", "--listen", "stdio://"]` | stdio 传输的参数。                                       |
+| `url`               | 未设置                                   | WebSocket 应用服务器 URL。                               |
+| `authToken`         | 未设置                                   | WebSocket 传输的 Bearer 令牌。                           |
+| `headers`           | `{}`                                     | 额外的 WebSocket 标头。                                  |
+| `requestTimeoutMs`  | `60000`                                  | 应用服务器控制平面调用的超时时间。                       |
+| `approvalPolicy`    | `"never"`                                | 发送到线程启动/恢复/轮次的原生 Codex 审批策略。          |
+| `sandbox`           | `"workspace-write"`                      | 发送到线程启动/恢复的原生 Codex 沙盒模式。               |
 | `approvalsReviewer` | `"user"`                                 | 使用 `"guardian_subagent"` 让 Codex 守护者审查原生审批。 |
-| `serviceTier`       | 未设置                                    | 可选的 Codex 服务层级，例如 `"priority"`。                   |
+| `serviceTier`       | 未设置                                   | 可选的 Codex 服务层级，例如 `"priority"`。               |
 
 当匹配的配置字段未设置时，旧的环境变量仍然作为本地测试的回退：
 

@@ -66,40 +66,40 @@ read_when:
 
 ### `openclaw` 字段
 
-| 字段        | 类型       | 描述                                                                                            |
-| ------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
-| `extensions` | `string[]` | 入口点文件（相对于包根目录）                                                           |
-| `setupEntry` | `string`   | 轻量级仅设置入口（可选）                                                                |
-| `channel`    | `object`   | 通道目录元数据，用于设置、选择器、快速入门和状态界面                            |
-| `providers`  | `string[]` | 此插件注册的提供商 id                                                                 |
+| 字段         | 类型       | 描述                                                                                              |
+| ------------ | ---------- | ------------------------------------------------------------------------------------------------- |
+| `extensions` | `string[]` | 入口点文件（相对于包根目录）                                                                      |
+| `setupEntry` | `string`   | 轻量级仅设置入口（可选）                                                                          |
+| `channel`    | `object`   | 通道目录元数据，用于设置、选择器、快速入门和状态界面                                              |
+| `providers`  | `string[]` | 此插件注册的提供商 id                                                                             |
 | `install`    | `object`   | 安装提示：`npmSpec`、`localPath`、`defaultChoice`、`minHostVersion`、`allowInvalidConfigRecovery` |
-| `startup`    | `object`   | 启动行为标志                                                                                 |
+| `startup`    | `object`   | 启动行为标志                                                                                      |
 
 ### `openclaw.channel`
 
 `openclaw.channel` 是通道发现和运行时加载前设置界面的廉价包元数据。
 
-| 字段                                  | 类型       | 含义                                                                 |
-| -------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
-| `id`                                   | `string`   | 规范通道 id。                                                         |
-| `label`                                | `string`   | 主要通道标签。                                                        |
-| `selectionLabel`                       | `string`   | 选择器/设置标签，当它应与 `label` 不同时。                        |
-| `detailLabel`                          | `string`   | 用于更丰富的通道目录和状态界面的次要详细标签。       |
-| `docsPath`                             | `string`   | 设置和选择链接的文档路径。                                      |
-| `docsLabel`                            | `string`   | 当文档链接的标签应与通道 id 不同时的覆盖标签。 |
-| `blurb`                                | `string`   | 简短的入职/目录描述。                                         |
-| `order`                                | `number`   | 通道目录中的排序顺序。                                               |
-| `aliases`                              | `string[]` | 通道选择的额外查找别名。                                   |
-| `preferOver`                           | `string[]` | 此通道应优于的低优先级插件/通道 id。                |
-| `systemImage`                          | `string`   | 通道 UI 目录的可选图标/系统图像名称。                      |
-| `selectionDocsPrefix`                  | `string`   | 选择界面中文档链接前的前缀文本。                          |
+| 字段                                   | 类型       | 含义                                                   |
+| -------------------------------------- | ---------- | ------------------------------------------------------ |
+| `id`                                   | `string`   | 规范通道 id。                                          |
+| `label`                                | `string`   | 主要通道标签。                                         |
+| `selectionLabel`                       | `string`   | 选择器/设置标签，当它应与 `label` 不同时。             |
+| `detailLabel`                          | `string`   | 用于更丰富的通道目录和状态界面的次要详细标签。         |
+| `docsPath`                             | `string`   | 设置和选择链接的文档路径。                             |
+| `docsLabel`                            | `string`   | 当文档链接的标签应与通道 id 不同时的覆盖标签。         |
+| `blurb`                                | `string`   | 简短的入职/目录描述。                                  |
+| `order`                                | `number`   | 通道目录中的排序顺序。                                 |
+| `aliases`                              | `string[]` | 通道选择的额外查找别名。                               |
+| `preferOver`                           | `string[]` | 此通道应优于的低优先级插件/通道 id。                   |
+| `systemImage`                          | `string`   | 通道 UI 目录的可选图标/系统图像名称。                  |
+| `selectionDocsPrefix`                  | `string`   | 选择界面中文档链接前的前缀文本。                       |
 | `selectionDocsOmitLabel`               | `boolean`  | 在选择文本中直接显示文档路径，而不是带标签的文档链接。 |
-| `selectionExtras`                      | `string[]` | 在选择文本中附加的额外短字符串。                               |
-| `markdownCapable`                      | `boolean`  | 将通道标记为支持 Markdown，用于出站格式决策。      |
-| `exposure`                             | `object`   | 通道可见性控制，用于设置、配置列表和文档界面。   |
-| `quickstartAllowFrom`                  | `boolean`  | 使此通道进入标准快速入门 `allowFrom` 设置流程。         |
-| `forceAccountBinding`                  | `boolean`  | 即使只有一个账户存在，也需要显式账户绑定。           |
-| `preferSessionLookupForAnnounceTarget` | `boolean`  | 为此通道解析公告目标时优先使用会话查找。       |
+| `selectionExtras`                      | `string[]` | 在选择文本中附加的额外短字符串。                       |
+| `markdownCapable`                      | `boolean`  | 将通道标记为支持 Markdown，用于出站格式决策。          |
+| `exposure`                             | `object`   | 通道可见性控制，用于设置、配置列表和文档界面。         |
+| `quickstartAllowFrom`                  | `boolean`  | 使此通道进入标准快速入门 `allowFrom` 设置流程。        |
+| `forceAccountBinding`                  | `boolean`  | 即使只有一个账户存在，也需要显式账户绑定。             |
+| `preferSessionLookupForAnnounceTarget` | `boolean`  | 为此通道解析公告目标时优先使用会话查找。               |
 
 示例：
 
@@ -143,13 +143,13 @@ read_when:
 
 `openclaw.install` 是包元数据，不是清单元数据。
 
-| 字段                        | 类型                 | 含义                                                                    |
-| ---------------------------- | -------------------- | -------------------------------------------------------------------------------- |
-| `npmSpec`                    | `string`             | 安装/更新流程的规范 npm 规范。                                     |
-| `localPath`                  | `string`             | 本地开发或捆绑安装路径。                                       |
-| `defaultChoice`              | `"npm"  "local"` | 当两者都可用时的首选安装源。                                |
-| `minHostVersion`             | `string`             | 支持的最低 OpenClaw 版本，格式为 `>=x.y.z`。                        |
-| `allowInvalidConfigRecovery` | `boolean`            | 允许捆绑插件重新安装流程从特定的过时配置失败中恢复。 |
+| 字段                         | 类型             | 含义                                                 |
+| ---------------------------- | ---------------- | ---------------------------------------------------- |
+| `npmSpec`                    | `string`         | 安装/更新流程的规范 npm 规范。                       |
+| `localPath`                  | `string`         | 本地开发或捆绑安装路径。                             |
+| `defaultChoice`              | `"npm"  "local"` | 当两者都可用时的首选安装源。                         |
+| `minHostVersion`             | `string`         | 支持的最低 OpenClaw 版本，格式为 `>=x.y.z`。         |
+| `allowInvalidConfigRecovery` | `boolean`        | 允许捆绑插件重新安装流程从特定的过时配置失败中恢复。 |
 
 如果设置了 `minHostVersion`，安装和清单注册表加载都会强制执行它。较旧的主机跳过插件；无效的版本字符串被拒绝。
 
@@ -282,11 +282,11 @@ export default defineSetupPluginEntry(myChannelPlugin);
 
 对于热设置专用路径，当你只需要部分设置界面时，首选狭窄的设置助手接缝而不是更广泛的 `plugin-sdk/setup` 伞形：
 
-| 导入路径                        | 用途                                                                                | 关键导出                                                                                                                                                                                                                                                                                  |
-| ---------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 导入路径                           | 用途                                                         | 关键导出                                                                                                                                                                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/setup-runtime`         | 设置时的运行时助手，在 `setupEntry` / 延迟通道启动中保持可用 | `createPatchedAccountSetupAdapter`、`createEnvPatchedAccountSetupAdapter`、`createSetupInputPresenceValidator`、`noteChannelLookupFailure`、`noteChannelLookupSummary`、`promptResolvedAllowFrom`、`splitSetupEntries`、`createAllowlistSetupWizardProxy`、`createDelegatedSetupWizardProxy` |
-| `plugin-sdk/setup-adapter-runtime` | 环境感知的账户设置适配器                                                  | `createEnvPatchedAccountSetupAdapter`                                                                                                                                                                                                                                                        |
-| `plugin-sdk/setup-tools`           | 设置/安装 CLI/归档/文档助手                                                    | `formatCliCommand`、`detectBinary`、`extractArchive`、`resolveBrewExecutable`、`formatDocsLink`、`CONFIG_DIR`                                                                                                                                                                                |
+| `plugin-sdk/setup-adapter-runtime` | 环境感知的账户设置适配器                                     | `createEnvPatchedAccountSetupAdapter`                                                                                                                                                                                                                                                        |
+| `plugin-sdk/setup-tools`           | 设置/安装 CLI/归档/文档助手                                  | `formatCliCommand`、`detectBinary`、`extractArchive`、`resolveBrewExecutable`、`formatDocsLink`、`CONFIG_DIR`                                                                                                                                                                                |
 
 当你想要完整的共享设置工具箱，包括配置补丁助手如 `moveSingleAccountChannelSectionToDefaultAccount(...)` 时，使用更广泛的 `plugin-sdk/setup` 接缝。
 

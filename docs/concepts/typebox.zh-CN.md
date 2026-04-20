@@ -41,15 +41,15 @@ Client                    Gateway
 
 常见方法 + 事件：
 
-| 类别     | 示例                                                     | 注意事项                              |
-| -------- | -------------------------------------------------------- | ------------------------------------ |
-| 核心     | `connect`, `health`, `status`                           | `connect` 必须是第一个                |
-| 消息传递 | `send`, `agent`, `agent.wait`, `system-event`, `logs.tail` | 副作用需要 `idempotencyKey`          |
-| 聊天     | `chat.history`, `chat.send`, `chat.abort`               | WebChat 使用这些                     |
-| 会话     | `sessions.list`, `sessions.patch`, `sessions.delete`    | 会话管理                            |
-| 自动化   | `wake`, `cron.list`, `cron.run`, `cron.runs`            | 唤醒 + cron 控制                     |
-| 节点     | `node.list`, `node.invoke`, `node.pair.*`               | 网关 WS + 节点操作                   |
-| 事件     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | 服务器推送                           |
+| 类别     | 示例                                                       | 注意事项                    |
+| -------- | ---------------------------------------------------------- | --------------------------- |
+| 核心     | `connect`, `health`, `status`                              | `connect` 必须是第一个      |
+| 消息传递 | `send`, `agent`, `agent.wait`, `system-event`, `logs.tail` | 副作用需要 `idempotencyKey` |
+| 聊天     | `chat.history`, `chat.send`, `chat.abort`                  | WebChat 使用这些            |
+| 会话     | `sessions.list`, `sessions.patch`, `sessions.delete`       | 会话管理                    |
+| 自动化   | `wake`, `cron.list`, `cron.run`, `cron.runs`               | 唤醒 + cron 控制            |
+| 节点     | `node.list`, `node.invoke`, `node.pair.*`                  | 网关 WS + 节点操作          |
+| 事件     | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown`  | 服务器推送                  |
 
 权威的 **发现** 清单位于
 `src/gateway/server-methods-list.ts`（`listGatewayMethods`、`GATEWAY_EVENTS`）。

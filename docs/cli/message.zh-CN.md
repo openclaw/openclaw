@@ -185,7 +185,7 @@ openclaw message <子命令> [选项]
 - `event create`（Discord）：`--guild-id`、`--event-name`、`--start-time`
   - 可选：`--end-time`、`--desc`、`--channel-id`、`--location`、`--event-type`
 
-###  moderation（Discord）
+### moderation（Discord）
 
 - `timeout`：`--guild-id`、`--user-id`（可选 `--duration-min` 或 `--until`；省略两者以清除超时）
 - `kick`：`--guild-id`、`--user-id`（+ `--reason`）

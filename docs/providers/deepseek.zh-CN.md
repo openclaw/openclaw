@@ -8,7 +8,7 @@ read_when:
 
 # DeepSeek
 
-[DeepSeek](<https://www.deepseek.com)> 鎻愪緵鍏锋湁 OpenAI 鍏煎 API 鐨勫己澶?AI 妯″瀷銆?
+[DeepSeek](https://www.deepseek.com) 鎻愪緵鍏锋湁 OpenAI 鍏煎 API 鐨勫己澶?AI 妯″瀷銆?
 
 | 灞炴€?| 鍊?|
 
@@ -25,7 +25,7 @@ read_when:
 
 <Steps>
   <Step title="鑾峰彇浣犵殑 API 瀵嗛挜">
-    鍦?[platform.deepseek.com](<https://platform.deepseek.com/api_keys)> 鍒涘缓 API 瀵嗛挜銆?  </Step>
+    鍦?[platform.deepseek.com](https://platform.deepseek.com/api_keys) 鍒涘缓 API 瀵嗛挜銆?  </Step>
   <Step title="杩愯璁剧疆鍚戝">```bash
     openclaw onboard --auth-choice deepseek-api-key```杩欎細鎻愮ず杈撳叆浣犵殑 API 瀵嗛挜锛屽苟灏?`deepseek/deepseek-chat`璁剧疆涓洪粯璁ゆā鍨嬨€?
 

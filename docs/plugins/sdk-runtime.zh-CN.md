@@ -400,15 +400,15 @@ export function tryGetRuntime() {
 
 除了 `api.runtime`，API 对象还提供：
 
-| 字段                    | 类型                      | 描述                                                                                 |
-| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | 插件 id                                                                                   |
-| `api.name`               | `string`                  | 插件显示名称                                                                         |
-| `api.config`             | `OpenClawConfig`          | 当前配置快照（可用时的活动内存运行时快照）                  |
-| `api.pluginConfig`       | `Record<string, unknown>` | 来自 `plugins.entries.<id>.config` 的插件特定配置                                   |
-| `api.logger`             | `PluginLogger`            | 作用域日志记录器（`debug`、`info`、`warn`、`error`）                                            |
+| 字段                     | 类型                      | 描述                                                              |
+| ------------------------ | ------------------------- | ----------------------------------------------------------------- |
+| `api.id`                 | `string`                  | 插件 id                                                           |
+| `api.name`               | `string`                  | 插件显示名称                                                      |
+| `api.config`             | `OpenClawConfig`          | 当前配置快照（可用时的活动内存运行时快照）                        |
+| `api.pluginConfig`       | `Record<string, unknown>` | 来自 `plugins.entries.<id>.config` 的插件特定配置                 |
+| `api.logger`             | `PluginLogger`            | 作用域日志记录器（`debug`、`info`、`warn`、`error`）              |
 | `api.registrationMode`   | `PluginRegistrationMode`  | 当前加载模式；`"setup-runtime"` 是轻量级的预完整入口启动/设置窗口 |
-| `api.resolvePath(input)` | `(string) => string`      | 解析相对于插件根目录的路径                                                  |
+| `api.resolvePath(input)` | `(string) => string`      | 解析相对于插件根目录的路径                                        |
 
 ## 相关
 

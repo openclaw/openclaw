@@ -69,14 +69,14 @@ OpenClaw 可以从三个外部生态系统安装插件：**Codex**、**Claude**
 
 ### 现在支持
 
-| 功能       | 映射方式                                                                                   | 适用于     |
-| --------- | ---------------------------------------------------------------------------------------- | ---------- |
-| 技能内容   | 包技能根目录加载为正常的 OpenClaw 技能                                                   | 所有格式    |
-| 命令       | `commands/` 和 `.cursor/commands/` 被视为技能根目录                                       | Claude, Cursor |
-| 钩子包     | OpenClaw 风格的 `HOOK.md` + `handler.ts` 布局                                            | Codex      |
-| MCP 工具   | 包 MCP 配置合并到嵌入式 Pi 设置中；支持的 stdio 和 HTTP 服务器被加载                       | 所有格式    |
-| LSP 服务器 | Claude `.lsp.json` 和清单声明的 `lspServers` 合并到嵌入式 Pi LSP 默认值                  | Claude     |
-| 设置       | Claude `settings.json` 导入为嵌入式 Pi 默认值                                             | Claude     |
+| 功能       | 映射方式                                                                | 适用于         |
+| ---------- | ----------------------------------------------------------------------- | -------------- |
+| 技能内容   | 包技能根目录加载为正常的 OpenClaw 技能                                  | 所有格式       |
+| 命令       | `commands/` 和 `.cursor/commands/` 被视为技能根目录                     | Claude, Cursor |
+| 钩子包     | OpenClaw 风格的 `HOOK.md` + `handler.ts` 布局                           | Codex          |
+| MCP 工具   | 包 MCP 配置合并到嵌入式 Pi 设置中；支持的 stdio 和 HTTP 服务器被加载    | 所有格式       |
+| LSP 服务器 | Claude `.lsp.json` 和清单声明的 `lspServers` 合并到嵌入式 Pi LSP 默认值 | Claude         |
+| 设置       | Claude `settings.json` 导入为嵌入式 Pi 默认值                           | Claude         |
 
 #### 技能内容
 
@@ -84,7 +84,7 @@ OpenClaw 可以从三个外部生态系统安装插件：**Codex**、**Claude**
 - Claude `commands` 根目录被视为额外的技能根目录
 - Cursor `.cursor/commands` 根目录被视为额外的技能根目录
 
-这意味着 Claude  markdown 命令文件通过正常的 OpenClaw 技能加载器工作。Cursor 命令 markdown 通过相同的路径工作。
+这意味着 Claude markdown 命令文件通过正常的 OpenClaw 技能加载器工作。Cursor 命令 markdown 通过相同的路径工作。
 
 #### 钩子包
 

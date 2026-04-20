@@ -68,21 +68,21 @@ title: "音乐生成"
 
 ## 共享捆绑提供者支持
 
-| 提供者 | 默认模型          | 参考输入 | 支持的控制                                        | API 密钥                                |
-| -------- | ---------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
-| ComfyUI  | `workflow`             | 最多 1 张图片    | 工作流定义的音乐或音频                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
-| Google   | `lyria-3-clip-preview` | 最多 10 张图片  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax  | `music-2.5+`           | 无             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                      |
+| 提供者  | 默认模型               | 参考输入       | 支持的控制                                                | API 密钥                               |
+| ------- | ---------------------- | -------------- | --------------------------------------------------------- | -------------------------------------- |
+| ComfyUI | `workflow`             | 最多 1 张图片  | 工作流定义的音乐或音频                                    | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
+| Google  | `lyria-3-clip-preview` | 最多 10 张图片 | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
+| MiniMax | `music-2.5+`           | 无             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                      |
 
 ### 声明的能力矩阵
 
 这是 `music_generate`、合同测试和共享实时扫描使用的显式模式合同。
 
-| 提供者 | `generate` | `edit` | 编辑限制 | 共享实时通道                                                         |
-| -------- | ---------- | ------ | ---------- | ------------------------------------------------------------------------- |
-| ComfyUI  | 是        | 是    | 1 张图片    | 不在共享扫描中；由 `extensions/comfy/comfy.live.test.ts` 覆盖 |
-| Google   | 是        | 是    | 10 张图片  | `generate`, `edit`                                                        |
-| MiniMax  | 是        | 否     | 无       | `generate`                                                                |
+| 提供者  | `generate` | `edit` | 编辑限制  | 共享实时通道                                                  |
+| ------- | ---------- | ------ | --------- | ------------------------------------------------------------- |
+| ComfyUI | 是         | 是     | 1 张图片  | 不在共享扫描中；由 `extensions/comfy/comfy.live.test.ts` 覆盖 |
+| Google  | 是         | 是     | 10 张图片 | `generate`, `edit`                                            |
+| MiniMax | 是         | 否     | 无        | `generate`                                                    |
 
 使用 `action: "list"` 在运行时检查可用的共享提供者和模型：
 
@@ -104,18 +104,18 @@ title: "音乐生成"
 
 ## 内置工具参数
 
-| 参数         | 类型     | 描述                                                                                       |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------- |
-| `prompt`          | 字符串   | 音乐生成提示（`action: "generate"` 必需）                                       |
+| 参数              | 类型     | 描述                                                                          |
+| ----------------- | -------- | ----------------------------------------------------------------------------- |
+| `prompt`          | 字符串   | 音乐生成提示（`action: "generate"` 必需）                                     |
 | `action`          | 字符串   | `"generate"`（默认），`"status"` 用于当前会话任务，或 `"list"` 用于检查提供者 |
-| `model`           | 字符串   | 提供者/模型覆盖，例如 `google/lyria-3-pro-preview` 或 `comfy/workflow`                    |
-| `lyrics`          | 字符串   | 当提供者支持显式歌词输入时的可选歌词                                   |
-| `instrumental`    | 布尔值  | 当提供者支持时请求仅器乐输出                                    |
-| `image`           | 字符串   | 单个参考图片路径或 URL                                                                |
-| `images`          | 字符串[] | 多个参考图片（最多 10 个）                                                              |
-| `durationSeconds` | 数字   | 当提供者支持持续时间提示时的目标持续时间（秒）                              |
-| `format`          | 字符串   | 当提供者支持时的输出格式提示（`mp3` 或 `wav`）                                 |
-| `filename`        | 字符串   | 输出文件名提示                                                                              |
+| `model`           | 字符串   | 提供者/模型覆盖，例如 `google/lyria-3-pro-preview` 或 `comfy/workflow`        |
+| `lyrics`          | 字符串   | 当提供者支持显式歌词输入时的可选歌词                                          |
+| `instrumental`    | 布尔值   | 当提供者支持时请求仅器乐输出                                                  |
+| `image`           | 字符串   | 单个参考图片路径或 URL                                                        |
+| `images`          | 字符串[] | 多个参考图片（最多 10 个）                                                    |
+| `durationSeconds` | 数字     | 当提供者支持持续时间提示时的目标持续时间（秒）                                |
+| `format`          | 字符串   | 当提供者支持时的输出格式提示（`mp3` 或 `wav`）                                |
+| `filename`        | 字符串   | 输出文件名提示                                                                |
 
 并非所有提供者都支持所有参数。OpenClaw 仍然在提交前验证硬限制，如输入计数。当提供者支持持续时间但使用比请求值更短的最大值时，OpenClaw 会自动限制为最接近的支持持续时间。当所选提供者或模型无法满足真正不支持的可选提示时，会忽略它们并发出警告。
 

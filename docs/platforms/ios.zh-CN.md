@@ -163,7 +163,7 @@ chmod 600 ~/.openclaw/credentials/apns/AuthKey_KEYID.p8
 export OPENCLAW_APNS_PRIVATE_KEY_PATH="$HOME/.openclaw/credentials/apns/AuthKey_KEYID.p8"
 ```
 
-不要提交 `.p8` 文件或将其放在 repo  checkout 下。
+不要提交 `.p8` 文件或将其放在 repo checkout 下。
 
 ## 发现路径
 

@@ -154,25 +154,25 @@ export async function spawnWithOutput(
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), {
       ...options,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = '';
-    let stderr = '';
+    let stdout = "";
+    let stderr = "";
 
-    child.stdout?.on('data', (data) => {
+    child.stdout?.on("data", (data) => {
       stdout += data.toString();
     });
 
-    child.stderr?.on('data', (data) => {
+    child.stderr?.on("data", (data) => {
       stderr += data.toString();
     });
 
-    child.on('error', (err) => {
+    child.on("error", (err) => {
       reject(err);
     });
 
-    child.on('close', (code, signal) => {
+    child.on("close", (code, signal) => {
       resolve({
         stdout,
         stderr,
@@ -191,35 +191,35 @@ export async function spawnWithTimeout(
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), {
       ...options,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = '';
-    let stderr = '';
+    let stdout = "";
+    let stderr = "";
     let timedOut = false;
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
       child.kill();
-      reject(new Error(`Command timed out after ${timeoutMs}ms: ${argv.join(' ')}`));
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${argv.join(" ")}`));
     }, timeoutMs);
 
-    child.stdout?.on('data', (data) => {
+    child.stdout?.on("data", (data) => {
       stdout += data.toString();
     });
 
-    child.stderr?.on('data', (data) => {
+    child.stderr?.on("data", (data) => {
       stderr += data.toString();
     });
 
-    child.on('error', (err) => {
+    child.on("error", (err) => {
       clearTimeout(timeoutId);
       if (!timedOut) {
         reject(err);
       }
     });
 
-    child.on('close', (code, signal) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timeoutId);
       if (!timedOut) {
         resolve({
@@ -240,11 +240,11 @@ export async function spawnAndWait(
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), options);
 
-    child.on('error', (err) => {
+    child.on("error", (err) => {
       reject(err);
     });
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       resolve(code);
     });
   });
@@ -257,16 +257,16 @@ export function spawnWithLogging(
 ): ChildProcess {
   const child = spawn(argv[0], argv.slice(1), {
     ...options,
-    stdio: options.stdio || ['ignore', 'pipe', 'pipe'],
+    stdio: options.stdio || ["ignore", "pipe", "pipe"],
   });
 
-  child.stdout?.on('data', (data) => {
+  child.stdout?.on("data", (data) => {
     if (logger) {
       logger.info(data.toString().trim());
     }
   });
 
-  child.stderr?.on('data', (data) => {
+  child.stderr?.on("data", (data) => {
     if (logger) {
       logger.error(data.toString().trim());
     }
@@ -275,11 +275,11 @@ export function spawnWithLogging(
   return child;
 }
 
-export function safeKillProcess(pid: number, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+export function safeKillProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): boolean {
   try {
     process.kill(pid, signal);
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -288,7 +288,7 @@ export function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }

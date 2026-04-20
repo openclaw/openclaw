@@ -79,7 +79,11 @@ export function truncateString(str: string, maxLength: number, suffix: string = 
   return str.slice(0, maxLength - suffix.length) + suffix;
 }
 
-export function truncateStringAtWord(str: string, maxLength: number, suffix: string = "..."): string {
+export function truncateStringAtWord(
+  str: string,
+  maxLength: number,
+  suffix: string = "...",
+): string {
   if (str.length <= maxLength) {
     return str;
   }
@@ -109,7 +113,7 @@ export function includesIgnoreCase(str: string, substring: string): boolean {
 }
 
 export function reverseString(str: string): string {
-  return str.split("").reverse().join("");
+  return str.split("").toReversed().join("");
 }
 
 export function repeatString(str: string, count: number): string {
@@ -159,17 +163,29 @@ export function countCharacters(str: string, char: string): number {
 
 export function isPalindrome(str: string): boolean {
   const cleaned = str.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return cleaned === cleaned.split("").reverse().join("");
+  return cleaned === cleaned.split("").toReversed().join("");
 }
 
-export function maskString(str: string, visibleStart: number = 4, visibleEnd: number = 4, maskChar: string = "*"): string {
+export function maskString(
+  str: string,
+  visibleStart: number = 4,
+  visibleEnd: number = 4,
+  maskChar: string = "*",
+): string {
   if (str.length <= visibleStart + visibleEnd) {
     return str;
   }
-  return str.slice(0, visibleStart) + maskChar.repeat(str.length - visibleStart - visibleEnd) + str.slice(-visibleEnd);
+  return (
+    str.slice(0, visibleStart) +
+    maskChar.repeat(str.length - visibleStart - visibleEnd) +
+    str.slice(-visibleEnd)
+  );
 }
 
-export function generateRandomString(length: number, chars: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"): string {
+export function generateRandomString(
+  length: number,
+  chars: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+): string {
   let result = "";
   for (let i = 0; i < length; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -180,13 +196,13 @@ export function generateRandomString(length: number, chars: string = "ABCDEFGHIJ
 export function toKebabCaseToTitleCase(str: string): string {
   return str
     .split("-")
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
 
 export function toSnakeCaseToTitleCase(str: string): string {
   return str
     .split("_")
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }

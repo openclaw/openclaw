@@ -104,18 +104,18 @@ title: "推理CLI"
 
 此表将常见推理任务映射到相应的infer命令。
 
-| 任务                    | 命令                                                                | 说明                                                |
-| ----------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
-| 运行文本/模型提示        | `openclaw infer model run --prompt "..." --json`                       | 默认使用正常的本地路径                               |
-| 生成图像                | `openclaw infer image generate --prompt "..." --json`                  | 从现有文件开始时使用`image edit`                   |
-| 描述图像文件            | `openclaw infer image describe --file ./image.png --json`              | `--model`必须是`<provider/model>`                   |
-| 转录音频                | `openclaw infer audio transcribe --file ./memo.m4a --json`             | `--model`必须是`<provider/model>`                   |
-| 合成语音                | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json` | `tts status`是gateway导向的                        |
-| 生成视频                | `openclaw infer video generate --prompt "..." --json`                  |                                                      |
-| 描述视频文件            | `openclaw infer video describe --file ./clip.mp4 --json`               | `--model`必须是`<provider/model>`                   |
-| 搜索网络                | `openclaw infer web search --query "..." --json`                       |                                                      |
-| 获取网页                | `openclaw infer web fetch --url https://example.com --json`            |                                                      |
-| 创建嵌入                | `openclaw infer embedding create --text "..." --json`                  |                                                      |
+| 任务              | 命令                                                                   | 说明                              |
+| ----------------- | ---------------------------------------------------------------------- | --------------------------------- |
+| 运行文本/模型提示 | `openclaw infer model run --prompt "..." --json`                       | 默认使用正常的本地路径            |
+| 生成图像          | `openclaw infer image generate --prompt "..." --json`                  | 从现有文件开始时使用`image edit`  |
+| 描述图像文件      | `openclaw infer image describe --file ./image.png --json`              | `--model`必须是`<provider/model>` |
+| 转录音频          | `openclaw infer audio transcribe --file ./memo.m4a --json`             | `--model`必须是`<provider/model>` |
+| 合成语音          | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json` | `tts status`是gateway导向的       |
+| 生成视频          | `openclaw infer video generate --prompt "..." --json`                  |                                   |
+| 描述视频文件      | `openclaw infer video describe --file ./clip.mp4 --json`               | `--model`必须是`<provider/model>` |
+| 搜索网络          | `openclaw infer web search --query "..." --json`                       |                                   |
+| 获取网页          | `openclaw infer web fetch --url https://example.com --json`            |                                   |
+| 创建嵌入          | `openclaw infer embedding create --text "..." --json`                  |                                   |
 
 ## 行为
 
