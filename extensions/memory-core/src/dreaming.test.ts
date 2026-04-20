@@ -1592,6 +1592,72 @@ describe("short-term dreaming trigger", () => {
     expect(result).toBeUndefined();
   });
 
+  it("skips dreaming promotion when frequency/timezone config is invalid", async () => {
+    // Reconcile preserves the last-known-good cron on invalid config, but the
+    // runtime execution path reads `params.config.timezone` fresh every fire.
+    // If we do not also gate execution on validation, a cron still firing
+    // under the old tz would write reports day-stamped under host-local time
+    // because `formatMemoryDreamingDay` silently falls back when the tz is
+    // invalid. Gating here keeps scheduling and execution consistent.
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-invalid-config-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        timezone: "Not/Real",
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming invalid config",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "memory-core: dreaming promotion skipped because dreaming config is invalid",
+      ),
+    );
+    // Nothing should have been written to MEMORY.md — execution must be
+    // skipped entirely when the config is invalid, not just partially.
+    const memoryText = await fs
+      .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+      .catch((err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") {
+          return "";
+        }
+        throw err;
+      });
+    expect(memoryText).toBe("");
+  });
+
   it("skips dreaming promotion cleanly when limit is zero", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-limit-zero-");

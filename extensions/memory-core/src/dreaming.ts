@@ -537,6 +537,21 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
   }
 
+  // Reconcile leaves the last-known-good cron entry in place when config is
+  // invalid, but the runtime execution path reads `params.config.timezone`
+  // fresh on every fire. If the configured timezone has since gone bad,
+  // `formatMemoryDreamingDay` silently falls back to host-local time, so
+  // reports end up day-stamped under one timezone while the preserved cron is
+  // still firing under another. Mirror the reconcile gate here so we skip
+  // execution (not just scheduling) until the user fixes the config.
+  const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
+  if (!validation.valid) {
+    params.logger.warn(
+      `memory-core: dreaming promotion skipped because dreaming config is invalid (${validation.reason}).`,
+    );
+    return { handled: true, reason: "memory-core: short-term dreaming invalid config" };
+  }
+
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const workspaceCandidates = params.cfg
