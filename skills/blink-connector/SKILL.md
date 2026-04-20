@@ -389,31 +389,31 @@ blink connector exec github repos/OWNER/REPO/contents/README.md GET
 
 #### Cloning a repo locally
 
-The `blink connector exec` command calls the GitHub REST API — it CANNOT run `git clone`. To get repo files locally:
+On Blink Claw machines, `git clone`, `git push`, and `gh` are **fully pre-authenticated** via the Blink GitHub App credential helper — no PAT, no SSH key, no `gh auth login` required. Just use git directly:
 
-**Option 1 — Download via tarball (preferred for full repo)**:
 ```bash
-# Get the repo info to find clone_url
-REPO_INFO=$(blink connector exec github repos/OWNER/REPO GET --json)
-# Download the tarball using curl (no auth needed for public repos)
-curl -L "https://api.github.com/repos/OWNER/REPO/tarball/main" -o repo.tar.gz
-tar -xzf repo.tar.gz
+# Clone any repo the workspace's GitHub App has access to (public OR private)
+git clone https://github.com/OWNER/REPO.git
+
+# Or use the blink CLI helper which strips the token from .git/config after clone:
+blink github clone OWNER/REPO
+
+# Push, PR — all work automatically:
+git push
+gh pr create --fill
 ```
 
-**Option 2 — Browse files via API (for reading specific files)**:
-```bash
-# List the root directory
-blink connector exec github repos/OWNER/REPO/contents/ GET
+For reading specific files without cloning, use the API:
 
+```bash
 # Read a specific file (content is base64-encoded in the response)
 blink connector exec github repos/OWNER/REPO/contents/package.json GET
+
+# List the root directory
+blink connector exec github repos/OWNER/REPO/contents/ GET
 ```
 
-**Option 3 — git clone (public repos only, or if SSH key exists)**:
-```bash
-git clone https://github.com/OWNER/REPO.git
-```
-Note: `git clone` for private repos requires SSH keys or a personal access token configured on the machine — the connector's OAuth token is not available for git CLI.
+**See the `blink-github` skill for full clone/push/PR documentation.**
 
 ### Jira
 
