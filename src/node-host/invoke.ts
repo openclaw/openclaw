@@ -568,6 +568,7 @@ export async function handleInvoke(
       }
       const data = encoding === "base64" ? buf.toString("base64") : buf.toString("utf8");
       await sendJsonPayloadResult(client, frame, {
+        path: filePath,
         data,
         encoding,
         size: stat.size,
@@ -582,11 +583,11 @@ export async function handleInvoke(
   if (command === "file.write") {
     try {
       const snapshot = readExecApprovalsSnapshot();
-      const security = snapshot.file.defaults?.security;
+      const security = snapshot.defaults?.security;
       if (security !== "full") {
-        const allAllowlists = Object.values(snapshot.file.agents ?? {});
+        const allAllowlists = Object.values(snapshot.agents ?? {});
         const hasPermission = allAllowlists.some((agent) =>
-          agent.allowlist?.some((entry) => entry.pattern === "file.write"),
+          agent.allowedCommands?.includes("file.write") || agent.security === "full",
         );
         if (!hasPermission) {
           await sendErrorResult(
