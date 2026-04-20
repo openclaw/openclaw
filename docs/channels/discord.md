@@ -63,12 +63,15 @@ You will need to create a new application with a bot, add the bot to your server
 
     A **Bot Permissions** section will appear below. Enable:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
     Copy the generated URL at the bottom, paste it into your browser, select your server, and click **Continue** to connect. You should now see your bot in the Discord server.
 
@@ -520,9 +523,9 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
     Typical baseline permissions:
     
-    [General Permissions]
+    **General Permissions**
       - View Channels
-    [Text Permissions]
+    **Text Permissions**
       - Send Messages
       - Read Message History
       - Embed Links
