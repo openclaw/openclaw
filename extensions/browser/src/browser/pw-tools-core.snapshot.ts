@@ -15,6 +15,7 @@ import {
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   gotoPageWithNavigationGuard,
+  restoreRoleRefsForTarget,
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
@@ -102,6 +103,7 @@ export async function snapshotAiViaPlaywright(opts: {
   }
 
   const built = buildRoleSnapshotFromAiSnapshot(snapshot);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,
@@ -153,6 +155,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       track: "response",
     });
     const built = buildRoleSnapshotFromAiSnapshot(result?.full ?? "", opts.options);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
     storeRoleRefsForTarget({
       page,
       cdpUrl: opts.cdpUrl,
@@ -179,6 +182,7 @@ export async function snapshotRoleViaPlaywright(opts: {
 
   const ariaSnapshot = await locator.ariaSnapshot();
   const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,

@@ -91,6 +91,57 @@ describe("pw-session role refs cache", () => {
     refLocator(page, "e1");
     expect(mocks.frameLocator).toHaveBeenCalledWith("iframe#main");
   });
+
+  it("restores roleRefsMode=aria for a fresh page and uses aria-ref locator", () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = "t1";
+
+    // Simulate: previous snapshot stored aria refs for this target
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "OK" } },
+      mode: "aria",
+    });
+
+    // Simulate: page reconnects (new Page instance)
+    const { page, mocks } = fakePage();
+
+    // First restore — fresh page, no existing roleRefs
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    // refLocator should use aria-ref when mode=aria
+    refLocator(page, "e1");
+    expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
+  });
+
+  it("does NOT overwrite roleRefsMode when state.roleRefs already set but mode differs", () => {
+    const cdpUrl = "http://127.0.0.1:9222";
+    const targetId = "t1";
+
+    // Cache has aria mode
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "OK" } },
+      mode: "aria",
+    });
+
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+
+    // Simulate: state already has roleRefs (e.g. from a previous snapshot)
+    state.roleRefs = { e1: { role: "link", name: "Docs" } };
+    state.roleRefsMode = "aria";
+
+    // Restore should NOT overwrite existing roleRefs but SHOULD preserve aria mode
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    // roleRefs unchanged (previous snapshot takes precedence)
+    expect(state.roleRefs.e1).toMatchObject({ role: "link", name: "Docs" });
+    // roleRefsMode preserved
+    expect(state.roleRefsMode).toBe("aria");
+  });
 });
 
 describe("pw-session ensurePageState", () => {

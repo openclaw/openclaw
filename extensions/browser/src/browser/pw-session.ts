@@ -297,6 +297,14 @@ export function restoreRoleRefsForTarget(opts: {
   }
   const state = ensurePageState(opts.page);
   if (state.roleRefs) {
+    // roleRefs already set — still restore roleRefsMode in case it changed
+    // (e.g. snapshotAiViaPlaywright ran with mode=aria after snapshotRoleViaPlaywright)
+    if (cached.mode) {
+      state.roleRefsMode = cached.mode;
+    }
+    if (cached.frameSelector) {
+      state.roleRefsFrameSelector = cached.frameSelector;
+    }
     return;
   }
   state.roleRefs = cached.refs;
