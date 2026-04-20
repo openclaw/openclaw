@@ -46,6 +46,7 @@ import {
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
 import { closeQaWebSessions } from "./web-runtime.js";
 
 type QaSuiteStep = {
@@ -252,28 +253,7 @@ export type QaSuiteSummaryJsonParams = {
  * import this type instead of re-declaring the shape, so changes to the
  * summary schema propagate through to every consumer at type-check time.
  */
-export type QaSuiteSummaryJson = {
-  scenarios: QaSuiteScenarioResult[];
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-  };
-  run: {
-    startedAt: string;
-    finishedAt: string;
-    providerMode: QaProviderMode;
-    primaryModel: string;
-    primaryProvider: string | null;
-    primaryModelName: string | null;
-    alternateModel: string;
-    alternateProvider: string | null;
-    alternateModelName: string | null;
-    fastMode: boolean;
-    concurrency: number;
-    scenarioIds: string[] | null;
-  };
-};
+export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 /**
  * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.4
@@ -297,7 +277,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     counts: {
       total: params.scenarios.length,
       passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
-      failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
+      failed: countQaSuiteFailedScenarios(params.scenarios),
     },
     run: {
       startedAt: params.startedAt.toISOString(),

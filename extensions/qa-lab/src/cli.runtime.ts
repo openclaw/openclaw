@@ -39,6 +39,7 @@ import {
 } from "./run-config.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -121,44 +122,28 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   return Math.floor(value);
 }
 
-function countQaFailedScenarios(
-  scenarios: ReadonlyArray<{
-    status?: string;
-  }>,
-) {
-  let failed = 0;
-  for (const scenario of scenarios) {
-    if (scenario.status === "fail") {
-      failed += 1;
-    }
-  }
-  return failed;
-}
-
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
+  let summaryText: string;
+  try {
+    summaryText = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    throw new Error(
+      `Could not read QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
   let payload: unknown;
   try {
-    payload = JSON.parse(await fs.readFile(summaryPath, "utf8")) as unknown;
+    payload = JSON.parse(summaryText) as unknown;
   } catch (error) {
     throw new Error(
       `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
       { cause: error },
     );
   }
-  if (!payload || typeof payload !== "object") {
-    throw new Error(`QA summary at ${summaryPath} must be a JSON object.`);
-  }
-  const summary = payload as {
-    counts?: {
-      failed?: unknown;
-    };
-    scenarios?: Array<{ status?: string }>;
-  };
-  if (typeof summary.counts?.failed === "number" && Number.isFinite(summary.counts.failed)) {
-    return Math.max(0, Math.floor(summary.counts.failed));
-  }
-  if (Array.isArray(summary.scenarios)) {
-    return countQaFailedScenarios(summary.scenarios);
+  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
+  if (failedScenarioCount !== null) {
+    return failedScenarioCount;
   }
   throw new Error(
     `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
@@ -453,7 +438,8 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-  if (!allowFailures && countQaFailedScenarios(result.scenarios) > 0) {
+  const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(result);
+  if (!allowFailures && failedScenarioCount !== null && failedScenarioCount > 0) {
     process.exitCode = 1;
   }
 }

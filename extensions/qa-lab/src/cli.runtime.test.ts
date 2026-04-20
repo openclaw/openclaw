@@ -707,6 +707,32 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("rejects unreadable multipass summary JSON with read/parse wording", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    try {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          runner: "multipass",
+        }),
+      ).rejects.toThrow("Could not read QA summary JSON");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects partial multipass summary JSON without failure fields", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
     const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
