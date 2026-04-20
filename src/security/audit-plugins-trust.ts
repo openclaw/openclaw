@@ -8,7 +8,6 @@ import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { safeStat } from "./audit-fs.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
 type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
@@ -125,8 +124,11 @@ async function listInstalledPluginDirs(params: {
   onReadError?: (error: unknown) => void;
 }): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
   const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await safeStat(extensionsDir);
-  if (!st.ok || !st.isDir) {
+  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
+    params.onReadError?.(err);
+    return null;
+  });
+  if (!st?.isDirectory()) {
     return { extensionsDir, pluginDirs: [] };
   }
   const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {

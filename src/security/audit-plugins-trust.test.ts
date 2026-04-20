@@ -18,6 +18,41 @@ const mockChannelPlugins = vi.hoisted(() => [
   },
 ]);
 
+const readInstalledPackageVersionMock = vi.hoisted(() =>
+  vi.fn(async (dir: string) => {
+    if (dir.includes("/extensions/voice-call") || dir.includes("\\extensions\\voice-call")) {
+      return "9.9.9";
+    }
+    if (dir.includes("/hooks/test-hooks") || dir.includes("\\hooks\\test-hooks")) {
+      return "8.8.8";
+    }
+    return undefined;
+  }),
+);
+
+vi.mock("../infra/package-update-utils.js", () => ({
+  readInstalledPackageVersion: readInstalledPackageVersionMock,
+}));
+
+vi.mock("../plugins/config-state.js", () => ({
+  normalizePluginId: (id: string) => id,
+  normalizePluginsConfig: (
+    config:
+      | {
+          allow?: string[];
+          deny?: string[];
+          enabled?: boolean;
+          entries?: Record<string, { enabled?: boolean }>;
+        }
+      | undefined,
+  ) => ({
+    allow: config?.allow ?? [],
+    deny: config?.deny ?? [],
+    enabled: config?.enabled !== false,
+    entries: config?.entries ?? {},
+  }),
+}));
+
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: (id: string) => mockChannelPlugins.find((plugin) => plugin.id === id),
   getLoadedChannelPlugin: () => undefined,
@@ -133,25 +168,8 @@ describe("security audit install metadata findings", () => {
       },
       {
         name: "warns when install records drift from installed package versions",
-        run: async () => {
-          const tmp = await makeTmpDir("install-version-drift");
-          const stateDir = path.join(tmp, "state");
-          const pluginDir = path.join(stateDir, "extensions", "voice-call");
-          const hookDir = path.join(stateDir, "hooks", "test-hooks");
-          await fs.mkdir(pluginDir, { recursive: true });
-          await fs.mkdir(hookDir, { recursive: true });
-          await fs.writeFile(
-            path.join(pluginDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
-            "utf-8",
-          );
-          await fs.writeFile(
-            path.join(hookDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
-            "utf-8",
-          );
-
-          return runInstallMetadataAudit(
+        run: async () =>
+          runInstallMetadataAudit(
             {
               plugins: {
                 installs: {
@@ -176,9 +194,8 @@ describe("security audit install metadata findings", () => {
                 },
               },
             },
-            stateDir,
-          );
-        },
+            sharedInstallMetadataStateDir,
+          ),
         expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
       },
     ];
