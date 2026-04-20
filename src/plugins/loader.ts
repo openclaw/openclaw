@@ -135,6 +135,7 @@ export type PluginLoadOptions = {
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
+  requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   /**
    * Prefer `setupEntry` for configured channel plugins that explicitly opt in
    * via package metadata because their setup entry covers the pre-listen startup surface.
@@ -507,6 +508,7 @@ function buildCacheKey(params: {
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
+  requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
@@ -538,6 +540,10 @@ function buildCacheKey(params: {
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const setupOnlyModeKey =
     params.forceSetupOnlyChannelPlugins === true ? "force-setup" : "normal-setup";
+  const setupOnlyRequirementKey =
+    params.requireSetupEntryForSetupOnlyChannelPlugins === true
+      ? "require-setup-entry"
+      : "allow-full-fallback";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
@@ -548,7 +554,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${startupChannelMode}::${moduleLoadMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -624,6 +630,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
     options.forceSetupOnlyChannelPlugins === true ||
+    options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
     options.loadModules === false
   );
@@ -640,6 +647,8 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const onlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const forceSetupOnlyChannelPlugins = options.forceSetupOnlyChannelPlugins === true;
+  const requireSetupEntryForSetupOnlyChannelPlugins =
+    options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
@@ -655,6 +664,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
+    requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     loadModules: options.loadModules,
     runtimeSubagentMode,
@@ -671,6 +681,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
+    requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
@@ -986,6 +997,17 @@ function shouldLoadChannelPluginInSetupRuntime(params: {
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
   );
+}
+
+function channelPluginIdBelongsToManifest(params: {
+  channelId: string | undefined;
+  pluginId: string;
+  manifestChannels: readonly string[];
+}): boolean {
+  if (!params.channelId) {
+    return true;
+  }
+  return params.channelId === params.pluginId || params.manifestChannels.includes(params.channelId);
 }
 
 function createPluginRecord(params: {
@@ -1419,6 +1441,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
+    requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
     shouldLoadModules,
@@ -1749,29 +1772,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
       }
 
-      const canLoadScopedSetupOnlyChannelPlugin =
+      const scopedSetupOnlyChannelPluginRequested =
         includeSetupOnlyChannelPlugins &&
         !validateOnly &&
         onlyPluginIdSet &&
         manifestRecord.channels.length > 0 &&
         (!enableState.enabled || forceSetupOnlyChannelPlugins);
+      const canLoadScopedSetupOnlyChannelPlugin =
+        scopedSetupOnlyChannelPluginRequested &&
+        (!requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
       const registrationMode = canLoadScopedSetupOnlyChannelPlugin
         ? "setup-only"
-        : enableState.enabled
-          ? shouldLoadModules &&
-            !validateOnly &&
-            shouldLoadChannelPluginInSetupRuntime({
-              manifestChannels: manifestRecord.channels,
-              setupSource: manifestRecord.setupSource,
-              startupDeferConfiguredChannelFullLoadUntilAfterListen:
-                manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-              cfg,
-              env,
-              preferSetupRuntimeForChannelPlugins,
-            })
-            ? "setup-runtime"
-            : "full"
-          : null;
+        : scopedSetupOnlyChannelPluginRequested && requireSetupEntryForSetupOnlyChannelPlugins
+          ? null
+          : enableState.enabled
+            ? shouldLoadModules &&
+              !validateOnly &&
+              shouldLoadChannelPluginInSetupRuntime({
+                manifestChannels: manifestRecord.channels,
+                setupSource: manifestRecord.setupSource,
+                startupDeferConfiguredChannelFullLoadUntilAfterListen:
+                  manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+                cfg,
+                env,
+                preferSetupRuntimeForChannelPlugins,
+              })
+              ? "setup-runtime"
+              : "full"
+            : null;
 
       if (!registrationMode) {
         record.status = "disabled";
@@ -1992,7 +2020,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           continue;
         }
         if (setupRegistration.plugin) {
-          if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
+          if (
+            !channelPluginIdBelongsToManifest({
+              channelId: setupRegistration.plugin.id,
+              pluginId: record.id,
+              manifestChannels: manifestRecord.channels,
+            })
+          ) {
             pushPluginLoadError(
               `plugin id mismatch (config uses "${record.id}", setup export uses "${setupRegistration.plugin.id}")`,
             );
@@ -2117,7 +2151,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (!mergedSetupPlugin) {
             continue;
           }
-          if (mergedSetupPlugin.id && mergedSetupPlugin.id !== record.id) {
+          if (
+            !channelPluginIdBelongsToManifest({
+              channelId: mergedSetupPlugin.id,
+              pluginId: record.id,
+              manifestChannels: manifestRecord.channels,
+            })
+          ) {
             pushPluginLoadError(
               `plugin id mismatch (config uses "${record.id}", setup export uses "${mergedSetupPlugin.id}")`,
             );
