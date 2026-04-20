@@ -384,6 +384,7 @@ Provider options:
 - `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
 - `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).
 - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
+- `channels.bluebubbles.sendTimeoutMs`: Per-request timeout in ms for outbound text sends via `/api/v1/message/text` (default: 30000). Raise on macOS 26 setups where Private API iMessage sends can stall for 60+ seconds inside the iMessage framework; for example `45000` or `60000`. Probes, chat lookups, reactions, edits, and health checks currently keep the shorter 10s default; broadening coverage to reactions and edits is planned as a follow-up. Per-account override: `channels.bluebubbles.accounts.<accountId>.sendTimeoutMs`.
 - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
 - `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
 - `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
