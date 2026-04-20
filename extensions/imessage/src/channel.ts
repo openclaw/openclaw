@@ -190,6 +190,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           cliPath: null,
           dbPath: null,
         }),
+        skipStaleSocketHealthCheck: true,
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildPassiveProbedChannelStatusSummary(snapshot, {
