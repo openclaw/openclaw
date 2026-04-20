@@ -817,48 +817,54 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "denies approval-based execution when cwd is a symlink",
+    "denies approval-based execution for symlinked cwd paths",
     async () => {
-      const tmp = createFixtureDir("openclaw-approval-cwd-link-");
-      const safeDir = path.join(tmp, "safe");
-      const linkDir = path.join(tmp, "cwd-link");
-      const script = path.join(safeDir, "run.sh");
-      fs.mkdirSync(safeDir, { recursive: true });
-      fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
-      fs.chmodSync(script, 0o755);
-      fs.symlinkSync(safeDir, linkDir, "dir");
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: ["./run.sh"],
-        cwd: linkDir,
-        approved: true,
-        security: "full",
-        ask: "off",
-      });
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(sendInvokeResult, { message: "canonical cwd" });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "denies approval-based execution when cwd contains a symlink parent component",
-    async () => {
-      const tmp = createFixtureDir("openclaw-approval-cwd-parent-link-");
-      const safeRoot = path.join(tmp, "safe-root");
-      const safeSub = path.join(safeRoot, "sub");
-      const linkRoot = path.join(tmp, "approved-link");
-      fs.mkdirSync(safeSub, { recursive: true });
-      fs.symlinkSync(safeRoot, linkRoot, "dir");
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: ["./run.sh"],
-        cwd: path.join(linkRoot, "sub"),
-        approved: true,
-        security: "full",
-        ask: "off",
-      });
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(sendInvokeResult, { message: "no symlink path components" });
+      for (const testCase of [
+        {
+          label: "cwd symlink",
+          setup: () => {
+            const tmp = createFixtureDir("openclaw-approval-cwd-link-");
+            const safeDir = path.join(tmp, "safe");
+            const linkDir = path.join(tmp, "cwd-link");
+            const script = path.join(safeDir, "run.sh");
+            fs.mkdirSync(safeDir, { recursive: true });
+            fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+            fs.chmodSync(script, 0o755);
+            fs.symlinkSync(safeDir, linkDir, "dir");
+            return {
+              cwd: linkDir,
+              message: "canonical cwd",
+            };
+          },
+        },
+        {
+          label: "parent symlink",
+          setup: () => {
+            const tmp = createFixtureDir("openclaw-approval-cwd-parent-link-");
+            const safeRoot = path.join(tmp, "safe-root");
+            const safeSub = path.join(safeRoot, "sub");
+            const linkRoot = path.join(tmp, "approved-link");
+            fs.mkdirSync(safeSub, { recursive: true });
+            fs.symlinkSync(safeRoot, linkRoot, "dir");
+            return {
+              cwd: path.join(linkRoot, "sub"),
+              message: "no symlink path components",
+            };
+          },
+        },
+      ]) {
+        const { cwd, message } = testCase.setup();
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["./run.sh"],
+          cwd,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand, testCase.label).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, { message });
+      }
     },
   );
 
@@ -927,70 +933,50 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
-  it("denies approval-based execution when a script operand changes after approval", async () => {
-    const tmp = createFixtureDir("openclaw-approval-script-drift-");
-    const fixture = createMutableScriptOperandFixture(tmp);
-    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-    if (process.platform !== "win32") {
-      fs.chmodSync(fixture.scriptPath, 0o755);
+  it("validates approved script operand bindings at dispatch", async () => {
+    for (const mutate of [true, false]) {
+      const tmp = createFixtureDir(
+        mutate ? "openclaw-approval-script-drift-" : "openclaw-approval-script-stable-",
+      );
+      const fixture = createMutableScriptOperandFixture(tmp);
+      fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+      if (process.platform !== "win32") {
+        fs.chmodSync(fixture.scriptPath, 0o755);
+      }
+      const prepared = buildSystemRunApprovalPlan({
+        command: fixture.command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+
+      if (mutate) {
+        fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+      }
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: prepared.plan.argv,
+        rawCommand: prepared.plan.commandText,
+        systemRunPlan: prepared.plan,
+        cwd: prepared.plan.cwd ?? tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+
+      if (mutate) {
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          exact: true,
+        });
+      } else {
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(sendInvokeResult);
+      }
     }
-    const prepared = buildSystemRunApprovalPlan({
-      command: fixture.command,
-      cwd: tmp,
-    });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) {
-      throw new Error("unreachable");
-    }
-
-    fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      command: prepared.plan.argv,
-      rawCommand: prepared.plan.commandText,
-      systemRunPlan: prepared.plan,
-      cwd: prepared.plan.cwd ?? tmp,
-      approved: true,
-      security: "full",
-      ask: "off",
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeErrorMessage(sendInvokeResult, {
-      message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
-      exact: true,
-    });
-  });
-
-  it("keeps approved shell script execution working when the script is unchanged", async () => {
-    const tmp = createFixtureDir("openclaw-approval-script-stable-");
-    const fixture = createMutableScriptOperandFixture(tmp);
-    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-    if (process.platform !== "win32") {
-      fs.chmodSync(fixture.scriptPath, 0o755);
-    }
-    const prepared = buildSystemRunApprovalPlan({
-      command: fixture.command,
-      cwd: tmp,
-    });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) {
-      throw new Error("unreachable");
-    }
-
-    const { runCommand, sendInvokeResult } = await runSystemInvoke({
-      preferMacAppExecHost: false,
-      command: prepared.plan.argv,
-      rawCommand: prepared.plan.commandText,
-      systemRunPlan: prepared.plan,
-      cwd: prepared.plan.cwd ?? tmp,
-      approved: true,
-      security: "full",
-      ask: "off",
-    });
-
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    expectInvokeOk(sendInvokeResult);
   });
 
   it("validates approved runtime script operand bindings at dispatch", async () => {
