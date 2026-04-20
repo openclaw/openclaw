@@ -302,6 +302,7 @@ export async function dispatchReplyFromConfig(
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const inboundIdempotencyKey = ctx.MessageSidFull ?? ctx.MessageSid;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
   const inboundClaimContext = toPluginInboundClaimContext(hookContext);
@@ -387,6 +388,7 @@ export async function dispatchReplyFromConfig(
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
       threadId: routeThreadId,
+      idempotencyKey: inboundIdempotencyKey,
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,

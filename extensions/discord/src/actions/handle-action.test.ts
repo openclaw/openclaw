@@ -12,6 +12,54 @@ describe("handleDiscordMessageAction", () => {
     handleDiscordActionMock.mockClear();
   });
 
+  it("normalizes bare numeric send targets to Discord channel targets", async () => {
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "123",
+        message: "hello",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "hello",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("normalizes raw poll targets to Discord channel targets", async () => {
+    await handleDiscordMessageAction({
+      action: "poll",
+      params: {
+        to: "general",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "poll",
+        to: "channel:general",
+        question: "Lunch?",
+        answers: ["Pizza", "Sushi"],
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
     await handleDiscordMessageAction({
       action: "timeout",

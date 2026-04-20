@@ -46,6 +46,8 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
+  /** Stable key for deduping provider sends and mirrored transcript writes. */
+  idempotencyKey?: string;
   /** Originating sender id for sender-scoped outbound media policy. */
   requesterSenderId?: string;
   /** Originating sender display name for name-keyed sender policy matching. */
@@ -86,7 +88,7 @@ export type RouteReplyResult = {
  * are set.
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const { payload, channel, to, accountId, threadId, cfg, abortSignal, idempotencyKey } = params;
   if (shouldSuppressReasoningPayload(payload)) {
     return { ok: true };
   }
@@ -206,6 +208,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
+      idempotencyKey,
       payloads: [externalPayload],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
@@ -218,6 +221,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
               agentId: resolvedAgentId,
               text,
               mediaUrls,
+              idempotencyKey,
               ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
               ...(params.groupId ? { groupId: params.groupId } : {}),
             }
