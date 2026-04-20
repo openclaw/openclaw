@@ -127,6 +127,71 @@ const DESTRUCTIVE_FIND_FLAGS: readonly RegExp[] = [
 ];
 
 /**
+ * C4 (Plan Mode 1.0 follow-up): layered-defense escape-pattern
+ * detection. The prefix / SQL / find checks above catch the 99%
+ * case where the destructive verb is directly visible in the
+ * command string. These patterns flag the sophisticated-bypass
+ * vectors where a shell would resolve an expansion AT RUNTIME
+ * into a destructive command — the gate can't track the expansion,
+ * but it can refuse to allow the construct entirely under
+ * acceptEdits.
+ *
+ * Posture: if an exec command contains ANY of these escape
+ * constructs referencing destructive verbs, treat it as
+ * destructive and block. Rationale:
+ *   - acceptEdits is a permission elevation — the user opted in
+ *     for trusted-plan execution, not for cleverness budget.
+ *   - A legitimate post-approval exec rarely needs env-var
+ *     indirection for destructive verbs. Blocking has near-zero
+ *     false-positive cost and high true-positive recall.
+ *   - Primary defense remains the prompt layer; this is
+ *     defense-in-depth so a prompt-ignoring agent can't silently
+ *     shell-escape around the gate.
+ */
+const DESTRUCTIVE_VERBS_FOR_ESCAPE_DETECTION = "rm|rmdir|unlink|shred|trash|truncate";
+
+const DESTRUCTIVE_ESCAPE_PATTERNS: readonly RegExp[] = [
+  // `$RM file`, `$SHRED ...` — env-var indirection where the
+  // variable name matches a destructive verb (case-insensitive).
+  new RegExp(`\\$\\{?(?:${DESTRUCTIVE_VERBS_FOR_ESCAPE_DETECTION})\\b`, "i"),
+  // `` `echo rm` file `` — backtick subshell containing destructive verb.
+  new RegExp(`\`[^\`]*\\b(?:${DESTRUCTIVE_VERBS_FOR_ESCAPE_DETECTION})\\b[^\`]*\``, "i"),
+  // `$(echo rm) file` — $(...) subshell containing destructive verb.
+  new RegExp(`\\$\\([^)]*\\b(?:${DESTRUCTIVE_VERBS_FOR_ESCAPE_DETECTION})\\b[^)]*\\)`, "i"),
+  // Quote concatenation: `"r""m" file`, `'r''m' file`. The
+  // concatenation of adjacent quoted fragments that together
+  // spell a destructive verb — catches the common "r""m" /
+  // "rm"+"" / "r"m patterns. Intentionally conservative —
+  // matches when adjacent quoted tokens start with the first
+  // letter of a destructive verb and can reconstruct into it.
+  /["'][a-z]["']["'][a-z]["']/i,
+  // Hex-encoded destructive verbs: `\x72m`, `\x72\x6d`. A
+  // destructive verb's first letter is `\xNN` followed by the
+  // remainder. Conservative — also flags any `\xNN` byte escape
+  // inside an exec command, which is itself highly suspicious
+  // under acceptEdits.
+  /\\x[0-9a-f]{2}/i,
+  // Octal-encoded bytes (e.g., `\162m`).
+  /\\[0-7]{3}/,
+];
+
+function checkDestructiveEscape(execCommand: string): AcceptEditsGateResult | null {
+  for (const pattern of DESTRUCTIVE_ESCAPE_PATTERNS) {
+    if (pattern.test(execCommand)) {
+      return {
+        blocked: true,
+        constraint: "destructive",
+        reason:
+          "Command contains a shell-escape construct (env-var indirection, subshell, quote concatenation, or byte escape) " +
+          "near a destructive verb. Under acceptEdits these are blocked because the gate cannot track what the shell will " +
+          "expand to at runtime. Ask the user for explicit confirmation and run the destructive action directly if approved.",
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Self-restart patterns. Match exec commands that stop / restart /
  * kill the gateway or its processes. Case-insensitive.
  */
@@ -238,6 +303,13 @@ function checkDestructive(execCommand: string): AcceptEditsGateResult | null {
           "Ask the user for explicit confirmation before proceeding.",
       };
     }
+  }
+  // C4 layered-defense: catch escape-vector bypasses where the
+  // destructive verb is hidden behind env expansion, subshell,
+  // quote concatenation, or byte escapes.
+  const escapeResult = checkDestructiveEscape(execCommand);
+  if (escapeResult) {
+    return escapeResult;
   }
   return null;
 }
