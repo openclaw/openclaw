@@ -59,11 +59,11 @@ function isGroupAdmin(
   if (!senderE164 || !groups) {
     return false;
   }
-  const groupConfig = groups[groupId] ?? groups["*"];
-  if (!groupConfig?.admin) {
+  const admin = groups[groupId]?.admin ?? groups["*"]?.admin;
+  if (!admin) {
     return false;
   }
-  const normalizedAdmin = normalizeE164(groupConfig.admin);
+  const normalizedAdmin = normalizeE164(admin);
   const normalizedSender = normalizeE164(senderE164);
   return normalizedAdmin === normalizedSender;
 }
@@ -193,14 +193,12 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   if (!normalizedSender) {
     return false;
   }
-  const groupId = params.msg.from ?? "";
-  const groupConfig = isGroup
-    ? (policy.account.groups?.[groupId] ?? policy.account.groups?.["*"])
+  const groupId = resolveGroupConversationId(params.msg.from ?? "");
+  const groupAdmin = isGroup
+    ? (policy.account.groups?.[groupId]?.admin ?? policy.account.groups?.["*"]?.admin)
     : undefined;
   const senderIsConfiguredAdmin =
-    isGroup && groupConfig?.admin
-      ? isGroupAdmin(policy.account.groups, groupId, groupSender)
-      : false;
+    isGroup && groupAdmin ? isGroupAdmin(policy.account.groups, groupId, groupSender) : false;
 
   const storeAllowFrom =
     isGroup || !policy.shouldReadStorePairingApprovals
@@ -230,10 +228,10 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   });
 
   // Only enable admin-only group commands when the group config declares an admin.
-  if (isGroup && groupConfig?.admin && !senderIsConfiguredAdmin) {
+  if (isGroup && groupAdmin && !senderIsConfiguredAdmin) {
     return false;
   }
-  if (senderIsConfiguredAdmin && access.decision === "allow") {
+  if (senderIsConfiguredAdmin) {
     return true;
   }
 

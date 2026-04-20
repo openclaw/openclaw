@@ -186,4 +186,32 @@ describe("resolveGroupActivationFor", () => {
 
     expect(activation).toBe("always");
   });
+
+  it("defaults admin senders to always activation when mention gating is otherwise required", async () => {
+    const { storePath, cleanup } = await makeSessionStore({});
+    cleanups.push(cleanup);
+
+    const activation = await resolveGroupActivationFor({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groups: {
+              "*": {
+                requireMention: true,
+                admin: "+15550001111",
+              },
+            },
+          },
+        },
+        session: { store: storePath },
+      } as never,
+      accountId: "default",
+      agentId: "main",
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      conversationId: "123@g.us",
+      senderE164: "+15550001111",
+    });
+
+    expect(activation).toBe("always");
+  });
 });

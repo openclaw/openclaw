@@ -127,6 +127,37 @@ describe("whatsapp group policy", () => {
     expect(isAuthorized).toBe(true);
   });
 
+  it("allows the configured admin to run commands even under group allowlist mode", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15550002222"],
+          groups: {
+            "1203630@g.us": {
+              admin: "+15550001111",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const isAuthorized = await resolveWhatsAppCommandAuthorized({
+      cfg,
+      msg: {
+        accountId: "default",
+        chatType: "group",
+        from: "1203630@g.us",
+        senderE164: "+15550001111",
+        selfE164: "+15550009999",
+        body: "/status",
+        to: "+15550009999",
+      } as any,
+    });
+
+    expect(isAuthorized).toBe(true);
+  });
+
   it("preserves existing allowlist-based command access when no admin is configured", async () => {
     const cfg = {
       channels: {
@@ -162,6 +193,47 @@ describe("whatsapp group policy", () => {
             "*": {
               requireMention: true,
               admin: "+15550001111",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveWhatsAppInboundPolicy({
+      cfg,
+      accountId: "default",
+      selfE164: "+15550009999",
+    });
+
+    expect(policy.resolveConversationRequireMention("1203630@g.us", "+15550001111")).toBe(false);
+
+    const isAuthorized = await resolveWhatsAppCommandAuthorized({
+      cfg,
+      msg: {
+        accountId: "default",
+        chatType: "group",
+        from: "1203630@g.us",
+        senderE164: "+15550001111",
+        selfE164: "+15550009999",
+        body: "/status",
+        to: "+15550009999",
+      } as any,
+    });
+
+    expect(isAuthorized).toBe(true);
+  });
+
+  it("preserves wildcard admin fallback when a group override omits admin", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          groups: {
+            "*": {
+              admin: "+15550001111",
+            },
+            "1203630@g.us": {
+              requireMention: true,
             },
           },
         },
