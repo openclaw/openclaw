@@ -9,6 +9,7 @@ import {
 import {
   approveDevicePairing,
   requestDevicePairing,
+  revokeDeviceToken,
   rotateDeviceToken,
 } from "../infra/device-pairing.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -182,5 +183,82 @@ describe("noteDevicePairingHealth", () => {
     );
     expect(noteMock).toHaveBeenCalledTimes(1);
     expect(String(noteMock.mock.calls[0]?.[0] ?? "")).toContain("req-gateway-1");
+  });
+
+  it("sanitizes device labels before printing doctor notes", async () => {
+    callGatewayMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-gateway-1",
+          deviceId: "device-gateway-1",
+          publicKey: "pubkey",
+          role: "operator",
+          roles: ["operator"],
+          scopes: ["operator.admin"],
+          clientId: "control-ui\tclient",
+          clientMode: "webchat",
+          displayName: "\u001b[2Kbad\nname",
+          ts: 1,
+          isRepair: false,
+        },
+      ],
+      paired: [],
+    });
+
+    await noteDevicePairingHealth({
+      cfg: { gateway: { mode: "remote" } },
+      healthOk: true,
+    });
+
+    const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("bad\\nname");
+    expect(message).not.toContain("\u001b");
+    expect(message).not.toContain("control-ui\tclient");
+  });
+
+  it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const identity = loadOrCreateDeviceIdentity();
+          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+          const initial = await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey,
+            role: "operator",
+            scopes: ["operator.read"],
+            clientId: "control-ui",
+            clientMode: "webchat",
+            displayName: "Dashboard",
+          });
+          await approveDevicePairing(initial.request.requestId, {
+            callerScopes: ["operator.read"],
+          });
+          storeDeviceAuthToken({
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "stale-local-token",
+            scopes: ["operator.read"],
+          });
+          await revokeDeviceToken({
+            deviceId: identity.deviceId,
+            role: "operator",
+          });
+
+          await noteDevicePairingHealth({
+            cfg: { gateway: { mode: "local" } },
+            healthOk: false,
+          });
+
+          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+          expect(message).toContain("has no active operator device token");
+          expect(message).not.toContain("no longer has a matching active gateway token");
+        },
+      );
+    });
   });
 });

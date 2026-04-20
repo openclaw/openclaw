@@ -16,6 +16,7 @@ import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { note } from "../terminal/note.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 type GatewayListedPairedDevice = Omit<PairedDevice, "tokens" | "approvedScopes"> & {
   tokens?: DeviceAuthTokenSummary[];
@@ -188,7 +189,9 @@ function describeDevice(params: {
   displayName?: string;
   clientId?: string;
 }): string {
-  const label = params.displayName?.trim() || params.clientId?.trim();
+  const label =
+    sanitizeTerminalText(params.displayName?.trim() || "") ||
+    sanitizeTerminalText(params.clientId?.trim() || "");
   return label ? `${label} (${params.deviceId})` : params.deviceId;
 }
 
@@ -447,6 +450,7 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
     clientId: paired.clientId,
   });
   const lines: string[] = [];
+  const approvedRoles = new Set(listApprovedPairedDeviceRoles(paired));
   for (const entry of Object.values(store.tokens)) {
     const role = entry.role.trim();
     if (!role) {
@@ -457,6 +461,9 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
     );
     const pairedToken = findTokenSummary(paired, role);
     if (!pairedToken) {
+      if (approvedRoles.has(role)) {
+        continue;
+      }
       lines.push(
         `- Local cached ${role} device auth for ${deviceLabel} no longer has a matching active gateway token. Reconnect with shared gateway auth to refresh it, or rotate with ${rotateCommand}.`,
       );
