@@ -437,7 +437,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     }
     ```
 
-    `params.num_ctx` also works under `agents.defaults.models["ollama/<id>"]` for per-agent overrides. It applies to both the native Ollama and OpenAI-compatible paths. Non-numeric, zero, or negative values are ignored (falls back to `contextWindow`).
+    `params.num_ctx` also works under `agents.defaults.models["ollama/<id>"]` for per-agent overrides. It applies to both the native Ollama and OpenAI-compatible paths. If both sources are set, `models.providers.ollama.models[].params` wins. Values that aren't finite numbers, or that floor below 1 (including `0`, negatives, and fractions like `0.5`), are ignored and fall back to `contextWindow`.
 
   </Accordion>
 
