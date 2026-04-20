@@ -424,6 +424,43 @@ describe("memory cli", () => {
     );
   });
 
+  it("reports phase-level dreaming status for rem-only configs", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: true,
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "45 1 * * *",
+                phases: {
+                  light: { enabled: false },
+                  deep: { enabled: false },
+                  rem: { enabled: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Dreaming: 45 1 * * * · light off · deep off · rem on"),
+    );
+  });
+
   it("keeps legacy dreaming configs readable by showing default phase states", async () => {
     loadConfig.mockReturnValue({
       plugins: {
