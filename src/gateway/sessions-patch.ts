@@ -510,7 +510,7 @@ export async function applySessionsPatchToStore(params: {
         // never seen plan mode before (no `planModeIntroDeliveredAt`
         // marker), write a `[PLAN_MODE_INTRO]:` synthetic message via
         // `pendingAgentInjection` so the agent's NEXT turn opens with
-        // a quick lifecycle overview + pointer to /plan self-test.
+        // a quick lifecycle overview (reference card is bootstrap-injected).
         // One-shot semantic: marker survives planMode delete on
         // approve/edit so subsequent enter_plan_mode calls in the
         // same session skip the intro.
@@ -528,7 +528,7 @@ export async function applySessionsPatchToStore(params: {
             "  3. Wait for the user's Approve/Edit/Reject decision (arrives as [PLAN_DECISION]: ... in your next turn).",
             "  4. After approval, mutating tools (write, edit, exec, bash) UNLOCK; execute the plan. Use update_plan to mark steps completed.",
             "Hard rules: do NOT post chat after exit_plan_mode in the same turn; wait for ALL spawned subagents BEFORE exit_plan_mode; update_plan does NOT submit (only exit_plan_mode does).",
-            "Full reference: see the bootstrap-injected plan-mode reference card above (state diagram + tag taxonomy + slash commands + debugging tips). Run `/plan self-test` to verify your local install end-to-end.",
+            "Full reference: see the bootstrap-injected plan-mode reference card above (state diagram + tag taxonomy + slash commands + debugging tips).",
           ].join("\n");
           appendToInjectionQueue(next, {
             id: `plan-intro-${storeKey}-${planNow}`,
