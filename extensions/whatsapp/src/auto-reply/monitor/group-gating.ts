@@ -168,6 +168,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,
+    senderE164: sender.e164 ?? null,
   });
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);
