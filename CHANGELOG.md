@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Memory-core/dreaming: normalize sweep timestamps and reuse hashed narrative session keys for fallback cleanup so Dreaming narrative sub-sessions stop leaking. (#67023) Thanks @chiyouYCH.
 - Gateway/startup: delay HTTP bind until websocket handlers are attached, so immediate post-startup websocket health/connect probes no longer hit the startup race window. (#43392) Thanks @dalefrieswthat.
 - Codex/app-server: release the session lane when a downstream consumer throws while draining the `turn/completed` notification, so follow-up messages after a Codex plugin reply stop queueing behind a stale lane lock. Fixes #67996. (#69072) Thanks @ayeshakhalid192007-dev.
+- Codex/app-server: default approval handling to `on-request` so Codex harness sessions do not start with overly permissive tool approvals. (#68721) Thanks @Lucenx9.
 
 ## 2026.4.20
 
