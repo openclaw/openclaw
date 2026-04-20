@@ -89,13 +89,27 @@ function schedulePersist(): void {
           persistState.entries.delete(key);
         }
       }
-      const data = Object.fromEntries(persistState.entries);
-      fs.mkdirSync(path.dirname(getPersistPath()), { recursive: true });
-      fs.writeFileSync(getPersistPath(), JSON.stringify(data));
+      // Cap persisted size to MAX_ENTRIES by most-recent timestamp so the
+      // on-disk file can't grow beyond the in-memory dedupe cap.
+      let entries = Array.from(persistState.entries.entries());
+      if (entries.length > MAX_ENTRIES) {
+        entries.sort((a, b) => b[1] - a[1]);
+        entries = entries.slice(0, MAX_ENTRIES);
+      }
+      const data = Object.fromEntries(entries);
+      const filePath = getPersistPath();
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      // Write atomically via temp file + rename so a mid-write crash
+      // can't leave a truncated/corrupt JSON on disk.
+      const tmpPath = `${filePath}.${process.pid}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data));
+      fs.renameSync(tmpPath, filePath);
     } catch {
       // Best-effort persistence — don't crash on write failures.
     }
   }, PERSIST_DEBOUNCE_MS);
+  // Don't hold the event loop open for a debounced persist.
+  persistState.persistTimer.unref?.();
 }
 
 function makeKey(accountId: string, channelId: string, threadTs: string): string {
@@ -157,9 +171,17 @@ export function _flushPersist(): void {
         persistState.entries.delete(key);
       }
     }
-    const data = Object.fromEntries(persistState.entries);
-    fs.mkdirSync(path.dirname(getPersistPath()), { recursive: true });
-    fs.writeFileSync(getPersistPath(), JSON.stringify(data));
+    let entries = Array.from(persistState.entries.entries());
+    if (entries.length > MAX_ENTRIES) {
+      entries.sort((a, b) => b[1] - a[1]);
+      entries = entries.slice(0, MAX_ENTRIES);
+    }
+    const data = Object.fromEntries(entries);
+    const filePath = getPersistPath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const tmpPath = `${filePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(data));
+    fs.renameSync(tmpPath, filePath);
   } catch {
     // Best-effort.
   }
