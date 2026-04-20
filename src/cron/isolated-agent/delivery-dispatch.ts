@@ -468,7 +468,18 @@ export async function dispatchCronDelivery(
     if (!params.job.deleteAfterRun || directCronSessionDeleted) {
       return;
     }
+
     try {
+      const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+      const activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+        params.agentSessionKey,
+      );
+      if (activeSubagentRuns > 0) {
+        // Parent orchestration is still in progress; preserve the session for
+        // subagent announcements.
+        return;
+      }
+
       const { callGateway } = await loadGatewayCallRuntime();
       await callGateway({
         method: "sessions.delete",
