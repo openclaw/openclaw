@@ -117,6 +117,7 @@ function isStoredSubagentEnvelopeSession(
     sessionKey: string;
     cfg?: OpenClawConfig;
     store?: Record<string, SessionCapabilityEntry>;
+    entry?: SessionCapabilityEntry;
   },
   visited = new Set<string>(),
 ): boolean {
@@ -133,11 +134,13 @@ function isStoredSubagentEnvelopeSession(
     return false;
   }
 
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: params.cfg,
-    store: params.store,
-  });
+  const entry =
+    params.entry ??
+    resolveSessionCapabilityEntry({
+      sessionKey: normalizedSessionKey,
+      cfg: params.cfg,
+      store: params.store,
+    });
   if (
     normalizeSubagentRole(entry?.subagentRole) ||
     normalizeSubagentControlScope(entry?.subagentControlScope)
@@ -164,6 +167,7 @@ export function isSubagentEnvelopeSession(
   opts?: {
     cfg?: OpenClawConfig;
     store?: Record<string, SessionCapabilityEntry>;
+    entry?: SessionCapabilityEntry;
   },
 ): boolean {
   const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
@@ -174,6 +178,7 @@ export function isSubagentEnvelopeSession(
     sessionKey: normalizedSessionKey,
     cfg: opts?.cfg,
     store: opts?.store,
+    entry: opts?.entry,
   });
 }
 
@@ -198,7 +203,10 @@ export function resolveStoredSubagentCapabilities(
     cfg: opts?.cfg,
     store: opts?.store,
   });
-  if (!normalizedSessionKey || !isSubagentEnvelopeSession(normalizedSessionKey, opts)) {
+  if (
+    !normalizedSessionKey ||
+    !isSubagentEnvelopeSession(normalizedSessionKey, { ...opts, entry })
+  ) {
     return resolveSubagentCapabilities({ depth, maxSpawnDepth });
   }
   const storedRole = normalizeSubagentRole(entry?.subagentRole);

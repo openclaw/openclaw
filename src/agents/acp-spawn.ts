@@ -33,7 +33,10 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+} from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
@@ -745,7 +748,9 @@ function resolveAcpSubagentEnvelopeState(params: {
     };
   }
 
-  const maxChildren = params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+  const maxChildren =
+    params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
+    DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   const activeChildren = countActiveRunsForSession(requesterSessionKey);
   if (activeChildren >= maxChildren) {
     return {
