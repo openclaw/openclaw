@@ -25,7 +25,7 @@ openclaw channels status --probe
 
 Expected healthy signals:
 
-- `openclaw gateway status` shows `Runtime: running` and `RPC probe: ok`.
+- `openclaw gateway status` shows `Runtime: running`, `Connectivity probe: ok`, and a `Capability: ...` line.
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and,
   where supported, probe/audit results such as `works` or `audit ok`.
@@ -281,7 +281,8 @@ Common signatures:
 
 - `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
 - `multiple reachable gateways detected` → more than one target answered. Usually this means an intentional multi-gateway setup or stale/duplicate listeners.
-- `Probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
+- `Read-probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
+- `Capability: pairing-pending` or `gateway closed (1008): pairing required` → the gateway answered, but this client still needs pairing/approval before normal operator access.
 - unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.
 
 Related:
@@ -471,7 +472,7 @@ What to check:
 Common signatures:
 
 - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path.
-- `RPC probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
+- `Connectivity probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
 
 ### 3) Pairing and device identity state changed
 

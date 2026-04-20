@@ -133,7 +133,15 @@ run_install_smoke() {
 
     echo "==> Verify installed version"
     if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
-      printf "%s" "$FRESH_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+      # Non-root installer smoke uses the public install script path, which
+      # resolves npm "latest" rather than this host-served candidate tarball.
+      local latest_npm_version
+      latest_npm_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+      if [[ -n "$latest_npm_version" ]]; then
+        printf "%s" "$latest_npm_version" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+      else
+        printf "%s" "$FRESH_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
+      fi
     fi
     verify_installed_cli "$PACKAGE_NAME" "$FRESH_VERSION"
 

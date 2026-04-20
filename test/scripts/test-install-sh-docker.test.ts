@@ -53,6 +53,13 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
     expect(script).toContain("install smoke cannot verify pack budget");
   });
+
+  it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).toContain("quiet_npm pack --ignore-scripts");
+  });
 });
 
 describe("install-sh smoke runner", () => {

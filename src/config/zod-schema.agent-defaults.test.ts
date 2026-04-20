@@ -64,6 +64,32 @@ describe("agent defaults schema", () => {
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
   });
 
+  it("accepts focused contextLimits on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      contextLimits: {
+        memoryGetMaxChars: 20_000,
+        memoryGetDefaultLines: 200,
+        toolResultMaxChars: 24_000,
+        postCompactionMaxChars: 4_000,
+      },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      skillsLimits: {
+        maxSkillsPromptChars: 30_000,
+      },
+      contextLimits: {
+        memoryGetMaxChars: 18_000,
+      },
+    });
+
+    expect(defaults.contextLimits?.memoryGetMaxChars).toBe(20_000);
+    expect(defaults.contextLimits?.memoryGetDefaultLines).toBe(200);
+    expect(defaults.contextLimits?.toolResultMaxChars).toBe(24_000);
+    expect(agent.skillsLimits?.maxSkillsPromptChars).toBe(30_000);
+    expect(agent.contextLimits?.memoryGetMaxChars).toBe(18_000);
+  });
+
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       heartbeat: { timeoutSeconds: 45 },

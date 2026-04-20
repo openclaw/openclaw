@@ -955,21 +955,21 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 
 ### `agents.defaults.bootstrapMaxChars`
 
-Max characters per workspace bootstrap file before truncation. Default: `20000`.
+Max characters per workspace bootstrap file before truncation. Default: `12000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapMaxChars: 20000 } },
+  agents: { defaults: { bootstrapMaxChars: 12000 } },
 }
 ```
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
-Max total characters injected across all workspace bootstrap files. Default: `150000`.
+Max total characters injected across all workspace bootstrap files. Default: `60000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
+  agents: { defaults: { bootstrapTotalMaxChars: 60000 } },
 }
 ```
 
@@ -985,6 +985,142 @@ Default: `"once"`.
 ```json5
 {
   agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
+}
+```
+
+### Context budget ownership map
+
+OpenClaw has multiple high-volume prompt/context budgets, and they are
+intentionally split by subsystem instead of all flowing through one generic
+knob.
+
+- `agents.defaults.bootstrapMaxChars` /
+  `agents.defaults.bootstrapTotalMaxChars`:
+  normal workspace bootstrap injection.
+- `agents.defaults.startupContext.*`:
+  one-shot `/new` and `/reset` startup prelude, including recent daily
+  `memory/*.md` files.
+- `skills.limits.*`:
+  the compact skills list injected into the system prompt.
+- `agents.defaults.contextLimits.*`:
+  bounded runtime excerpts and injected runtime-owned blocks.
+- `memory.qmd.limits.*`:
+  indexed memory-search snippet and injection sizing.
+
+Use the matching per-agent override only when one agent needs a different
+budget:
+
+- `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextLimits.*`
+
+#### `agents.defaults.startupContext`
+
+Controls the first-turn startup prelude injected on bare `/new` and `/reset`
+runs.
+
+```json5
+{
+  agents: {
+    defaults: {
+      startupContext: {
+        enabled: true,
+        applyOn: ["new", "reset"],
+        dailyMemoryDays: 2,
+        maxFileBytes: 16384,
+        maxFileChars: 1200,
+        maxTotalChars: 2800,
+      },
+    },
+  },
+}
+```
+
+#### `agents.defaults.contextLimits`
+
+Shared defaults for bounded runtime context surfaces.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        memoryGetDefaultLines: 120,
+        toolResultMaxChars: 16000,
+        postCompactionMaxChars: 1800,
+      },
+    },
+  },
+}
+```
+
+- `memoryGetMaxChars`: default `memory_get` excerpt cap before truncation
+  metadata and continuation notice are added.
+- `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
+  omitted.
+- `toolResultMaxChars`: live tool-result cap used for persisted results and
+  overflow recovery.
+- `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
+  refresh injection.
+
+#### `agents.list[].contextLimits`
+
+Per-agent override for the shared `contextLimits` knobs. Omitted fields inherit
+from `agents.defaults.contextLimits`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        toolResultMaxChars: 16000,
+      },
+    },
+    list: [
+      {
+        id: "tiny-local",
+        contextLimits: {
+          memoryGetMaxChars: 6000,
+          toolResultMaxChars: 8000,
+        },
+      },
+    ],
+  },
+}
+```
+
+#### `skills.limits.maxSkillsPromptChars`
+
+Global cap for the compact skills list injected into the system prompt. This
+does not affect reading `SKILL.md` files on demand.
+
+```json5
+{
+  skills: {
+    limits: {
+      maxSkillsPromptChars: 18000,
+    },
+  },
+}
+```
+
+#### `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Per-agent override for the skills prompt budget.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "tiny-local",
+        skillsLimits: {
+          maxSkillsPromptChars: 6000,
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -2831,7 +2967,8 @@ See [Plugins](/tools/plugin).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
   when your provider gives you a direct DevTools WebSocket URL.
-- `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
+- `existing-session` profiles use Chrome MCP instead of CDP and can attach on
+  the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
 - `existing-session` profiles keep the current Chrome MCP route limits:

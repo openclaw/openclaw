@@ -124,17 +124,14 @@ type IsolatedDeliveryContract = "cron-owned" | "shared";
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
   resolvedDelivery: ResolvedCronDeliveryTarget;
-  deliveryContract: IsolatedDeliveryContract;
+  deliveryMode: "announce" | "webhook" | "none";
 }) {
   return {
     // Only enforce an explicit message target when the cron delivery target
     // was successfully resolved. When resolution fails the agent should not
     // be blocked by a target it cannot satisfy (#27898).
     requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
-    // Cron-owned runs always route user-facing delivery through the runner
-    // itself. Shared callers keep the previous behavior so non-cron paths do
-    // not silently lose the message tool when no explicit delivery is active.
-    disableMessageTool: params.deliveryContract === "cron-owned" ? true : params.deliveryRequested,
+    disableMessageTool: params.deliveryMode !== "none",
   };
 }
 
@@ -145,7 +142,8 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  if (!deliveryPlan.requested) {
+  const hasMessageTargetContext = deliveryPlan.mode !== "webhook" && deliveryPlan.to !== undefined;
+  if (!deliveryPlan.requested && !hasMessageTargetContext) {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -162,7 +160,7 @@ async function resolveCronDeliveryContext(params: {
       toolPolicy: resolveCronToolPolicy({
         deliveryRequested: false,
         resolvedDelivery,
-        deliveryContract: params.deliveryContract,
+        deliveryMode: deliveryPlan.mode,
       }),
     };
   }
@@ -181,7 +179,7 @@ async function resolveCronDeliveryContext(params: {
     toolPolicy: resolveCronToolPolicy({
       deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
-      deliveryContract: params.deliveryContract,
+      deliveryMode: deliveryPlan.mode,
     }),
   };
 }
@@ -669,7 +667,6 @@ async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
-    runSessionId: prepared.runSessionId,
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,
@@ -750,7 +747,9 @@ export async function runCronIsolatedAgentTurn(params: {
       lane: params.lane,
       resolvedDelivery: {
         channel: prepared.context.resolvedDelivery.channel,
+        to: prepared.context.resolvedDelivery.to,
         accountId: prepared.context.resolvedDelivery.accountId,
+        threadId: prepared.context.resolvedDelivery.threadId,
       },
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,

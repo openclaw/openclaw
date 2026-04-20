@@ -39,6 +39,18 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+export type PluginManifestProviderEndpoint = {
+  /**
+   * Core endpoint class this plugin-owned endpoint should map to. Core must
+   * already know the class; manifests own host/baseUrl matching metadata.
+   */
+  endpointClass: string;
+  /** Hostnames that should resolve to this endpoint class. */
+  hosts?: string[];
+  /** Exact normalized base URLs that should resolve to this endpoint class. */
+  baseUrls?: string[];
+};
+
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
 
 export type PluginManifestActivation = {
@@ -47,6 +59,8 @@ export type PluginManifestActivation = {
    * This is metadata only; runtime loading still happens through the loader.
    */
   onProviders?: string[];
+  /** Agent harness runtime ids that should activate this plugin. */
+  onAgentHarnesses?: string[];
   /** Command ids that should activate this plugin. */
   onCommands?: string[];
   /** Channel ids that should activate this plugin. */
@@ -159,8 +173,20 @@ export type PluginManifest = {
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
   modelSupport?: PluginManifestModelSupport;
+  /** Cheap provider endpoint metadata used before provider runtime loads. */
+  providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
+  /**
+   * Provider or CLI backend refs whose plugin-owned synthetic auth hook should
+   * be probed during cold model discovery before the runtime registry exists.
+   */
+  syntheticAuthRefs?: string[];
+  /**
+   * Bundled-plugin-owned placeholder API key values that represent non-secret
+   * local, OAuth, or ambient credential state.
+   */
+  nonSecretAuthMarkers?: string[];
   /**
    * Plugin-owned command aliases that should resolve to this plugin during
    * config diagnostics before runtime loads.
@@ -421,12 +447,44 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
 }
 
+function normalizeManifestProviderEndpoints(
+  value: unknown,
+): PluginManifestProviderEndpoint[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const endpoints: PluginManifestProviderEndpoint[] = [];
+  for (const rawEndpoint of value) {
+    if (!isRecord(rawEndpoint)) {
+      continue;
+    }
+    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
+    if (!endpointClass) {
+      continue;
+    }
+    const hosts = normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase());
+    const baseUrls = normalizeTrimmedStringList(rawEndpoint.baseUrls);
+    if (hosts.length === 0 && baseUrls.length === 0) {
+      continue;
+    }
+    endpoints.push({
+      endpointClass,
+      ...(hosts.length > 0 ? { hosts } : {}),
+      ...(baseUrls.length > 0 ? { baseUrls } : {}),
+    });
+  }
+
+  return endpoints.length > 0 ? endpoints : undefined;
+}
+
 function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
 
   const onProviders = normalizeTrimmedStringList(value.onProviders);
+  const onAgentHarnesses = normalizeTrimmedStringList(value.onAgentHarnesses);
   const onCommands = normalizeTrimmedStringList(value.onCommands);
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
@@ -440,6 +498,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
 
   const activation = {
     ...(onProviders.length > 0 ? { onProviders } : {}),
+    ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
     ...(onCommands.length > 0 ? { onCommands } : {}),
     ...(onChannels.length > 0 ? { onChannels } : {}),
     ...(onRoutes.length > 0 ? { onRoutes } : {}),
@@ -696,7 +755,10 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
+  const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
+  const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
@@ -730,7 +792,10 @@ export function loadPluginManifest(
       providers,
       providerDiscoveryEntry,
       modelSupport,
+      providerEndpoints,
       cliBackends,
+      syntheticAuthRefs,
+      nonSecretAuthMarkers,
       commandAliases,
       providerAuthEnvVars,
       providerAuthAliases,
@@ -805,9 +870,15 @@ export type OpenClawPackageStartup = {
   deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
+export type OpenClawPackageSetupFeatures = {
+  legacyStateMigrations?: boolean;
+  legacySessionSurfaces?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   setupEntry?: string;
+  setupFeatures?: OpenClawPackageSetupFeatures;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
