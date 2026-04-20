@@ -5,17 +5,33 @@ import { setMSTeamsRuntime } from "../runtime.js";
 
 export const channelConversationId = "19:general@thread.tacv2";
 
-export function createMessageHandlerDeps(cfg: OpenClawConfig) {
-  const enqueueSystemEvent = vi.fn();
-  const recordInboundSession = vi.fn(async (_params: { sessionKey: string }) => undefined);
-  const resolveAgentRoute = vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
-    sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
-    agentId: "main",
-    accountId: "default",
-    mainSessionKey: "agent:main:main",
-    lastRoutePolicy: "session" as const,
-    matchedBy: "default" as const,
-  }));
+type MessageHandlerDepsOptions = {
+  enqueueSystemEvent?: ReturnType<typeof vi.fn>;
+  readAllowFromStore?: ReturnType<typeof vi.fn>;
+  upsertPairingRequest?: ReturnType<typeof vi.fn>;
+  recordInboundSession?: ReturnType<typeof vi.fn>;
+  resolveAgentRoute?: ReturnType<typeof vi.fn>;
+};
+
+export function createMessageHandlerDeps(
+  cfg: OpenClawConfig,
+  options: MessageHandlerDepsOptions = {},
+) {
+  const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
+  const readAllowFromStore = options.readAllowFromStore ?? vi.fn(async () => []);
+  const upsertPairingRequest = options.upsertPairingRequest ?? vi.fn(async () => null);
+  const recordInboundSession =
+    options.recordInboundSession ?? vi.fn(async (_params: { sessionKey: string }) => undefined);
+  const resolveAgentRoute =
+    options.resolveAgentRoute ??
+    vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
+      sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
+      agentId: "main",
+      accountId: "default",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session" as const,
+      matchedBy: "default" as const,
+    }));
 
   setMSTeamsRuntime({
     logging: { shouldLogVerbose: () => false },
@@ -32,8 +48,8 @@ export function createMessageHandlerDeps(cfg: OpenClawConfig) {
         }),
       },
       pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => null),
+        readAllowFromStore,
+        upsertPairingRequest,
       },
       text: {
         hasControlCommand: () => false,
@@ -51,6 +67,15 @@ export function createMessageHandlerDeps(cfg: OpenClawConfig) {
     },
   } as unknown as PluginRuntime);
 
+  const conversationStore = {
+    get: vi.fn(async () => null),
+    upsert: vi.fn(async () => undefined),
+    list: vi.fn(async () => []),
+    remove: vi.fn(async () => false),
+    findPreferredDmByUserId: vi.fn(async () => null),
+    findByUserId: vi.fn(async () => null),
+  } satisfies MSTeamsMessageHandlerDeps["conversationStore"];
+
   const deps: MSTeamsMessageHandlerDeps = {
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
@@ -61,14 +86,7 @@ export function createMessageHandlerDeps(cfg: OpenClawConfig) {
     },
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
-    conversationStore: {
-      get: vi.fn(async () => null),
-      upsert: vi.fn(async () => undefined),
-      list: vi.fn(async () => []),
-      remove: vi.fn(async () => false),
-      findPreferredDmByUserId: vi.fn(async () => null),
-      findByUserId: vi.fn(async () => null),
-    } satisfies MSTeamsMessageHandlerDeps["conversationStore"],
+    conversationStore,
     pollStore: {
       recordVote: vi.fn(async () => null),
     } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
@@ -80,8 +98,11 @@ export function createMessageHandlerDeps(cfg: OpenClawConfig) {
   };
 
   return {
+    conversationStore,
     deps,
     enqueueSystemEvent,
+    readAllowFromStore,
+    upsertPairingRequest,
     recordInboundSession,
     resolveAgentRoute,
   };
