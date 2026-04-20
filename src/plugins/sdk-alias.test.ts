@@ -1058,7 +1058,7 @@ export const syntheticRuntimeMarker = {
 });
 
 describe("buildPluginLoaderAliasMap memoization", () => {
-  it("returns the same object reference for identical inputs (jiti sentinel safety)", () => {
+  it("returns the same object reference for identical effective context", () => {
     const fixture = createPluginSdkAliasFixture();
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
@@ -1070,8 +1070,6 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     const first = buildPluginLoaderAliasMap(sourcePluginEntry);
     const second = buildPluginLoaderAliasMap(sourcePluginEntry);
 
-    // Reference identity is critical: jiti's normalizeAliases uses a
-    // reference-identity sentinel to skip O(N²) re-processing.
     expect(second).toBe(first);
   });
 

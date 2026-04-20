@@ -430,11 +430,9 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-// Memoize alias maps by inputs so the same object reference is returned for
-// identical parameters. jiti's `normalizeAliases` uses a reference-identity
-// sentinel (`if (e[pt]) return e`) to skip its O(N²) normalization — returning
-// the same object lets the sentinel fire on the 2nd+ call instead of repeating
-// the full cycle every time. See #68983.
+// Memoize alias maps by effective resolution context so repeated loader setup
+// avoids rebuilding the same filesystem-derived map. Include cwd/env inputs
+// because the fallback root and private QA alias surfaces depend on them.
 const aliasMapCache = new Map<string, Record<string, string>>();
 
 function buildPluginLoaderAliasMapCacheKey(params: {
