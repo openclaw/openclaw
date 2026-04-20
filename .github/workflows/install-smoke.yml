@@ -20,7 +20,7 @@ env:
 jobs:
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
