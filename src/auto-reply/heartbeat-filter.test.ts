@@ -1,10 +1,77 @@
 import { describe, expect, it } from "vitest";
 import {
   filterHeartbeatPairs,
+  isExecEventInjectionMessage,
   isHeartbeatOkResponse,
   isHeartbeatUserMessage,
 } from "./heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "./heartbeat.js";
+
+describe("isExecEventInjectionMessage", () => {
+  it("matches exec event injection user messages", () => {
+    expect(
+      isExecEventInjectionMessage({
+        role: "user",
+        content:
+          "System (untrusted): [2026-04-19 15:04:47 PDT] Exec completed (rapid-or, code 0) :: hello\n\nRead HEARTBEAT.md if it exists.",
+      }),
+    ).toBe(true);
+
+    expect(
+      isExecEventInjectionMessage({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "System (untrusted): [2026-04-19 08:22:20 PDT] Exec failed (job-1, code 1) :: error\n\nAn async command failed.",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isExecEventInjectionMessage({
+        role: "user",
+        content: "System (untrusted): [Mon 2026-04-19 15:04:47] Exec finished (deploy-abc, code 0)",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match regular user messages", () => {
+    expect(
+      isExecEventInjectionMessage({
+        role: "user",
+        content: "run this shell command asynchronously: sleep 3 && echo hello",
+      }),
+    ).toBe(false);
+
+    expect(
+      isExecEventInjectionMessage({
+        role: "user",
+        content: "Please reply HEARTBEAT_OK so I can test something.",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not match assistant messages", () => {
+    expect(
+      isExecEventInjectionMessage({
+        role: "assistant",
+        content:
+          "System (untrusted): [2026-04-19 15:04:47 PDT] Exec completed (rapid-or, code 0) :: hello",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not match messages without the exec prefix", () => {
+    expect(
+      isExecEventInjectionMessage({
+        role: "user",
+        content: "System (untrusted): [2026-04-19 15:04:47 PDT] Some other event",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {

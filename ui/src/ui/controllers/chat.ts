@@ -1,4 +1,5 @@
 import { resetToolStream } from "../app-tool-stream.ts";
+import { isExecEventInjectionMessage, isHeartbeatOkResponse } from "../chat/heartbeat-client.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
@@ -72,7 +73,25 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
 }
 
 function shouldHideHistoryMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message);
+  if (isAssistantSilentReply(message) || isSyntheticTranscriptRepairToolResult(message)) {
+    return true;
+  }
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as { role: string; content?: unknown };
+  // Hide heartbeat exec-event injection messages that leaked into the main session.
+  // These appear as user-role messages starting with "System (untrusted): [...] Exec completed..."
+  // and are internal runtime machinery, not real user messages.
+  if (isExecEventInjectionMessage(entry)) {
+    return true;
+  }
+  // Hide pure HEARTBEAT_OK assistant acks (ackMaxChars=0 means only empty-after-strip matches).
+  // Relay messages that happen to append HEARTBEAT_OK are handled by text stripping in the renderer.
+  if (isHeartbeatOkResponse(entry, 0)) {
+    return true;
+  }
+  return false;
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {

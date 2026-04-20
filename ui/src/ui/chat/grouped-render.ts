@@ -16,6 +16,7 @@ import type {
 } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
+import { stripHeartbeatToken } from "./heartbeat-client.ts";
 import {
   extractTextCached,
   extractThinkingCached,
@@ -1204,7 +1205,16 @@ function renderGroupedMessage(
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  // Strip HEARTBEAT_OK token from assistant messages. For pure acks this yields null
+  // (message already hidden by shouldHideHistoryMessage, but this is a safety net).
+  // For relay messages like "Command finished...\n\nHEARTBEAT_OK" it strips only the token.
+  const markdown =
+    role === "assistant" && markdownBase
+      ? (() => {
+          const s = stripHeartbeatToken(markdownBase, { mode: "heartbeat", maxAckChars: 0 });
+          return s.shouldSkip ? null : s.didStrip ? s.text || null : markdownBase;
+        })()
+      : markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
