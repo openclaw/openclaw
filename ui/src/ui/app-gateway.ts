@@ -25,6 +25,7 @@ import {
   type AssistantIdentityState,
 } from "./controllers/assistant-identity.ts";
 import {
+  appendTranscriptMessage,
   loadChatHistory,
   handleChatEvent,
   type ChatEventPayload,
@@ -441,7 +442,9 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string } | undefined,
+  payload:
+    | { sessionKey?: string; message?: unknown; messageId?: string; messageSeq?: number }
+    | undefined,
 ) {
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
@@ -454,6 +457,12 @@ function handleSessionMessageGatewayEvent(
   // chatStream, which delays the user message card from appearing until the
   // first LLM delta arrives.
   if (host.chatRunId) {
+    if (payload?.message !== undefined) {
+      appendTranscriptMessage(host as unknown as ChatState, payload.message, {
+        messageId: typeof payload.messageId === "string" ? payload.messageId : undefined,
+        messageSeq: typeof payload.messageSeq === "number" ? payload.messageSeq : undefined,
+      });
+    }
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
     return;
   }
@@ -498,7 +507,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "session.message") {
-    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
+    handleSessionMessageGatewayEvent(
+      host,
+      evt.payload as
+        | { sessionKey?: string; message?: unknown; messageId?: string; messageSeq?: number }
+        | undefined,
+    );
     return;
   }
 
