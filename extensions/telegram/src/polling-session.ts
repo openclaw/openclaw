@@ -8,7 +8,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { resolveTelegramApiBase, type TelegramTransport } from "./fetch.js";
+import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
@@ -112,7 +112,7 @@ export class TelegramPollingSession {
     const heartbeatLoop = (async () => {
       while (!heartbeatAborted()) {
         await sleepWithAbort(HEARTBEAT_INTERVAL_MS, heartbeatStop.signal).catch(() => {});
-        if (heartbeatAborted()) return;
+        if (heartbeatAborted()) { return; }
 
         let heartbeat: "ok" | "network-failure" | "fatal-api-failure" = "network-failure";
         try {
@@ -180,7 +180,8 @@ export class TelegramPollingSession {
     try {
       while (!this.opts.abortSignal?.aborted) {
         // If heartbeat has suspended polling, wait for recovery.
-        while (heartbeatSuspended && !this.opts.abortSignal?.aborted) {
+        while (!this.opts.abortSignal?.aborted) {
+          if (!heartbeatSuspended) { break; }
           const abortController = new AbortController();
           const onSessionAbort = () => abortController.abort();
           const onRecovery = () => abortController.abort();
@@ -200,14 +201,14 @@ export class TelegramPollingSession {
           this.opts.abortSignal?.removeEventListener("abort", onSessionAbort);
           heartbeatRecoveryWake.signal.removeEventListener("abort", onRecovery);
         }
-        if (this.opts.abortSignal?.aborted) return;
+        if (this.opts.abortSignal?.aborted) { return; }
 
         const bot = await this.#createPollingBot();
-        if (!bot) continue;
+        if (!bot) { continue; }
 
         const cleanupState = await this.#ensureWebhookCleanup(bot);
-        if (cleanupState === "retry") continue;
-        if (cleanupState === "exit") return;
+        if (cleanupState === "retry") { continue; }
+        if (cleanupState === "exit") { return; }
 
         // Re-check suspension after async setup to avoid a race window.
         if (heartbeatSuspended || this.opts.abortSignal?.aborted) {
@@ -221,7 +222,7 @@ export class TelegramPollingSession {
         const state = await this.#runPollingCycle(bot, cycleAbort.signal);
         currentCycleAbort = undefined;
 
-        if (state === "exit") return;
+        if (state === "exit") { return; }
         // "continue" — loop back, will check heartbeatSuspended before starting next cycle.
       }
     } finally {
