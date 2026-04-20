@@ -140,6 +140,7 @@ describe("handleTtsCommands status fallback reporting", () => {
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/fallback.ogg",
+      mediaUrl: "/Users/test/.openclaw/media/tool-tts/fallback.ogg",
       provider: FALLBACK_TTS_PROVIDER,
       fallbackFrom: PRIMARY_TTS_PROVIDER,
       attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
@@ -163,7 +164,7 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const audioResult = await handleTtsCommands(buildTtsParams("/tts audio hello world"), true);
     expect(audioResult?.shouldContinue).toBe(false);
-    expect(audioResult?.reply?.mediaUrl).toBe("/tmp/fallback.ogg");
+    expect(audioResult?.reply?.mediaUrl).toBe("/Users/test/.openclaw/media/tool-tts/fallback.ogg");
 
     const statusResult = await handleTtsCommands(buildTtsParams("/tts status"), true);
     expect(statusResult?.shouldContinue).toBe(false);
