@@ -439,6 +439,22 @@ describe("devices cli local fallback", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
   });
 
+  it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
+    callGateway.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      paired: [],
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesCommand(["list"]);
+
+    expect(listDevicePairing).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
   it("does not use local fallback when an explicit --url is provided", async () => {
     callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
 

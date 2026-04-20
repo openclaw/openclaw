@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -120,7 +121,7 @@ function normalizeErrorMessage(error: unknown): string {
 
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (!message.includes("pairing required")) {
+  if (!readConnectPairingRequiredMessage(message)) {
     return false;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
