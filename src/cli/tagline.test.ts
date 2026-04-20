@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TAGLINE, pickTagline } from "./tagline.js";
+import { DEFAULT_TAGLINE, TAGLINES, pickTagline } from "./tagline.js";
 
 describe("pickTagline", () => {
   it("returns empty string when mode is off", () => {
@@ -17,5 +17,26 @@ describe("pickTagline", () => {
     });
     expect(value.length).toBeGreaterThan(0);
     expect(value).not.toBe(DEFAULT_TAGLINE);
+  });
+
+  it("keeps random taglines neutral and operator-facing", () => {
+    const bannedTerms = [
+      "segfault",
+      "roast",
+      "judge",
+      "dignity",
+      "spite",
+      "passive-aggressive",
+      "possessed",
+      "relationships",
+      "shame",
+    ];
+
+    for (const tagline of TAGLINES) {
+      const lower = tagline.toLowerCase();
+      for (const term of bannedTerms) {
+        expect(lower).not.toContain(term);
+      }
+    }
   });
 });

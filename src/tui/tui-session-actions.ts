@@ -30,7 +30,7 @@ type SessionActionContext = {
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
-  setActivityStatus: (text: string) => void;
+  setActivityStatus: (text: string, startedAt?: number | null) => void;
   clearLocalRunIds?: () => void;
 };
 
@@ -41,6 +41,7 @@ type SessionInfoDefaults = {
 };
 
 type SessionInfoEntry = SessionInfo & {
+  key?: string;
   modelOverride?: string;
   providerOverride?: string;
 };
@@ -133,6 +134,34 @@ export function createSessionActions(context: SessionActionContext) {
     });
   };
 
+  const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
+
+  const isCurrentSessionEntry = (entryKey: string | undefined) => {
+    if (!entryKey) {
+      return false;
+    }
+    if (entryKey === state.currentSessionKey) {
+      return true;
+    }
+    return normalizeMatchKey(entryKey) === normalizeMatchKey(state.currentSessionKey);
+  };
+
+  const syncActivityFromSessionInfo = (entry?: SessionInfoEntry | null) => {
+    if (!entry || !isCurrentSessionEntry(entry.key)) {
+      return;
+    }
+    const busy = new Set(["sending", "waiting", "streaming", "running"]);
+    if (entry.status === "running") {
+      if (!busy.has(state.activityStatus) || state.activityStatus === "running") {
+        setActivityStatus("running", entry.startedAt);
+      }
+      return;
+    }
+    if (!state.activeChatRunId && state.activityStatus === "running") {
+      setActivityStatus("idle");
+    }
+  };
+
   const applySessionInfo = (params: {
     entry?: SessionInfoEntry | null;
     defaults?: SessionInfoDefaults | null;
@@ -197,6 +226,18 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.displayName !== undefined) {
       next.displayName = entry.displayName;
     }
+    if (entry?.status !== undefined) {
+      next.status = entry.status;
+    }
+    if (entry?.startedAt !== undefined) {
+      next.startedAt = entry.startedAt;
+    }
+    if (entry?.endedAt !== undefined) {
+      next.endedAt = entry.endedAt;
+    }
+    if (entry?.runtimeMs !== undefined) {
+      next.runtimeMs = entry.runtimeMs;
+    }
     if (entry?.updatedAt !== undefined) {
       next.updatedAt = entry.updatedAt;
     }
@@ -213,6 +254,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider();
     updateFooter();
     tui.requestRender();
+    syncActivityFromSessionInfo(entry);
   };
 
   const runRefreshSessionInfo = async () => {
@@ -230,7 +272,6 @@ export function createSessionActions(context: SessionActionContext) {
         includeUnknown: false,
         agentId: listAgentId,
       });
-      const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
       const currentMatchKey = normalizeMatchKey(state.currentSessionKey);
       const entry = result.sessions.find((row) => {
         // Exact match
@@ -280,6 +321,28 @@ export function createSessionActions(context: SessionActionContext) {
             model: resolved.model ?? result.entry.model,
           }
         : result.entry;
+    applySessionInfo({ entry, force: true });
+  };
+
+  const applySessionInfoFromEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const event = payload as SessionInfoEntry & {
+      sessionKey?: string;
+      key?: string;
+      reason?: string;
+    };
+    const key = event.key ?? event.sessionKey;
+    if (!isCurrentSessionEntry(key)) {
+      return;
+    }
+    const entry = { ...event, key: key ?? state.currentSessionKey };
+    if (entry.key && entry.key !== state.currentSessionKey) {
+      updateAgentFromSessionKey(entry.key);
+      state.currentSessionKey = entry.key;
+      updateHeader();
+    }
     applySessionInfo({ entry, force: true });
   };
 
@@ -405,6 +468,7 @@ export function createSessionActions(context: SessionActionContext) {
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,
+    applySessionInfoFromEvent,
     loadHistory,
     setSession,
     abortActive,

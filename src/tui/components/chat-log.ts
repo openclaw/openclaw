@@ -3,6 +3,7 @@ import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
+import { prefixTimestamp } from "./timestamp.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
@@ -94,7 +95,7 @@ export class ChatLog extends Container {
   private createSystemMessage(text: string): Container {
     const entry = new Container();
     entry.addChild(new Spacer(1));
-    entry.addChild(new Text(theme.system(text), 1, 0));
+    entry.addChild(new Text(theme.system(prefixTimestamp(text)), 1, 0));
     return entry;
   }
 

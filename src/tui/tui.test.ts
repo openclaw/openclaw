@@ -8,6 +8,7 @@ import {
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
+  resolveTuiProjectSessionKey,
   resolveInitialTuiAgentId,
   resolveTuiSessionKey,
   stopTuiSafely,
@@ -58,6 +59,16 @@ describe("tui slash commands", () => {
 });
 
 describe("resolveTuiSessionKey", () => {
+  it("derives stable project session keys from cwd", () => {
+    const first = resolveTuiProjectSessionKey({ cwd: "/tmp/OpenClaw Console" });
+    const second = resolveTuiProjectSessionKey({ cwd: "/tmp/OpenClaw Console" });
+    const other = resolveTuiProjectSessionKey({ cwd: "/tmp/Other Project" });
+
+    expect(first).toMatch(/^project:openclaw-console:[a-f0-9]{10}$/);
+    expect(first).toBe(second);
+    expect(first).not.toBe(other);
+  });
+
   it("uses global only as the default when scope is global", () => {
     expect(
       resolveTuiSessionKey({

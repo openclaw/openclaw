@@ -25,7 +25,7 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
+type ExecPolicyPresetName = "yolo" | "hands-free" | "cautious" | "deny-all";
 
 type ExecPolicyResolved = {
   host?: ExecTarget;
@@ -40,6 +40,12 @@ const EXEC_POLICY_PRESETS: Record<ExecPolicyPresetName, Required<ExecPolicyResol
     security: "full",
     ask: "off",
     askFallback: "full",
+  },
+  "hands-free": {
+    host: "gateway",
+    security: "allowlist",
+    ask: "off",
+    askFallback: "deny",
   },
   cautious: {
     host: "gateway",
@@ -389,7 +395,7 @@ export function registerExecPolicyCli(program: Command) {
 
   execPolicy
     .command("preset <name>")
-    .description('Apply a synchronized preset: "yolo", "cautious", or "deny-all"')
+    .description('Apply a synchronized preset: "yolo", "hands-free", "cautious", or "deny-all"')
     .option("--json", "Output as JSON", false)
     .action(async (name: string, opts: { json?: boolean }) => {
       await runExecPolicyAction(async () => {

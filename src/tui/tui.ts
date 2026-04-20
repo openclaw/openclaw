@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
 import {
   CombinedAutocompleteProvider,
   Container,
@@ -73,6 +75,19 @@ export function resolveTuiSessionKey(params: {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
+}
+
+export function resolveTuiProjectSessionKey(params?: { cwd?: string }) {
+  const cwd = path.resolve(params?.cwd ?? process.cwd());
+  const rawName = path.basename(cwd) || "project";
+  const slug =
+    normalizeLowercaseStringOrEmpty(rawName)
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+/, "")
+      .replace(/-+$/, "")
+      .slice(0, 48) || "project";
+  const hash = createHash("sha1").update(cwd).digest("hex").slice(0, 10);
+  return `project:${slug}:${hash}`;
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -206,7 +221,9 @@ export function resolveCtrlCAction(params: {
 
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
-  const initialSessionInput = (opts.session ?? "").trim();
+  const explicitSessionInput = (opts.session ?? "").trim();
+  const initialSessionInput =
+    explicitSessionInput || resolveTuiProjectSessionKey({ cwd: process.cwd() });
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
@@ -243,7 +260,6 @@ export async function runTui(opts: TuiOptions) {
   let statusTimeout: NodeJS.Timeout | null = null;
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
-  let lastActivityStatus = activityStatus;
 
   const state: TuiStateAccess = {
     get agentDefaultId() {
@@ -555,7 +571,8 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
 
-    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
+    const label = activityStatus === "running" ? "thinking/working" : activityStatus;
+    statusLoader.setMessage(`${label} • ${elapsed} | ${connectionStatus}`);
   };
 
   const startStatusTimer = () => {
@@ -611,7 +628,7 @@ export async function runTui(opts: TuiOptions) {
   const renderStatus = () => {
     const isBusy = busyStates.has(activityStatus);
     if (isBusy) {
-      if (!statusStartedAt || lastActivityStatus !== activityStatus) {
+      if (!statusStartedAt) {
         statusStartedAt = Date.now();
       }
       ensureStatusLoader();
@@ -633,7 +650,6 @@ export async function runTui(opts: TuiOptions) {
       const text = activityStatus ? `${connectionStatus} | ${activityStatus}` : connectionStatus;
       statusText?.setText(theme.dim(text));
     }
-    lastActivityStatus = activityStatus;
   };
 
   const setConnectionStatus = (text: string, ttlMs?: number) => {
@@ -650,8 +666,14 @@ export async function runTui(opts: TuiOptions) {
     }
   };
 
-  const setActivityStatus = (text: string) => {
+  const setActivityStatus = (text: string, startedAt?: number | null) => {
+    const changed = activityStatus !== text;
     activityStatus = text;
+    if (typeof startedAt === "number" && Number.isFinite(startedAt) && startedAt > 0) {
+      statusStartedAt = startedAt;
+    } else if (changed) {
+      statusStartedAt = null;
+    }
     renderStatus();
   };
 
@@ -725,6 +747,7 @@ export async function runTui(opts: TuiOptions) {
     refreshAgents,
     refreshSessionInfo,
     applySessionInfoFromPatch,
+    applySessionInfoFromEvent,
     loadHistory,
     setSession,
     abortActive,
@@ -881,6 +904,9 @@ export async function runTui(opts: TuiOptions) {
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
+    if (evt.event === "sessions.changed") {
+      applySessionInfoFromEvent(evt.payload);
+    }
   };
 
   client.onConnected = () => {
@@ -891,6 +917,11 @@ export async function runTui(opts: TuiOptions) {
     setConnectionStatus("connected");
     void (async () => {
       await refreshAgents();
+      try {
+        await client.subscribeSessions();
+      } catch (err) {
+        chatLog.addSystem(`session activity subscription failed: ${String(err)}`);
+      }
       updateHeader();
       await loadHistory();
       setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);

@@ -2,6 +2,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
+import { formatTuiTimestamp } from "./timestamp.js";
 
 type ToolResultContent = {
   type?: string;
@@ -59,6 +60,7 @@ export class ToolExecutionComponent extends Container {
   private output: Markdown;
   private toolName: string;
   private args: unknown;
+  private timestamp: string;
   private result?: ToolResult;
   private expanded = false;
   private isError = false;
@@ -68,6 +70,7 @@ export class ToolExecutionComponent extends Container {
     super();
     this.toolName = toolName;
     this.args = args;
+    this.timestamp = formatTuiTimestamp();
     this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
@@ -117,7 +120,7 @@ export class ToolExecutionComponent extends Container {
       name: this.toolName,
       args: this.args,
     });
-    const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
+    const title = `[${this.timestamp}] ${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
     const argLine = formatArgs(this.toolName, this.args);

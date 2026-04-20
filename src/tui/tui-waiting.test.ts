@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildWaitingStatusMessage, pickWaitingPhrase } from "./tui-waiting.js";
+import {
+  buildWaitingStatusMessage,
+  defaultWaitingPhrases,
+  pickWaitingPhrase,
+} from "./tui-waiting.js";
 
 const theme = {
   dim: (s: string) => `<d>${s}</d>`,
@@ -27,6 +31,7 @@ describe("tui-waiting", () => {
     });
 
     expect(msg).toContain("connected");
+    expect(msg).toContain("working");
     expect(msg).toContain("3s");
     // text is wrapped per-char; check it appears in order
     expect(msg).toContain("h");
@@ -36,5 +41,12 @@ describe("tui-waiting", () => {
     // shimmer should contain both highlighted and dim parts
     expect(msg).toContain("<b><a>");
     expect(msg).toContain("<d>");
+  });
+
+  it("uses clear operator-facing default waiting phrases", () => {
+    expect(defaultWaitingPhrases).toContain("waiting for the model");
+    expect(defaultWaitingPhrases).toContain("working on the request");
+    expect(defaultWaitingPhrases).not.toContain("flibbertigibbeting");
+    expect(defaultWaitingPhrases).not.toContain("twiddling thumbs");
   });
 });
