@@ -34,6 +34,13 @@ describe("tool mutation helpers", () => {
     expect(metaOnlyFingerprint).toContain("tool=exec");
     expect(metaOnlyFingerprint).toContain("meta=ls -la");
 
+    const pipedMetaFingerprint = buildToolActionFingerprint(
+      "exec",
+      { command: "echo hi | wc -l" },
+      "echo hi | wc -l",
+    );
+    expect(pipedMetaFingerprint).toContain("meta=echo hi %7C wc -l");
+
     const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
     expect(readFingerprint).toBeUndefined();
   });
@@ -116,6 +123,12 @@ describe("tool mutation helpers", () => {
       isSameToolActionType(
         { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi" },
         { toolName: "exec", actionFingerprint: "tool=exec|meta=rm -rf /tmp/x" },
+      ),
+    ).toBe(false);
+    expect(
+      isSameToolActionType(
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi %7C wc -l" },
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi %7C rm /tmp/x" },
       ),
     ).toBe(false);
     // Actionless tools with same meta → same type

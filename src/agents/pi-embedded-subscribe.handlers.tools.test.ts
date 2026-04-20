@@ -962,6 +962,44 @@ describe("handleToolExecutionEnd lastToolError clearing", () => {
     expect(ctx.state.lastToolError).toBeDefined();
     expect(ctx.state.lastToolError?.toolName).toBe("cron");
   });
+
+  it("does not clear lastToolError when exec commands differ after a pipe segment", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-e1",
+      args: { command: "echo hi | rm /tmp/a" },
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-e1",
+      isError: true,
+      result: "Error: command failed",
+    } as never);
+
+    expect(ctx.state.lastToolError).toBeDefined();
+    expect(ctx.state.lastToolError?.toolName).toBe("exec");
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-e2",
+      args: { command: "echo hi | wc -l" },
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-e2",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    expect(ctx.state.lastToolError).toBeDefined();
+    expect(ctx.state.lastToolError?.toolName).toBe("exec");
+  });
 });
 
 describe("messaging tool media URL tracking", () => {

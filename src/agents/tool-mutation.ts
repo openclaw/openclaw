@@ -71,12 +71,18 @@ function normalizeActionName(value: unknown): string | undefined {
 function normalizeFingerprintValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
+    return normalized
+      ? encodeFingerprintValue(normalizeLowercaseStringOrEmpty(normalized))
+      : undefined;
   }
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return normalizeLowercaseStringOrEmpty(String(value));
+    return encodeFingerprintValue(normalizeLowercaseStringOrEmpty(String(value)));
   }
   return undefined;
+}
+
+function encodeFingerprintValue(value: string): string {
+  return value.replaceAll("%", "%25").replaceAll("|", "%7C");
 }
 
 function appendFingerprintAlias(
@@ -197,7 +203,7 @@ export function buildToolActionFingerprint(
   // Prefer stable arg-derived keys for matching; only fall back to meta
   // when no stable target key is available.
   if (normalizedMeta && !hasStableTarget) {
-    parts.push(`meta=${normalizedMeta}`);
+    parts.push(`meta=${encodeFingerprintValue(normalizedMeta)}`);
   }
   return parts.join("|");
 }
