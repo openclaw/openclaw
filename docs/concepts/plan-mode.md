@@ -124,7 +124,7 @@ This prevents the agent from acting on partial subagent results.
 **Click Approve but nothing happens / agent doesn't continue:**
 
 - Likely the agent posted chat after `exit_plan_mode` in the same turn (a known anti-pattern). Re-prompt with "continue executing the approved plan."
-- Run `/plan self-test` to verify the runtime is wired correctly.
+- `/plan self-test` end-to-end verifier is deferred (runtime not yet wired; tracked in `PLAN-MODE-ARCHITECTURE.md` follow-ups). Use the debug log + gate log above instead.
 
 **Approval card stays after you click Approve:**
 

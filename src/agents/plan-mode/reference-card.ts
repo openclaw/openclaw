@@ -53,7 +53,7 @@ export const PLAN_MODE_REFERENCE_CARD = [
   "│   (mutations BLOCKED; read-only tools OK)    │",
   "│                                              │",
   "│  ↻ update_plan        — track progress       │",
-  "│  ↻ ask_user_question  — clarify, non-block   │",
+  "│  ↻ ask_user_question  — clarify; next turn   │",
   "│  ↻ sessions_spawn     — research subagents   │",
   "│  ↻ read/grep/glob/web_search/lcm_*           │",
   "│                                              │",
@@ -134,7 +134,7 @@ export const PLAN_MODE_REFERENCE_CARD = [
   "- Turn on plan-mode debug logging: `openclaw config set agents.defaults.planMode.debug true` then restart gateway.",
   "- Tail the structured event log: `tail -F ~/.openclaw/logs/gateway.err.log | grep '\\[plan-mode/'`",
   "- Always-on gate-decision log: `tail -F ~/.openclaw/logs/gateway.err.log | grep 'plan-approval-gate'`",
-  "- Run `/plan self-test` to verify the local install end-to-end.",
+  "- `/plan self-test` end-to-end verifier is deferred (see the slash-command line above) — runtime not yet wired in this PR.",
   "",
   "═════════════════════════════════════",
 ].join("\n");
