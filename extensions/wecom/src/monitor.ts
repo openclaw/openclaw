@@ -255,15 +255,27 @@ async function buildMessageContext(
     agentId: route.agentId,
   });
 
-  // Compute CommandAuthorized dynamically (aligned with webhook path and other channels)
-  const authz = await resolveWecomCommandAuthorization({
-    core,
-    cfg: config,
-    accountConfig: account.config,
-    rawBody: messageBody,
-    senderUserId: body.from.userid,
-  });
-  const commandAuthorized = authz.commandAuthorized;
+  // Compute CommandAuthorized dynamically.
+  //
+  // DM-only: `resolveWecomCommandAuthorization` enforces dmPolicy / allowFrom,
+  // which are direct-message access-control settings and MUST NOT apply to
+  // group chats. Group authorization is already handled earlier in
+  // `prepareWeComMessage` via `checkGroupPolicy` (groupPolicy + groupAllowFrom
+  // + per-group sender allowlist), so for group chats we leave
+  // CommandAuthorized = undefined and let the upper-layer access-groups
+  // mechanism decide. Otherwise a sender outside the DM allowlist would get
+  // CommandAuthorized=false and valid group commands would be blocked.
+  let commandAuthorized: boolean | undefined;
+  if (chatType !== "group") {
+    const authz = await resolveWecomCommandAuthorization({
+      core,
+      cfg: config,
+      accountConfig: account.config,
+      rawBody: messageBody,
+      senderUserId: body.from.userid,
+    });
+    commandAuthorized = authz.commandAuthorized;
+  }
 
   // 构建标准消息上下文
   const ctxPayload = core.channel.reply.finalizeInboundContext({
