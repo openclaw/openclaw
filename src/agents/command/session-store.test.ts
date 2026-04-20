@@ -15,6 +15,42 @@ vi.mock("../model-selection.js", () => ({
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+vi.mock("../../utils/usage-format.js", () => ({
+  estimateUsageCost: (params: { usage?: { input?: number; output?: number }; cost?: { input?: number; output?: number } }) => {
+    if (!params.usage || !params.cost) {
+      return undefined;
+    }
+    const input = params.usage.input ?? 0;
+    const output = params.usage.output ?? 0;
+    const costInput = params.cost.input ?? 0;
+    const costOutput = params.cost.output ?? 0;
+    const total = input * costInput + output * costOutput;
+    if (!Number.isFinite(total)) {
+      return undefined;
+    }
+    return total / 1e6;
+  },
+  resolveModelCostConfig: (params: { provider?: string; model?: string; config?: unknown }) => {
+    // Look up cost from config.models.providers[provider][model].cost
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const providers = params.config?.models?.providers as Record<string, unknown> | undefined;
+    if (!providers) {
+      return undefined;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const provider = providers[params.provider ?? ""] as Record<string, unknown> | undefined;
+    if (!provider) {
+      return undefined;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const model = provider[params.model ?? ""] as { cost?: { input: number; output: number } } | undefined;
+    if (!model?.cost) {
+      return undefined;
+    }
+    return model.cost;
+  },
+}));
+
 vi.mock("../../config/sessions.js", async () => {
   const fsSync = await import("node:fs");
   const fs = await import("node:fs/promises");
@@ -381,6 +417,86 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+    });
+  });
+
+  it("snapshots cost instead of accumulating (fixes #69347)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              "gpt-4": {
+                cost: {
+                  input: 10, // $10 per million input tokens
+                  output: 30, // $30 per million output tokens
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cost-snapshot";
+      const sessionId = "test-cost-snapshot-session";
+
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Simulate a run with 10k input + 5k output tokens
+      // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-4",
+            usage: {
+              input: 10000,
+              output: 5000,
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+        result,
+      });
+
+      // First run: cost should be $0.25
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+
+      // Simulate a second persist with the SAME cumulative usage (e.g., from a heartbeat or
+      // redundant persist). Before the fix, this would double the cost.
+      // After the fix, cost should remain the same because it's snapshotted.
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+        result, // Same usage again
+      });
+
+      // After second persist with same usage, cost should STILL be $0.25 (not $0.50)
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.estimatedCostUsd).toBeCloseTo(0.25, 4);
     });
   });
 });
