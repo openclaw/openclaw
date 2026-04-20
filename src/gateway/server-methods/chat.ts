@@ -83,6 +83,7 @@ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
+import { filterMessagesByRunId } from "./chat.history-run-id-filter.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1633,12 +1634,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       provider: resolvedSessionModel.provider,
       localMessages,
     });
+    // Apply the runId filter on raw messages, before any size-budget pass.
+    // Sanitization/placeholder substitution would otherwise be able to hide a
+    // run's marker (`run_id=<runId>`) behind a truncation or placeholder and
+    // silently drop matching messages.
+    const runScopedRaw = filterMessagesByRunId(rawMessages, runId);
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced = runScopedRaw.length > max ? runScopedRaw.slice(-max) : runScopedRaw;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
@@ -1669,24 +1675,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
-    // Optional runId filter — serialized-text match against markers emitted
-    // by agents (`run_id=<runId>`) or structured fields containing the id.
-    // Applied after all size-budget passes so callers get exactly the
-    // messages that belong to their run, nothing more.
-    const scopedMessages = runId
-      ? bounded.messages.filter((msg) => {
-          try {
-            const serialized = JSON.stringify(msg);
-            return serialized.includes(runId);
-          } catch {
-            return false;
-          }
-        })
-      : bounded.messages;
     respond(true, {
       sessionKey,
       sessionId,
-      messages: scopedMessages,
+      messages: bounded.messages,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,

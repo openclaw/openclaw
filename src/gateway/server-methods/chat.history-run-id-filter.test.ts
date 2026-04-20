@@ -1,27 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { filterMessagesByRunId, matchesRunId } from "./chat.history-run-id-filter.js";
 
-/**
- * Regression tests for the `runId` filter added to `chat.history`.
- *
- * The filter is implemented inline in chat.ts as a JSON.stringify.includes()
- * match against the full message record.  We exercise the same predicate
- * here so future refactors cannot silently change its semantics.
- */
-
-function filterByRunId(messages: unknown[], runId: string | undefined): unknown[] {
-  if (!runId) {
-    return messages;
-  }
-  return messages.filter((msg) => {
-    try {
-      return JSON.stringify(msg).includes(runId);
-    } catch {
-      return false;
-    }
-  });
-}
-
-describe("chat.history runId filter", () => {
+describe("filterMessagesByRunId", () => {
   const runIdA = "py-obsidian-1776455694-1b96751f";
   const runIdB = "py-mail-2001112233-deadbeef";
 
@@ -58,26 +38,48 @@ describe("chat.history runId filter", () => {
     },
   ];
 
-  it("returns all messages when runId is not provided", () => {
-    expect(filterByRunId(messagesMixed, undefined)).toHaveLength(4);
+  it("returns the input array unchanged when runId is not provided", () => {
+    expect(filterMessagesByRunId(messagesMixed, undefined)).toBe(messagesMixed);
   });
 
   it("returns only messages whose JSON body contains the runId token", () => {
-    const filtered = filterByRunId(messagesMixed, runIdA);
+    const filtered = filterMessagesByRunId(messagesMixed, runIdA);
     expect(filtered).toHaveLength(1);
     expect((filtered[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("m2");
   });
 
   it("isolates different runs in the same session", () => {
-    const filteredA = filterByRunId(messagesMixed, runIdA);
-    const filteredB = filterByRunId(messagesMixed, runIdB);
+    const filteredA = filterMessagesByRunId(messagesMixed, runIdA);
+    const filteredB = filterMessagesByRunId(messagesMixed, runIdB);
     expect(filteredA).not.toEqual(filteredB);
     expect(filteredA).toHaveLength(1);
     expect(filteredB).toHaveLength(1);
   });
 
   it("returns empty when runId does not appear in any message", () => {
-    expect(filterByRunId(messagesMixed, "py-unknown-0000000000-aaaaaaaa")).toEqual([]);
+    expect(filterMessagesByRunId(messagesMixed, "py-unknown-0000000000-aaaaaaaa")).toEqual([]);
+  });
+
+  it("matches the runId even when the marker sits far into a long content block", () => {
+    // Marker lives after a multi-kilobyte prefix.  The chat.history handler
+    // applies this filter before its sanitization / placeholder passes, so a
+    // truncated tail in the response pipeline can never hide the match here.
+    const prefix = "x".repeat(50_000);
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `${prefix}\n[RUN_RESULT run_id=${runIdA}]` }],
+        __openclaw: { id: "long", seq: 10 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "no marker here" }],
+        __openclaw: { id: "noise", seq: 11 },
+      },
+    ];
+    const filtered = filterMessagesByRunId(messages, runIdA);
+    expect(filtered).toHaveLength(1);
+    expect((filtered[0] as { __openclaw: { id: string } }).__openclaw.id).toBe("long");
   });
 
   it("tolerates non-serializable message records by excluding them", () => {
@@ -90,7 +92,8 @@ describe("chat.history runId filter", () => {
         content: [{ type: "text", text: `[RUN_RESULT run_id=${runIdA}]` }],
       },
     ];
-    const filtered = filterByRunId(messages, runIdA);
+    expect(matchesRunId(cyclic, runIdA)).toBe(false);
+    const filtered = filterMessagesByRunId(messages, runIdA);
     expect(filtered).toHaveLength(1);
   });
 });
