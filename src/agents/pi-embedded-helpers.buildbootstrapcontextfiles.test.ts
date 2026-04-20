@@ -92,15 +92,25 @@ describe("buildBootstrapContextFiles", () => {
     const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
     const files = [
       makeFile({
-        name: "my-workspace-agents.md",
-        path: "/tmp/my-workspace-agents.md",
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
         content: "a".repeat(maxChars * 2),
       }),
     ];
     const [result] = buildBootstrapContextFiles(files, { maxChars });
-    expect(result?.content).toContain(
-      "[...truncated, read my-workspace-agents.md for full content...]",
-    );
+    expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("keeps tiny per-file budgets bounded when the marker is longer than the limit", () => {
+    const maxChars = 40;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content: "a".repeat(1_000),
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
   it("keeps content under the default limit", () => {

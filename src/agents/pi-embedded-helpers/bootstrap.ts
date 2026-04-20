@@ -167,12 +167,27 @@ function trimBootstrapContent(
     tailChars = nextTailChars;
     marker = nextMarker;
   }
+  let renderedLength = headChars + tailChars + marker.length + BOOTSTRAP_JOIN_SEPARATOR_CHARS;
+  while (renderedLength > maxChars && (tailChars > 0 || headChars > 0)) {
+    const overflow = renderedLength - maxChars;
+    if (tailChars > 0) {
+      tailChars = Math.max(0, tailChars - overflow);
+    } else {
+      headChars = Math.max(0, headChars - overflow);
+    }
+    marker = markerTemplate(headChars, tailChars);
+    renderedLength = headChars + tailChars + marker.length + BOOTSTRAP_JOIN_SEPARATOR_CHARS;
+  }
   const head = trimmed.slice(0, headChars);
   const tail = tailChars > 0 ? trimmed.slice(-tailChars) : "";
 
   const contentWithMarker = [head, marker, tail].join("\n");
+  const boundedContent =
+    contentWithMarker.length > maxChars
+      ? truncateUtf16Safe(contentWithMarker, maxChars)
+      : contentWithMarker;
   return {
-    content: contentWithMarker,
+    content: boundedContent,
     truncated: true,
     maxChars,
     originalLength: trimmed.length,
