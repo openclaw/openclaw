@@ -64,6 +64,8 @@ import {
 
 let fixtureRoot = "";
 let caseId = 0;
+let randomIntSpy: ReturnType<typeof vi.spyOn<typeof crypto, "randomInt">>;
+let nextRandomInt = 0;
 
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pairing-"));
@@ -77,7 +79,23 @@ afterAll(async () => {
 
 beforeEach(() => {
   clearPairingAllowFromReadCacheForTest();
+  nextRandomInt = 0;
+  randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as typeof randomIntSpy;
+  setDefaultRandomIntMock();
 });
+
+afterAll(() => {
+  randomIntSpy?.mockRestore();
+});
+
+function setDefaultRandomIntMock() {
+  randomIntSpy.mockImplementation(((minOrMax: number, max?: number) => {
+    const min = max === undefined ? 0 : minOrMax;
+    const upper = max === undefined ? minOrMax : max;
+    const span = Math.max(upper - min, 1);
+    return min + (nextRandomInt++ % span);
+  }) as typeof crypto.randomInt);
+}
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
@@ -215,25 +233,21 @@ async function withMockRandomInt(params: {
   fallbackValue?: number;
   run: () => Promise<void>;
 }) {
-  const spy = vi.spyOn(crypto, "randomInt") as unknown as {
-    mockReturnValue: (value: number) => void;
-    mockImplementation: (fn: () => number) => void;
-    mockRestore: () => void;
-  };
-
   try {
     if (params.initialValue !== undefined) {
-      spy.mockReturnValue(params.initialValue);
+      randomIntSpy.mockReturnValue(params.initialValue);
     }
 
     if (params.sequence) {
       let idx = 0;
-      spy.mockImplementation(() => params.sequence?.[idx++] ?? params.fallbackValue ?? 1);
+      randomIntSpy.mockImplementation(
+        (() => params.sequence?.[idx++] ?? params.fallbackValue ?? 1) as typeof crypto.randomInt,
+      );
     }
 
     await params.run();
   } finally {
-    spy.mockRestore();
+    setDefaultRandomIntMock();
   }
 }
 

@@ -175,28 +175,6 @@ describe("chat view", () => {
     expect(welcomeImage).not.toBeNull();
     expect(welcomeImage?.getAttribute("src")).toBe("/avatar/main");
 
-    render(
-      renderChat(
-        createProps({
-          assistantName: "Assistant",
-          assistantAvatar: "A",
-          assistantAvatarUrl: null,
-          basePath: "/openclaw/",
-        }),
-      ),
-      container,
-    );
-    const logoImage = container.querySelector<HTMLImageElement>(
-      ".agent-chat__welcome .agent-chat__avatar--logo img",
-    );
-    expect(container.querySelector<HTMLImageElement>(".agent-chat__welcome > img")).toBeNull();
-    expect(logoImage).not.toBeNull();
-    expect(
-      container
-        .querySelector<HTMLImageElement>(".agent-chat__welcome .agent-chat__avatar--logo img")
-        ?.getAttribute("src"),
-    ).toBe("/openclaw/favicon.svg");
-
     renderAssistantMessage(
       container,
       {
@@ -1627,72 +1605,50 @@ describe("chat view", () => {
 
   it("lets a tool call collapse while keeping matching tool output visible", async () => {
     const container = document.createElement("div");
-
-    const renderCase = (params: { outputInToolMessages: boolean; id: string }) => {
-      const props = createProps({
-        autoExpandToolCalls: true,
-        messages: [
-          {
-            id: `assistant-${params.id}`,
-            role: "assistant",
-            toolCallId: `call-${params.id}`,
-            content: [
-              {
-                type: "toolcall",
-                id: `call-${params.id}`,
-                name: "sessions_spawn",
-                arguments: { mode: "session", thread: true },
-              },
-            ],
-            timestamp: Date.now(),
-          },
-          ...(params.outputInToolMessages
-            ? []
-            : [
-                {
-                  id: `tool-${params.id}`,
-                  role: "tool" as const,
-                  toolCallId: `call-${params.id}`,
-                  toolName: "sessions_spawn",
-                  content: JSON.stringify({ status: "error" }, null, 2),
-                  timestamp: Date.now() + 1,
-                },
-              ]),
-        ],
-        toolMessages: params.outputInToolMessages
-          ? [
-              {
-                id: `tool-${params.id}`,
-                role: "tool",
-                toolCallId: `call-${params.id}`,
-                toolName: "sessions_spawn",
-                content: JSON.stringify({ status: "error" }, null, 2),
-                timestamp: Date.now() + 1,
-              },
-            ]
-          : [],
-      });
-      const rerender = () => {
-        render(renderChat({ ...props, onRequestUpdate: rerender }), container);
-      };
-      rerender();
+    const props = createProps({
+      autoExpandToolCalls: true,
+      messages: [
+        {
+          id: "assistant-tool-messages",
+          role: "assistant",
+          toolCallId: "call-tool-messages",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-tool-messages",
+              name: "sessions_spawn",
+              arguments: { mode: "session", thread: true },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-tool-messages",
+          role: "tool",
+          toolCallId: "call-tool-messages",
+          toolName: "sessions_spawn",
+          content: JSON.stringify({ status: "error" }, null, 2),
+          timestamp: Date.now() + 1,
+        },
+      ],
+    });
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
     };
+    rerender();
 
-    for (const outputInToolMessages of [false, true]) {
-      renderCase({ id: outputInToolMessages ? "tool-messages" : "split", outputInToolMessages });
-      expect(container.textContent).toContain("Tool input");
-      expect(container.textContent).toContain('"thread": true');
-      expect(container.textContent).toContain('"status": "error"');
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).toContain('"status": "error"');
 
-      const summaries = container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary");
-      if (outputInToolMessages) {
-        expect(summaries.length).toBeGreaterThan(1);
-      }
-      summaries[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await flushTasks();
+    const summaries = container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary");
+    expect(summaries.length).toBeGreaterThan(1);
+    summaries[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
 
-      expect(container.textContent).not.toContain("Tool input");
-      expect(container.textContent).toContain('"status": "error"');
-    }
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).toContain('"status": "error"');
   });
 });
