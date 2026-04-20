@@ -153,6 +153,14 @@ describe("chunkDiscordText", () => {
     expect(groups.join("")).toBe(text);
   });
 
+  it("does not treat closing fences with trailing text as a real close", () => {
+    const text = "```ts\nconst a = 1;\n```not-close\nconst b = 2;\n```\nAfter";
+
+    const groups = splitDiscordTextOnCodeBlocks(text);
+    expect(groups).toEqual(["```ts\nconst a = 1;\n```not-close\nconst b = 2;\n```\n", "After"]);
+    expect(groups.join("")).toBe(text);
+  });
+
   it("emits separate Discord chunks around fenced code when enabled", () => {
     const text = "Intro\n\n```ts\nconst x = 1;\n```\n\nOutro";
 

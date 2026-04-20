@@ -24,6 +24,14 @@ type OpenFence = {
   openLine: string;
 };
 
+type FenceLine = {
+  indent: string;
+  markerChar: string;
+  markerLen: number;
+  trailing: string;
+  openLine: string;
+};
+
 const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
@@ -35,17 +43,19 @@ function countLines(text: string) {
   return text.split("\n").length;
 }
 
-function parseFenceLine(line: string): OpenFence | null {
+function parseFenceLine(line: string): FenceLine | null {
   const match = line.match(FENCE_RE);
   if (!match) {
     return null;
   }
   const indent = match[1] ?? "";
   const marker = match[2] ?? "";
+  const trailing = match[3] ?? "";
   return {
     indent,
     markerChar: marker[0] ?? "`",
     markerLen: marker.length,
+    trailing,
     openLine: line,
   };
 }
@@ -137,6 +147,24 @@ function mergeWhitespaceOnlySegments(segments: string[]): string[] {
   return merged.filter(Boolean);
 }
 
+function moveLeadingNewlinesToPreviousSegment(segments: string[]): string[] {
+  const moved = [...segments];
+  for (let i = 1; i < moved.length; i++) {
+    const segment = moved[i];
+    if (!segment) {
+      continue;
+    }
+    const leadingNewlineMatch = segment.match(/^\n+/);
+    if (!leadingNewlineMatch || !leadingNewlineMatch[0]) {
+      continue;
+    }
+    const leadingNewlines = leadingNewlineMatch[0];
+    moved[i - 1] += leadingNewlines;
+    moved[i] = segment.slice(leadingNewlines.length);
+  }
+  return moved.filter(Boolean);
+}
+
 export function splitDiscordTextOnCodeBlocks(text: string): string[] {
   const body = text ?? "";
   if (!body) {
@@ -175,7 +203,8 @@ export function splitDiscordTextOnCodeBlocks(text: string): string[] {
       openFence &&
       fenceInfo &&
       openFence.markerChar === fenceInfo.markerChar &&
-      fenceInfo.markerLen >= openFence.markerLen
+      fenceInfo.markerLen >= openFence.markerLen &&
+      fenceInfo.trailing.trim().length === 0
     ) {
       flush();
       openFence = null;
@@ -184,7 +213,8 @@ export function splitDiscordTextOnCodeBlocks(text: string): string[] {
 
   flush();
   const merged = mergeWhitespaceOnlySegments(segments);
-  return merged.length > 0 ? merged : [body];
+  const normalized = moveLeadingNewlinesToPreviousSegment(merged);
+  return normalized.length > 0 ? normalized : [body];
 }
 
 /**
@@ -237,7 +267,8 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
         nextOpenFence = fenceInfo;
       } else if (
         openFence.markerChar === fenceInfo.markerChar &&
-        fenceInfo.markerLen >= openFence.markerLen
+        fenceInfo.markerLen >= openFence.markerLen &&
+        fenceInfo.trailing.trim().length === 0
       ) {
         nextOpenFence = null;
       }
