@@ -13,9 +13,8 @@ import {
 } from "../src/agents/pi-embedded-helpers/failover-matches.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
+import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
 import { normalizeVideoGenerationDuration } from "../src/video-generation/duration-support.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
@@ -43,6 +42,7 @@ import {
 import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import falPlugin from "./fal/index.js";
+import { maybeLoadShellEnvForGenerationProviders } from "./generation-live-test-helpers.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
@@ -182,18 +182,7 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
 }
 
 function maybeLoadShellEnvForVideoProviders(providerIds: string[]): void {
-  const expectedKeys = [
-    ...new Set(providerIds.flatMap((providerId) => getProviderEnvVars(providerId))),
-  ];
-  if (expectedKeys.length === 0) {
-    return;
-  }
-  loadShellEnvFallback({
-    enabled: true,
-    env: process.env,
-    expectedKeys,
-    logger: { warn: (message: string) => console.warn(message) },
-  });
+  maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
 function expectBufferedVideo(
