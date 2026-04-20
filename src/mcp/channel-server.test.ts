@@ -39,6 +39,33 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
   };
 }
 
+function attachReadyGateway(
+  bridge: OpenClawChannelBridge,
+  gatewayRequest: ReturnType<typeof vi.fn>,
+) {
+  (
+    bridge as unknown as {
+      gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+      readySettled: boolean;
+      resolveReady: () => void;
+    }
+  ).gateway = {
+    request: gatewayRequest,
+    stopAndWait: async () => {},
+  };
+  (
+    bridge as unknown as {
+      readySettled: boolean;
+      resolveReady: () => void;
+    }
+  ).readySettled = true;
+  (
+    bridge as unknown as {
+      resolveReady: () => void;
+    }
+  ).resolveReady();
+}
+
 describe("openclaw channel mcp server", () => {
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
@@ -293,27 +320,7 @@ describe("openclaw channel mcp server", () => {
       });
       const gatewayRequest = vi.fn().mockResolvedValue({ ok: true, channel: "telegram" });
 
-      (
-        bridge as unknown as {
-          gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).gateway = {
-        request: gatewayRequest,
-        stopAndWait: async () => {},
-      };
-      (
-        bridge as unknown as {
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).readySettled = true;
-      (
-        bridge as unknown as {
-          resolveReady: () => void;
-        }
-      ).resolveReady();
+      attachReadyGateway(bridge, gatewayRequest);
 
       vi.spyOn(bridge, "getConversation").mockResolvedValue({
         sessionKey: "agent:main:main",
@@ -369,27 +376,7 @@ describe("openclaw channel mcp server", () => {
         ],
       });
 
-      (
-        bridge as unknown as {
-          gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).gateway = {
-        request: gatewayRequest,
-        stopAndWait: async () => {},
-      };
-      (
-        bridge as unknown as {
-          readySettled: boolean;
-          resolveReady: () => void;
-        }
-      ).readySettled = true;
-      (
-        bridge as unknown as {
-          resolveReady: () => void;
-        }
-      ).resolveReady();
+      attachReadyGateway(bridge, gatewayRequest);
 
       await expect(bridge.listConversations()).resolves.toEqual([
         expect.objectContaining({
