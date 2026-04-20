@@ -331,10 +331,51 @@ async function autoApproveIfEnabled(params: {
       cfg.session?.store,
       parsed?.agentId ? { agentId: parsed.agentId } : {},
     );
-    const store = readSessionStoreReadOnly(storePath);
-    const entry = store[params.sessionKey];
+    // PR #68939 follow-up (back-to-back race fix): the persister
+    // (plan-snapshot-persister.ts) writes `planMode.approval = "pending"`
+    // + `approvalId` from the SAME approval event we're handling. Both
+    // listeners fire in parallel, so reading the store immediately can
+    // beat the persister's write. Sessions.patch then rejects with
+    // INVALID_REQUEST "requires a pending approval (current state: none)"
+    // — the auto-approve falls back to a manual card the user can't
+    // safely click (the persister hasn't written the approvalId yet).
+    //
+    // Mitigation: poll the store until BOTH `approval === "pending"` AND
+    // `approvalId === params.approvalId` are visible (or timeout). Cap
+    // total wait at 2s — the persister write is local fs IO, normally
+    // <50ms. If the persister never lands the matching approvalId, treat
+    // as "auto-approve aborted" (safer than firing a stale patch).
+    const POLL_INTERVAL_MS = 50;
+    const MAX_WAIT_MS = 2000;
+    const pollStart = Date.now();
+    let entry: ReturnType<typeof readSessionStoreReadOnly>[string] | undefined;
+    while (Date.now() - pollStart < MAX_WAIT_MS) {
+      const store = readSessionStoreReadOnly(storePath);
+      entry = store[params.sessionKey];
+      if (!entry?.planMode?.autoApprove) {
+        return; // not auto-mode (or autoApprove flipped off mid-poll); let user resolve
+      }
+      if (
+        entry.planMode.approval === "pending" &&
+        entry.planMode.approvalId === params.approvalId
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
     if (!entry?.planMode?.autoApprove) {
-      return; // not auto-mode; let the user resolve manually
+      return;
+    }
+    if (
+      entry.planMode.approval !== "pending" ||
+      entry.planMode.approvalId !== params.approvalId
+    ) {
+      params.log?.warn?.(
+        `auto-approve aborted: persisted approval state did not reach pending+approvalId=${params.approvalId} ` +
+          `within ${MAX_WAIT_MS}ms (current: approval=${entry.planMode.approval}, approvalId=${entry.planMode.approvalId ?? "(missing)"}). ` +
+          `Manual approval card stays armed.`,
+      );
+      return;
     }
     const { callGatewayTool } = await import("./tools/gateway.js");
     await callGatewayTool(
