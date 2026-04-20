@@ -75,12 +75,35 @@ Plus existing `sessions-patch.test.ts` (43 tests, including the queue-migration 
 
 All disclosed in the agent's [architectural walkthrough](https://github.com/openclaw/openclaw/pull/68939#issuecomment-4276170359); kept deferred here as follow-ups:
 
-1. **Retry re-hydration on empty-response failure** (>100 LoC) — pending-injection consumer drains before the first attempt; empty-response retry has no context. Workaround today: post-approval ack-only grace covers the common failure mode.
-2. **Shell-escape destructive bypass** (pattern-limited) — env-var indirection / concat / alias redefinition can slip past the acceptEdits destructive denylist; prompt layer remains primary defense.
-3. **Double-approve on legacy-scalar upgrade** (<50% probability) — narrow scenario with bounded impact (duplicate "I'll execute..." ack, not broken state).
-4. **approvalRunId persister silent-bypass** (<0.1% probability).
-5. **Debug log multi-tag recording** (observability only).
+1. **Retry re-hydration on empty-response failure** (>100 LoC) — pending-injection consumer drains before the first attempt; empty-response retry has no context. Workaround today: post-approval ack-only grace covers the common failure mode. **Status: still deferred** — C4.2 scope requires a new `SessionEntry.lastConsumedInjections` field + retry-logic changes; targeted for a focused follow-up commit.
+2. **Shell-escape destructive bypass** (pattern-limited) — env-var indirection / concat / alias redefinition can slip past the acceptEdits destructive denylist; prompt layer remains primary defense. **Status: shipped in 1.0 follow-up C4** (`dcb9f0ec7d`) — layered-defense detection at `accept-edits-gate.ts` with 26 adversarial fixtures covering env-var indirection, backtick + `$(...)` subshells, quote concatenation, hex/octal byte escapes.
+3. **Double-approve on legacy-scalar upgrade** (<50% probability) — narrow scenario with bounded impact (duplicate "I'll execute..." ack, not broken state). **Status: verified closed** during the C4 audit; the existing atomic migration in `plan-mode/injections.ts` prevents the race.
+4. **approvalRunId persister silent-bypass** (<0.1% probability). **Status: shipped in 1.0 follow-up C4** — defensive throw in `plan-snapshot-persister.ts:persistApprovalMetadata` on empty/missing `approvalRunId`, with diagnostic message calling out the subagent-gate implication.
+5. **Debug log multi-tag recording** (observability only). **Status: partially shipped in 1.0 follow-up C7** (`c0aaabb1f1`) — added optional `approvalRunId` + `approvalId` correlation fields to 7 of 8 debug event kinds; wired through the two `approval_event` emitters in `sessions-patch.ts`. Remaining emitters (nudge crons, subagent lifecycle, gate decisions) pick up the fields as those surfaces are next touched.
 6. **Bootstrap context truncation** (AGENTS.md/SOUL.md diet) — separate PR.
+
+### Shipped in Plan Mode 1.0 follow-up (`feat/plan-mode-1.0-followup`)
+
+Follow-up PR stacks on #68939 with 5 distinct commits:
+
+| Commit       | Scope                          | Ships                                                                                                                                                                                                                                                                                                                                       |
+| ------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2ed8258eb5` | **C1 rollout hardening**       | `PLAN_APPROVAL_EXPIRED` error code (Bug B stale-card auto-dismiss), plan-title XSS regression suite (R3, 41 tests), disk-full `PlanPersistStorageError` classifier (R4), multi-channel approval dedup tests (R5). R1 (subagent drain) + R2 (cron approval-pending guard) were already shipped in `906eb68403`.                              |
+| `aae864e5cc` | **C2 Telegram PR-14 re-wire**  | Live delivery of plan markdown as Telegram document attachment via `openclaw/plugin-sdk/telegram.sendDocumentTelegram` facade. Auto thread-ID parsing via the SDK's `parseTelegramTarget`. 10 bridge tests (un-skipped failure-branch test + new topic-scoped target test).                                                                 |
+| `49d5d4ac1a` | **C3a autoEnableFor runtime**  | Pure `evaluateAutoEnableForMatch` helper with compiled-regex cache (14 tests). Wiring at `cron/isolated-agent/run.ts` before turn dispatch: when `planMode` is absent AND model matches a configured pattern AND `planMode.enabled` is true, flips the session to `mode: "plan"` before the turn starts. Respects user-toggled `/plan off`. |
+| `dcb9f0ec7d` | **C4 security hardening**      | Shell-escape layered defense (C4.1): 26 adversarial fixtures; env-var / subshell / quote-concat / byte-escape detection. approvalRunId silent-bypass guard (C4.4): defensive throw in `persistApprovalMetadata`.                                                                                                                            |
+| `c0aaabb1f1` | **C7 debug log correlation**   | Optional `approvalRunId` + `approvalId` fields on 7 plan-mode debug event kinds. Wired through the two `approval_event` emitters in `sessions-patch.ts`.                                                                                                                                                                                    |
+| (TBD)        | **C8 docs + operator runbook** | New `docs/plans/PLAN-MODE-OPERATOR-RUNBOOK.md` covering 5 common symptoms; architecture doc (this file) updated to mark shipped vs deferred items; troubleshooting section links to runbook.                                                                                                                                                |
+
+### Still deferred out of 1.0 follow-up
+
+| Item                                          | Why deferred                                                                                                                                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **C3b** `approvalTimeoutSeconds` runtime      | Needs either a new `timeout` action on the sessions.patch protocol or a gateway-internal bypass RPC + cron scheduling + cleanup. Substantial cross-surface change best handled as its own focused commit. |
+| **C4.2** retry re-hydration                   | Needs new `SessionEntry.lastConsumedInjections` field + modifications to `consumePendingAgentInjections` + retry-logic re-inject. Not trivial.                                                            |
+| **C5** Telegram inline-keyboard Accept/Revise | Requires grammy bot API wiring + callback_query handler registration + `TelegramDocumentOpts.inlineButtons` extension + plan-bridge button construction. Scope deserves its own focused commit.           |
+| **C6** Slack Block Kit cards                  | Requires new Slack Block Kit builder + action-id handler + modal for Revise feedback + `slack-blocks` render format. Similar scope to C5.                                                                 |
+| **C7b** `/plan self-test` harness             | New synthetic plan-mode flow runner + CLI subcommand + assertions. Medium-sized standalone feature.                                                                                                       |
 
 ### Rollback escalation path
 

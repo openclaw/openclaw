@@ -137,6 +137,8 @@ This prevents the agent from acting on partial subagent results.
 - The approval window is out of sync with server state — usually because another surface already resolved it, `/plan off` ran, or the session lost plan-mode state. The Control UI auto-dismisses the card when this code comes back; refresh if the card persists.
 - If it persists, check the gateway log: `tail -F ~/.openclaw/logs/gateway.err.log | grep plan-approval-gate`
 
+**Operator runbook:** for deeper incident triage (stale cards, subagent stalls, nudge noise, disk-full handling, cross-channel dedup, debug-log activation, approval-cycle correlation), see the full [Plan Mode Operator Runbook](/plans/PLAN-MODE-OPERATOR-RUNBOOK) under the repo plans directory.
+
 **Agent calls `update_plan` but never `exit_plan_mode`:**
 
 - The agent may be confused — `update_plan` only TRACKS progress; only `exit_plan_mode` submits. Re-prompt: "submit the plan via exit_plan_mode."
