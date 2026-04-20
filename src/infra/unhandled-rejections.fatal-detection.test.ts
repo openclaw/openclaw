@@ -207,5 +207,22 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expect.stringContaining("This operation was aborted"),
       );
     });
+
+    it.each([undefined, null])(
+      "does not exit on reasonless rejections (%s) emitted by third-party socket libraries",
+      (reason) => {
+        // Regression: `@slack/socket-mode` can reject a pending-connection promise with
+        // `Promise.reject()` during TLS reconnect failures, producing a rejection whose reason
+        // is literal `undefined`. Before the fix, this fell through to the default fatal branch
+        // and crashed the gateway process during transient network blips.
+        consoleWarnSpy.mockClear();
+        consoleErrorSpy.mockClear();
+        expectExitCodeFromUnhandled(reason, []);
+        expect(consoleWarnSpy.mock.calls[0]?.[0]).toBe(
+          "[openclaw] Non-fatal unhandled rejection (continuing):",
+        );
+        expect(consoleErrorSpy).not.toHaveBeenCalled();
+      },
+    );
   });
 });

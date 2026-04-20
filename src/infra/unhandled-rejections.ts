@@ -310,6 +310,16 @@ export function isTransientSqliteError(err: unknown): boolean {
 }
 
 export function isTransientUnhandledRejectionError(err: unknown): boolean {
+  // A promise rejection with no reason (`Promise.reject()` / `Promise.reject(undefined)` /
+  // `Promise.reject(null)`) carries no code, message, or stack, so the dedicated classifiers
+  // have nothing to match on. These empty rejections are routinely emitted by third-party
+  // socket libraries during transient connection failures (e.g. Slack `@slack/socket-mode`
+  // rejecting a pending-connection promise on TLS reconnect errors). Treat them as transient
+  // rather than letting them fall through to the default fatal branch and crash the gateway;
+  // a genuinely fatal condition would carry a fatal code and be classified earlier.
+  if (err == null) {
+    return true;
+  }
   return isTransientNetworkError(err) || isTransientSqliteError(err);
 }
 

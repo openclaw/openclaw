@@ -267,4 +267,11 @@ describe("isTransientUnhandledRejectionError", () => {
 
     expect(isTransientUnhandledRejectionError(error)).toBe(true);
   });
+
+  it.each([undefined, null])("returns true for reasonless rejections (%s)", (value) => {
+    // Empty-reason rejections (e.g. `Promise.reject()` from third-party socket libraries during
+    // transient reconnect errors) carry no code or message, so default them to transient rather
+    // than fatal. Fatal conditions would still match `isFatalError`/`isConfigError` earlier.
+    expect(isTransientUnhandledRejectionError(value)).toBe(true);
+  });
 });
