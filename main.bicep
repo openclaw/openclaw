@@ -335,12 +335,10 @@ You receive a fully-formed plan from the planner agent and carry it out step by 
 - Return a structured summary of what was done and any outputs or artefacts produced.
 EXECUTOR_EOF
 # ── Token Budget Plugin ──────────────────────────────────────────
-# Copy plugin files from the Docker image to the Azure File Share.
-# Source files live in custom-plugins/token-budget/ in the repo.
-# mkdir -p ensures the destination exists; cp with trailing slash
-# copies contents into the directory (idempotent across redeploys).
-mkdir -p /home/node/.openclaw/extensions/token-budget
-cp -r /app/custom-plugins/token-budget/* /home/node/.openclaw/extensions/token-budget/
+# Load plugin directly from the Docker image filesystem (proper 755 perms).
+# Azure File Share mounts as 777 which triggers OpenClaw's world-writable
+# security check, so we use plugins.load.paths instead of copying to ~/.openclaw/extensions/.
+node --require /tmp/patch.js openclaw.mjs config set plugins.load.paths '["/app/custom-plugins/token-budget"]'
 # Token budget plugin config
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.enabled true
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.monthlyLimit 2000000
