@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
-import { type BlueBubblesSendTarget } from "./types.js";
+import { DEFAULT_SEND_TIMEOUT_MS, type BlueBubblesSendTarget } from "./types.js";
 
 export type BlueBubblesSendOpts = {
   serverUrl?: string;
@@ -248,7 +248,27 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
-  let participantMatch: string | null = null;
+  // When matching by handle, prefer the caller's requested service. A user may
+  // have both an `iMessage;-;<handle>` and `SMS;-;<handle>` chat:
+  //   - default / `service: "imessage"` / `service: "auto"` -> prefer iMessage
+  //     so we never silently downgrade to SMS when iMessage is available.
+  //   - explicit `service: "sms"` (e.g. caller passed `sms:+15551234567`) ->
+  //     prefer SMS so explicit SMS intent is respected.
+  //
+  // A direct `<preferred>;-;<handle>` match is the strongest signal and
+  // returns immediately. Everything else is recorded as a ranked fallback.
+  const preferredService: "iMessage" | "SMS" =
+    params.target.kind === "handle" && params.target.service === "sms" ? "SMS" : "iMessage";
+  const preferredPrefix = `${preferredService};-;`;
+  const otherPrefix = preferredService === "iMessage" ? "SMS;-;" : "iMessage;-;";
+
+  // Note: a direct `preferredPrefix` match `return`s immediately below, so we
+  // only need to remember the other-service and unknown-service direct fallbacks.
+  let directHandleOtherServiceMatch: string | null = null;
+  let directHandleUnknownServiceMatch: string | null = null;
+  let participantPreferredMatch: string | null = null;
+  let participantOtherServiceMatch: string | null = null;
+  let participantUnknownServiceMatch: string | null = null;
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -299,10 +319,23 @@ export async function resolveChatGuidForTarget(params: {
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
-        if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+        if (directHandle && directHandle === normalizedHandle && guid) {
+          // A direct `<preferredPrefix><handle>` is the strongest signal and we
+          // can return immediately. Other services are remembered as fallbacks
+          // and we keep scanning in case a preferred-service chat exists later.
+          if (guid.startsWith(preferredPrefix)) {
+            return guid;
+          }
+          if (guid.startsWith(otherPrefix)) {
+            if (!directHandleOtherServiceMatch) {
+              directHandleOtherServiceMatch = guid;
+            }
+          } else if (!directHandleUnknownServiceMatch) {
+            // Unknown service; treat as a last-resort direct match.
+            directHandleUnknownServiceMatch = guid;
+          }
         }
-        if (!participantMatch && guid) {
+        if (guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
           // Group chats (`;+;` separator) should never match when searching by handle/phone.
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
@@ -312,14 +345,33 @@ export async function resolveChatGuidForTarget(params: {
               normalizeBlueBubblesHandle(entry),
             );
             if (participants.includes(normalizedHandle)) {
-              participantMatch = guid;
+              if (guid.startsWith(preferredPrefix)) {
+                if (!participantPreferredMatch) {
+                  participantPreferredMatch = guid;
+                }
+              } else if (guid.startsWith(otherPrefix)) {
+                if (!participantOtherServiceMatch) {
+                  participantOtherServiceMatch = guid;
+                }
+              } else if (!participantUnknownServiceMatch) {
+                participantUnknownServiceMatch = guid;
+              }
             }
           }
         }
       }
     }
+    // We deliberately do NOT break early on participant or non-preferred direct
+    // matches: a higher-priority direct `<preferredPrefix><handle>` chat may
+    // still exist on a later page, and only that branch can short-circuit.
   }
-  return participantMatch;
+  return (
+    participantPreferredMatch ??
+    directHandleOtherServiceMatch ??
+    participantOtherServiceMatch ??
+    directHandleUnknownServiceMatch ??
+    participantUnknownServiceMatch
+  );
 }
 
 /**
@@ -445,12 +497,18 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
   }
 
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveBlueBubblesServerAccount({
-    cfg: opts.cfg ?? {},
-    accountId: opts.accountId,
-    serverUrl: opts.serverUrl,
-    password: opts.password,
-  });
+  const { baseUrl, password, accountId, allowPrivateNetwork, sendTimeoutMs } =
+    resolveBlueBubblesServerAccount({
+      cfg: opts.cfg ?? {},
+      accountId: opts.accountId,
+      serverUrl: opts.serverUrl,
+      password: opts.password,
+    });
+  // Send-path timeout: explicit caller override > per-account config > 30s default.
+  // Kept separate from the default 10s client timeout so chat lookups, probes,
+  // and health checks stay snappy while actual sends can ride out macOS 26
+  // Private API stalls. (#67486)
+  const effectiveSendTimeoutMs = opts.timeoutMs ?? sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
   let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
@@ -470,7 +528,7 @@ export async function sendMessageBlueBubbles(
         password,
         address: target.address,
         message: strippedText,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs: effectiveSendTimeoutMs,
         allowPrivateNetwork,
       });
     }
@@ -550,7 +608,7 @@ export async function sendMessageBlueBubbles(
     method: "POST",
     path: "/api/v1/message/text",
     body: payload,
-    timeoutMs: opts.timeoutMs,
+    timeoutMs: effectiveSendTimeoutMs,
   });
   if (!res.ok) {
     const errorText = await res.text();

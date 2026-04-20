@@ -456,6 +456,11 @@ function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   `;
 }
 
+export const __testing = {
+  renderCompactionIndicator,
+  renderFallbackIndicator,
+};
+
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
