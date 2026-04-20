@@ -370,10 +370,7 @@ function resolveConfiguredProviderContextTokens(
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
-function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic") {
-    return false;
-  }
+function isAnthropic1MCapableModel(model: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(model);
   const modelId = normalized.includes("/")
     ? (normalized.split("/").at(-1) ?? normalized)
@@ -400,7 +397,7 @@ export function resolveContextTokensForModel(params: {
   const explicitProvider = params.provider?.trim();
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
-    if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
+    if (modelParams?.context1m === true && isAnthropic1MCapableModel(ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
     // Only do the config direct scan when the caller explicitly passed a
