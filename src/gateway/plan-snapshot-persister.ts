@@ -303,6 +303,23 @@ async function persistApprovalMetadata(params: {
   approvalId?: string;
   emitSessionsChanged?: (opts: { sessionKey: string; reason: string }) => void;
 }) {
+  // C4 (Plan Mode 1.0 follow-up): defensive guard against silent
+  // bypass when the approvalRunId is empty/missing. The field is
+  // typed as required, but a future refactor (e.g. an upstream
+  // emitter that skips `evt.runId` under some edge case) could hand
+  // us a falsy value. Without this guard, the write would silently
+  // succeed with an empty `planMode.approvalRunId`, later breaking
+  // the approval-side subagent gate in sessions-patch.ts that reads
+  // this field via `getAgentRunContext(approvalRunId)`. Throwing
+  // here surfaces the gap immediately so the caller's .catch logs
+  // it. <0.1% probability today but high operator-diagnostic value.
+  if (!params.approvalRunId || params.approvalRunId.trim().length === 0) {
+    throw new Error(
+      `persistApprovalMetadata: approvalRunId is required (got: ${JSON.stringify(
+        params.approvalRunId,
+      )}). Without it the approval-side subagent gate cannot look up parent-run state, silently bypassing the concurrency check.`,
+    );
+  }
   const cfg = loadConfig();
   const target = resolveGatewaySessionStoreTarget({ cfg, key: params.sessionKey });
   // Direct in-place write rather than going through `applySessionsPatchToStore`
@@ -714,3 +731,14 @@ async function persistSnapshot(params: {
   }
   params.emitSessionsChanged?.({ sessionKey: params.sessionKey, reason: "patch" });
 }
+
+/**
+ * C4 (Plan Mode 1.0 follow-up): test-only seam exposing the
+ * module-private `persistApprovalMetadata` so we can unit-test the
+ * defensive approvalRunId guard without refactoring the subscriber
+ * wiring. Not part of the public API surface — production callers
+ * continue to go through the event subscriber.
+ */
+export const __testingPlanSnapshotPersister = {
+  persistApprovalMetadata,
+};

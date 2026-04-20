@@ -428,3 +428,124 @@ describe("checkAcceptEditsConstraint — case insensitivity", () => {
     );
   });
 });
+
+// C4 (Plan Mode 1.0 follow-up): adversarial escape-vector suite.
+// These constructs are sophisticated bypasses where the shell
+// would resolve a destructive verb at runtime — the gate can't
+// evaluate the expansion but it CAN refuse the construct entirely
+// under acceptEdits. These are layer-2 defense-in-depth backing
+// the prompt-layer primary.
+describe("checkAcceptEditsConstraint — C4 shell-escape layered defense", () => {
+  const blocked = (execCommand: string) =>
+    checkAcceptEditsConstraint({ toolName: "exec", execCommand });
+
+  describe("env-var indirection", () => {
+    it("blocks `$RM file`", () => {
+      const result = blocked("$RM /tmp/x");
+      expect(result.blocked).toBe(true);
+      expect(result.constraint).toBe("destructive");
+    });
+
+    it("blocks `${RM} file` (braced form)", () => {
+      expect(blocked("${RM} /tmp/x").blocked).toBe(true);
+    });
+
+    it("blocks `$SHRED file`", () => {
+      expect(blocked("$SHRED /tmp/secrets").blocked).toBe(true);
+    });
+
+    it("blocks `$TRUNCATE -s 0 file`", () => {
+      expect(blocked("$TRUNCATE -s 0 file").blocked).toBe(true);
+    });
+
+    it("is case-insensitive: `$rm file`", () => {
+      expect(blocked("$rm /tmp/x").blocked).toBe(true);
+    });
+
+    it("allows unrelated env vars: `$HOME/bin/script.sh`", () => {
+      expect(blocked("$HOME/bin/script.sh").blocked).toBe(false);
+    });
+  });
+
+  describe("backtick subshell", () => {
+    it("blocks `` `echo rm` file ``", () => {
+      const result = blocked("`echo rm` /tmp/x");
+      expect(result.blocked).toBe(true);
+      expect(result.constraint).toBe("destructive");
+    });
+
+    it("blocks `` `which shred` file ``", () => {
+      expect(blocked("`which shred` /tmp/x").blocked).toBe(true);
+    });
+
+    it("allows backticks without destructive verbs: `` `date` ``", () => {
+      expect(blocked("echo `date`").blocked).toBe(false);
+    });
+  });
+
+  describe("$(...) subshell", () => {
+    it("blocks `$(echo rm) file`", () => {
+      const result = blocked("$(echo rm) /tmp/x");
+      expect(result.blocked).toBe(true);
+      expect(result.constraint).toBe("destructive");
+    });
+
+    it("blocks `$(which rm) file`", () => {
+      expect(blocked("$(which rm) /tmp/x").blocked).toBe(true);
+    });
+
+    it("allows $(...) without destructive verbs: `$(date)`", () => {
+      expect(blocked("echo $(date)").blocked).toBe(false);
+    });
+  });
+
+  describe("quote concatenation", () => {
+    it('blocks `"r""m" file`', () => {
+      const result = blocked(`"r""m" /tmp/x`);
+      expect(result.blocked).toBe(true);
+    });
+
+    it("blocks single-quote concatenation `'r''m' file`", () => {
+      expect(blocked(`'r''m' /tmp/x`).blocked).toBe(true);
+    });
+  });
+
+  describe("byte-escape encoded commands", () => {
+    it("blocks hex-encoded: `\\x72m file`", () => {
+      const result = blocked("\\x72m /tmp/x");
+      expect(result.blocked).toBe(true);
+      expect(result.constraint).toBe("destructive");
+    });
+
+    it("blocks fully hex-encoded: `\\x72\\x6d file`", () => {
+      expect(blocked("\\x72\\x6d /tmp/x").blocked).toBe(true);
+    });
+
+    it("blocks octal-encoded: `\\162m file`", () => {
+      expect(blocked("\\162m /tmp/x").blocked).toBe(true);
+    });
+
+    it("upper-case hex escapes: `\\X72m file`", () => {
+      expect(blocked("\\X72m /tmp/x").blocked).toBe(true);
+    });
+  });
+
+  describe("false-positive discipline (legitimate commands stay allowed)", () => {
+    it("allows `ls -la $HOME`", () => {
+      expect(blocked("ls -la $HOME").blocked).toBe(false);
+    });
+
+    it("allows `echo $USER is running the build`", () => {
+      expect(blocked("echo $USER is running the build").blocked).toBe(false);
+    });
+
+    it("allows `git log --oneline $(git merge-base main HEAD)..HEAD`", () => {
+      expect(blocked("git log --oneline $(git merge-base main HEAD)..HEAD").blocked).toBe(false);
+    });
+
+    it("allows `cat /tmp/logs/\\`date +%Y-%m-%d\\`.log`", () => {
+      // Backticks around `date` have no destructive verb inside.
+      expect(blocked("cat /tmp/logs/`date +%Y-%m-%d`.log").blocked).toBe(false);
+    });
+  });
+});
