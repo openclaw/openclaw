@@ -32,7 +32,7 @@ OpenClaw 运行时期望时支持的钩子包。
 有关原生能力模型和当前外部兼容性指导：
 [能力模型](/plugins/architecture#public-capability-model)。
 
-## 此文件的作用`openclaw.plugin.json`是 OpenClaw 在加载插件代码之前读取的元数据。
+## 此文件的作用`openclaw.plugin.json`是 OpenClaw 在加载插件代码之前读取的元数据
 
 使用它用于：
 
@@ -109,7 +109,7 @@ OpenClaw 运行时期望时支持的钩子包。
 "groupLabel": "OpenRouter",
 "optionKey": "openrouterApiKey",
 "cliFlag": "--openrouter-api-key",
-"cliOption": "--openrouter-api-key <key>",
+"cliOption": "--openrouter-api-key `key`",
 "cliDescription": "OpenRouter API key",
 "onboardingScopes": ["text-inference"]
 }
@@ -227,7 +227,7 @@ OpenClaw 在提供商运行时加载之前读取此信息。
 
 |`cliFlag`| 否 |`string`| CLI 标志名称，例如`--openrouter-api-key`。 |
 
-|`cliOption`| 否 |`string`| 完整的 CLI 选项形状，例如`--openrouter-api-key <key>`。 |
+|`cliOption`| 否 |`string`| 完整的 CLI 选项形状，例如`--openrouter-api-key `key``。 |
 
 |`cliDescription`| 否 |`string`| CLI 帮助中使用的描述。 |
 

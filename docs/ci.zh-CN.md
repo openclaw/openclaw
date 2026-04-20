@@ -12,25 +12,25 @@ CI 在每次推送到 `main` 分支和每个拉取请求时运行。它使用智
 
 ## 作业概述
 
-| 作业                      | 目的                                                                                  | 运行时机                              |
-| ------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------- |
-| `preflight`              | 检测仅文档变更、变更范围、变更扩展，并构建 CI 清单                                    | 始终在非草稿推送和 PR 上运行          |
-| `security-fast`          | 私钥检测、通过 `zizmor` 进行工作流审计、生产依赖项审计                               | 始终在非草稿推送和 PR 上运行          |
-| `build-artifacts`        | 构建 `dist/` 和 Control UI 一次，上传可重用的构件供下游作业使用                      | 与 Node 相关的变更                   |
-| `checks-fast-core`       | 快速 Linux 正确性通道，如捆绑/插件契约/协议检查                                       | 与 Node 相关的变更                   |
-| `checks-node-extensions` | 跨扩展套件的完整捆绑插件测试分片                                                      | 与 Node 相关的变更                   |
-| `checks-node-core-test`  | 核心 Node 测试分片，不包括通道、捆绑、契约和扩展通道                                 | 与 Node 相关的变更                   |
-| `extension-fast`         | 仅针对变更的捆绑插件的聚焦测试                                                        | 当检测到扩展变更时                   |
-| `check`                  | CI 中的主要本地门控：`pnpm check` 加上 `pnpm build:strict-smoke`                     | 与 Node 相关的变更                   |
-| `check-additional`       | 架构、边界、导入循环保护以及网关监视回归测试工具                                      | 与 Node 相关的变更                   |
-| `build-smoke`            | 构建的 CLI 冒烟测试和启动内存冒烟测试                                                 | 与 Node 相关的变更                   |
-| `checks`                 | 剩余的 Linux Node 通道：通道测试和仅推送的 Node 22 兼容性                            | 与 Node 相关的变更                   |
-| `check-docs`             | 文档格式化、 lint 和断链检查                                                         | 文档变更                             |
-| `skills-python`          | Python 支持的技能的 Ruff + pytest                                                     | 与 Python 技能相关的变更             |
-| `checks-windows`         | Windows 特定的测试通道                                                                | 与 Windows 相关的变更                |
-| `macos-node`             | 使用共享构建构件的 macOS TypeScript 测试通道                                          | 与 macOS 相关的变更                  |
-| `macos-swift`            | macOS 应用的 Swift lint、构建和测试                                                   | 与 macOS 相关的变更                  |
-| `android`                | Android 构建和测试矩阵                                                                | 与 Android 相关的变更                |
+| 作业                     | 目的                                                             | 运行时机                     |
+| ------------------------ | ---------------------------------------------------------------- | ---------------------------- |
+| `preflight`              | 检测仅文档变更、变更范围、变更扩展，并构建 CI 清单               | 始终在非草稿推送和 PR 上运行 |
+| `security-fast`          | 私钥检测、通过 `zizmor` 进行工作流审计、生产依赖项审计           | 始终在非草稿推送和 PR 上运行 |
+| `build-artifacts`        | 构建 `dist/` 和 Control UI 一次，上传可重用的构件供下游作业使用  | 与 Node 相关的变更           |
+| `checks-fast-core`       | 快速 Linux 正确性通道，如捆绑/插件契约/协议检查                  | 与 Node 相关的变更           |
+| `checks-node-extensions` | 跨扩展套件的完整捆绑插件测试分片                                 | 与 Node 相关的变更           |
+| `checks-node-core-test`  | 核心 Node 测试分片，不包括通道、捆绑、契约和扩展通道             | 与 Node 相关的变更           |
+| `extension-fast`         | 仅针对变更的捆绑插件的聚焦测试                                   | 当检测到扩展变更时           |
+| `check`                  | CI 中的主要本地门控：`pnpm check` 加上 `pnpm build:strict-smoke` | 与 Node 相关的变更           |
+| `check-additional`       | 架构、边界、导入循环保护以及网关监视回归测试工具                 | 与 Node 相关的变更           |
+| `build-smoke`            | 构建的 CLI 冒烟测试和启动内存冒烟测试                            | 与 Node 相关的变更           |
+| `checks`                 | 剩余的 Linux Node 通道：通道测试和仅推送的 Node 22 兼容性        | 与 Node 相关的变更           |
+| `check-docs`             | 文档格式化、 lint 和断链检查                                     | 文档变更                     |
+| `skills-python`          | Python 支持的技能的 Ruff + pytest                                | 与 Python 技能相关的变更     |
+| `checks-windows`         | Windows 特定的测试通道                                           | 与 Windows 相关的变更        |
+| `macos-node`             | 使用共享构建构件的 macOS TypeScript 测试通道                     | 与 macOS 相关的变更          |
+| `macos-swift`            | macOS 应用的 Swift lint、构建和测试                              | 与 macOS 相关的变更          |
+| `android`                | Android 构建和测试矩阵                                           | 与 Android 相关的变更        |
 
 ## 快速失败顺序
 
@@ -48,11 +48,11 @@ CI 在每次推送到 `main` 分支和每个拉取请求时运行。它使用智
 
 ## 运行器
 
-| 运行器                          | 作业                                                                                                |
-| ------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `blacksmith-16vcpu-ubuntu-2404` | `preflight`、`security-fast`、`build-artifacts`、Linux 检查、文档检查、Python 技能、`android`       |
-| `blacksmith-32vcpu-windows-2025`| `checks-windows`                                                                                    |
-| `macos-latest`                  | `macos-node`、`macos-swift`                                                                         |
+| 运行器                           | 作业                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------- |
+| `blacksmith-16vcpu-ubuntu-2404`  | `preflight`、`security-fast`、`build-artifacts`、Linux 检查、文档检查、Python 技能、`android` |
+| `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                              |
+| `macos-latest`                   | `macos-node`、`macos-swift`                                                                   |
 
 ## 本地等效命令
 

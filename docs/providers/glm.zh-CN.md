@@ -32,16 +32,18 @@ GLM 鏄€氳繃 Z.AI 骞冲彴鎻愪緵鐨勪竴涓?\*妯″瀷绯诲垪\*\*
 
     # 绀轰緥锛欳oding Plan 鍏ㄧ悆
     openclaw onboard --auth-choice zai-coding-global```</Step>
-  <Step title="灏?GLM 璁剧疆涓洪粯璁ゆā鍨?>```bash
-    openclaw config set agents.defaults.model.primary "zai/glm-5.1"```</Step>
-  <Step title="楠岃瘉妯″瀷鍙敤">```bash
-    openclaw models list --provider zai```</Step>
+
+<Step title="灏?GLM 璁剧疆涓洪粯璁ゆā鍨?>`bash
+    openclaw config set agents.defaults.model.primary "zai/glm-5.1"`</Step>
+<Step title="楠岃瘉妯″瀷鍙敤">`bash
+    openclaw models list --provider zai`</Step>
 </Steps>
 
 ## 閰嶇疆绀轰緥```json5
+
 {
-  env: { ZAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "zai/glm-5.1" } } },
+env: { ZAI_API_KEY: "sk-..." },
+agents: { defaults: { model: { primary: "zai/glm-5.1" } } },
 }```<Tip>`zai-api-key`鍏佽 OpenClaw 浠庡瘑閽ヤ腑妫€娴嬪尮閰嶇殑 Z.AI 绔偣锛屽苟鑷姩搴旂敤姝ｇ‘鐨勫熀 URL銆傚綋浣犳兂瑕佸己鍒朵娇鐢ㄧ壒瀹氱殑 Coding Plan 鎴栭€氱敤 API 鎺ュ彛鏃讹紝璇蜂娇鐢ㄦ槑纭殑鍖哄煙閫夐」銆?</Tip>
 
 ## 鍐呯疆 GLM 妯″瀷

@@ -38,7 +38,7 @@ OpenProse 注册`/prose`作为用户可调用的技能命令。它路由到 Open
 /prose examples
 /prose update`## 示例：一个简单的`.prose`文件```prose
 
-# 两个代理并行运行的研究 + 综合。
+# 两个代理并行运行的研究 + 综合
 
 input topic: "我们应该研究什么？"
 
@@ -80,7 +80,7 @@ OpenProse 支持多种状态后端：
 - sqlite/postgres 是可选的且实验性的。
 - postgres 凭据会流入子代理日志；请使用专用的、权限最小的数据库。
 
-## 远程程序`/prose run <handle/slug>`解析为`<https://p.prose.md/><handle>/<slug>`。
+## 远程程序`/prose run <handle/slug>`解析为`<https://p.prose.md/><handle>/<slug>`
 
 直接 URL 按原样获取。这使用`web_fetch`工具（或`exec`用于 POST）。
 

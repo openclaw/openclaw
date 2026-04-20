@@ -54,17 +54,17 @@ OpenClaw 支持将 Brave Search API 作为 `web_search` 提供商。
 
 ## 工具参数
 
-| 参数          | 描述                                                              |
-| ------------ | ----------------------------------------------------------------- |
-| `query`      | 搜索查询（必填）                                                  |
-| `count`      | 要返回的结果数量（1-10，默认：5）                                |
-| `country`    | 2 字母 ISO 国家代码（例如，"US"、"DE"）                         |
-| `language`   | 搜索结果的 ISO 639-1 语言代码（例如，"en"、"de"、"fr"）        |
-| `search_lang`| Brave 搜索语言代码（例如，`en`、`en-gb`、`zh-hans`）              |
-| `ui_lang`    | UI 元素的 ISO 语言代码                                            |
-| `freshness`  | 时间过滤器：`day`（24小时）、`week`、`month` 或 `year`            |
-| `date_after` | 仅返回此日期之后发布的结果（YYYY-MM-DD）                          |
-| `date_before`| 仅返回此日期之前发布的结果（YYYY-MM-DD）                          |
+| 参数          | 描述                                                    |
+| ------------- | ------------------------------------------------------- |
+| `query`       | 搜索查询（必填）                                        |
+| `count`       | 要返回的结果数量（1-10，默认：5）                       |
+| `country`     | 2 字母 ISO 国家代码（例如，"US"、"DE"）                 |
+| `language`    | 搜索结果的 ISO 639-1 语言代码（例如，"en"、"de"、"fr"） |
+| `search_lang` | Brave 搜索语言代码（例如，`en`、`en-gb`、`zh-hans`）    |
+| `ui_lang`     | UI 元素的 ISO 语言代码                                  |
+| `freshness`   | 时间过滤器：`day`（24小时）、`week`、`month` 或 `year`  |
+| `date_after`  | 仅返回此日期之后发布的结果（YYYY-MM-DD）                |
+| `date_before` | 仅返回此日期之前发布的结果（YYYY-MM-DD）                |
 
 **示例：**
 

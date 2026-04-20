@@ -99,18 +99,18 @@ OpenClaw 支持将 Perplexity Search API 作为 `web_search` 提供商。
 
 这些参数适用于原生 Perplexity Search API 路径。
 
-| 参数                 | 描述                                            |
-| ------------------- | ------------------------------------------------ |
-| `query`             | 搜索查询（必填）                                |
-| `count`             | 要返回的结果数量（1-10，默认：5）              |
-| `country`           | 2 字母 ISO 国家代码（例如，"US"、"DE"）       |
-| `language`          | ISO 639-1 语言代码（例如，"en"、"de"、"fr"） |
-| `freshness`         | 时间过滤器：`day`（24小时）、`week`、`month` 或 `year` |
-| `date_after`        | 仅返回此日期之后发布的结果（YYYY-MM-DD）        |
-| `date_before`       | 仅返回此日期之前发布的结果（YYYY-MM-DD）        |
-| `domain_filter`     | 域名允许列表/拒绝列表数组（最多 20 个）          |
-| `max_tokens`        | 总内容预算（默认：25000，最大：1000000）        |
-| `max_tokens_per_page` | 每页令牌限制（默认：2048）                     |
+| 参数                  | 描述                                                   |
+| --------------------- | ------------------------------------------------------ |
+| `query`               | 搜索查询（必填）                                       |
+| `count`               | 要返回的结果数量（1-10，默认：5）                      |
+| `country`             | 2 字母 ISO 国家代码（例如，"US"、"DE"）                |
+| `language`            | ISO 639-1 语言代码（例如，"en"、"de"、"fr"）           |
+| `freshness`           | 时间过滤器：`day`（24小时）、`week`、`month` 或 `year` |
+| `date_after`          | 仅返回此日期之后发布的结果（YYYY-MM-DD）               |
+| `date_before`         | 仅返回此日期之前发布的结果（YYYY-MM-DD）               |
+| `domain_filter`       | 域名允许列表/拒绝列表数组（最多 20 个）                |
+| `max_tokens`          | 总内容预算（默认：25000，最大：1000000）               |
+| `max_tokens_per_page` | 每页令牌限制（默认：2048）                             |
 
 对于旧版 Sonar/OpenRouter 兼容性路径：
 

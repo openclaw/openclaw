@@ -820,7 +820,7 @@ Slack 操作由 `channels.slack.actions.*` 控制。
 /openclaw /help
 ```
 
-原生命令需要 Slack 应用中的 [其他清单设置](#additional-manifest-settings)，并通过 `channels.slack.commands.native: true` 或全局配置中的 `commands.native: true` 启用。
+原生命令需要 Slack 应用中的 [其他清单设置](#其他清单设置)，并通过 `channels.slack.commands.native: true` 或全局配置中的 `commands.native: true` 启用。
 
 - Slack 的原生命令自动模式**关闭**，因此 `commands.native: "auto"` 不会启用 Slack 原生命令。
 
