@@ -271,11 +271,11 @@ Once configured, all your Ollama models are available:
 
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
 
-| Property    | Detail                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| Host        | Uses your configured Ollama host (`models.providers.ollama.baseUrl` when set, otherwise `http://127.0.0.1:11434`) |
-| Auth        | Key-free                                                                                                          |
-| Requirement | Ollama must be running and signed in with `ollama signin`                                                         |
+| Property    | Detail                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Host        | Ollama Cloud (`https://ollama.com/api/web_search`); optional `plugins.entries.ollama.config.webSearch.baseUrl` override for custom proxies |
+| Auth        | Reuses `models.providers.ollama.apiKey` or `OLLAMA_API_KEY`                                                                                |
+| Requirement | Signed in with `ollama signin` (or a provisioned `OLLAMA_API_KEY`)                                                                         |
 
 Choose **Ollama Web Search** during `openclaw onboard` or `openclaw configure --section web`, or set:
 

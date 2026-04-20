@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   fetchOllamaModels,
@@ -41,7 +41,11 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-const OLLAMA_WEB_SEARCH_PATH = "/api/experimental/web_search";
+// Ollama's web_search capability is served by Ollama Cloud at
+// https://ollama.com/api/web_search. The local Ollama daemon (0.16.0+) does
+// not expose this endpoint; older bundled versions pointed at the local
+// /api/experimental/web_search path, which now 404s. See issue #69132.
+const OLLAMA_WEB_SEARCH_PATH = "/api/web_search";
 const DEFAULT_OLLAMA_WEB_SEARCH_COUNT = 5;
 const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS = 15_000;
 const OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS = 300;
@@ -71,14 +75,7 @@ function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   if (pluginBaseUrl) {
     return resolveOllamaApiBase(pluginBaseUrl);
   }
-  const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
-  if (normalizeOptionalString(configuredBaseUrl)) {
-    const baseUrl = resolveOllamaApiBase(configuredBaseUrl);
-    if (baseUrl !== OLLAMA_CLOUD_BASE_URL) {
-      return baseUrl;
-    }
-  }
-  return OLLAMA_DEFAULT_BASE_URL;
+  return OLLAMA_CLOUD_BASE_URL;
 }
 
 function normalizeOllamaWebSearchResult(
@@ -180,17 +177,21 @@ async function warnOllamaWebSearchPrereqs(params: {
   };
 }): Promise<OpenClawConfig> {
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
-  const { reachable } = await fetchOllamaModels(baseUrl);
-  if (!reachable) {
-    await params.prompter.note(
-      [
-        "Ollama Web Search requires Ollama to be running.",
-        `Expected host: ${baseUrl}`,
-        "Start Ollama before using this provider.",
-      ].join("\n"),
-      "Ollama Web Search",
-    );
-    return params.config;
+  // Only probe daemon reachability for self-hosted/custom bases. Ollama Cloud
+  // doesn't serve /api/tags, so skip that check when we're pointing at it.
+  if (baseUrl !== OLLAMA_CLOUD_BASE_URL) {
+    const { reachable } = await fetchOllamaModels(baseUrl);
+    if (!reachable) {
+      await params.prompter.note(
+        [
+          "Ollama Web Search requires Ollama to be running.",
+          `Expected host: ${baseUrl}`,
+          "Start Ollama before using this provider.",
+        ].join("\n"),
+        "Ollama Web Search",
+      );
+      return params.config;
+    }
   }
 
   const auth = await checkOllamaCloudAuth(baseUrl);
@@ -230,7 +231,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
       }),
     createTool: (ctx) => ({
       description:
-        "Search the web using Ollama's experimental web search API. Returns titles, URLs, and snippets from the configured Ollama host.",
+        "Search the web using Ollama's Cloud web-search API. Returns titles, URLs, and snippets.",
       parameters: OLLAMA_WEB_SEARCH_SCHEMA,
       execute: async (args) =>
         await runOllamaWebSearch({

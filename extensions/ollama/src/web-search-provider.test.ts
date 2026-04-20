@@ -82,7 +82,7 @@ describe("ollama web search provider", () => {
     });
   });
 
-  it("uses the configured Ollama host and enables the plugin in config", () => {
+  it("defaults to Ollama Cloud and enables the plugin in config", () => {
     const provider = createOllamaWebSearchProvider();
     if (!provider.applySelectionConfig) {
       throw new Error("Expected applySelectionConfig to be defined");
@@ -104,10 +104,10 @@ describe("ollama web search provider", () => {
           },
         },
       }),
-    ).toBe("http://ollama.local:11434");
+    ).toBe("https://ollama.com");
   });
 
-  it("prefers the plugin web search base URL over the model provider host", () => {
+  it("prefers the plugin web search base URL over the cloud default", () => {
     expect(
       testing.resolveOllamaWebSearchBaseUrl(
         createOllamaConfigWithWebSearchBaseUrl("http://localhost:11434/v1"),
@@ -115,17 +115,18 @@ describe("ollama web search provider", () => {
     ).toBe("http://localhost:11434");
   });
 
-  it("falls back to the local Ollama host when the model provider uses ollama cloud", () => {
+  it("ignores models.providers.ollama.baseUrl for web search (routes to cloud)", () => {
+    // web_search is a cloud capability; the local daemon does not serve it.
     expect(
       testing.resolveOllamaWebSearchBaseUrl(
         createOllamaConfig({
-          baseUrl: "https://ollama.com",
+          baseUrl: "http://ollama.local:11434",
         }),
       ),
-    ).toBe("http://127.0.0.1:11434");
+    ).toBe("https://ollama.com");
   });
 
-  it("maps generic search args into the Ollama experimental search endpoint", async () => {
+  it("maps generic search args into the Ollama Cloud web_search endpoint", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
@@ -157,7 +158,7 @@ describe("ollama web search provider", () => {
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "http://ollama.local:11434/api/experimental/web_search",
+        url: "https://ollama.com/api/web_search",
         auditContext: "ollama-web-search.search",
       }),
     );
@@ -195,10 +196,10 @@ describe("ollama web search provider", () => {
     );
   });
 
-  it("warns when Ollama is not reachable during setup without cancelling", async () => {
+  it("warns when Ollama is not reachable during setup for custom self-hosted bases", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connect failed"));
 
-    const config = createOllamaConfig();
+    const config = createOllamaConfigWithWebSearchBaseUrl("http://localhost:11434");
     const { notes, prompter } = createSetupNotes();
 
     const next = await testing.warnOllamaWebSearchPrereqs({
@@ -236,24 +237,18 @@ describe("ollama web search provider", () => {
   });
 
   it("warns when ollama signin is missing during setup without cancelling", async () => {
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ models: [] }), {
-          status: 200,
+    // With the cloud default, setup skips daemon reachability and goes
+    // straight to the /api/me auth check.
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({ error: "not signed in", signin_url: "https://ollama.com/signin" }),
+        {
+          status: 401,
           headers: { "Content-Type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({ error: "not signed in", signin_url: "https://ollama.com/signin" }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      });
+        },
+      ),
+      release: vi.fn(async () => {}),
+    });
 
     const config = createOllamaConfig();
     const { notes, prompter } = createSetupNotes();

@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/commands: recognize slash commands that are prefixed with the bot's Matrix mention, so room messages like `@bot:server /new` trigger the command path without requiring custom mention regexes. (#68570) Thanks @nightq and @johnlanni.
 - Agents/subagents: include requested role and runtime timing on subagent failure payloads so parent agents can correlate failed or timed-out child work. (#68726) Thanks @BKF-Gitty.
 - Gateway/sessions: reject stale agent-scoped sessions after an agent is removed from config while preserving legacy default-agent main-session aliases. (#65986) Thanks @bittoby.
+- Ollama/web-search: route the bundled `web_search` provider at Ollama Cloud (`https://ollama.com/api/web_search`) instead of the local daemon's removed `/api/experimental/web_search` path, so `tools.web.search.provider = "ollama"` works again on Ollama 0.16.0+. (#69132) Thanks @yoon1012.
 
 ## 2026.4.19-beta.2
 
