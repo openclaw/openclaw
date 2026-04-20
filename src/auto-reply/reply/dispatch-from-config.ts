@@ -25,7 +25,6 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getExecApprovalReplyMetadata } from "../../infra/exec-approval-reply.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -118,55 +117,8 @@ async function maybeApplyTtsToReplyPayload(
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
-const EXEC_APPROVAL_COMMAND_RE =
-  /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(?:allow-once|allow-always|always|deny)\b/gi;
-const APPROVE_COMMAND_RE = /^\/?approve(?:@[^\s]+)?(?:\s|$)/i;
 const normalizeMediaType = (value: string): string =>
   normalizeOptionalLowercaseString(value.split(";")[0]) ?? "";
-
-function collectExecApprovalCommandIds(payload: ReplyPayload): string[] {
-  const text = typeof payload.text === "string" ? payload.text : "";
-  if (!text.trim()) {
-    return [];
-  }
-  const approvalCommandIds: string[] = [];
-  EXEC_APPROVAL_COMMAND_RE.lastIndex = 0;
-  let match: RegExpExecArray | null = EXEC_APPROVAL_COMMAND_RE.exec(text);
-  while (match) {
-    const approvalCommandId = match[1]?.trim();
-    if (approvalCommandId) {
-      approvalCommandIds.push(approvalCommandId);
-    }
-    match = EXEC_APPROVAL_COMMAND_RE.exec(text);
-  }
-  return approvalCommandIds;
-}
-
-function hasRepeatedNativeExecApprovalPrompt(params: {
-  payload: ReplyPayload;
-  approvalCommandIds: ReadonlySet<string>;
-}): boolean {
-  if (params.approvalCommandIds.size === 0) {
-    return false;
-  }
-  return collectExecApprovalCommandIds(params.payload).some((approvalCommandId) =>
-    params.approvalCommandIds.has(approvalCommandId),
-  );
-}
-
-function isInboundApproveCommand(ctx: FinalizedMsgContext): boolean {
-  const body =
-    typeof ctx.BodyForCommands === "string"
-      ? ctx.BodyForCommands
-      : typeof ctx.CommandBody === "string"
-        ? ctx.CommandBody
-        : typeof ctx.RawBody === "string"
-          ? ctx.RawBody
-          : typeof ctx.Body === "string"
-            ? ctx.Body
-            : "";
-  return APPROVE_COMMAND_RE.test(body.trim());
-}
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -683,40 +635,9 @@ export async function dispatchReplyFromConfig(
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
-    const pendingNativeExecApprovalCommandIds = new Set<string>();
-    const inboundIsApproveCommand = isInboundApproveCommand(ctx);
-    let sawExecApprovalToolResult = false;
-    const shouldSuppressExecApprovalPromptPayload = (payload: ReplyPayload): boolean => {
-      if (
-        hasRepeatedNativeExecApprovalPrompt({
-          payload,
-          approvalCommandIds: pendingNativeExecApprovalCommandIds,
-        })
-      ) {
-        logVerbose("dispatch-from-config: suppressing repeated native exec approval prompt");
-        return true;
-      }
-      if (
-        !inboundIsApproveCommand &&
-        !sawExecApprovalToolResult &&
-        collectExecApprovalCommandIds(payload).length > 0
-      ) {
-        logVerbose(
-          "dispatch-from-config: suppressing stale exec approval prompt without a new approval event",
-        );
-        return true;
-      }
-      return false;
-    };
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      if (shouldSuppressExecApprovalPromptPayload(payload)) {
-        return {
-          queuedFinal: false,
-          routedFinalCount: 0,
-        };
-      }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
@@ -925,21 +846,14 @@ export async function dispatchReplyFromConfig(
     let blockCount = 0;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
-      const execApprovalMetadata = getExecApprovalReplyMetadata(payload);
-      if (execApprovalMetadata) {
-        sawExecApprovalToolResult = true;
-      }
-      const shouldSuppressExecApprovalPrompt = shouldSuppressLocalExecApprovalPrompt({
-        channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
-        cfg,
-        accountId: ctx.AccountId,
-        payload,
-      });
-      if (shouldSuppressExecApprovalPrompt && execApprovalMetadata) {
-        pendingNativeExecApprovalCommandIds.add(execApprovalMetadata.approvalId);
-        pendingNativeExecApprovalCommandIds.add(execApprovalMetadata.approvalSlug);
-      }
-      if (shouldSuppressExecApprovalPrompt) {
+      if (
+        shouldSuppressLocalExecApprovalPrompt({
+          channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
+          cfg,
+          accountId: ctx.AccountId,
+          payload,
+        })
+      ) {
         return null;
       }
       if (shouldSendToolSummaries) {
@@ -1067,9 +981,6 @@ export async function dispatchReplyFromConfig(
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
             if (payload.isReasoning === true) {
-              return;
-            }
-            if (shouldSuppressExecApprovalPromptPayload(payload)) {
               return;
             }
             // Accumulate block text for TTS generation after streaming.

@@ -148,9 +148,9 @@ function buildExecApprovalPromptGuidance(params: {
       ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
       : false);
   if (usesNativeApprovalUi) {
-    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. If the user later repeats the original task in a fresh natural-language message, do not quote or reuse any earlier /approve id; call exec again so the runtime can issue a fresh approval request. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible, or the user explicitly asks for the command text.";
+    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
   }
-  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code. If the user later repeats the task instead of sending /approve, run exec again to get a fresh approval request rather than reusing an older /approve id.";
+  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
