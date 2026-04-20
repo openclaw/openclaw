@@ -149,6 +149,7 @@ function getDispatcherFromUndiciCall(nth: number) {
   return init?.dispatcher as
     | {
         options?: {
+          allowH2?: boolean;
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
           requestTls?: Record<string, unknown>;
@@ -195,6 +196,7 @@ function expectStickyAutoSelectDispatcher(
   dispatcher:
     | {
         options?: {
+          allowH2?: boolean;
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
           requestTls?: Record<string, unknown>;
@@ -207,6 +209,22 @@ function expectStickyAutoSelectDispatcher(
     expect.objectContaining({
       autoSelectFamily: true,
       autoSelectFamilyAttemptTimeout: 300,
+    }),
+  );
+}
+
+function expectHttp1OnlyDispatcher(
+  dispatcher:
+    | {
+        options?: {
+          allowH2?: boolean;
+        };
+      }
+    | undefined,
+): void {
+  expect(dispatcher?.options).toEqual(
+    expect.objectContaining({
+      allowH2: false,
     }),
   );
 }
@@ -328,6 +346,7 @@ describe("resolveTelegramFetch", () => {
 
     const dispatcher = getDispatcherFromUndiciCall(1);
     expect(dispatcher).toBeDefined();
+    expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
@@ -363,6 +382,7 @@ describe("resolveTelegramFetch", () => {
     expect(AgentCtor).not.toHaveBeenCalled();
 
     const dispatcher = getDispatcherFromUndiciCall(1);
+    expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         autoSelectFamily: false,
@@ -388,6 +408,7 @@ describe("resolveTelegramFetch", () => {
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
     expect(ProxyAgentCtor).toHaveBeenCalledWith(
       expect.objectContaining({
+        allowH2: false,
         uri: "http://127.0.0.1:7777",
       }),
     );
@@ -407,6 +428,7 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/getMe");
 
     const dispatcher = getDispatcherFromUndiciCall(1);
+    expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
@@ -440,6 +462,7 @@ describe("resolveTelegramFetch", () => {
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
     expect(AgentCtor).not.toHaveBeenCalled();
     const dispatcher = getDispatcherFromUndiciCall(1);
+    expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options).toEqual(
       expect.objectContaining({
         uri: "http://127.0.0.1:7890",
@@ -852,6 +875,7 @@ describe("resolveTelegramFetch", () => {
       const defaultAgent = AgentCtor.mock.instances[0]?.options;
       expect(defaultAgent).toEqual(
         expect.objectContaining({
+          allowH2: false,
           keepAliveTimeout: expect.any(Number),
           keepAliveMaxTimeout: expect.any(Number),
           connections: expect.any(Number),

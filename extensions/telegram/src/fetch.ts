@@ -41,6 +41,7 @@ const TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN = 10;
 const TELEGRAM_DISPATCHER_PIPELINING = 1;
 
 type TelegramAgentPoolOptions = {
+  allowH2: false;
   keepAliveTimeout: number;
   keepAliveMaxTimeout: number;
   connections: number;
@@ -49,6 +50,7 @@ type TelegramAgentPoolOptions = {
 
 function telegramAgentPoolOptions(): TelegramAgentPoolOptions {
   return {
+    allowH2: false,
     keepAliveTimeout: TELEGRAM_DISPATCHER_KEEP_ALIVE_TIMEOUT_MS,
     keepAliveMaxTimeout: TELEGRAM_DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS,
     connections: TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN,
@@ -293,6 +295,9 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   mode: TelegramDispatcherMode;
   effectivePolicy: PinnedDispatcherPolicy;
 } {
+  // Telegram polling uses long-lived connections. Undici 8 enables HTTP/2 ALPN
+  // by default, which can stall Telegram long-polling on Windows/IPv6 networks.
+  // Force HTTP/1.1 for every dispatcher while keeping bounded pool defaults.
   const poolOptions = telegramAgentPoolOptions();
 
   if (policy.mode === "explicit-proxy") {
