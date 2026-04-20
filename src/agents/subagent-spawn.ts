@@ -39,9 +39,11 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
+  deliveryContextFromSession,
   emitSessionLifecycleEvent,
   getGlobalHookRunner,
   loadConfig,
+  loadSessionEntry,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -460,14 +462,40 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  // Backfill missing delivery routing fields from the parent session's stored
+  // deliveryContext. The tool-wiring layer (pi-tools / tool-resolution) sources
+  // ctx.agent{Channel,To,ThreadId,AccountId} from the current invocation's
+  // request, which can be empty for top-level-agent runs not driven by a direct
+  // inbound (e.g. a router awakened by an internal trigger). Without backfill
+  // the spawned child loses thread context and replies leak to the channel
+  // root. mergeDeliveryContext owns the channel-mismatch guard so we never
+  // cross to/threadId between unrelated channels.
+  const ctxDeliveryHint = normalizeDeliveryContext({
+    channel: ctx.agentChannel,
+    to: ctx.agentTo,
+    accountId: ctx.agentAccountId,
+    threadId: ctx.agentThreadId,
+  });
+  // Best-effort parent lookup; defensive against test harnesses or future
+  // callers that don't provide a writable session store.
+  let parentDelivery: DeliveryContext | undefined;
+  if (requesterInternalKey && typeof loadSessionEntry === "function") {
+    try {
+      parentDelivery = deliveryContextFromSession(loadSessionEntry(requesterInternalKey).entry);
+    } catch {
+      parentDelivery = undefined;
+    }
+  }
+  const effectiveRequesterDelivery =
+    mergeDeliveryContext(ctxDeliveryHint, parentDelivery) ?? ctxDeliveryHint;
   const requesterOrigin = resolveRequesterOriginForChild({
     cfg,
     targetAgentId,
     requesterAgentId,
-    requesterChannel: ctx.agentChannel,
-    requesterAccountId: ctx.agentAccountId,
-    requesterTo: ctx.agentTo,
-    requesterThreadId: ctx.agentThreadId,
+    requesterChannel: effectiveRequesterDelivery?.channel ?? ctx.agentChannel,
+    requesterAccountId: effectiveRequesterDelivery?.accountId ?? ctx.agentAccountId,
+    requesterTo: effectiveRequesterDelivery?.to ?? ctx.agentTo,
+    requesterThreadId: effectiveRequesterDelivery?.threadId ?? ctx.agentThreadId,
     requesterGroupSpace: ctx.agentGroupSpace,
     requesterMemberRoleIds: ctx.agentMemberRoleIds,
   });
@@ -549,11 +577,25 @@ export async function spawnSubagentDirect(
     }
   };
 
+  // Persist the resolved parent-origin delivery context onto the child entry so
+  // outbound replies (announce / session-mode follow-ups) have a route even
+  // before any inbound message seeds it via gateway.agent. Defense-in-depth:
+  // the gateway-side seeding at server-methods/agent.ts only seeds from the
+  // request's own to/threadId, which can be empty when the child first speaks.
   const initialChildSessionPatch: Record<string, unknown> = {
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
     ...plan.initialSessionPatch,
+    ...(requesterOrigin
+      ? {
+          deliveryContext: requesterOrigin,
+          lastChannel: requesterOrigin.channel,
+          lastTo: requesterOrigin.to,
+          lastAccountId: requesterOrigin.accountId,
+          lastThreadId: requesterOrigin.threadId,
+        }
+      : {}),
   };
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);
@@ -623,6 +665,35 @@ export async function spawnSubagentDirect(
     hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
     childSessionOrigin =
       mergeDeliveryContext(bindResult.deliveryOrigin, requesterOrigin) ?? childSessionOrigin;
+    // The thread binding may have introduced a binding-owned override (e.g. a
+    // different thread targeted by the binding manager). Persist the merged
+    // origin so subsequent outbound resolution honors the binding decision
+    // rather than the pre-binding initial patch.
+    if (childSessionOrigin && childSessionOrigin !== requesterOrigin) {
+      const followupPatchError = await patchChildSession({
+        deliveryContext: childSessionOrigin,
+        lastChannel: childSessionOrigin.channel,
+        lastTo: childSessionOrigin.to,
+        lastAccountId: childSessionOrigin.accountId,
+        lastThreadId: childSessionOrigin.threadId,
+      });
+      if (followupPatchError) {
+        try {
+          await callSubagentGateway({
+            method: "sessions.delete",
+            params: { key: childSessionKey, emitLifecycleHooks: false },
+            timeoutMs: 10_000,
+          });
+        } catch {
+          // Best-effort cleanup only.
+        }
+        return {
+          status: "error",
+          error: followupPatchError,
+          childSessionKey,
+        };
+      }
+    }
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 

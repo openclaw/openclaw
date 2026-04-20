@@ -63,6 +63,7 @@ import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
+  mergeDeliveryContext,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
@@ -675,6 +676,30 @@ function resolveAcpSpawnRequesterState(params: {
       : params.ctx.agentThreadId != null;
   const requesterAgentId = requesterParsedSession?.agentId;
 
+  // Backfill missing ctx delivery fields from the parent session's stored
+  // deliveryContext so sessions_spawn children inherit the originating thread
+  // when the tool-wiring layer did not populate ctx.agent{To,ThreadId}.
+  let parentDelivery: ReturnType<typeof deliveryContextFromSession> = undefined;
+  if (params.parentSessionKey && requesterAgentId) {
+    try {
+      const parentStorePath = resolveStorePath(params.cfg.session?.store, {
+        agentId: requesterAgentId,
+      });
+      const parentStore = loadSessionStore(parentStorePath);
+      parentDelivery = deliveryContextFromSession(parentStore[params.parentSessionKey]);
+    } catch {
+      parentDelivery = undefined;
+    }
+  }
+  const ctxDeliveryHint = normalizeDeliveryContext({
+    channel: params.ctx.agentChannel,
+    to: params.ctx.agentTo,
+    accountId: params.ctx.agentAccountId,
+    threadId: params.ctx.agentThreadId,
+  });
+  const effectiveDelivery =
+    mergeDeliveryContext(ctxDeliveryHint, parentDelivery) ?? ctxDeliveryHint;
+
   return {
     parentSessionKey: params.parentSessionKey,
     isSubagentSession,
@@ -696,10 +721,10 @@ function resolveAcpSpawnRequesterState(params: {
       cfg: params.cfg,
       targetAgentId: params.targetAgentId,
       requesterAgentId: normalizeAgentId(requesterAgentId),
-      requesterChannel: params.ctx.agentChannel,
-      requesterAccountId: params.ctx.agentAccountId,
-      requesterTo: params.ctx.agentTo,
-      requesterThreadId: params.ctx.agentThreadId,
+      requesterChannel: effectiveDelivery?.channel ?? params.ctx.agentChannel,
+      requesterAccountId: effectiveDelivery?.accountId ?? params.ctx.agentAccountId,
+      requesterTo: effectiveDelivery?.to ?? params.ctx.agentTo,
+      requesterThreadId: effectiveDelivery?.threadId ?? params.ctx.agentThreadId,
       requesterGroupSpace: params.ctx.agentGroupSpace,
       requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
@@ -1065,12 +1090,22 @@ export async function spawnAcpDirect(
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   try {
+    const initialChildDelivery = requesterState.origin;
     await callGateway({
       method: "sessions.patch",
       params: {
         key: sessionKey,
         spawnedBy: requesterInternalKey,
         ...(params.label ? { label: params.label } : {}),
+        ...(initialChildDelivery
+          ? {
+              deliveryContext: initialChildDelivery,
+              lastChannel: initialChildDelivery.channel,
+              lastTo: initialChildDelivery.to,
+              lastAccountId: initialChildDelivery.accountId,
+              lastThreadId: initialChildDelivery.threadId,
+            }
+          : {}),
       },
       timeoutMs: 10_000,
     });

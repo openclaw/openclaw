@@ -59,7 +59,15 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
 }
 
 export function identityDeliveryContext(value: unknown) {
-  return value;
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, v]) => v !== undefined && v !== null && v !== "",
+  );
+  return entries.length === 0
+    ? undefined
+    : (Object.fromEntries(entries) as Record<string, unknown>);
 }
 
 export function createDefaultSessionHelperMocks() {
@@ -144,6 +152,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
+  parentSessionEntry?: Record<string, unknown>;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
     vi.resetModules();
@@ -193,10 +202,22 @@ export async function loadSubagentSpawnModuleForTest(params: {
     mergeDeliveryContext: (
       primary?: Record<string, unknown>,
       fallback?: Record<string, unknown>,
-    ) => ({
-      ...fallback,
-      ...primary,
-    }),
+    ) => {
+      const p = identityDeliveryContext(primary);
+      const f = identityDeliveryContext(fallback);
+      const primaryChannel = typeof p?.channel === "string" ? p.channel : undefined;
+      const fallbackChannel = typeof f?.channel === "string" ? f.channel : undefined;
+      const channelsConflict =
+        primaryChannel && fallbackChannel && primaryChannel !== fallbackChannel;
+      const merged: Record<string, unknown> = {
+        ...(channelsConflict ? {} : f),
+        ...p,
+      };
+      if (!channelsConflict && f) {
+        merged.channel = primaryChannel ?? fallbackChannel;
+      }
+      return identityDeliveryContext(merged);
+    },
     resolveGatewaySessionStoreTarget: (targetParams: { key: string }) => ({
       agentId: "main",
       storePath: params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json",
@@ -204,6 +225,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
       storeKeys: [targetParams.key],
     }),
     normalizeDeliveryContext: identityDeliveryContext,
+    deliveryContextFromSession: (entry?: Record<string, unknown>) =>
+      entry?.deliveryContext as Record<string, unknown> | undefined,
+    loadSessionEntry: (_key: string) => ({ entry: params.parentSessionEntry }),
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
     resolveAgentWorkspaceDir:
       params.resolveAgentWorkspaceDir ?? (() => params.workspaceDir ?? os.tmpdir()),

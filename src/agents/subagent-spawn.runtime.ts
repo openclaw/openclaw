@@ -5,12 +5,14 @@ export { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export { callGateway } from "../gateway/call.js";
 export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
 export {
+  loadSessionEntry,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
 } from "../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 export {
+  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
