@@ -223,6 +223,13 @@ const VAULT_PATH_TEMPLATE_PATTERN = new RegExp(
   "g",
 );
 
+// Broader check used after expansion to gate `path.normalize`. Matches any
+// `{word}` placeholder, not just the four known tokens, so a typo like
+// `{tenant}` in a multi-tenant config still blocks normalization — otherwise
+// `path.normalize("/tmp/workspace/{tenant}/../wiki")` collapses to
+// `/tmp/workspace/wiki` and silently redirects the vault.
+const VAULT_PATH_ANY_PLACEHOLDER = /\{[^{}/]+\}/;
+
 export function containsVaultPathTemplate(candidatePath: string): boolean {
   return VAULT_PATH_TEMPLATE_DETECT.test(candidatePath);
 }
@@ -237,13 +244,15 @@ export function containsVaultPathTemplate(candidatePath: string): boolean {
  * for example when a plugin tool server resolves tools with a context that
  * does not populate workspace/agent/session fields.
  *
- * Normalization is only applied when every token was resolved. Running
- * `path.normalize` over a path that still contains literal `{token}` segments
- * would collapse traversal that references those unresolved segments —
+ * Normalization is only applied when every placeholder was resolved. Running
+ * `path.normalize` over a path that still contains `{...}` segments would
+ * collapse traversal that references those segments —
  * `path.normalize("{workspaceDir}/../wiki")` returns `"wiki"`, a CWD-relative
  * path — re-introducing the exact silent-redirect failure mode the literal
- * preservation guards against. Skipping normalization in that case keeps the
- * path lexically broken so the filesystem surfaces ENOENT.
+ * preservation guards against. The gate uses a broader `\{word\}` match
+ * (not just the four known tokens), so typos like `{tenant}` also block
+ * normalization and fail loudly at the filesystem layer instead of silently
+ * redirecting to a neighbouring tenant.
  */
 export function expandVaultPathTemplate(
   templatePath: string,
@@ -259,7 +268,7 @@ export function expandVaultPathTemplate(
       return value != null && value !== "" ? value : match;
     },
   );
-  if (containsVaultPathTemplate(expanded)) {
+  if (VAULT_PATH_ANY_PLACEHOLDER.test(expanded)) {
     return expanded;
   }
   return path.normalize(expanded);

@@ -152,6 +152,21 @@ describe("vault path templating", () => {
       }),
     ).toBe("/tmp/wiki");
   });
+
+  it("skips path normalization when unknown placeholders (typos) remain so `..` cannot eat them", () => {
+    // A typo like `{tenant}` is not a known token, so the replace step leaves
+    // it in place. If the normalization gate only looked at known tokens the
+    // path would still normalize and `path.normalize` would collapse
+    // `{tenant}/..`, silently rewriting `/tmp/workspace/{tenant}/../wiki` to
+    // `/tmp/workspace/wiki` — a tenant-boundary breach driven by a config
+    // typo. The broader `{word}` gate blocks normalization so the filesystem
+    // surfaces ENOENT on the literal placeholder directory instead.
+    expect(
+      expandVaultPathTemplate("{workspaceDir}/{tenant}/../wiki", {
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toBe("/tmp/workspace/{tenant}/../wiki");
+  });
 });
 
 describe("memory-wiki manifest config schema", () => {
