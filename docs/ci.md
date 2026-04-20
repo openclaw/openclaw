@@ -57,9 +57,10 @@ On pushes, the `checks` matrix adds the push-only `compat-node22` lane. On pull 
 ## Local Equivalents
 
 ```bash
-pnpm check          # types + lint + format
+pnpm check          # fast local gate: project-reference tsgo + lint + fast guards
+pnpm check:timed    # same gate with per-stage timings
 pnpm build:strict-smoke
-pnpm check:import-cycles
+pnpm check:architecture
 pnpm test:gateway:watch-regression
 pnpm test           # vitest tests
 pnpm test:channels
