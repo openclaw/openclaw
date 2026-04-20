@@ -330,7 +330,9 @@ is known.
 
 By default, successful fallback transitions stay quiet unless verbose mode is
 enabled. To prepend the existing one-line fallback notice even in normal reply
-mode, set `agents.defaults.notifyOnModelFallback: true`.
+mode, set `agents.defaults.notifyOnModelFallback: true`. That same opt-in also
+surfaces the one-line fallback-cleared notice once when the session returns to
+the selected model.
 
 That cooldown summary is model-aware:
 
