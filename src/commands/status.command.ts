@@ -1,4 +1,8 @@
 import { withProgress } from "../cli/progress.js";
+import {
+  readPairingConnectErrorDetails,
+  type ConnectPairingRequiredReason,
+} from "../gateway/protocol/connect-error-details.js";
 import { type RuntimeEnv } from "../runtime.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
@@ -59,7 +63,20 @@ function loadStatusNodeModeModule() {
 export function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
-}): { requestId: string | null } | null {
+  details?: unknown;
+}): {
+  requestId: string | null;
+  reason: ConnectPairingRequiredReason | null;
+  remediationHint: string | null;
+} | null {
+  const structured = readPairingConnectErrorDetails(params.details);
+  if (structured) {
+    return {
+      requestId: structured.requestId ?? null,
+      reason: structured.reason ?? null,
+      remediationHint: structured.remediationHint ?? null,
+    };
+  }
   const sanitizeRequestId = (value: string): string | null => {
     const trimmed = value.trim();
     if (!trimmed) {
@@ -80,7 +97,7 @@ export function resolvePairingRecoveryContext(params: {
   const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
   const requestId =
     requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
-  return { requestId: requestId || null };
+  return { requestId: requestId || null, reason: null, remediationHint: null };
 }
 
 export async function statusCommand(
@@ -247,6 +264,7 @@ export async function statusCommand(
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
+    details: gatewayProbe?.connectErrorDetails,
   });
 
   const usageLines = usage

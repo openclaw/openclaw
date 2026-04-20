@@ -105,6 +105,7 @@ type ProbeGatewayResult = {
   url: string;
   connectLatencyMs: number | null;
   error: string | null;
+  connectErrorDetails?: unknown;
   close: { code: number; reason: string } | null;
   health: unknown;
   status: unknown;
@@ -1272,36 +1273,62 @@ describe("statusCommand", () => {
         error: "connect failed: pairing required (requestId: req-123)",
         closeReason: "pairing required (requestId: req-123)",
       }),
-    ).toEqual({ requestId: "req-123" });
+    ).toEqual({ requestId: "req-123", reason: null, remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         error: "connect failed: pairing required",
         closeReason: "connect failed",
       }),
-    ).toEqual({ requestId: null });
+    ).toEqual({ requestId: null, reason: null, remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
         closeReason: "pairing required (requestId: req-123;rm -rf /)",
       }),
-    ).toEqual({ requestId: null });
+    ).toEqual({ requestId: null, reason: null, remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         error: "connect failed: pairing required",
         closeReason: "pairing required (requestId: req-close-456)",
       }),
-    ).toEqual({ requestId: "req-close-456" });
+    ).toEqual({ requestId: "req-close-456", reason: null, remediationHint: null });
+    expect(
+      resolvePairingRecoveryContext({
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "scope-upgrade",
+          requestId: "req-structured-789",
+          remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+        },
+      }),
+    ).toEqual({
+      requestId: "req-structured-789",
+      reason: "scope-upgrade",
+      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    });
 
     mocks.loadConfig.mockReturnValue({
       session: {},
       channels: { whatsapp: { allowFrom: ["*"] } },
     });
     mockProbeGatewayResult({
-      error: "connect failed: pairing required (requestId: req-123)",
-      close: { code: 1008, reason: "pairing required (requestId: req-123)" },
+      error:
+        "connect failed: pairing required: device is asking for more scopes than currently approved",
+      connectErrorDetails: {
+        code: "PAIRING_REQUIRED",
+        reason: "scope-upgrade",
+        requestId: "req-123",
+        remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+      },
+      close: {
+        code: 1008,
+        reason:
+          "pairing required: device is asking for more scopes than currently approved (requestId: req-123)",
+      },
     });
     const joined = await runStatusAndGetJoinedLogs();
-    expect(joined).toContain("Gateway pairing approval required.");
+    expect(joined).toContain("Gateway scope upgrade approval required.");
+    expect(joined).toContain("more scopes than currently approved");
     expect(joined).toContain("devices approve req-123");
     expect(joined).toContain("devices approve --latest");
     expect(joined).toContain("devices list");
