@@ -303,6 +303,8 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
+          scopedSession.pollActive = true;
+          try {
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
@@ -324,6 +326,7 @@ export function createProcessTool(
               scopedSession.exitSignal ?? null,
               status,
             );
+            scopedSession.exitNotified = true;
           }
           const status = exited
             ? exitCode === 0 && exitSignal == null
@@ -360,6 +363,9 @@ export function createProcessTool(
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             },
           };
+          } finally {
+            scopedSession.pollActive = false;
+          }
         }
 
         case "log": {
