@@ -1003,12 +1003,12 @@ Discord 消息操作包括消息传递、频道管理、审核、状态和元数
 
 默认门行为：
 
-| 操作组                                                                                                                                                             | 默认值  |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
-| reactions, messages, threads, pins, polls, search, memberInfo, roleInfo, channelInfo, channels, voiceStatus, events, stickers, emojiUploads, stickerUploads, permissions | 启用  |
-| roles                                                                                                                                                                    | 禁用 |
-| moderation                                                                                                                                                               | 禁用 |
-| presence                                                                                                                                                                 | 禁用 |
+| 操作组                                                                                                                                                                   | 默认值 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| reactions, messages, threads, pins, polls, search, memberInfo, roleInfo, channelInfo, channels, voiceStatus, events, stickers, emojiUploads, stickerUploads, permissions | 启用   |
+| roles                                                                                                                                                                    | 禁用   |
+| moderation                                                                                                                                                               | 禁用   |
+| presence                                                                                                                                                                 | 禁用   |
 
 ## 组件 v2 UI
 

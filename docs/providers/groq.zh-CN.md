@@ -10,11 +10,11 @@ read_when:
 
 [Groq](https://groq.com) 使用自定义 LPU 硬件在开源模型（Llama、Gemma、Mistral 等）上提供超快速推理。OpenClaw 通过其 OpenAI 兼容的 API 连接到 Groq。
 
-| 属性   | 值                |
-| ------ | ----------------- |
-| 提供商 | `groq`            |
-| 认证   | `GROQ_API_KEY`    |
-| API    | OpenAI 兼容       |
+| 属性   | 值             |
+| ------ | -------------- |
+| 提供商 | `groq`         |
+| 认证   | `GROQ_API_KEY` |
+| API    | OpenAI 兼容    |
 
 ## 入门指南
 
@@ -57,12 +57,12 @@ read_when:
 
 Groq 的模型目录经常变化。运行 `openclaw models list | grep groq` 查看当前可用的模型，或检查 [console.groq.com/docs/models](https://console.groq.com/docs/models)。
 
-| 模型                       | 说明                              |
-| --------------------------- | ---------------------------------- |
-| **Llama 3.3 70B Versatile** | 通用型，大上下文                  |
-| **Llama 3.1 8B Instant**    | 快速，轻量级                      |
-| **Gemma 2 9B**              | 紧凑，高效                        |
-| **Mixtral 8x7B**            | MoE 架构，强大的推理能力          |
+| 模型                        | 说明                     |
+| --------------------------- | ------------------------ |
+| **Llama 3.3 70B Versatile** | 通用型，大上下文         |
+| **Llama 3.1 8B Instant**    | 快速，轻量级             |
+| **Gemma 2 9B**              | 紧凑，高效               |
+| **Mixtral 8x7B**            | MoE 架构，强大的推理能力 |
 
 <Tip>
 使用 `openclaw models list --provider groq` 获取你账户上可用的最新模型列表。

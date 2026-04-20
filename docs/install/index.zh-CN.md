@@ -59,7 +59,7 @@ title: "安装"
 curl -fsSL https://openclaw.ai/install-cli.sh | bash
 ```
 
-它默认支持 npm 安装，以及在相同前缀流程下的 git  checkout 安装。完整参考：[安装程序内部](/install/installer#install-clish)。
+它默认支持 npm 安装，以及在相同前缀流程下的 git checkout 安装。完整参考：[安装程序内部](/install/installer#install-clish)。
 
 ### npm、pnpm 或 bun
 

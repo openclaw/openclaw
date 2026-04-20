@@ -17,6 +17,7 @@ read_when:
 | 鍩?URL | `https://api.deepseek.com` |
 
 ## 寮€濮嬩娇鐢?
+
 <Steps>
   <Step title="鑾峰彇浣犵殑 API 瀵嗛挜">
     鍦?[platform.deepseek.com](https://platform.deepseek.com/api_keys) 鍒涘缓 API 瀵嗛挜銆?  </Step>
@@ -26,6 +27,7 @@ read_when:
     ```
 
     杩欎細鎻愮ず杈撳叆浣犵殑 API 瀵嗛挜锛屽苟灏?`deepseek/deepseek-chat` 璁剧疆涓洪粯璁ゆā鍨嬨€?
+
   </Step>
   <Step title="楠岃瘉妯″瀷鍙敤">
     ```bash
@@ -55,10 +57,10 @@ read_when:
 
 ## 鍐呯疆鐩綍
 
-| 妯″瀷寮曠敤 | 鍚嶇О | 杈撳叆 | 涓婁笅鏂?| 鏈€澶ц緭鍑?| 璇存槑 |
-| ---------------------------- | ----------------- | ----- | ------- | ---------- | ------------------------------------------------- |
-| `deepseek/deepseek-chat` | DeepSeek Chat | text | 131,072 | 8,192 | 榛樿妯″瀷锛汥eepSeek V3.2 闈炴€濊€冩帴鍙?|
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text | 131,072 | 65,536 | 鍚敤鎬濊€冪殑 V3.2 鎺ュ彛 |
+| 妯″瀷寮曠敤                  | 鍚嶇О             | 杈撳叆 | 涓婁笅鏂? | 鏈€澶ц緭鍑? | 璇存槑                                     |
+| ---------------------------- | ----------------- | ------ | --------- | ----------- | ------------------------------------------ |
+| `deepseek/deepseek-chat`     | DeepSeek Chat     | text   | 131,072   | 8,192       | 榛樿妯″瀷锛汥eepSeek V3.2 闈炴€濊€冩帴鍙? |
+| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text   | 131,072   | 65,536      | 鍚敤鎬濊€冪殑 V3.2 鎺ュ彛                 |
 
 <Tip>
 褰撳墠涓や釜鍐呯疆妯″瀷鍦ㄦ簮浠ｇ爜涓兘瀹ｄ紶浜嗘祦寮忎娇鐢ㄥ吋瀹规€с€?</Tip>

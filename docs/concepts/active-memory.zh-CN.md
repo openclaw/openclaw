@@ -311,14 +311,14 @@ allowedChatTypes: ["direct", "group", "channel"]
 
 活动内存是一个会话增强功能，而不是平台范围的推理功能。
 
-| 表面                                                             | 运行活动内存？                                     |
-| ------------------------------------------------------------------- | ------------------------------------------------------- |
-| 控制UI / 网络聊天持久会话                           | 是，如果插件启用且代理被定位 |
+| 表面                                   | 运行活动内存？               |
+| -------------------------------------- | ---------------------------- |
+| 控制UI / 网络聊天持久会话              | 是，如果插件启用且代理被定位 |
 | 同一持久聊天路径上的其他交互式频道会话 | 是，如果插件启用且代理被定位 |
-| 无头一次性运行                                              | 否                                                      |
-| 心跳/后台运行                                           | 否                                                      |
-| 通用内部`agent-command`路径                              | 否                                                      |
-| 子代理/内部助手执行                                 | 否                                                      |
+| 无头一次性运行                         | 否                           |
+| 心跳/后台运行                          | 否                           |
+| 通用内部`agent-command`路径            | 否                           |
+| 子代理/内部助手执行                    | 否                           |
 
 ## 为什么使用它
 
@@ -573,32 +573,32 @@ plugins.entries.active-memory
 
 最重要的字段是：
 
-| 键                         | 类型                                                                                                 | 含义                                                                                                |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `enabled`                   | `boolean`                                                                                            | 启用插件本身                                                                              |
-| `config.agents`             | `string[]`                                                                                           | 可能使用活动内存的代理ID                                                                   |
+| 键                          | 类型                                                                                                 | 含义                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `enabled`                   | `boolean`                                                                                            | 启用插件本身                                                     |
+| `config.agents`             | `string[]`                                                                                           | 可能使用活动内存的代理ID                                         |
 | `config.model`              | `string`                                                                                             | 可选的阻塞内存子代理模型引用；未设置时，活动内存使用当前会话模型 |
-| `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | 控制阻塞内存子代理看到多少对话                                      |
-| `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | 控制阻塞内存子代理在决定是否返回内存时的急切程度或严格程度   |
-| `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive"`                         | 阻塞内存子代理的高级思考覆盖；默认`off`以提高速度                  |
-| `config.promptOverride`     | `string`                                                                                             | 高级完整提示替换；不推荐正常使用                                       |
+| `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | 控制阻塞内存子代理看到多少对话                                   |
+| `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | 控制阻塞内存子代理在决定是否返回内存时的急切程度或严格程度       |
+| `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive"`                         | 阻塞内存子代理的高级思考覆盖；默认`off`以提高速度                |
+| `config.promptOverride`     | `string`                                                                                             | 高级完整提示替换；不推荐正常使用                                 |
 | `config.promptAppend`       | `string`                                                                                             | 附加到默认或覆盖提示的高级额外指令                               |
-| `config.timeoutMs`          | `number`                                                                                             | 阻塞内存子代理的硬超时，上限为120000毫秒                                    |
-| `config.maxSummaryChars`    | `number`                                                                                             | 活动内存摘要中允许的最大总字符数                                          |
-| `config.logging`            | `boolean`                                                                                            | 在调优时发出活动内存日志                                                                  |
-| `config.persistTranscripts` | `boolean`                                                                                            | 保留阻塞内存子代理记录在磁盘上，而不是删除临时文件                     |
-| `config.transcriptDir`      | `string`                                                                                             | 代理会话文件夹下的相对阻塞内存子代理记录目录                |
+| `config.timeoutMs`          | `number`                                                                                             | 阻塞内存子代理的硬超时，上限为120000毫秒                         |
+| `config.maxSummaryChars`    | `number`                                                                                             | 活动内存摘要中允许的最大总字符数                                 |
+| `config.logging`            | `boolean`                                                                                            | 在调优时发出活动内存日志                                         |
+| `config.persistTranscripts` | `boolean`                                                                                            | 保留阻塞内存子代理记录在磁盘上，而不是删除临时文件               |
+| `config.transcriptDir`      | `string`                                                                                             | 代理会话文件夹下的相对阻塞内存子代理记录目录                     |
 
 有用的调优字段：
 
-| 键                           | 类型     | 含义                                                       |
-| ----------------------------- | -------- | ------------------------------------------------------------- |
-| `config.maxSummaryChars`      | `number` | 活动内存摘要中允许的最大总字符数 |
-| `config.recentUserTurns`      | `number` | 当`queryMode`为`recent`时包含的先前用户回合      |
+| 键                            | 类型     | 含义                                        |
+| ----------------------------- | -------- | ------------------------------------------- |
+| `config.maxSummaryChars`      | `number` | 活动内存摘要中允许的最大总字符数            |
+| `config.recentUserTurns`      | `number` | 当`queryMode`为`recent`时包含的先前用户回合 |
 | `config.recentAssistantTurns` | `number` | 当`queryMode`为`recent`时包含的先前助手回合 |
-| `config.recentUserChars`      | `number` | 每个最近用户回合的最大字符                                |
-| `config.recentAssistantChars` | `number` | 每个最近助手回合的最大字符                           |
-| `config.cacheTtlMs`           | `number` | 重复相同查询的缓存重用                    |
+| `config.recentUserChars`      | `number` | 每个最近用户回合的最大字符                  |
+| `config.recentAssistantChars` | `number` | 每个最近助手回合的最大字符                  |
+| `config.cacheTtlMs`           | `number` | 重复相同查询的缓存重用                      |
 
 ## 推荐设置
 

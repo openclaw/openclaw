@@ -16,6 +16,7 @@ read_when:
 | API | OpenAI 鍏煎 |
 
 ## 寮€濮嬩娇鐢?
+
 <Steps>
   <Step title="璁剧疆 API 瀵嗛挜">
     杩愯浜や簰寮忚缃細
@@ -25,6 +26,7 @@ read_when:
     ```
 
     杩欎細浠庡崟涓?API 瀵嗛挜鍚屾椂娉ㄥ唽閫氱敤锛坄volcengine`锛夊拰缂栫▼锛坄volcengine-plan`锛夋彁渚涘晢銆?
+
   </Step>
   <Step title="璁剧疆榛樿妯″瀷">
     ```json5
@@ -59,10 +61,10 @@ openclaw onboard --non-interactive \
 
 ## 鎻愪緵鍟嗗拰绔偣
 
-| 鎻愪緵鍟?| 绔偣 | 鐢ㄤ緥 |
-| ----------------- | ----------------------------------------- | -------------- |
-| `volcengine` | `ark.cn-beijing.volces.com/api/v3` | 閫氱敤妯″瀷 |
-| `volcengine-plan` | `ark.cn-beijing.volces.com/api/coding/v3` | 缂栫▼妯″瀷 |
+| 鎻愪緵鍟?         | 绔偣                                     | 鐢ㄤ緥      |
+| ----------------- | ----------------------------------------- | ----------- |
+| `volcengine`      | `ark.cn-beijing.volces.com/api/v3`        | 閫氱敤妯″瀷 |
+| `volcengine-plan` | `ark.cn-beijing.volces.com/api/coding/v3` | 缂栫▼妯″瀷  |
 
 <Note>
 涓や釜鎻愪緵鍟嗛兘浠庡崟涓?API 瀵嗛挜閰嶇疆銆傝缃細鑷姩娉ㄥ唽涓よ€呫€?</Note>
@@ -100,8 +102,8 @@ openclaw onboard --non-interactive \
   <Accordion title="妯″瀷閫夋嫨鍣ㄥ洖閫€琛屼负">
     鍦ㄨ缃?閰嶇疆妯″瀷閫夋嫨鏈熼棿锛岀伀灞卞紩鎿庤璇侀€夋嫨浼氬悓鏃朵紭鍏堣€冭檻 `volcengine/*` 鍜?`volcengine-plan/*` 琛屻€傚鏋滆繖浜涙ā鍨嬪皻鏈姞杞斤紝OpenClaw 浼氬洖閫€鍒版湭杩囨护鐨勭洰褰曪紝鑰屼笉鏄樉绀虹┖鐨勬彁渚涘晢鑼冨洿閫夋嫨鍣ㄣ€?  </Accordion>
 
-  <Accordion title="瀹堟姢杩涚▼鐨勭幆澧冨彉閲?>
-    濡傛灉缃戝叧浣滀负瀹堟姢杩涚▼锛坙aunchd/systemd锛夎繍琛岋紝璇风‘淇?`VOLCANO_ENGINE_API_KEY` 瀵硅杩涚▼鍙敤锛堜緥濡傦紝鍦?`~/.openclaw/.env` 涓垨閫氳繃 `env.shellEnv`锛夈€?  </Accordion>
+<Accordion title="瀹堟姢杩涚▼鐨勭幆澧冨彉閲?>
+濡傛灉缃戝叧浣滀负瀹堟姢杩涚▼锛坙aunchd/systemd锛夎繍琛岋紝璇风‘淇?`VOLCANO_ENGINE_API_KEY` 瀵硅杩涚▼鍙敤锛堜緥濡傦紝鍦?`~/.openclaw/.env` 涓垨閫氳繃 `env.shellEnv`锛夈€? </Accordion>
 </AccordionGroup>
 
 <Warning>

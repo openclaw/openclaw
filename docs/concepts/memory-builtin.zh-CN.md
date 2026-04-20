@@ -40,14 +40,14 @@ read_when:
 
 ## 支持的嵌入提供程序
 
-| 提供程序 | ID        | 自动检测 | 说明                               |
-| -------- | --------- | ------------- | ----------------------------------- |
-| OpenAI   | `openai`  | 是           | 默认：`text-embedding-3-small`   |
-| Gemini   | `gemini`  | 是           | 支持多模态（图像 + 音频） |
-| Voyage   | `voyage`  | 是           |                                     |
-| Mistral  | `mistral` | 是           |                                     |
-| Ollama   | `ollama`  | 否            | 本地，需明确设置               |
-| Local    | `local`   | 是（首选）   | GGUF模型，约0.6 GB下载        |
+| 提供程序 | ID        | 自动检测   | 说明                           |
+| -------- | --------- | ---------- | ------------------------------ |
+| OpenAI   | `openai`  | 是         | 默认：`text-embedding-3-small` |
+| Gemini   | `gemini`  | 是         | 支持多模态（图像 + 音频）      |
+| Voyage   | `voyage`  | 是         |                                |
+| Mistral  | `mistral` | 是         |                                |
+| Ollama   | `ollama`  | 否         | 本地，需明确设置               |
+| Local    | `local`   | 是（首选） | GGUF模型，约0.6 GB下载         |
 
 自动检测会按照显示的顺序选择第一个可以解析API密钥的提供程序。设置`memorySearch.provider`以覆盖。
 

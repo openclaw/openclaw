@@ -52,15 +52,15 @@ Mistral 还可用于记忆嵌入（`memorySearch.provider = "mistral"`）。
 
 OpenClaw 目前提供以下捆绑的 Mistral 目录：
 
-| 模型引用                        | 输入       | 上下文   | 最大输出  | 说明                                                            |
-| ------------------------------- | ---------- | -------- | --------- | --------------------------------------------------------------- |
-| `mistral/mistral-large-latest`   | 文本，图像 | 262,144  | 16,384    | 默认模型                                                        |
-| `mistral/mistral-medium-2508`    | 文本，图像 | 262,144  | 8,192     | Mistral Medium 3.1                                               |
-| `mistral/mistral-small-latest`   | 文本，图像 | 128,000  | 16,384    | Mistral Small 4；通过 API `reasoning_effort` 可调整推理         |
-| `mistral/pixtral-large-latest`   | 文本，图像 | 128,000  | 32,768    | Pixtral                                                          |
-| `mistral/codestral-latest`       | 文本       | 256,000  | 4,096     | 编码                                                           |
-| `mistral/devstral-medium-latest` | 文本       | 262,144  | 32,768    | Devstral 2                                                       |
-| `mistral/magistral-small`        | 文本       | 128,000  | 40,000    | 启用推理                                                        |
+| 模型引用                         | 输入       | 上下文  | 最大输出 | 说明                                                    |
+| -------------------------------- | ---------- | ------- | -------- | ------------------------------------------------------- |
+| `mistral/mistral-large-latest`   | 文本，图像 | 262,144 | 16,384   | 默认模型                                                |
+| `mistral/mistral-medium-2508`    | 文本，图像 | 262,144 | 8,192    | Mistral Medium 3.1                                      |
+| `mistral/mistral-small-latest`   | 文本，图像 | 128,000 | 16,384   | Mistral Small 4；通过 API `reasoning_effort` 可调整推理 |
+| `mistral/pixtral-large-latest`   | 文本，图像 | 128,000 | 32,768   | Pixtral                                                 |
+| `mistral/codestral-latest`       | 文本       | 256,000 | 4,096    | 编码                                                    |
+| `mistral/devstral-medium-latest` | 文本       | 262,144 | 32,768   | Devstral 2                                              |
+| `mistral/magistral-small`        | 文本       | 128,000 | 40,000   | 启用推理                                                |
 
 ## 音频转录（Voxtral）
 

@@ -607,13 +607,13 @@ Slack 操作由 `channels.slack.actions.*` 控制。
 
 当前 Slack 工具中可用的操作组：
 
-| 组      | 默认值 |
-| ---------- | ------- |
-| messages   | 启用 |
-| reactions  | 启用 |
-| pins       | 启用 |
-| memberInfo | 启用 |
-| emojiList  | 启用 |
+| 组         | 默认值 |
+| ---------- | ------ |
+| messages   | 启用   |
+| reactions  | 启用   |
+| pins       | 启用   |
+| memberInfo | 启用   |
+| emojiList  | 启用   |
 
 当前 Slack 消息操作包括 `send`、`upload-file`、`download-file`、`read`、`edit`、`delete`、`pin`、`unpin`、`list-pins`、`member-info` 和 `emoji-list`。
 

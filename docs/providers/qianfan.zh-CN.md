@@ -7,7 +7,7 @@ read_when:
 
 # Qianfan
 
-鍗冨竼鏄櫨搴︾殑 MaaS 骞冲彴锛屾彁渚?*缁熶竴 API**锛屽彲閫氳繃鍗曚釜绔偣鍜?API 瀵嗛挜灏嗚姹傝矾鐢卞埌澶氫釜妯″瀷銆傚畠鏄?OpenAI 鍏煎鐨勶紝鍥犳澶у鏁?OpenAI SDK 鍙渶鍒囨崲鍩?URL 鍗冲彲浣跨敤銆?
+鍗冨竼鏄櫨搴︾殑 MaaS 骞冲彴锛屾彁渚?\*缁熶竴 API\*\*锛屽彲閫氳繃鍗曚釜绔偣鍜?API 瀵嗛挜灏嗚姹傝矾鐢卞埌澶氫釜妯″瀷銆傚畠鏄?OpenAI 鍏煎鐨勶紝鍥犳澶у鏁?OpenAI SDK 鍙渶鍒囨崲鍩?URL 鍗冲彲浣跨敤銆?
 | 灞炴€?| 鍊?|
 | -------- | --------------------------------- |
 | 鎻愪緵鍟?| `qianfan` |
@@ -16,6 +16,7 @@ read_when:
 | 鍩?URL | `https://qianfan.baidubce.com/v2` |
 
 ## 寮€濮嬩娇鐢?
+
 <Steps>
   <Step title="鍒涘缓鐧惧害浜戣处鎴?>
     鍦?[鍗冨竼鎺у埗鍙癩(https://console.bce.baidu.com/qianfan/ais/console/apiKey) 娉ㄥ唽鎴栫櫥褰曪紝纭繚宸插惎鐢ㄥ崈甯?API 璁块棶鏉冮檺銆?  </Step>
@@ -35,10 +36,10 @@ read_when:
 
 ## 鍙敤妯″瀷
 
-| 妯″瀷寮曠敤 | 杈撳叆 | 涓婁笅鏂?| 鏈€澶ц緭鍑?| 鎬濊€?| 璇存槑 |
-| ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |
-| `qianfan/deepseek-v3.2` | text | 98,304 | 32,768 | Yes | 榛樿妯″瀷 |
-| `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000 | 64,000 | Yes | 澶氭ā鎬?|
+| 妯″瀷寮曠敤                          | 杈撳叆      | 涓婁笅鏂? | 鏈€澶ц緭鍑? | 鎬濊€? | 璇存槑     |
+| ------------------------------------ | ----------- | --------- | ----------- | ------ | ---------- |
+| `qianfan/deepseek-v3.2`              | text        | 98,304    | 32,768      | Yes    | 榛樿妯″瀷 |
+| `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000   | 64,000      | Yes    | 澶氭ā鎬?   |
 
 <Tip>
 榛樿鐨勫唴缃ā鍨嬪紩鐢ㄦ槸 `qianfan/deepseek-v3.2`銆備粎褰撲綘闇€瑕佽嚜瀹氫箟鍩?URL 鎴栨ā鍨嬪厓鏁版嵁鏃讹紝鎵嶉渶瑕佽鐩?`models.providers.qianfan`銆?</Tip>
@@ -91,10 +92,10 @@ read_when:
   <Accordion title="浼犺緭鍜屽吋瀹规€?>
     鍗冨竼閫氳繃 OpenAI 鍏煎鐨勪紶杈撹矾寰勮繍琛岋紝鑰屼笉鏄師鐢?OpenAI 璇锋眰鏁村舰銆傝繖鎰忓懗鐫€鏍囧噯 OpenAI SDK 鍔熻兘鍙敤锛屼絾鐗瑰畾浜庢彁渚涘晢鐨勫弬鏁板彲鑳戒笉浼氳杞彂銆?  </Accordion>
 
-  <Accordion title="鐩綍鍜岃鐩?>
-    褰撳墠鍐呯疆鐩綍鍖呮嫭 `deepseek-v3.2` 鍜?`ernie-5.0-thinking-preview`銆備粎褰撲綘闇€瑕佽嚜瀹氫箟鍩?URL 鎴栨ā鍨嬪厓鏁版嵁鏃讹紝鎵嶆坊鍔犳垨瑕嗙洊 `models.providers.qianfan`銆?
-    <Note>
-    妯″瀷寮曠敤浣跨敤 `qianfan/` 鍓嶇紑锛堜緥濡?`qianfan/deepseek-v3.2`锛夈€?    </Note>
+<Accordion title="鐩綍鍜岃鐩?>
+褰撳墠鍐呯疆鐩綍鍖呮嫭 `deepseek-v3.2` 鍜?`ernie-5.0-thinking-preview`銆備粎褰撲綘闇€瑕佽嚜瀹氫箟鍩?URL 鎴栨ā鍨嬪厓鏁版嵁鏃讹紝鎵嶆坊鍔犳垨瑕嗙洊 `models.providers.qianfan`銆?
+<Note>
+妯″瀷寮曠敤浣跨敤 `qianfan/` 鍓嶇紑锛堜緥濡?`qianfan/deepseek-v3.2`锛夈€? </Note>
 
   </Accordion>
 

@@ -35,21 +35,21 @@ openclaw hooks info session-memory
 
 ## 事件类型
 
-| 事件                    | 触发时机                                    |
-| ------------------------ | ------------------------------------------------ |
-| `command:new`            | 发出 `/new` 命令                            |
-| `command:reset`          | 发出 `/reset` 命令                          |
-| `command:stop`           | 发出 `/stop` 命令                           |
-| `command`                | 任何命令事件（通用监听器）             |
-| `session:compact:before` | 在压缩总结历史之前             |
-| `session:compact:after`  | 压缩完成之后                       |
-| `session:patch`          | 当会话属性被修改时             |
-| `agent:bootstrap`        | 在注入工作区引导文件之前    |
-| `gateway:startup`        | 通道启动和钩子加载之后        |
-| `message:received`       | 来自任何通道的入站消息                 |
-| `message:transcribed`    | 音频转录完成之后              |
+| 事件                     | 触发时机                   |
+| ------------------------ | -------------------------- |
+| `command:new`            | 发出 `/new` 命令           |
+| `command:reset`          | 发出 `/reset` 命令         |
+| `command:stop`           | 发出 `/stop` 命令          |
+| `command`                | 任何命令事件（通用监听器） |
+| `session:compact:before` | 在压缩总结历史之前         |
+| `session:compact:after`  | 压缩完成之后               |
+| `session:patch`          | 当会话属性被修改时         |
+| `agent:bootstrap`        | 在注入工作区引导文件之前   |
+| `gateway:startup`        | 通道启动和钩子加载之后     |
+| `message:received`       | 来自任何通道的入站消息     |
+| `message:transcribed`    | 音频转录完成之后           |
 | `message:preprocessed`   | 所有媒体和链接理解完成之后 |
-| `message:sent`           | 出站消息已传递                       |
+| `message:sent`           | 出站消息已传递             |
 
 ## 编写钩子
 
@@ -80,15 +80,15 @@ metadata:
 
 **元数据字段** (`metadata.openclaw`)：
 
-| 字段      | 描述                                          |
-| ---------- | ---------------------------------------------------- |
-| `emoji`    | CLI 的显示表情                                |
-| `events`   | 要监听的事件数组                        |
-| `export`   | 要使用的命名导出（默认为 `"default"`）        |
-| `os`       | 必需的平台（例如，`["darwin", "linux"]`）     |
+| 字段       | 描述                                             |
+| ---------- | ------------------------------------------------ |
+| `emoji`    | CLI 的显示表情                                   |
+| `events`   | 要监听的事件数组                                 |
+| `export`   | 要使用的命名导出（默认为 `"default"`）           |
+| `os`       | 必需的平台（例如，`["darwin", "linux"]`）        |
 | `requires` | 必需的 `bins`、`anyBins`、`env` 或 `config` 路径 |
-| `always`   | 绕过资格检查（布尔值）                  |
-| `install`  | 安装方法                                 |
+| `always`   | 绕过资格检查（布尔值）                           |
+| `install`  | 安装方法                                         |
 
 ### 处理程序实现
 
@@ -151,12 +151,12 @@ Npm 规范仅支持注册表（包名 + 可选的精确版本或 dist-tag）。G
 
 ## 捆绑钩子
 
-| 钩子                  | 事件                         | 功能                                          |
-| --------------------- | ------------------------------ | ----------------------------------------------------- |
-| session-memory        | `command:new`, `command:reset` | 将会话上下文保存到 `<workspace>/memory/`        |
-| bootstrap-extra-files | `agent:bootstrap`              | 从 glob 模式注入额外的引导文件 |
-| command-logger        | `command`                      | 将所有命令记录到 `~/.openclaw/logs/commands.log`  |
-| boot-md               | `gateway:startup`              | 网关启动时运行 `BOOT.md`                |
+| 钩子                  | 事件                           | 功能                                             |
+| --------------------- | ------------------------------ | ------------------------------------------------ |
+| session-memory        | `command:new`, `command:reset` | 将会话上下文保存到 `<workspace>/memory/`         |
+| bootstrap-extra-files | `agent:bootstrap`              | 从 glob 模式注入额外的引导文件                   |
+| command-logger        | `command`                      | 将所有命令记录到 `~/.openclaw/logs/commands.log` |
+| boot-md               | `gateway:startup`              | 网关启动时运行 `BOOT.md`                         |
 
 启用任何捆绑钩子：
 

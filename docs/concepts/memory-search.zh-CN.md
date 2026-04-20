@@ -31,16 +31,16 @@ read_when:
 
 ## 支持的提供程序
 
-| 提供程序       | ID               | 需要API密钥 | 说明                                                |
-| -------------- | ---------------- | ------------- | ---------------------------------------------------- |
-| Bedrock        | `bedrock`        | 否            | 当AWS凭证链解析时自动检测                           |
-| Gemini         | `gemini`         | 是           | 支持图像/音频索引                                   |
-| GitHub Copilot | `github-copilot` | 否            | 自动检测，使用Copilot订阅                           |
-| Local          | `local`          | 否            | GGUF模型，约0.6 GB下载                              |
-| Mistral        | `mistral`        | 是           | 自动检测                                            |
-| Ollama         | `ollama`         | 否            | 本地，必须明确设置                                  |
-| OpenAI         | `openai`         | 是           | 自动检测，速度快                                    |
-| Voyage         | `voyage`         | 是           | 自动检测                                            |
+| 提供程序       | ID               | 需要API密钥 | 说明                      |
+| -------------- | ---------------- | ----------- | ------------------------- |
+| Bedrock        | `bedrock`        | 否          | 当AWS凭证链解析时自动检测 |
+| Gemini         | `gemini`         | 是          | 支持图像/音频索引         |
+| GitHub Copilot | `github-copilot` | 否          | 自动检测，使用Copilot订阅 |
+| Local          | `local`          | 否          | GGUF模型，约0.6 GB下载    |
+| Mistral        | `mistral`        | 是          | 自动检测                  |
+| Ollama         | `ollama`         | 否          | 本地，必须明确设置        |
+| OpenAI         | `openai`         | 是          | 自动检测，速度快          |
+| Voyage         | `voyage`         | 是          | 自动检测                  |
 
 ## 搜索如何工作
 

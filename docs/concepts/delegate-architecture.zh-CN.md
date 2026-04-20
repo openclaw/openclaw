@@ -26,12 +26,12 @@ status: active
 
 OpenClaw 的默认模式是**个人助理** — 一个人类，一个代理。委托将此扩展到组织：
 
-| 个人模式 | 委托模式 |
-| -------- | -------- |
-| 代理使用您的凭证 | 代理有自己的凭证 |
-| 回复来自您 | 回复来自委托，代表您 |
-| 一个委托人 | 一个或多个委托人 |
-| 信任边界 = 您 | 信任边界 = 组织政策 |
+| 个人模式         | 委托模式             |
+| ---------------- | -------------------- |
+| 代理使用您的凭证 | 代理有自己的凭证     |
+| 回复来自您       | 回复来自委托，代表您 |
+| 一个委托人       | 一个或多个委托人     |
+| 信任边界 = 您    | 信任边界 = 组织政策  |
 
 委托解决了两个问题：
 
@@ -287,7 +287,7 @@ https://www.googleapis.com/auth/calendar           # 第 2 层
 内容，剥离思考标签 / `<relevant-memories>` 脚手架 / 纯文本
 工具调用 XML 有效负载（包括 `<tool_call>...</tool_call>`、
 `<function_call>...</function_call>`、`<tool_calls>...</tool_calls>`、
-`<function_calls>...</function_calls>` 和截断的工具调用块）/ 
+`<function_calls>...</function_calls>` 和截断的工具调用块）/
 降级的工具调用脚手架 / 泄露的 ASCII/全宽模型控制
 令牌 / 来自助手回忆的格式错误的 MiniMax 工具调用 XML，并且可以
 用 `[sessions_history omitted: message too large]` 替换超大行
