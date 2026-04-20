@@ -149,6 +149,125 @@ describe("ollama web search provider", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the stable local Ollama web search endpoint after experimental 404", async () => {
+    const experimentalRelease = vi.fn(async () => {});
+    const stableRelease = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response("404 page not found", { status: 404 }),
+        release: experimentalRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            results: [
+              {
+                title: "Stable",
+                url: "https://ollama.com/search",
+                content: "Stable endpoint result",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: stableRelease,
+      });
+
+    const result = await runOllamaWebSearch({
+      config: createOllamaConfig(),
+      query: "ollama search",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "http://ollama.local:11434/api/experimental/web_search",
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://ollama.local:11434/api/web_search",
+      }),
+    );
+    expect(result).toMatchObject({
+      count: 1,
+      results: [{ url: "https://ollama.com/search" }],
+    });
+    expect(experimentalRelease).toHaveBeenCalledTimes(1);
+    expect(stableRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the Ollama cloud endpoint when local web search endpoints 404 and an API key is available", async () => {
+    const original = process.env.OLLAMA_API_KEY;
+    const experimentalRelease = vi.fn(async () => {});
+    const stableRelease = vi.fn(async () => {});
+    const cloudRelease = vi.fn(async () => {});
+    try {
+      process.env.OLLAMA_API_KEY = "cloud-secret";
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce({
+          response: new Response("404 page not found", { status: 404 }),
+          release: experimentalRelease,
+        })
+        .mockResolvedValueOnce({
+          response: new Response("404 page not found", { status: 404 }),
+          release: stableRelease,
+        })
+        .mockResolvedValueOnce({
+          response: new Response(
+            JSON.stringify({
+              results: [
+                {
+                  title: "Cloud",
+                  url: "https://ollama.com/cloud",
+                  content: "Cloud endpoint result",
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+          release: cloudRelease,
+        });
+
+      const result = await runOllamaWebSearch({
+        config: createOllamaConfig({ apiKey: "OLLAMA_API_KEY" }),
+        query: "ollama cloud",
+      });
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
+          url: "https://ollama.com/api/web_search",
+          init: expect.objectContaining({
+            headers: expect.objectContaining({
+              Authorization: "Bearer cloud-secret",
+            }),
+          }),
+        }),
+      );
+      expect(result).toMatchObject({
+        count: 1,
+        results: [{ url: "https://ollama.com/cloud" }],
+      });
+      expect(experimentalRelease).toHaveBeenCalledTimes(1);
+      expect(stableRelease).toHaveBeenCalledTimes(1);
+      expect(cloudRelease).toHaveBeenCalledTimes(1);
+    } finally {
+      if (original === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = original;
+      }
+    }
+  });
+
   it("surfaces Ollama signin guidance for 401 responses", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("", { status: 401 }),

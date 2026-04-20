@@ -40,7 +40,8 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   { additionalProperties: false },
 );
 
-const OLLAMA_WEB_SEARCH_PATH = "/api/experimental/web_search";
+const OLLAMA_WEB_SEARCH_PATHS = ["/api/experimental/web_search", "/api/web_search"] as const;
+const OLLAMA_CLOUD_WEB_SEARCH_URL = "https://ollama.com/api/web_search";
 const DEFAULT_OLLAMA_WEB_SEARCH_COUNT = 5;
 const DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS = 15_000;
 const OLLAMA_WEB_SEARCH_SNIPPET_MAX_CHARS = 300;
@@ -85,6 +86,53 @@ function normalizeOllamaWebSearchResult(
   };
 }
 
+async function fetchOllamaWebSearch(params: {
+  baseUrl: string;
+  apiKey?: string;
+  headers: Record<string, string>;
+  body: string;
+}): Promise<{
+  response: Response;
+  release: () => Promise<void>;
+}> {
+  let last404Detail = "";
+  for (const path of OLLAMA_WEB_SEARCH_PATHS) {
+    const result = await fetchWithSsrFGuard({
+      url: `${params.baseUrl}${path}`,
+      init: {
+        method: "POST",
+        headers: params.headers,
+        body: params.body,
+        signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
+      },
+      policy: buildOllamaBaseUrlSsrFPolicy(params.baseUrl),
+      auditContext: "ollama-web-search.search",
+    });
+    if (result.response.status !== 404) {
+      return result;
+    }
+    const detail = await readResponseText(result.response, { maxBytes: 64_000 });
+    last404Detail = detail.text;
+    await result.release();
+  }
+
+  if (params.apiKey) {
+    return await fetchWithSsrFGuard({
+      url: OLLAMA_CLOUD_WEB_SEARCH_URL,
+      init: {
+        method: "POST",
+        headers: params.headers,
+        body: params.body,
+        signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
+      },
+      policy: buildOllamaBaseUrlSsrFPolicy(OLLAMA_CLOUD_WEB_SEARCH_URL),
+      auditContext: "ollama-web-search.search",
+    });
+  }
+
+  throw new Error(`Ollama web search failed (404): ${last404Detail}`.trim());
+}
+
 export async function runOllamaWebSearch(params: {
   config?: OpenClawConfig;
   query: string;
@@ -103,16 +151,11 @@ export async function runOllamaWebSearch(params: {
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${baseUrl}${OLLAMA_WEB_SEARCH_PATH}`,
-    init: {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query, max_results: count }),
-      signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
-    },
-    policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
-    auditContext: "ollama-web-search.search",
+  const { response, release } = await fetchOllamaWebSearch({
+    baseUrl,
+    apiKey,
+    headers,
+    body: JSON.stringify({ query, max_results: count }),
   });
 
   try {
