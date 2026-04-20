@@ -854,12 +854,20 @@ export async function applySessionsPatchToStore(params: {
           `gate decision: action=${action} sessionKey=${storeKey} approvalRunId=${approvalRunId ?? "(missing)"} openSubagents=${combinedOpen.size} result=${combinedOpen.size > 0 ? "blocked" : "allowed"}`,
         );
         if (combinedOpen.size > 0) {
+          // C7: thread approvalRunId + approvalId into the debug
+          // event so operators can grep a single approval cycle
+          // across multiple log lines.
+          const approvalIdForLog =
+            normalizeOptionalString(patch.planApproval.approvalId) ||
+            normalizeOptionalString(next.planMode?.approvalId);
           logPlanModeDebug({
             kind: "approval_event",
             sessionKey: storeKey,
             action,
             openSubagentCount: combinedOpen.size,
             result: "rejected_by_subagent_gate",
+            ...(approvalRunId ? { approvalRunId } : {}),
+            ...(approvalIdForLog ? { approvalId: approvalIdForLog } : {}),
           });
           const ids = [...combinedOpen].slice(0, 5).join(", ");
           const more = combinedOpen.size > 5 ? ` and ${combinedOpen.size - 5} more` : "";
@@ -987,18 +995,25 @@ export async function applySessionsPatchToStore(params: {
         // Live-test iteration 1 Bug 4: log the successful approval +
         // synthetic injection write. Pair-up with the rejection log
         // above so debug tail shows the full approval lifecycle.
+        // C7: thread approvalRunId + approvalId for cycle correlation.
+        const acceptedApprovalRunId = (next.planMode as { approvalRunId?: string } | undefined)
+          ?.approvalRunId;
         logPlanModeDebug({
           kind: "approval_event",
           sessionKey: storeKey,
           action,
           openSubagentCount: 0,
           result: "accepted",
+          ...(acceptedApprovalRunId ? { approvalRunId: acceptedApprovalRunId } : {}),
+          ...(approvalId ? { approvalId } : {}),
         });
         logPlanModeDebug({
           kind: "synthetic_injection",
           sessionKey: storeKey,
           tag: "[PLAN_DECISION]",
           preview: action === "approve" ? "approved" : "edited",
+          ...(acceptedApprovalRunId ? { approvalRunId: acceptedApprovalRunId } : {}),
+          ...(approvalId ? { approvalId } : {}),
         });
         clearResolvedPlanInteraction(next, approvalId);
       } else if (action === "reject") {
