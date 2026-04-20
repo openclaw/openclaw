@@ -104,3 +104,38 @@ describe("memory_search unavailable payloads", () => {
     );
   });
 });
+
+describe("memory_search default-off rerank regression guard", () => {
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
+
+  it("preserves the original score on every result when no rerank is supplied", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/a.md",
+        startLine: 1,
+        endLine: 5,
+        score: 0.42,
+        snippet: "a",
+        source: "memory",
+      },
+      {
+        path: "memory/b.md",
+        startLine: 1,
+        endLine: 5,
+        score: 0.91,
+        snippet: "b",
+        source: "memory",
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("noop", { query: "anything" });
+    const results =
+      (result.details as { results?: Array<{ path: string; score: number }> }).results ?? [];
+    expect(results.length).toBe(2);
+    const scoreByPath = new Map(results.map((r) => [r.path, r.score]));
+    expect(scoreByPath.get("memory/a.md")).toBe(0.42);
+    expect(scoreByPath.get("memory/b.md")).toBe(0.91);
+  });
+});

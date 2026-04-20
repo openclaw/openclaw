@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -34,6 +35,11 @@ import type {
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
+  MemorySidecarListCommandOptions,
+  MemorySidecarPinCommandOptions,
+  MemorySidecarSalienceCommandOptions,
+  MemorySidecarStatusCommandOptions,
+  MemorySidecarSupersedeCommandOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -45,6 +51,29 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import {
+  formatListLines as formatSidecarListLines,
+  formatPinLine as formatSidecarPinLine,
+  formatSalienceLine as formatSidecarSalienceLine,
+  formatStatsLines as formatSidecarStatsLines,
+  formatStatusLine as formatSidecarStatusLine,
+  formatSupersedeLine as formatSidecarSupersedeLine,
+  parseSidecarSalienceArg,
+  parseSidecarStatus,
+  parseSidecarSupersedeArg,
+  readSidecarList,
+  readSidecarStats,
+  SIDECAR_STATUS_VALUES,
+  type SidecarListRow,
+  type SidecarStatsSummary,
+  type SidecarSupersedeOutcome,
+  writeSidecarPin,
+  writeSidecarSalience,
+  writeSidecarStatus,
+  writeSidecarSupersede,
+} from "./memory-v2/cli/sidecar-cli.js";
+import { type RefIdResolution, resolveRefIdByPrefix } from "./memory-v2/sidecar-repo.js";
+import { SIDECAR_DB_RELATIVE_PATH, openSidecarDatabase } from "./memory-v2/sidecar-store.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
@@ -1932,4 +1961,542 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
       }
     },
   });
+}
+
+type SidecarStatsEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  stats: SidecarStatsSummary | null;
+};
+
+type SidecarListEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  rows: SidecarListRow[];
+};
+
+async function collectSidecarStatsEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+): Promise<SidecarStatsEntry[]> {
+  const entries: SidecarStatsEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({ agentId, dbPath, initialized: false, stats: null });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          entries.push({ agentId, dbPath, initialized: true, stats: readSidecarStats(db) });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+async function collectSidecarListEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  opts: { status?: string; limit?: number },
+): Promise<SidecarListEntry[]> {
+  const entries: SidecarListEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({ agentId, dbPath, initialized: false, rows: [] });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: true,
+            rows: readSidecarList(db, opts),
+          });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+export async function runMemorySidecarStats(opts: MemoryCommandOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar stats");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectSidecarStatsEntries(cfg, agentIds);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || !entry.stats) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    for (const line of formatSidecarStatsLines(entry.stats)) {
+      defaultRuntime.log(`  ${line}`);
+    }
+    defaultRuntime.log("");
+  }
+}
+
+export async function runMemorySidecarList(opts: MemorySidecarListCommandOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar list");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const listOpts: { status?: string; limit?: number } = {};
+  if (typeof opts.status === "string" && opts.status.length > 0) {
+    listOpts.status = opts.status;
+  }
+  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
+    listOpts.limit = opts.limit;
+  }
+  const entries = await collectSidecarListEntries(cfg, agentIds, listOpts);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    for (const line of formatSidecarListLines(entry.rows)) {
+      defaultRuntime.log(line);
+    }
+    defaultRuntime.log("");
+  }
+}
+
+// Shared per-agent entry for every sidecar writer (pin / status / salience).
+// Encodes resolution separately from the write outcome so JSON consumers can
+// tell whether the write ran (resolution.kind === "match") or was skipped
+// because the ref id was ambiguous / absent.
+type ResolvedWriteEntry<O> = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  resolution: RefIdResolution | null;
+  outcome: O | null;
+};
+
+// Per-agent: resolve the user-supplied ref id or prefix, then call doWrite
+// only on an unambiguous match. On ambiguous or miss, record the resolution
+// and leave the sidecar untouched.
+async function collectResolvedWriteEntries<O>(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  rawRefId: string,
+  doWrite: (db: DatabaseSync, resolvedRefId: string) => O,
+): Promise<ResolvedWriteEntry<O>[]> {
+  const entries: ResolvedWriteEntry<O>[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: false,
+            resolution: null,
+            outcome: null,
+          });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          const resolution = resolveRefIdByPrefix(db, rawRefId);
+          const outcome = resolution.kind === "match" ? doWrite(db, resolution.refId) : null;
+          entries.push({ agentId, dbPath, initialized: true, resolution, outcome });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+// Logs the human-readable lines for a non-match resolution under the given
+// label prefix (e.g. "ref-id" or "target ref-id"). Returns true when it
+// logged something (caller should then skip the match-path rendering).
+// No-op when the resolution is a match.
+function logNonMatchResolution(resolution: RefIdResolution, labelPrefix: string): boolean {
+  if (resolution.kind === "match") {
+    return false;
+  }
+  if (resolution.kind === "miss") {
+    defaultRuntime.log(`  ${labelPrefix} not found: ${resolution.input}`);
+    return true;
+  }
+  const countLabel = resolution.hasMore
+    ? `${resolution.candidates.length}+`
+    : String(resolution.candidates.length);
+  defaultRuntime.log(
+    `  ${labelPrefix} prefix "${resolution.input}" is ambiguous (matched ${countLabel}):`,
+  );
+  for (const candidate of resolution.candidates) {
+    defaultRuntime.log(`    ${candidate}`);
+  }
+  if (resolution.hasMore) {
+    defaultRuntime.log("    … and more — provide a longer prefix to disambiguate.");
+  }
+  return true;
+}
+
+// Text renderer shared by every resolve+write command. Walks the entries in
+// the order they were collected and emits:
+//   - "sidecar not initialized" when the per-agent sidecar db is missing,
+//   - a "ref-id not found" line on a miss,
+//   - a multi-line ambiguity block listing up to REF_ID_AMBIGUOUS_CANDIDATE_CAP
+//     candidates plus a hint to provide a longer prefix when `hasMore`,
+//   - the caller-supplied outcome line on a successful match.
+function renderResolvedWriteEntries<O>(
+  entries: readonly ResolvedWriteEntry<O>[],
+  formatOutcomeLine: (outcome: O) => string,
+): void {
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || entry.resolution === null) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    if (logNonMatchResolution(entry.resolution, "ref-id")) {
+      defaultRuntime.log("");
+      continue;
+    }
+    // resolution.kind === "match" → the write ran and produced an outcome.
+    if (entry.outcome !== null) {
+      defaultRuntime.log(`  ${formatOutcomeLine(entry.outcome)}`);
+    }
+    defaultRuntime.log("");
+  }
+}
+
+export async function runMemorySidecarPin(
+  refIdArg: string | undefined,
+  opts: MemorySidecarPinCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const rawRefId = (refIdArg ?? "").trim();
+  if (rawRefId.length === 0) {
+    defaultRuntime.log(
+      theme.warn("memory sidecar pin: <ref-id> is required (full id or unique prefix)."),
+    );
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar pin");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const pinned = opts.unpin !== true;
+  const entries = await collectResolvedWriteEntries(cfg, agentIds, rawRefId, (db, resolvedId) =>
+    writeSidecarPin(db, resolvedId, pinned),
+  );
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+  renderResolvedWriteEntries(entries, formatSidecarPinLine);
+}
+
+export async function runMemorySidecarStatus(
+  refIdArg: string | undefined,
+  statusArg: string | undefined,
+  opts: MemorySidecarStatusCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const rawRefId = (refIdArg ?? "").trim();
+  if (rawRefId.length === 0) {
+    defaultRuntime.log(
+      theme.warn("memory sidecar status: <ref-id> is required (full id or unique prefix)."),
+    );
+    return;
+  }
+  const rawStatus = (statusArg ?? "").trim();
+  const status = parseSidecarStatus(rawStatus);
+  if (!status) {
+    defaultRuntime.log(
+      theme.warn(
+        `memory sidecar status: invalid status "${rawStatus}". Expected one of: ${SIDECAR_STATUS_VALUES.join(" | ")}.`,
+      ),
+    );
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar status");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectResolvedWriteEntries(cfg, agentIds, rawRefId, (db, resolvedId) =>
+    writeSidecarStatus(db, resolvedId, status),
+  );
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+  renderResolvedWriteEntries(entries, formatSidecarStatusLine);
+}
+
+export async function runMemorySidecarSalience(
+  refIdArg: string | undefined,
+  salienceArg: string | undefined,
+  opts: MemorySidecarSalienceCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const rawRefId = (refIdArg ?? "").trim();
+  if (rawRefId.length === 0) {
+    defaultRuntime.log(
+      theme.warn("memory sidecar salience: <ref-id> is required (full id or unique prefix)."),
+    );
+    return;
+  }
+  const rawSalience = salienceArg ?? "";
+  const parsed = parseSidecarSalienceArg(rawSalience);
+  if (!parsed) {
+    defaultRuntime.log(
+      theme.warn(
+        `memory sidecar salience: invalid value "${rawSalience}". Expected a finite number or the literal "clear".`,
+      ),
+    );
+    return;
+  }
+  const salience = parsed.kind === "clear" ? null : parsed.value;
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar salience");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectResolvedWriteEntries(cfg, agentIds, rawRefId, (db, resolvedId) =>
+    writeSidecarSalience(db, resolvedId, salience),
+  );
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+  renderResolvedWriteEntries(entries, formatSidecarSalienceLine);
+}
+
+// Per-agent entry for the supersede writer. Carries two resolutions because
+// the command takes two positional ref ids. `newResolution` is null in two
+// distinct cases — the operator asked for `clear`, or the old ref already
+// failed resolution (so we never attempted the new one). The outcome is
+// present only when the write actually ran (old matched, and new either
+// matched or was `clear`).
+type SidecarSupersedeEntry = {
+  agentId: string;
+  dbPath: string;
+  initialized: boolean;
+  oldResolution: RefIdResolution | null;
+  newResolution: RefIdResolution | null;
+  outcome: SidecarSupersedeOutcome | null;
+};
+
+async function collectSidecarSupersedeEntries(
+  cfg: OpenClawConfig,
+  agentIds: readonly string[],
+  rawOldRefId: string,
+  newTarget: { kind: "clear" } | { kind: "link"; rawNewRefId: string },
+): Promise<SidecarSupersedeEntry[]> {
+  const entries: SidecarSupersedeEntry[] = [];
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        const workspaceDir = manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return;
+        }
+        const dbPath = path.join(workspaceDir, SIDECAR_DB_RELATIVE_PATH);
+        if (!fsSync.existsSync(dbPath)) {
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: false,
+            oldResolution: null,
+            newResolution: null,
+            outcome: null,
+          });
+          return;
+        }
+        const db = openSidecarDatabase(dbPath);
+        try {
+          const oldResolution = resolveRefIdByPrefix(db, rawOldRefId);
+          if (oldResolution.kind !== "match") {
+            entries.push({
+              agentId,
+              dbPath,
+              initialized: true,
+              oldResolution,
+              newResolution: null,
+              outcome: null,
+            });
+            return;
+          }
+          if (newTarget.kind === "clear") {
+            entries.push({
+              agentId,
+              dbPath,
+              initialized: true,
+              oldResolution,
+              newResolution: null,
+              outcome: writeSidecarSupersede(db, oldResolution.refId, null),
+            });
+            return;
+          }
+          const newResolution = resolveRefIdByPrefix(db, newTarget.rawNewRefId);
+          if (newResolution.kind !== "match") {
+            entries.push({
+              agentId,
+              dbPath,
+              initialized: true,
+              oldResolution,
+              newResolution,
+              outcome: null,
+            });
+            return;
+          }
+          entries.push({
+            agentId,
+            dbPath,
+            initialized: true,
+            oldResolution,
+            newResolution,
+            outcome: writeSidecarSupersede(db, oldResolution.refId, newResolution.refId),
+          });
+        } finally {
+          db.close();
+        }
+      },
+    });
+  }
+  return entries;
+}
+
+export async function runMemorySidecarSupersede(
+  oldRefIdArg: string | undefined,
+  newRefIdArg: string | undefined,
+  opts: MemorySidecarSupersedeCommandOptions,
+): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  const rawOldRefId = (oldRefIdArg ?? "").trim();
+  if (rawOldRefId.length === 0) {
+    defaultRuntime.log(
+      theme.warn("memory sidecar supersede: <old-ref-id> is required (full id or unique prefix)."),
+    );
+    return;
+  }
+  const parsed = parseSidecarSupersedeArg(newRefIdArg ?? "");
+  if (!parsed) {
+    defaultRuntime.log(
+      theme.warn(
+        "memory sidecar supersede: <new-ref-id-or-clear> is required (full id, unique prefix, or the literal `clear` to unlink).",
+      ),
+    );
+    return;
+  }
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory sidecar supersede");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const entries = await collectSidecarSupersedeEntries(cfg, agentIds, rawOldRefId, parsed);
+
+  if (opts.json) {
+    defaultRuntime.writeJson(entries);
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  for (const entry of entries) {
+    defaultRuntime.log(heading(`Memory v2 sidecar — ${entry.agentId}`));
+    defaultRuntime.log(muted(`path: ${shortenHomePath(entry.dbPath)}`));
+    if (!entry.initialized || entry.oldResolution === null) {
+      defaultRuntime.log(
+        muted("sidecar not initialized (enable memoryV2.ingest to start populating)."),
+      );
+      defaultRuntime.log("");
+      continue;
+    }
+    if (logNonMatchResolution(entry.oldResolution, "ref-id")) {
+      defaultRuntime.log("");
+      continue;
+    }
+    if (
+      entry.newResolution !== null &&
+      logNonMatchResolution(entry.newResolution, "target ref-id")
+    ) {
+      defaultRuntime.log("");
+      continue;
+    }
+    if (entry.outcome !== null) {
+      defaultRuntime.log(`  ${formatSidecarSupersedeLine(entry.outcome)}`);
+    }
+    defaultRuntime.log("");
+  }
 }

@@ -8,6 +8,8 @@ import {
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./src/flush-plan.js";
+import { registerMemoryV2Ingest } from "./src/memory-v2/ingest-wiring.js";
+import { buildMemoryV2Rerank } from "./src/memory-v2/rerank-wiring.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 import { listMemoryCorePublicArtifacts } from "./src/public-artifacts.js";
@@ -30,6 +32,8 @@ export default definePluginEntry({
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
     registerDreamingCommand(api);
+    registerMemoryV2Ingest(api);
+    const memoryV2Rerank = buildMemoryV2Rerank(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
@@ -44,6 +48,7 @@ export default definePluginEntry({
         createMemorySearchTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
+          ...(memoryV2Rerank ? { rerank: memoryV2Rerank } : {}),
         }),
       { names: ["memory_search"] },
     );

@@ -11,6 +11,11 @@ import type {
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
+  MemorySidecarListCommandOptions,
+  MemorySidecarPinCommandOptions,
+  MemorySidecarSalienceCommandOptions,
+  MemorySidecarStatusCommandOptions,
+  MemorySidecarSupersedeCommandOptions,
 } from "./cli.types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -63,6 +68,51 @@ async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
 async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemBackfill(opts);
+}
+
+async function runMemorySidecarStats(opts: MemoryCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarStats(opts);
+}
+
+async function runMemorySidecarList(opts: MemorySidecarListCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarList(opts);
+}
+
+async function runMemorySidecarPin(
+  refIdArg: string | undefined,
+  opts: MemorySidecarPinCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarPin(refIdArg, opts);
+}
+
+async function runMemorySidecarStatus(
+  refIdArg: string | undefined,
+  statusArg: string | undefined,
+  opts: MemorySidecarStatusCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarStatus(refIdArg, statusArg, opts);
+}
+
+async function runMemorySidecarSalience(
+  refIdArg: string | undefined,
+  salienceArg: string | undefined,
+  opts: MemorySidecarSalienceCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarSalience(refIdArg, salienceArg, opts);
+}
+
+async function runMemorySidecarSupersede(
+  oldRefIdArg: string | undefined,
+  newRefIdArg: string | undefined,
+  opts: MemorySidecarSupersedeCommandOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemorySidecarSupersede(oldRefIdArg, newRefIdArg, opts);
 }
 
 export function registerMemoryCli(program: Command) {
@@ -219,4 +269,112 @@ export function registerMemoryCli(program: Command) {
     .action(async (opts: MemoryRemBackfillOptions) => {
       await runMemoryRemBackfill(opts);
     });
+
+  const sidecar = memory
+    .command("sidecar")
+    .description("Inspect the Memory v2 sidecar database (read-only)");
+
+  sidecar
+    .command("stats")
+    .description("Show row counts, status/source breakdown, and time bounds")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: MemoryCommandOptions) => {
+      await runMemorySidecarStats(opts);
+    });
+
+  sidecar
+    .command("list")
+    .description("List sidecar rows newest-first (read-only)")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--status <s>", "Filter by status (active | superseded | archived | deleted)")
+    .option("--limit <n>", "Max rows (default 20, max 1000)", (value: string) => Number(value))
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: MemorySidecarListCommandOptions) => {
+      await runMemorySidecarList(opts);
+    });
+
+  sidecar
+    .command("pin")
+    .description("Pin or unpin a sidecar record by its full ref id")
+    .argument(
+      "<ref-id>",
+      "Full sidecar ref id or unique prefix (ambiguous or missing ids are rejected without mutating anything; use `memory sidecar list --json` to find full ids)",
+    )
+    .option("--unpin", "Clear the pinned flag instead of setting it", false)
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (refIdArg: string | undefined, opts: MemorySidecarPinCommandOptions) => {
+      await runMemorySidecarPin(refIdArg, opts);
+    });
+
+  sidecar
+    .command("status")
+    .description("Set the status of a sidecar record by its full ref id")
+    .argument(
+      "<ref-id>",
+      "Full sidecar ref id or unique prefix (ambiguous or missing ids are rejected without mutating anything; use `memory sidecar list --json` to find full ids)",
+    )
+    .argument("<status>", "One of: active | superseded | archived | deleted")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(
+      async (
+        refIdArg: string | undefined,
+        statusArg: string | undefined,
+        opts: MemorySidecarStatusCommandOptions,
+      ) => {
+        await runMemorySidecarStatus(refIdArg, statusArg, opts);
+      },
+    );
+
+  sidecar
+    .command("salience")
+    .description(
+      "Set or clear the salience of a sidecar record by its full ref id (0 is distinct from clear)",
+    )
+    .argument(
+      "<ref-id>",
+      "Full sidecar ref id or unique prefix (ambiguous or missing ids are rejected without mutating anything; use `memory sidecar list --json` to find full ids)",
+    )
+    .argument("<value>", "A finite number (e.g. 0.7, -1.2, 0) or the literal `clear` to set NULL")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(
+      async (
+        refIdArg: string | undefined,
+        valueArg: string | undefined,
+        opts: MemorySidecarSalienceCommandOptions,
+      ) => {
+        await runMemorySidecarSalience(refIdArg, valueArg, opts);
+      },
+    );
+
+  sidecar
+    .command("supersede")
+    .description(
+      "Link a sidecar record to the ref that supersedes it (does not flip `status`; run `status` separately if needed)",
+    )
+    .argument("<old-ref-id>", "The record being superseded — full sidecar ref id or unique prefix")
+    .argument(
+      "<new-ref-id-or-clear>",
+      "The record that supersedes it — full id, unique prefix, or the literal `clear` to unlink",
+    )
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--json", "Print JSON")
+    .option("--verbose", "Verbose logging", false)
+    .action(
+      async (
+        oldRefIdArg: string | undefined,
+        newRefIdArg: string | undefined,
+        opts: MemorySidecarSupersedeCommandOptions,
+      ) => {
+        await runMemorySidecarSupersede(oldRefIdArg, newRefIdArg, opts);
+      },
+    );
 }

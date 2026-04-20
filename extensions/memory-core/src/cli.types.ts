@@ -39,3 +39,18 @@ export type MemoryRemBackfillOptions = MemoryCommandOptions & {
   stageShortTerm?: boolean;
   rollbackShortTerm?: boolean;
 };
+
+export type MemorySidecarListCommandOptions = MemoryCommandOptions & {
+  status?: string;
+  limit?: number;
+};
+
+export type MemorySidecarPinCommandOptions = MemoryCommandOptions & {
+  unpin?: boolean;
+};
+
+export type MemorySidecarStatusCommandOptions = MemoryCommandOptions;
+
+export type MemorySidecarSalienceCommandOptions = MemoryCommandOptions;
+
+export type MemorySidecarSupersedeCommandOptions = MemoryCommandOptions;
