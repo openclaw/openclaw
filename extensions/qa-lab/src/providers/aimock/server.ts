@@ -70,7 +70,7 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
   return requestMessages(body)
-    .map((message) => stringifyContent(message.content))
+    .map((message: any) => stringifyContent(message.content))
     .filter(Boolean)
     .join("\n");
 }
@@ -163,7 +163,7 @@ function createDebugMount(mock: LLMock): Mountable {
         writeJson(
           res,
           200,
-          entries.map((entry) => toRequestSnapshot(entry)),
+          entries.map((entry: JournalEntry) => toRequestSnapshot(entry)),
         );
         return true;
       }
@@ -172,8 +172,8 @@ function createDebugMount(mock: LLMock): Mountable {
           res,
           200,
           entries
-            .filter((entry) => entry.path === "/v1/images/generations")
-            .map((entry) => entry.body ?? {}),
+            .filter((entry: JournalEntry) => entry.path === "/v1/images/generations")
+            .map((entry: JournalEntry) => entry.body ?? {}),
         );
         return true;
       }
