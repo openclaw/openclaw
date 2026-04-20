@@ -194,10 +194,17 @@ export const ko: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway 토큰",
       password: "비밀번호(저장되지 않음)",
+      passwordPlaceholder: "시스템 또는 공유 비밀번호",
       sessionKey: "기본 세션 키",
       language: "언어",
       connectHint: "연결 변경 사항을 적용하려면 Connect를 클릭하세요.",
       trustedProxy: "신뢰할 수 있는 프록시를 통해 인증되었습니다.",
+      showToken: "토큰 표시",
+      hideToken: "토큰 숨기기",
+      toggleTokenVisibility: "토큰 표시 여부 전환",
+      showPassword: "비밀번호 표시",
+      hidePassword: "비밀번호 숨기기",
+      togglePasswordVisibility: "비밀번호 표시 여부 전환",
     },
     snapshot: {
       title: "스냅샷",
@@ -237,6 +244,8 @@ export const ko: TranslationMap = {
       hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
       mobileHint:
         "모바일에서 사용 중이신가요? 데스크톱에서 openclaw dashboard --no-open으로 전체 URL(#token=... 포함)을 복사하세요.",
+      docsTitle: "기기 페어링 문서(새 탭에서 열림)",
+      docsLink: "문서: 기기 페어링",
     },
     insecure: {
       hint: "이 페이지는 HTTP이므로 브라우저가 디바이스 ID를 차단합니다. HTTPS(Tailscale Serve)를 사용하거나 gateway host에서 {url}을 여세요.",
@@ -250,6 +259,12 @@ export const ko: TranslationMap = {
       step4: "또는 재사용 가능한 토큰을 생성하세요:",
       docsHint: "원격 액세스에는 Tailscale Serve를 권장합니다. ",
       docsLink: "문서 읽기 →",
+      authDocsTitle: "Control UI 인증 문서(새 탭에서 열림)",
+      authDocsLink: "문서: Control UI 인증",
+      tailscaleDocsTitle: "Tailscale Serve 문서(새 탭에서 열림)",
+      tailscaleDocsLink: "문서: Tailscale Serve",
+      insecureHttpDocsTitle: "안전하지 않은 HTTP 문서(새 탭에서 열림)",
+      insecureHttpDocsLink: "문서: 안전하지 않은 HTTP",
     },
     cards: {
       cost: "비용",
@@ -617,6 +632,12 @@ export const ko: TranslationMap = {
   login: {
     subtitle: "Gateway 대시보드",
     passwordPlaceholder: "선택 사항",
+    showToken: "토큰 표시",
+    hideToken: "토큰 숨기기",
+    toggleTokenVisibility: "토큰 표시 여부 전환",
+    showPassword: "비밀번호 표시",
+    hidePassword: "비밀번호 숨기기",
+    togglePasswordVisibility: "비밀번호 표시 여부 전환",
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",

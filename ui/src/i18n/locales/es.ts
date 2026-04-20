@@ -195,10 +195,17 @@ export const es: TranslationMap = {
       wsUrl: "URL de WebSocket",
       token: "Token de la puerta de enlace",
       password: "Contraseña (no se guarda)",
+      passwordPlaceholder: "contraseña del sistema o compartida",
       sessionKey: "Clave de sesión predeterminada",
       language: "Idioma",
       connectHint: "Haz clic en Conectar para aplicar los cambios de conexión.",
       trustedProxy: "Autenticado mediante proxy de confianza.",
+      showToken: "Mostrar token",
+      hideToken: "Ocultar token",
+      toggleTokenVisibility: "Alternar visibilidad del token",
+      showPassword: "Mostrar contraseña",
+      hidePassword: "Ocultar contraseña",
+      togglePasswordVisibility: "Alternar visibilidad de la contraseña",
     },
     snapshot: {
       title: "Instantánea",
@@ -238,6 +245,8 @@ export const es: TranslationMap = {
       hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
       mobileHint:
         "¿En el móvil? Copia la URL completa (incluyendo #token=...) desde openclaw dashboard --no-open en tu escritorio.",
+      docsTitle: "Documentación de emparejamiento de dispositivos (se abre en una pestaña nueva)",
+      docsLink: "Documentación: Emparejamiento de dispositivos",
     },
     insecure: {
       hint: "Esta página es HTTP, por lo que el navegador bloquea el acceso a la identidad del dispositivo. Usa HTTPS (Tailscale Serve) o abre {url} en el equipo host.",
@@ -251,6 +260,12 @@ export const es: TranslationMap = {
       step4: "O genera un token reutilizable:",
       docsHint: "Para el acceso remoto, se recomienda Tailscale Serve. ",
       docsLink: "Leer la documentación →",
+      authDocsTitle: "Documentación de autenticación de Control UI (se abre en una pestaña nueva)",
+      authDocsLink: "Documentación: Autenticación de Control UI",
+      tailscaleDocsTitle: "Documentación de Tailscale Serve (se abre en una pestaña nueva)",
+      tailscaleDocsLink: "Documentación: Tailscale Serve",
+      insecureHttpDocsTitle: "Documentación de HTTP inseguro (se abre en una pestaña nueva)",
+      insecureHttpDocsLink: "Documentación: HTTP inseguro",
     },
     cards: {
       cost: "Costo",
@@ -626,6 +641,12 @@ export const es: TranslationMap = {
   login: {
     subtitle: "Panel de Gateway",
     passwordPlaceholder: "opcional",
+    showToken: "Mostrar token",
+    hideToken: "Ocultar token",
+    toggleTokenVisibility: "Alternar visibilidad del token",
+    showPassword: "Mostrar contraseña",
+    hidePassword: "Ocultar contraseña",
+    togglePasswordVisibility: "Alternar visibilidad de la contraseña",
   },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",

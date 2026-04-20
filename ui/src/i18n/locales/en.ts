@@ -193,10 +193,17 @@ export const en: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway Token",
       password: "Password (not stored)",
+      passwordPlaceholder: "system or shared password",
       sessionKey: "Default Session Key",
       language: "Language",
       connectHint: "Click Connect to apply connection changes.",
       trustedProxy: "Authenticated via trusted proxy.",
+      showToken: "Show token",
+      hideToken: "Hide token",
+      toggleTokenVisibility: "Toggle token visibility",
+      showPassword: "Show password",
+      hidePassword: "Hide password",
+      togglePasswordVisibility: "Toggle password visibility",
     },
     snapshot: {
       title: "Snapshot",
@@ -234,6 +241,8 @@ export const en: TranslationMap = {
       hint: "This device needs pairing approval from the gateway host.",
       mobileHint:
         "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
+      docsTitle: "Device pairing docs (opens in new tab)",
+      docsLink: "Docs: Device pairing",
     },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
@@ -247,6 +256,12 @@ export const en: TranslationMap = {
       step4: "Or generate a reusable token:",
       docsHint: "For remote access, Tailscale Serve is recommended. ",
       docsLink: "Read the docs →",
+      authDocsTitle: "Control UI auth docs (opens in new tab)",
+      authDocsLink: "Docs: Control UI auth",
+      tailscaleDocsTitle: "Tailscale Serve docs (opens in new tab)",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      insecureHttpDocsTitle: "Insecure HTTP docs (opens in new tab)",
+      insecureHttpDocsLink: "Docs: Insecure HTTP",
     },
     cards: {
       cost: "Cost",
@@ -614,6 +629,12 @@ export const en: TranslationMap = {
   login: {
     subtitle: "Gateway Dashboard",
     passwordPlaceholder: "optional",
+    showToken: "Show token",
+    hideToken: "Hide token",
+    toggleTokenVisibility: "Toggle token visibility",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    togglePasswordVisibility: "Toggle password visibility",
   },
   chat: {
     disconnected: "Disconnected from gateway.",
