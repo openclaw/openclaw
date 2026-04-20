@@ -9,14 +9,21 @@ import {
 } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import { appendReplyMediaFailureWarning } from "../reply-payload.js";
+import { resolveConfigDir } from "../../utils.js";
+import {
+  resolveDroppedMediaCode,
+  sanitizeMediaDisplayName,
+  type DroppedMediaItem,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+
+const log = createSubsystemLogger("reply-media-paths");
 
 const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
@@ -199,15 +206,18 @@ export function createReplyMediaPathNormalizer(params: {
     }
 
     const normalizedMedia: string[] = [];
+    const dropped: DroppedMediaItem[] = [];
     const seen = new Set<string>();
-    let firstMediaDropError: unknown;
     for (const media of mediaList) {
       let normalized: string;
       try {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
-        firstMediaDropError ??= err;
-        logVerbose(`dropping blocked reply media ${media}: ${String(err)}`);
+        log.warn(`dropping blocked reply media: ${String(err)}`, { media });
+        dropped.push({
+          displayName: sanitizeMediaDisplayName(media),
+          code: resolveDroppedMediaCode(err),
+        });
         continue;
       }
       if (!normalized || seen.has(normalized)) {
@@ -217,25 +227,22 @@ export function createReplyMediaPathNormalizer(params: {
       normalizedMedia.push(normalized);
     }
 
-    const text =
-      firstMediaDropError === undefined
-        ? payload.text
-        : appendReplyMediaFailureWarning(payload.text);
+    const droppedMedia = dropped.length > 0 ? dropped : undefined;
 
     if (normalizedMedia.length === 0) {
       return {
         ...payload,
-        text,
         mediaUrl: undefined,
         mediaUrls: undefined,
+        droppedMedia,
       };
     }
 
     return {
       ...payload,
-      text,
       mediaUrl: normalizedMedia[0],
       mediaUrls: normalizedMedia,
+      droppedMedia,
     };
   };
 }
