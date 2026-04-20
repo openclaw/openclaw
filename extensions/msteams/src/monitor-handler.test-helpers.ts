@@ -39,6 +39,8 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       },
       text: {
         hasControlCommand: () => false,
+        resolveChunkMode: () => "length",
+        resolveMarkdownTableMode: () => "code",
         ...(options.resolveTextChunkLimit
           ? { resolveTextChunkLimit: options.resolveTextChunkLimit }
           : {}),
@@ -53,8 +55,14 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
           })),
       },
       reply: {
+        createReplyDispatcherWithTyping: () => ({
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: vi.fn(),
+        }),
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
+        resolveHumanDelayConfig: () => undefined,
       },
       session: {
         recordInboundSession: options.recordInboundSession ?? vi.fn(async () => undefined),
