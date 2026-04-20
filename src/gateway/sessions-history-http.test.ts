@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
-import {
-  appendAssistantMessageToSessionTranscript,
-  appendExactAssistantMessageToSessionTranscript,
-} from "../config/sessions/transcript.js";
+import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -53,17 +51,45 @@ async function seedSession(params?: { text?: string }) {
     storePath,
   });
   if (params?.text) {
-    const appended = await appendAssistantMessageToSessionTranscript({
+    await appendVisibleAssistantMessage({
       sessionKey: "agent:main:main",
       text: params.text,
       storePath,
     });
-    expect(appended.ok).toBe(true);
   }
   return { storePath };
 }
 
-function makeTranscriptAssistantMessage(params: {
+function makeVisibleAssistantMessage(params: {
+  text: string;
+  content?: AssistantMessage["content"];
+}): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    content: params.content ?? [{ type: "text", text: params.text }],
+    api: "anthropic",
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    usage: {
+      input: 100,
+      output: 25,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 125,
+      cost: {
+        input: 0.0001,
+        output: 0.0002,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0.0003,
+      },
+    },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
+}
+
+function makeTranscriptOnlyAssistantMessage(params: {
   text: string;
   content?: AssistantMessage["content"];
 }): AssistantMessage {
@@ -90,6 +116,24 @@ function makeTranscriptAssistantMessage(params: {
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
+}
+
+async function appendVisibleAssistantMessage(params: {
+  sessionKey: string;
+  text: string;
+  content?: AssistantMessage["content"];
+  emitInlineMessage?: boolean;
+  storePath?: string;
+}): Promise<string> {
+  return appendTranscriptMessage({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    emitInlineMessage: params.emitInlineMessage,
+    message: makeVisibleAssistantMessage({
+      text: params.text,
+      content: params.content,
+    }),
+  });
 }
 
 async function appendTranscriptMessage(params: {
@@ -289,18 +333,16 @@ describe("session history HTTP endpoints", () => {
 
   test("supports cursor pagination over direct REST while preserving the messages field", async () => {
     const { storePath } = await seedSession({ text: "first message" });
-    const second = await appendAssistantMessageToSessionTranscript({
+    await appendVisibleAssistantMessage({
       sessionKey: "agent:main:main",
       text: "second message",
       storePath,
     });
-    expect(second.ok).toBe(true);
-    const third = await appendAssistantMessageToSessionTranscript({
+    await appendVisibleAssistantMessage({
       sessionKey: "agent:main:main",
       text: "third message",
       storePath,
     });
-    expect(third.ok).toBe(true);
 
     await withGatewayHarness(async (harness) => {
       const firstPage = await fetchSessionHistory(harness.port, "agent:main:main", {
@@ -344,12 +386,11 @@ describe("session history HTTP endpoints", () => {
 
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
-    const second = await appendAssistantMessageToSessionTranscript({
+    await appendVisibleAssistantMessage({
       sessionKey: "agent:main:main",
       text: "second message",
       storePath,
     });
-    expect(second.ok).toBe(true);
 
     await withGatewayHarness(async (harness) => {
       const res = await fetchSessionHistory(harness.port, "agent:main:main", {
@@ -368,11 +409,11 @@ describe("session history HTTP endpoints", () => {
           .messages?.[0]?.content?.[0]?.text,
       ).toBe("second message");
 
-      const thirdMessageId = await appendTranscriptMessage({
+      const thirdMessageId = await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         storePath,
         emitInlineMessage: false,
-        message: makeTranscriptAssistantMessage({ text: "third message" }),
+        text: "third message",
       });
 
       const nextEvent = await readSseEvent(reader!, streamState);
@@ -395,12 +436,11 @@ describe("session history HTTP endpoints", () => {
 
   test("seeds bounded SSE windows from visible history when transcript refreshes are silent", async () => {
     const { storePath } = await seedSession({ text: "first message" });
-    const second = await appendAssistantMessageToSessionTranscript({
+    await appendVisibleAssistantMessage({
       sessionKey: "agent:main:main",
       text: "second message",
       storePath,
     });
-    expect(second.ok).toBe(true);
 
     await withGatewayHarness(async (harness) => {
       const res = await fetchSessionHistory(harness.port, "agent:main:main", {
@@ -423,7 +463,7 @@ describe("session history HTTP endpoints", () => {
         sessionKey: "agent:main:main",
         storePath,
         emitInlineMessage: false,
-        message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
+        message: makeTranscriptOnlyAssistantMessage({ text: "NO_REPLY" }),
       });
 
       const refreshEvent = await readSseEvent(reader!, streamState);
@@ -451,35 +491,28 @@ describe("session history HTTP endpoints", () => {
     });
 
     await withGatewayHarness(async (harness) => {
-      const hidden = await appendAssistantMessageToSessionTranscript({
+      await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "NO_REPLY",
         storePath,
       });
-      expect(hidden.ok).toBe(true);
-
-      if (!hidden.ok) {
-        throw new Error(`append failed: ${hidden.reason}`);
-      }
-      const visibleMessageId = await appendTranscriptMessage({
+      const visibleMessageId = await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         storePath,
-        message: makeTranscriptAssistantMessage({
-          text: "Done.",
-          content: [
-            {
-              type: "text",
-              text: "internal reasoning",
-              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Done.",
-              textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-            },
-          ],
-        }),
         emitInlineMessage: false,
+        text: "Done.",
+        content: [
+          {
+            type: "text",
+            text: "internal reasoning",
+            textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+          },
+        ],
       });
 
       const historyRes = await fetchSessionHistory(harness.port, "agent:main:main");
@@ -493,7 +526,7 @@ describe("session history HTTP endpoints", () => {
       };
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
-      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
+      expect(extractAssistantVisibleText(body.messages?.[0])).toBe("Done.");
       expect(body.messages?.[0]?.__openclaw).toMatchObject({
         id: visibleMessageId,
         seq: 2,
@@ -508,14 +541,14 @@ describe("session history HTTP endpoints", () => {
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
         storePath,
-        message: makeTranscriptAssistantMessage({ text: "mirrored copy" }),
+        message: makeTranscriptOnlyAssistantMessage({ text: "mirrored copy" }),
         emitInlineMessage: false,
       });
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
         storePath,
         message: {
-          ...makeTranscriptAssistantMessage({ text: "bootstrap copy" }),
+          ...makeTranscriptOnlyAssistantMessage({ text: "bootstrap copy" }),
           model: "gateway-injected",
         },
         emitInlineMessage: false,
@@ -551,12 +584,11 @@ describe("session history HTTP endpoints", () => {
           .messages?.[0]?.content?.[0]?.text,
       ).toBe("first message");
 
-      const appended = await appendAssistantMessageToSessionTranscript({
+      const appended = await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "second message",
         storePath,
       });
-      expect(appended.ok).toBe(true);
 
       const messageEvent = await readSseEvent(reader!, streamState);
       expect(messageEvent.event).toBe("message");
@@ -573,9 +605,6 @@ describe("session history HTTP endpoints", () => {
           ?.content?.[0]?.text,
       ).toBe("second message");
       expect((messageEvent.data as { messageSeq?: number }).messageSeq).toBe(2);
-      if (!appended.ok) {
-        throw new Error(`append failed: ${appended.reason}`);
-      }
       expect(
         (
           messageEvent.data as {
@@ -583,7 +612,7 @@ describe("session history HTTP endpoints", () => {
           }
         ).message?.__openclaw,
       ).toMatchObject({
-        id: appended.ok ? appended.messageId : undefined,
+        id: appended,
         seq: 2,
       });
 
@@ -596,7 +625,7 @@ describe("session history HTTP endpoints", () => {
     await appendTranscriptMessage({
       sessionKey: "agent:main:main",
       storePath,
-      message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
+      message: makeTranscriptOnlyAssistantMessage({ text: "NO_REPLY" }),
       emitInlineMessage: false,
     });
 
@@ -617,12 +646,11 @@ describe("session history HTTP endpoints", () => {
         ).messages?.map((message) => message.content?.[0]?.text),
       ).toEqual(["first message"]);
 
-      const visible = await appendAssistantMessageToSessionTranscript({
+      await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "third visible message",
         storePath,
       });
-      expect(visible.ok).toBe(true);
 
       const messageEvent = await readSseEvent(reader!, streamState);
       expect(messageEvent.event).toBe("message");
@@ -650,19 +678,17 @@ describe("session history HTTP endpoints", () => {
       const streamState = { buffer: "" };
       await readSseEvent(reader!, streamState);
 
-      const silent = await appendAssistantMessageToSessionTranscript({
+      await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "NO_REPLY",
         storePath,
       });
-      expect(silent.ok).toBe(true);
 
-      const visible = await appendAssistantMessageToSessionTranscript({
+      const visible = await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "third visible message",
         storePath,
       });
-      expect(visible.ok).toBe(true);
 
       const messageEvent = await readSseEvent(reader!, streamState);
       expect(messageEvent.event).toBe("message");
@@ -678,7 +704,7 @@ describe("session history HTTP endpoints", () => {
           }
         ).message?.__openclaw,
       ).toMatchObject({
-        id: visible.ok ? visible.messageId : undefined,
+        id: visible,
         seq: 3,
       });
 
@@ -700,24 +726,20 @@ describe("session history HTTP endpoints", () => {
       const streamState = { buffer: "" };
       await readSseEvent(reader!, streamState);
 
-      const second = await appendAssistantMessageToSessionTranscript({
+      await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "second visible message",
         storePath,
       });
-      expect(second.ok).toBe(true);
 
       const secondEvent = await readSseEvent(reader!, streamState);
       expect(secondEvent.event).toBe("message");
       expect((secondEvent.data as { messageSeq?: number }).messageSeq).toBe(2);
 
-      if (!second.ok) {
-        throw new Error(`append failed: ${second.reason}`);
-      }
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
         storePath,
-        message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
+        message: makeTranscriptOnlyAssistantMessage({ text: "NO_REPLY" }),
         emitInlineMessage: false,
       });
 
@@ -729,12 +751,11 @@ describe("session history HTTP endpoints", () => {
         ).messages?.map((message) => message.content?.[0]?.text),
       ).toEqual(["first message", "second visible message"]);
 
-      const third = await appendAssistantMessageToSessionTranscript({
+      const third = await appendVisibleAssistantMessage({
         sessionKey: "agent:main:main",
         text: "third visible message",
         storePath,
       });
-      expect(third.ok).toBe(true);
 
       const thirdEvent = await readSseEvent(reader!, streamState);
       expect(thirdEvent.event).toBe("message");
@@ -750,7 +771,7 @@ describe("session history HTTP endpoints", () => {
           }
         ).message?.__openclaw,
       ).toMatchObject({
-        id: third.ok ? third.messageId : undefined,
+        id: third,
         seq: 4,
       });
 
