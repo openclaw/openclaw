@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
@@ -8,7 +9,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
-import { __testing } from "./dreaming-phases.js";
+import { __testing, runDreamingSweepPhases } from "./dreaming-phases.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
@@ -187,6 +188,71 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
 }
 
 describe("memory-core dreaming phases", () => {
+  it("uses the hashed narrative session key for sweep-level fallback cleanup", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await writeDailyNote(workspaceDir, [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Move backups to S3 Glacier.",
+      "- Keep retention at 365 days.",
+    ]);
+    const testConfig: OpenClawConfig = {
+      ...LIGHT_DREAMING_TEST_CONFIG,
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 20,
+                    lookbackDays: 2,
+                  },
+                  rem: {
+                    enabled: false,
+                    limit: 0,
+                    lookbackDays: 2,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const subagent = createMockNarrativeSubagent("The archive hummed softly.");
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
+
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs,
+    });
+
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
+  });
+
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {
