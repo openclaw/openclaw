@@ -637,34 +637,41 @@ describe("generateAndAppendDreamNarrative", () => {
     );
   });
 
-  it("falls back to the session default model when the configured model cannot start", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
-    subagent.run
-      .mockRejectedValueOnce(new Error("model unavailable"))
-      .mockResolvedValueOnce({ runId: "run-456" });
-    const logger = createMockLogger();
+  it.each([
+    "model unavailable",
+    "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
+    "models/openai/gpt-6 is not found",
+  ])(
+    "falls back to the session default model when the configured model cannot start (%s)",
+    async (startupError) => {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
+      subagent.run.mockRejectedValueOnce(new Error(startupError)).mockResolvedValueOnce({
+        runId: "run-456",
+      });
+      const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: {
-        phase: "light",
-        snippets: ["API endpoints need authentication"],
-      },
-      model: TEST_DREAMING_MODEL,
-      logger,
-    });
+      await generateAndAppendDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["API endpoints need authentication"],
+        },
+        model: TEST_DREAMING_MODEL,
+        logger,
+      });
 
-    expect(subagent.run).toHaveBeenCalledTimes(2);
-    expect(subagent.run.mock.calls[0][0]).toMatchObject({
-      model: TEST_DREAMING_MODEL,
-    });
-    expect(subagent.run.mock.calls[1][0]).not.toHaveProperty("model");
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("retrying with the session default"),
-    );
-  });
+      expect(subagent.run).toHaveBeenCalledTimes(2);
+      expect(subagent.run.mock.calls[0][0]).toMatchObject({
+        model: TEST_DREAMING_MODEL,
+      });
+      expect(subagent.run.mock.calls[1][0]).not.toHaveProperty("model");
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("retrying with the session default"),
+      );
+    },
+  );
 
   it("does not fall back to the session default model for generic startup failures", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
@@ -699,7 +706,7 @@ describe("generateAndAppendDreamNarrative", () => {
       .mockResolvedValueOnce({ runId: "run-123" })
       .mockResolvedValueOnce({ runId: "run-456" });
     subagent.waitForRun
-      .mockResolvedValueOnce({ status: "error", error: "unknown model" })
+      .mockResolvedValueOnce({ status: "error", error: "gpt-foo is not a valid model id" })
       .mockResolvedValueOnce({ status: "ok" });
     const logger = createMockLogger();
 

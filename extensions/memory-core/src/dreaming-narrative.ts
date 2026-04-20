@@ -187,10 +187,32 @@ function isModelUnavailableNarrativeErrorMessage(raw: string): boolean {
   if (/\b404\b/.test(message) && /not(?:[_\-\s])?found/i.test(message)) {
     return true;
   }
+  if (/not_found_error/i.test(message)) {
+    return true;
+  }
+  if (/model:\s*[a-z0-9._/-]+/i.test(message) && /not(?:[_\-\s])?found/i.test(message)) {
+    return true;
+  }
+  if (/models\/[^\s]+ is not found/i.test(message)) {
+    return true;
+  }
   if (/model/i.test(message) && /does not exist/i.test(message)) {
     return true;
   }
   if (/unsupported model/i.test(message)) {
+    return true;
+  }
+  if (
+    /model/i.test(message) &&
+    /deprecated/i.test(message) &&
+    /(upgrade|transition) to/i.test(message)
+  ) {
+    return true;
+  }
+  if (/stealth model/i.test(message) && /find it here/i.test(message)) {
+    return true;
+  }
+  if (/is not a valid model id/i.test(message)) {
     return true;
   }
   if (/invalid model/i.test(message) && !/invalid model reference/i.test(message)) {
