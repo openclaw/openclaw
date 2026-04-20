@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-19 (run 29)
+**Date:** 2026-04-20 (run 30)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -15,13 +15,13 @@
 | #54363 | fix/chat-send-button-contrast           | CLOSED without merge (2026-03-27) | N/A | N/A | N/A | None (closed without merge) |
 | #54730 | fix/subagent-identity-fallback          | CLOSED without merge (2026-04-17) | N/A | N/A | N/A | None (closed by maintainer) |
 
-No change to any of the four originally monitored PRs since run 28.
+No change to any of the four originally monitored PRs since run 29.
 
 ---
 
 ## PR #45911 — fix/telegram-approval-callback-fallback
 
-**Status:** MERGED (merged_at: 2026-03-29T05:15:58Z). No action required.
+**Status:** MERGED (merged_at: 2026-03-29T05:15:58Z by `obviyus`). No action required.
 
 ---
 
@@ -43,7 +43,7 @@ No change to any of the four originally monitored PRs since run 28.
 
 ---
 
-## Actions Taken This Run (run 29 — 2026-04-19)
+## Actions Taken This Run (run 30 — 2026-04-20)
 
 **GitHub API access:** Partial — MCP restricted to `suboss87/openclaw` (fork only); `gh` CLI
 not installed; PR comment/review bodies for `openclaw/openclaw` are inaccessible via MCP.
@@ -54,43 +54,14 @@ not installed; PR comment/review bodies for `openclaw/openclaw` are inaccessible
 
 ---
 
-## Notable Activity Since Run 28 (2026-04-18)
+## Notable Activity Since Run 29 (2026-04-19)
 
-### #55787 — MERGED today
-- **PR:** fix: strip orphaned OpenAI reasoning blocks before responses API call
-- **Merged:** 2026-04-19T07:57:03Z by `jalehman`
-- Was open as of run 28 (assigned to `jalehman`). Now closed/merged.
-- https://github.com/openclaw/openclaw/pull/55787
+**No new activity.** All three open PRs have the same comment counts and update timestamps as
+run 29. No new merges since run 29.
 
-### #56978 — NOW CLOSED (was open in run 28)
-- **PR:** fix(whatsapp): exclude DM allowFrom from group policy sender bypass
-- No longer in open PRs list as of this run.
-- Superseded by #68446 (opened 2026-04-18), which targets the same bug against the
-  current refactored code path. Author opened #68446 as the canonical replacement.
-- https://github.com/openclaw/openclaw/pull/56978
-
-### #68446 — NEW open PR (opened 2026-04-18)
-- **PR:** fix(whatsapp): stop DM allowFrom fallback into group policy sender bypass
-- Supersedes #56978. One-line fix: `const groupAllowFrom = account.groupAllowFrom ?? [];`
-- Labels: channel: whatsapp-web, size: XS. 2 comments. 👍×1
-- Created: 2026-04-18T07:03:38Z, last updated: 2026-04-18T07:19:26Z
-- https://github.com/openclaw/openclaw/pull/68446
-
-### #66225 — New comment activity today
-- **PR:** fix(agents): align final tag regexes to handle self-closing `<final/>` variant
-- Comment count: 4 → **5** (new comment posted 2026-04-19)
-- Updated: 2026-04-19T00:34:20Z (up from 2026-04-17T02:13:03Z)
-- **⚠ Needs human check** — new comment content inaccessible via MCP; may be review
-  feedback requiring a response or code change.
-- https://github.com/openclaw/openclaw/pull/66225
-
-### #66544 — Timestamp bump today, no new comment
-- **PR:** fix(gateway): exclude heartbeat sender ID from session display name
-- Comment count: 3 (unchanged)
-- Updated: 2026-04-19T00:33:48Z (up from 2026-04-17T02:16:13Z)
-- Timestamp change without comment count change likely indicates a review event, label
-  change, or PR edit. **Low priority** — no new discussion to respond to.
-- https://github.com/openclaw/openclaw/pull/66544
+- #66225: 5 comments, updated 2026-04-19T00:34:20Z (unchanged)
+- #66544: 3 comments, updated 2026-04-19T00:33:48Z (unchanged)
+- #68446: 2 comments, updated 2026-04-18T07:19:26Z (unchanged)
 
 ---
 
@@ -106,9 +77,10 @@ not installed; PR comment/review bodies for `openclaw/openclaw` are inaccessible
 
 ## PRs Requiring Human Attention
 
-1. **#66225** — New comment posted today (comment count 4→5). Review/feedback body is
-   inaccessible in this session (MCP restricted to fork only). Check for code change
-   requests or review threads that need a reply or fix.
+1. **#66225** — Comment count reached 5 as of 2026-04-19 (was 4 in run 28). Still unresolved
+   as of run 30 — no further update since 2026-04-19T00:34:20Z. The comment body is
+   inaccessible in this session (MCP restricted to fork only). Check for code change requests
+   or review threads that need a reply or fix.
    https://github.com/openclaw/openclaw/pull/66225
 
 All four originally monitored PRs (#45911, #45584, #54363, #54730) remain resolved with
