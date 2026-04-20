@@ -11,6 +11,7 @@ import {
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveLocalAuthCliInvocation,
+  resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
   resolveTuiSessionKey,
   stopTuiSafely,
@@ -402,5 +403,34 @@ describe("resolveLocalAuthSpawnOptions", () => {
         platform: "win32",
       }),
     ).toEqual({});
+  });
+});
+
+describe("resolveLocalAuthSpawnCwd", () => {
+  it("runs the packaged wrapper from the repo root", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["/repo/openclaw.mjs", "models", "auth", "login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("runs the source fallback helper from the repo root", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("keeps the caller cwd for direct codex exec", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/worktree/subdir");
   });
 });

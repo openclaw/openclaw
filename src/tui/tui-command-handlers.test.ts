@@ -19,6 +19,7 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
+  pendingOptimisticUserMessage?: boolean;
   opts?: { local?: boolean };
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
@@ -44,7 +45,7 @@ function createHarness(params?: {
   const state = {
     currentSessionKey: "agent:main:main",
     activeChatRunId: params?.activeChatRunId ?? null,
-    pendingOptimisticUserMessage: false,
+    pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
@@ -295,6 +296,20 @@ describe("tui command handlers", () => {
     await handleCommand("/auth");
 
     expect(addSystem).toHaveBeenCalledWith("auth login is only available in local embedded mode");
+  });
+
+  it("blocks /auth while an optimistic run is still pending", async () => {
+    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const { handleCommand, addSystem } = createHarness({
+      opts: { local: true },
+      pendingOptimisticUserMessage: true,
+      runAuthFlow,
+    });
+
+    await handleCommand("/auth openai-codex");
+
+    expect(runAuthFlow).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("abort the current run before /auth");
   });
 
   it("rejects invalid /activation values before patching the session", async () => {

@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
@@ -110,6 +111,25 @@ export function resolveLocalAuthSpawnOptions(params: {
   return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
     ? { shell: true }
     : {};
+}
+
+export function resolveLocalAuthSpawnCwd(params: {
+  args: string[];
+  defaultCwd?: string;
+}): string {
+  const defaultCwd = params.defaultCwd ?? process.cwd();
+  const entryArg = params.args[0]?.trim();
+  if (!entryArg) {
+    return defaultCwd;
+  }
+  const entryBase = path.basename(entryArg).toLowerCase();
+  if (entryBase === "openclaw.mjs") {
+    return path.dirname(entryArg);
+  }
+  if (entryBase === "run-node.mjs") {
+    return path.dirname(path.dirname(entryArg));
+  }
+  return defaultCwd;
 }
 
 export function resolveTuiSessionKey(params: {
@@ -786,7 +806,7 @@ export async function runTui(opts: TuiOptions) {
                 }
 
                 const child = spawn(command, args, {
-                  cwd: process.cwd(),
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
                   env: process.env,
                   stdio: "inherit",
                   ...resolveLocalAuthSpawnOptions({ command }),

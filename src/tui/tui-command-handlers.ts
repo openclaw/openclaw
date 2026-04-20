@@ -265,7 +265,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("auth login is only available in local embedded mode");
           break;
         }
-        if (state.activeChatRunId) {
+        if (state.activeChatRunId || state.pendingOptimisticUserMessage) {
           chatLog.addSystem("abort the current run before /auth");
           break;
         }
