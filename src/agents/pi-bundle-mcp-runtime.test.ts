@@ -15,6 +15,18 @@ type RuntimeFactoryOptions = NonNullable<
 >;
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
 
+function createIsoBmffImage(
+  majorBrand: string,
+  compatibleBrands: string[] = [],
+  minorVersion = "\0\0\0\0",
+): Buffer {
+  const brands = [majorBrand, minorVersion, ...compatibleBrands];
+  const payload = Buffer.concat(brands.map((brand) => Buffer.from(brand, "ascii")));
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(payload.length + 8, 0);
+  return Buffer.concat([size, Buffer.from("ftyp", "ascii"), payload]);
+}
+
 function makeRuntime(
   tools: Array<{ toolName: string; description: string }>,
   serverName = "bundleProbe",
@@ -252,6 +264,27 @@ describe("session MCP runtime", () => {
     expect(runtimeA).not.toBe(runtimeB);
     expect(resultA.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-A" });
     expect(resultB.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-B" });
+  });
+
+  it("rejects HEIF-family MCP image tool results on the materialized execution path", async () => {
+    const heif = createIsoBmffImage("heic", ["mif1"]);
+    const runtime: SessionMcpRuntime = {
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      callTool: async () => ({
+        content: [{ type: "image", data: heif.toString("base64"), mimeType: "image/jpeg" }],
+        isError: false,
+      }),
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const result = await materialized.tools[0].execute("call-heif", {}, undefined, undefined);
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "[bundleProbe:bundle_probe] omitted image payload: Error: unsupported image format",
+      },
+    ]);
   });
 
   it("disposes catalog startup in-flight without leaving cached runtimes", async () => {

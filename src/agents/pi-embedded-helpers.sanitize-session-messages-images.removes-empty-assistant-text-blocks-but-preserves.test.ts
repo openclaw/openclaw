@@ -13,6 +13,18 @@ import {
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
 
+function createIsoBmffImage(
+  majorBrand: string,
+  compatibleBrands: string[] = [],
+  minorVersion = "\0\0\0\0",
+): Buffer {
+  const brands = [majorBrand, minorVersion, ...compatibleBrands];
+  const payload = Buffer.concat(brands.map((brand) => Buffer.from(brand, "ascii")));
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(payload.length + 8, 0);
+  return Buffer.concat([size, Buffer.from("ftyp", "ascii"), payload]);
+}
+
 function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessage> {
   return [
     makeAgentAssistantMessage({
@@ -256,6 +268,33 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(2);
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("toolResult");
+  });
+
+  it("rejects HEIF-family images inside toolResult transcript messages", async () => {
+    const heif = createIsoBmffImage("avif", ["mif1"]);
+    const input = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "mcp_image",
+        isError: false,
+        content: [{ type: "image", data: heif.toString("base64"), mimeType: "image/jpeg" }],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("toolResult");
+    if (out[0]?.role === "toolResult") {
+      expect(out[0].content).toEqual([
+        {
+          type: "text",
+          text: "[test] omitted image payload: Error: unsupported image format",
+        },
+      ]);
+    }
   });
 
   describe("thought_signature stripping", () => {

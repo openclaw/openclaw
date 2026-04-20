@@ -10,6 +10,7 @@ import {
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+import { sanitizeToolResultImages } from "./tool-images.js";
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -103,11 +104,14 @@ export async function materializeBundleMcpToolsForRun(params: {
       parameters: tool.inputSchema,
       execute: async (_toolCallId: string, input: unknown) => {
         const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-        return toAgentToolResult({
-          serverName: tool.serverName,
-          toolName: tool.toolName,
-          result,
-        });
+        return await sanitizeToolResultImages(
+          toAgentToolResult({
+            serverName: tool.serverName,
+            toolName: tool.toolName,
+            result,
+          }),
+          `${tool.serverName}:${tool.toolName}`,
+        );
       },
     });
   }

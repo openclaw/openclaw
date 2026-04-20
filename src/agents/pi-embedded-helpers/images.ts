@@ -2,7 +2,7 @@ import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core"
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
-import { sanitizeContentBlocksImages } from "../tool-images.js";
+import { sanitizeContentBlocksImages, sanitizeToolResultImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
@@ -81,13 +81,18 @@ export async function sanitizeSessionMessagesImages(
     const role = (msg as { role?: unknown }).role;
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
-      const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
-      const nextContent = (await sanitizeContentBlocksImages(
-        content,
+      const sanitized = await sanitizeToolResultImages(
+        {
+          content: Array.isArray(toolMsg.content) ? toolMsg.content : [],
+          details: toolMsg.details,
+        },
         label,
         imageSanitization,
-      )) as unknown as typeof toolMsg.content;
-      out.push({ ...toolMsg, content: nextContent });
+      );
+      out.push({
+        ...toolMsg,
+        content: sanitized.content as unknown as typeof toolMsg.content,
+      });
       continue;
     }
 
