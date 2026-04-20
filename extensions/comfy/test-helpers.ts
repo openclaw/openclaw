@@ -34,8 +34,12 @@ export function parseComfyJsonBody(
   call: number,
 ): Record<string, unknown> {
   const request = fetchWithSsrFGuardMock.mock.calls[call - 1]?.[0] as FetchGuardRequest | undefined;
-  expect(request?.init?.body).toBeTruthy();
-  return JSON.parse(String(request.init.body)) as Record<string, unknown>;
+  const body = request?.init?.body;
+  expect(body).toBeTruthy();
+  if (typeof body !== "string") {
+    throw new Error(`Missing Comfy request body for fetch call ${call}`);
+  }
+  return JSON.parse(body) as Record<string, unknown>;
 }
 
 export function mockComfyProviderApiKey(apiKey = "comfy-test-key") {
