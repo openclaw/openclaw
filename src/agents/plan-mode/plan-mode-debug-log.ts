@@ -45,6 +45,21 @@ const logger = createSubsystemLogger("plan-mode");
  * captures. Add new kinds here when instrumenting a new touch point —
  * the union keeps callers honest about what fields each event needs.
  */
+// C7 (Plan Mode 1.0 follow-up): correlation fields.
+// Operators tracing a single approval cycle across multiple events
+// need a shared key beyond `sessionKey` (one session can have many
+// approvals in its lifetime). The two correlation keys added to
+// relevant events are:
+//   - `approvalRunId`: the agent-run ID that produced the plan
+//     (persisted on `planMode.approvalRunId` at exit_plan_mode
+//     time). Traces events from tool-call → gate decisions →
+//     injections within one agent turn.
+//   - `approvalId`: the approval-version token minted for each
+//     exit_plan_mode call. Traces events across the full approval
+//     lifecycle (exit_plan_mode → user decision → state transition).
+// Both are optional — pre-existing emitters that don't carry them
+// keep the current logging shape; new emitters populate them when
+// the field is available at emit time.
 export type PlanModeDebugEvent =
   | {
       kind: "state_transition";
@@ -52,6 +67,8 @@ export type PlanModeDebugEvent =
       from: string;
       to: string;
       trigger: string;
+      approvalRunId?: string;
+      approvalId?: string;
     }
   | {
       kind: "gate_decision";
@@ -60,6 +77,8 @@ export type PlanModeDebugEvent =
       allowed: boolean;
       planMode: string | undefined;
       reason?: string;
+      approvalRunId?: string;
+      approvalId?: string;
     }
   | {
       kind: "tool_call";
@@ -80,12 +99,15 @@ export type PlanModeDebugEvent =
       sessionKey: string;
       tag: string;
       preview: string;
+      approvalRunId?: string;
+      approvalId?: string;
     }
   | {
       kind: "nudge_event";
       sessionKey: string;
       nudgeId: string;
       phase: "scheduled" | "fired" | "cleaned";
+      approvalRunId?: string;
     }
   | {
       kind: "subagent_event";
@@ -93,6 +115,7 @@ export type PlanModeDebugEvent =
       parentRunId: string;
       childRunId: string;
       event: "spawn" | "return";
+      approvalRunId?: string;
     }
   | {
       kind: "approval_event";
@@ -100,12 +123,16 @@ export type PlanModeDebugEvent =
       action: string;
       openSubagentCount: number;
       result: "accepted" | "rejected_by_subagent_gate" | "other";
+      approvalRunId?: string;
+      approvalId?: string;
     }
   | {
       kind: "toast_event";
       sessionKey: string;
       toast: string;
       phase: "fired" | "dismissed";
+      approvalRunId?: string;
+      approvalId?: string;
     };
 
 /**
