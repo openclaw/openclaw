@@ -22,14 +22,68 @@ import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+// Security: the agent-facing `gateway` tool is owner-only, but per SECURITY.md the model/agent
+// itself is not a trusted principal. `assertGatewayConfigMutationAllowed` is the explicit
+// model -> operator trust-boundary control on `config.apply`/`config.patch`. Any operator-trusted
+// path listed here must not be changed by agent-driven mutations, including descendant keys
+// reached via deep merge or `mergeObjectArraysById` in-place edits.
 const PROTECTED_GATEWAY_CONFIG_PATHS = [
+  // Exec consent / allowlist.
   "tools.exec.ask",
   "tools.exec.security",
   "tools.exec.safeBins",
   "tools.exec.safeBinProfiles",
   "tools.exec.safeBinTrustedDirs",
   "tools.exec.strictInlineEval",
+  // Filesystem boundary.
+  "tools.fs",
+  // Sandbox isolation and per-agent sandbox overrides.
+  "agents.defaults.sandbox",
+  "agents.sandbox",
+  "sandbox",
+  "agents.list[].sandbox",
+  // Per-agent tool/runtime execution policy.
+  "agents.list[].tools",
+  "agents.list[].embeddedPi",
+  "tools.subagents",
+  // Plugin trust boundary.
+  "plugins.enabled",
+  "plugins.allow",
+  "plugins.deny",
+  "plugins.entries",
+  "plugins.installs",
+  "plugins.load",
+  "plugins.slots",
+  // Gateway auth / TLS / HTTP tool exposure.
+  "gateway.auth",
+  "gateway.tls",
+  "gateway.tools.allow",
+  "gateway.tools.deny",
+  // Hook auth/routing and extra trusted code loading.
+  "hooks.token",
+  "hooks.allowRequestSessionKey",
+  "hooks.defaultSessionKey",
+  "hooks.allowedSessionKeyPrefixes",
+  "hooks.internal.load.extraDirs",
+  "hooks.transformsDir",
+  "hooks.mappings",
+  // SSRF and MCP transport reach.
+  "browser.ssrfPolicy",
+  "tools.web.fetch.ssrfPolicy",
+  "mcp.servers",
 ] as const;
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export const PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST = PROTECTED_GATEWAY_CONFIG_PATHS;
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export function assertGatewayConfigMutationAllowedForTest(params: {
+  action: "config.apply" | "config.patch";
+  currentConfig: Record<string, unknown>;
+  raw: string;
+}): void {
+  assertGatewayConfigMutationAllowed(params);
+}
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -95,6 +149,66 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+function isProtectedPathEqual(
+  currentConfig: Record<string, unknown>,
+  nextConfig: Record<string, unknown>,
+  path: string,
+): boolean {
+  const bracketIdx = path.indexOf("[]");
+  if (bracketIdx === -1) {
+    return isDeepStrictEqual(getValueAtPath(currentConfig, path), getValueAtPath(nextConfig, path));
+  }
+
+  const arrayPath = path.slice(0, bracketIdx);
+  const subPath = path.slice(bracketIdx + "[]".length).replace(/^\./, "");
+  const currentList = getValueAtCanonicalPath(currentConfig, arrayPath);
+  const nextList = getValueAtCanonicalPath(nextConfig, arrayPath);
+  if (!Array.isArray(currentList) && !Array.isArray(nextList)) {
+    return true;
+  }
+
+  const indexById = (list: unknown): Map<string, Record<string, unknown>> => {
+    const out = new Map<string, Record<string, unknown>>();
+    if (!Array.isArray(list)) {
+      return out;
+    }
+    for (const entry of list) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        typeof (entry as { id?: unknown }).id === "string" &&
+        (entry as { id: string }).id.length > 0
+      ) {
+        out.set((entry as { id: string }).id, entry as Record<string, unknown>);
+      }
+    }
+    return out;
+  };
+
+  const currentEntries = indexById(currentList);
+  const nextEntries = indexById(nextList);
+  const ids = new Set([...currentEntries.keys(), ...nextEntries.keys()]);
+  for (const id of ids) {
+    const currentEntry = currentEntries.get(id);
+    const nextEntry = nextEntries.get(id);
+    const currentVal = subPath
+      ? currentEntry
+        ? getValueAtCanonicalPath(currentEntry, subPath)
+        : undefined
+      : currentEntry;
+    const nextVal = subPath
+      ? nextEntry
+        ? getValueAtCanonicalPath(nextEntry, subPath)
+        : undefined
+      : nextEntry;
+    if (!isDeepStrictEqual(currentVal, nextVal)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
@@ -108,11 +222,7 @@ function assertGatewayConfigMutationAllowed(params: {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) =>
-      !isDeepStrictEqual(
-        getValueAtPath(params.currentConfig, path),
-        getValueAtPath(nextConfig, path),
-      ),
+    (path) => !isProtectedPathEqual(params.currentConfig, nextConfig, path),
   );
   if (changedProtectedPaths.length > 0) {
     throw new Error(
