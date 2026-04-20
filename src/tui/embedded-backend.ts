@@ -58,6 +58,7 @@ type LocalRunState = {
   isBtw: boolean;
   question?: string;
   finalSent: boolean;
+  registered: boolean;
 };
 
 const silentRuntime = {
@@ -213,6 +214,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       isBtw: Boolean(question),
       question,
       finalSent: false,
+      registered: false,
     });
 
     void this.runTurn({
@@ -402,6 +404,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!text || isSilentReplyText(text, SILENT_REPLY_TOKEN) || isSilentReplyLeadFragment(text)) {
       return;
     }
+    run.registered = true;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -419,6 +422,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     run.finalSent = true;
+    run.registered = true;
     const text = run.buffer.trim();
     const shouldIncludeMessage =
       Boolean(text) &&
@@ -446,6 +450,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     run.finalSent = true;
+    run.registered = true;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -458,6 +463,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     run.finalSent = true;
+    run.registered = true;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -466,10 +472,31 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
+  private ensureRunRegistered(runId: string, run: LocalRunState) {
+    if (run.registered || run.isBtw) {
+      return;
+    }
+    run.registered = true;
+    this.emit("chat", {
+      runId,
+      sessionKey: run.sessionKey,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        timestamp: Date.now(),
+      },
+    });
+  }
+
   private async handleAgentEvent(evt: AgentEventPayload) {
     const run = this.runs.get(evt.runId);
     if (!run) {
       return;
+    }
+
+    if (evt.stream !== "assistant") {
+      this.ensureRunRegistered(evt.runId, run);
     }
 
     this.emit("agent", {

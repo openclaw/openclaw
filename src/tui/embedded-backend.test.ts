@@ -183,6 +183,73 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
+  it("registers tool-first local runs before forwarding agent events", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "run tool first",
+      runId: "run-tool-first",
+    });
+
+    registeredListener?.({
+      runId: "run-tool-first",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc-tool-first", name: "exec" },
+    });
+    pending.resolve({ payloads: [{ text: "done" }], meta: {} });
+    await flushMicrotasks();
+
+    expect(events).toEqual([
+      {
+        event: "chat",
+        payload: {
+          runId: "run-tool-first",
+          sessionKey: "agent:main:main",
+          state: "delta",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "" }],
+            timestamp: expect.any(Number),
+          },
+        },
+      },
+      {
+        event: "agent",
+        payload: {
+          runId: "run-tool-first",
+          stream: "tool",
+          data: { phase: "start", toolCallId: "tc-tool-first", name: "exec" },
+        },
+      },
+      {
+        event: "chat",
+        payload: {
+          runId: "run-tool-first",
+          sessionKey: "agent:main:main",
+          state: "final",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            timestamp: expect.any(Number),
+          },
+        },
+      },
+    ]);
+  });
+
   it("aborts active local runs", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     let capturedSignal: AbortSignal | undefined;
