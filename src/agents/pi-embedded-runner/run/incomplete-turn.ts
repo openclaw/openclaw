@@ -4,7 +4,7 @@ import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-de
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isStrictAgenticSupportedProviderModel } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
-import { hasNonzeroUsage } from "../../usage.js";
+import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "../../usage.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -284,7 +284,14 @@ export function isLikelyConfigErrorEmptyStream(params: {
   if (Array.isArray(assistant.content) && assistant.content.length > 0) {
     return false;
   }
-  if (hasNonzeroUsage(assistant.usage)) {
+  // Assistant usage carries aggregate counts on `totalTokens` (plus provider
+  // alias fields like `input_tokens`, `prompt_tokens`, `totalTokens`), while
+  // `hasNonzeroUsage` only inspects the normalized `{input, output, cacheRead,
+  // cacheWrite, total}` surface. Run the usage through `normalizeUsage` first
+  // so a real model turn that reports billing only via `totalTokens` (for
+  // example the OpenAI WS conversion path) cannot be misclassified as a
+  // zero-token config error.
+  if (hasNonzeroUsage(normalizeUsage(assistant.usage as UsageLike | undefined))) {
     return false;
   }
   return true;

@@ -82,6 +82,28 @@ describe("isLikelyConfigErrorEmptyStream", () => {
     ).toBe(false);
   });
 
+  // Regression test: `AssistantMessage.usage` reports its aggregate on
+  // `totalTokens`, not on the normalized `total` field that `hasNonzeroUsage`
+  // inspects directly. Some provider conversion paths (e.g. the OpenAI WS
+  // path) populate only `totalTokens` — without normalization the detector
+  // would misclassify such a real model turn as a zero-token config error.
+  it("does not flag when only totalTokens is populated (provider aggregate)", () => {
+    expect(
+      isLikelyConfigErrorEmptyStream({
+        payloadCount: 0,
+        attempt: makeAttempt({
+          lastAssistant: makeAssistant({
+            usage: {
+              ...ZERO_USAGE,
+              totalTokens: 500,
+              cost: { ...ZERO_USAGE.cost },
+            },
+          }),
+        }),
+      }),
+    ).toBe(false);
+  });
+
   it("does not flag when the assistant has any content blocks", () => {
     expect(
       isLikelyConfigErrorEmptyStream({
