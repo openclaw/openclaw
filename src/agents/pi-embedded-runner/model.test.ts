@@ -1069,6 +1069,79 @@ describe("resolveModel", () => {
     });
   });
 
+  it("normalizes stale discovered openai-codex /backend-api/v1 metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("normalizes stale discovered openrouter /v1 metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openrouter",
+      modelId: "openai/gpt-5.4",
+      templateModel: {
+        provider: "openrouter",
+        id: "openai/gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      },
+    });
+
+    const result = resolveModelForTest("openrouter", "openai/gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openai/gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
+  it("normalizes discovered openai-codex metadata when api is missing", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        api: undefined,
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
   it("passes configured workspaceDir to runtime preference hooks", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",

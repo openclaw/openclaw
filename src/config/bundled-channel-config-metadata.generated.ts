@@ -262,6 +262,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               exclusiveMinimum: 0,
               maximum: 9007199254740991,
             },
+            maxFailureRetries: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
           },
           additionalProperties: false,
         },
@@ -559,6 +564,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     maximum: 9007199254740991,
                   },
                   firstRunLookbackMinutes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxFailureRetries: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
@@ -15205,7 +15215,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
               dmPolicy: {
-                default: "pairing",
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
               },
@@ -15228,7 +15237,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
               },
               groupPolicy: {
-                default: "allowlist",
                 type: "string",
                 enum: ["open", "disabled", "allowlist"],
               },
@@ -15389,7 +15397,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["off", "ack", "minimal", "extensive"],
               },
               debounceMs: {
-                default: 0,
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
@@ -15430,7 +15437,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 maximum: 9007199254740991,
               },
             },
-            required: ["dmPolicy", "groupPolicy", "debounceMs"],
             additionalProperties: false,
           },
         },
