@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Providers/OpenAI: stop advertising the removed `gpt-5.3-codex-spark` Codex model through fallback catalogs, and suppress stale rows with a GPT-5.5 recovery hint.
+- Ollama: honor `params.num_ctx` on models configured under `agents.defaults.models[].params.num_ctx` or `models.providers.ollama.models[].params.num_ctx`, overriding the model's `contextWindow` when building both the native-Ollama and OpenAI-compat `/api/generate` payloads. Lets operators hard-cap `num_ctx` below a model's GGUF-reported ceiling (e.g. qwen3-coder's 262144) to fit larger models on VRAM-constrained GPUs without CPU spillover. Fixes #44550.
 - Plugins/QR: replace legacy `qrcode-terminal` QR rendering with bounded `qrcode-tui` helpers for plugin login/setup flows. (#65969) Thanks @vincentkoc.
 - ACPX/Codex: stop the embedded Codex ACP auth bridge from falling back to raw `~/.codex` file copies; ACPX now only uses OpenClaw's canonical Codex OAuth bridge.
 - Auto-reply/system events: route async exec-event completion replies through the persisted session delivery context, so long-running command results return to the originating channel instead of being dropped when live origin metadata is missing. (#70258) Thanks @wzfukui.

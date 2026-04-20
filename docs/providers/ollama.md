@@ -417,6 +417,28 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     }
     ```
 
+    **Hard-capping `num_ctx` below the model's native context:** if the context window reported by Ollama is larger than your GPU can host (for example, qwen3-coder exposes a 262K native context but a 20 GB card can only hold it at ~16K), set `params.num_ctx` on the model. This value is sent as `options.num_ctx` on every `/api/generate` / `/api/chat` request and overrides the model's `contextWindow` without affecting how OpenClaw tracks the session budget:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          ollama: {
+            models: [
+              {
+                id: "qwen3-coder:30b",
+                contextWindow: 262144, // what the model supports
+                params: { num_ctx: 16384 }, // what you actually want allocated on GPU
+              }
+            ]
+          }
+        }
+      }
+    }
+    ```
+
+    `params.num_ctx` also works under `agents.defaults.models["ollama/<id>"]` for per-agent overrides. It applies to both the native Ollama and OpenAI-compatible paths. Non-numeric, zero, or negative values are ignored (falls back to `contextWindow`).
+
   </Accordion>
 
   <Accordion title="Reasoning models">

@@ -159,8 +159,38 @@ function createOllamaThinkingWrapper(baseFn: StreamFn | undefined, think: boolea
     });
 }
 
+/**
+ * Resolve an Ollama-specific `num_ctx` override set at the per-model `params.num_ctx` path.
+ *
+ * Allows users to configure a hard context cap via
+ * `agents.defaults.models["ollama/<id>"].params.num_ctx` or
+ * `models.providers.ollama.models[].params.num_ctx` — both flow through to the resolved
+ * runtime model object as `model.params.num_ctx`.
+ *
+ * Returns `undefined` if unset, non-numeric, or non-positive, so callers fall back to
+ * their existing `contextWindow`/default resolution.
+ *
+ * Fixes openclaw/openclaw#44550: `num_ctx` was previously ignored and users had to
+ * rely on `contextWindow` (documented for openai-completions mode only) to cap the
+ * context sent to Ollama's native API.
+ */
+function resolveOllamaNumCtxFromParams(model: unknown): number | undefined {
+  if (!model || typeof model !== "object") return undefined;
+  const params = (model as { params?: unknown }).params;
+  if (!params || typeof params !== "object") return undefined;
+  const numCtx = (params as { num_ctx?: unknown }).num_ctx;
+  if (typeof numCtx !== "number" || !Number.isFinite(numCtx) || numCtx <= 0) {
+    return undefined;
+  }
+  return Math.floor(numCtx);
+}
+
 function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
-  return Math.max(1, Math.floor(model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS));
+  const override = resolveOllamaNumCtxFromParams(model);
+  return Math.max(
+    1,
+    Math.floor(override ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS),
+  );
 }
 
 function isOllamaCloudKimiModelRef(modelId: string): boolean {
@@ -623,7 +653,13 @@ export function createOllamaStreamFn(
         );
         const ollamaTools = extractOllamaTools(context.tools);
 
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        // `params.num_ctx` (set via `agents.defaults.models[].params.num_ctx` or
+        // `models.providers.ollama.models[].params.num_ctx`) takes precedence over the
+        // model's resolved `contextWindow` — fixes openclaw/openclaw#44550.
+        const numCtxOverride = resolveOllamaNumCtxFromParams(model);
+        const ollamaOptions: Record<string, unknown> = {
+          num_ctx: numCtxOverride ?? model.contextWindow ?? 65536,
+        };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }

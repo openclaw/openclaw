@@ -1174,3 +1174,141 @@ describe("createConfiguredOllamaStreamFn", () => {
     );
   });
 });
+
+// Regression coverage for openclaw/openclaw#44550 — `params.num_ctx` set on the resolved model
+// (flowing from `agents.defaults.models[].params.num_ctx` or
+// `models.providers.ollama.models[].params.num_ctx`) must override `contextWindow` when building
+// the Ollama request payload. Without this override the native Ollama provider always forces
+// `num_ctx = model.contextWindow`, which in turn comes from Ollama's `/api/show` GGUF metadata
+// (e.g. 262144 for qwen3-coder) and spills large models off GPU on constrained hardware.
+describe("num_ctx params override (issue #44550)", () => {
+  it("createOllamaStreamFn: params.num_ctx takes precedence over contextWindow", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = streamFn(
+          {
+            id: "qwen3-coder:30b",
+            api: "ollama",
+            provider: "ollama",
+            contextWindow: 262144,
+            // User-configured cap — should override the GGUF-derived contextWindow.
+            params: { num_ctx: 16384 },
+          } as never,
+          { messages: [{ role: "user", content: "hi" }] } as never,
+          {} as never,
+        );
+
+        await collectStreamEvents(stream);
+
+        const request = getGuardedFetchCall(fetchMock);
+        const body = JSON.parse((request.init?.body as string) ?? "{}") as {
+          options: { num_ctx?: number };
+        };
+        expect(body.options.num_ctx).toBe(16384);
+      },
+    );
+  });
+
+  it("createOllamaStreamFn: falls back to contextWindow when params.num_ctx is absent", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = streamFn(
+          {
+            id: "qwen3-coder:30b",
+            api: "ollama",
+            provider: "ollama",
+            contextWindow: 131072,
+          } as never,
+          { messages: [{ role: "user", content: "hi" }] } as never,
+          {} as never,
+        );
+
+        await collectStreamEvents(stream);
+
+        const request = getGuardedFetchCall(fetchMock);
+        const body = JSON.parse((request.init?.body as string) ?? "{}") as {
+          options: { num_ctx?: number };
+        };
+        expect(body.options.num_ctx).toBe(131072);
+      },
+    );
+  });
+
+  it("createOllamaStreamFn: ignores invalid params.num_ctx values and falls back to contextWindow", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = streamFn(
+          {
+            id: "qwen3-coder:30b",
+            api: "ollama",
+            provider: "ollama",
+            contextWindow: 32768,
+            // Invalid — zero, negative, or NaN should be treated as "not set".
+            params: { num_ctx: 0 },
+          } as never,
+          { messages: [{ role: "user", content: "hi" }] } as never,
+          {} as never,
+        );
+
+        await collectStreamEvents(stream);
+
+        const request = getGuardedFetchCall(fetchMock);
+        const body = JSON.parse((request.init?.body as string) ?? "{}") as {
+          options: { num_ctx?: number };
+        };
+        expect(body.options.num_ctx).toBe(32768);
+      },
+    );
+  });
+
+  it("createConfiguredOllamaCompatStreamWrapper: params.num_ctx overrides contextWindow on compat path", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({ messages: [], options: { num_ctx: 999 }, stream: true });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "qwen3-coder:30b",
+      contextWindow: 262144,
+      params: { num_ctx: 8192 },
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "qwen3-coder:30b",
+      model,
+      streamFn: baseStreamFn,
+      thinkingLevel: "off",
+      extraParams: {},
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    expect(patchedPayload).toMatchObject({ options: { num_ctx: 8192 } });
+  });
+});
