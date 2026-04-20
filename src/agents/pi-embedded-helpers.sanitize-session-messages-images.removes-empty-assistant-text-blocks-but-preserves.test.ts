@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
+import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeGoogleTurnOrdering,
@@ -323,6 +324,49 @@ describe("sanitizeSessionMessagesImages", () => {
       ]);
     }
   });
+
+  it("does not let stored sanitization metadata wipe configured replay limits", async () => {
+    const maxBytes = 64 * 1024;
+    const width = 900;
+    const height = 900;
+    const raw = Buffer.alloc(width * height * 3, 0xff);
+    const bigPng = await sharp(raw, {
+      raw: { width, height, channels: 3 },
+    })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+    expect(bigPng.byteLength).toBeGreaterThan(maxBytes);
+
+    const input = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "image", data: bigPng.toString("base64"), mimeType: "image/png" }],
+        details: {
+          imageSanitization: {
+            rejectHeifFamily: false,
+          },
+        },
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test", { maxBytes });
+
+    expect(out).toHaveLength(1);
+    const tool = out[0];
+    expect(tool?.role).toBe("toolResult");
+    if (tool?.role !== "toolResult") {
+      return;
+    }
+    const image = tool.content?.find((block) => (block as { type?: string }).type === "image") as
+      | { type: "image"; data: string; mimeType?: string }
+      | undefined;
+    expect(image).toBeDefined();
+    expect(Buffer.from(image?.data ?? "", "base64").byteLength).toBeLessThanOrEqual(maxBytes);
+  }, 20_000);
 
   it("preserves read-tool HEIF opt-outs during transcript replay sanitization", async () => {
     const heif = createIsoBmffImage("heic", ["mif1"]);

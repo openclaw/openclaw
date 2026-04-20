@@ -33,12 +33,21 @@ function readToolImageSanitizationDetails(
     }
     return {};
   }
-  return {
-    maxDimensionPx: typeof record.maxDimensionPx === "number" ? record.maxDimensionPx : undefined,
-    maxBytes: typeof record.maxBytes === "number" ? record.maxBytes : undefined,
-    rejectHeifFamily:
-      typeof record.rejectHeifFamily === "boolean" ? record.rejectHeifFamily : undefined,
-  };
+  // Omit absent keys so the spread in sanitizeSessionMessagesImages does not
+  // overwrite caller-configured limits with undefined.
+  const result: Pick<ImageSanitizationLimits, "maxDimensionPx" | "maxBytes"> & {
+    rejectHeifFamily?: boolean;
+  } = {};
+  if (typeof record.maxDimensionPx === "number") {
+    result.maxDimensionPx = record.maxDimensionPx;
+  }
+  if (typeof record.maxBytes === "number") {
+    result.maxBytes = record.maxBytes;
+  }
+  if (typeof record.rejectHeifFamily === "boolean") {
+    result.rejectHeifFamily = record.rejectHeifFamily;
+  }
+  return result;
 }
 
 function isThinkingOrRedactedBlock(block: unknown): boolean {
