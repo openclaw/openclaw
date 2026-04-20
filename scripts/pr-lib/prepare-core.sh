@@ -49,7 +49,8 @@ verify_prep_branch_matches_prepared_head() {
 
 prepare_init() {
   local pr="$1"
-  enter_worktree "$pr" true
+  local force_clean="${2:-false}"
+  enter_worktree "$pr" true "$force_clean"
 
   require_artifact .local/pr-meta.env
   require_artifact .local/review.md
@@ -84,6 +85,7 @@ prepare_init() {
     PR_HEAD "$head" \
     PR_HEAD_SHA_BEFORE "$pr_head_sha_before" \
     PREP_BRANCH "pr-$pr-prep" \
+    PREP_REBASE_COUNT 0 \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
 
@@ -98,6 +100,17 @@ EOF_PREP
   echo "worktree=$PWD"
   echo "branch=$(git branch --show-current)"
   echo "wrote=.local/prep-context.env .local/prep.md"
+}
+
+prepare_sync_rebase_allowed() {
+  local rebase_count="$1"
+  local force_rebase="${2:-false}"
+
+  if [ "$rebase_count" -ge 1 ] && [ "$force_rebase" != "true" ]; then
+    return 1
+  fi
+
+  return 0
 }
 
 prepare_validate_commit() {
@@ -158,6 +171,7 @@ prepare_push() {
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
+  local push_main_status="${PUSH_MAIN_STATUS:-up_to_date}"
 
   local contrib="${PR_AUTHOR:-}"
   if [ -z "$contrib" ]; then
@@ -170,9 +184,20 @@ prepare_push() {
   cat >> .local/prep.md <<EOF_PREP
 - Gates passed and push succeeded to branch $PR_HEAD.
 - Gate mode: ${GATES_MODE:-unknown}.
+- Gate statuses: build=${BUILD_GATE_STATUS:-unknown}, check=${CHECK_GATE_STATUS:-unknown}, test=${TEST_GATE_STATUS:-unknown}.
 - Verified PR head SHA matches local prep HEAD.
+EOF_PREP
+
+  if [ "$push_main_status" = "main_advanced_after_push" ]; then
+    cat >> .local/prep.md <<EOF_PREP
+- Push succeeded, but origin/main advanced again before post-push freshness verification.
+- Use scripts/pr prepare-sync-head $pr for the next lightweight sync/push cycle if the new mainline drift is relevant.
+EOF_PREP
+  else
+    cat >> .local/prep.md <<'EOF_PREP'
 - Verified PR head contains origin/main.
 EOF_PREP
+  fi
 
   # Security: shell-escape values to prevent command injection via propagated PR_HEAD.
   printf '%s=%q\n' \
@@ -192,11 +217,13 @@ EOF_PREP
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
+  echo "post_push_main_status=$push_main_status"
   echo "artifacts=.local/prep.md .local/prep.env"
 }
 
 prepare_sync_head() {
   local pr="$1"
+  local force_rebase="${2:-false}"
   enter_worktree "$pr" false
 
   require_artifact .local/pr-meta.env
@@ -212,8 +239,26 @@ prepare_sync_head() {
   local rebased=false
   git fetch origin main
   if ! git merge-base --is-ancestor origin/main HEAD; then
+    local rebase_count="${PREP_REBASE_COUNT:-0}"
+    if ! prepare_sync_rebase_allowed "$rebase_count" "$force_rebase"; then
+      echo "prepare-sync-head already rebased this prep branch once; stop here and merge from the current prepared head, or re-run with --force if another rebase is intentional."
+      exit 1
+    fi
+    if [ "$rebase_count" -ge 1 ] && [ "$force_rebase" = "true" ]; then
+      echo "prepare-sync-head --force: allowing another rebase after PREP_REBASE_COUNT=$rebase_count."
+    fi
+
     git rebase origin/main
     rebased=true
+    rebase_count=$((rebase_count + 1))
+    printf '%s=%q\n' \
+      PR_NUMBER "$PR_NUMBER" \
+      PR_HEAD "$PR_HEAD" \
+      PR_HEAD_SHA_BEFORE "${PR_HEAD_SHA_BEFORE:-}" \
+      PREP_BRANCH "$PREP_BRANCH" \
+      PREP_REBASE_COUNT "$rebase_count" \
+      PREP_STARTED_AT "$PREP_STARTED_AT" \
+      > .local/prep-context.env
     prepare_gates "$pr"
     checkout_prep_branch "$pr"
   fi
@@ -232,6 +277,7 @@ prepare_sync_head() {
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
+  local push_main_status="${PUSH_MAIN_STATUS:-up_to_date}"
 
   local contrib="${PR_AUTHOR:-}"
   if [ -z "$contrib" ]; then
@@ -244,10 +290,21 @@ prepare_sync_head() {
   cat >> .local/prep.md <<EOF_PREP
 - Prep head sync completed to branch $PR_HEAD.
 - Rebased onto origin/main: $rebased.
+- Prepare sync rebase count: ${PREP_REBASE_COUNT:-0}.
 - Verified PR head SHA matches local prep HEAD.
-- Verified PR head contains origin/main.
 - Prepare gates reran automatically when the sync rebase changed the prep head.
 EOF_PREP
+
+  if [ "$push_main_status" = "main_advanced_after_push" ]; then
+    cat >> .local/prep.md <<EOF_PREP
+- Push succeeded, but origin/main advanced again before post-push freshness verification.
+- Another full prepare rerun is not required; use scripts/pr prepare-sync-head $pr again only if that drift is relevant.
+EOF_PREP
+  else
+    cat >> .local/prep.md <<'EOF_PREP'
+- Verified PR head contains origin/main.
+EOF_PREP
+  fi
 
   # Security: shell-escape values to prevent command injection via propagated PR_HEAD.
   printf '%s=%q\n' \
@@ -267,6 +324,7 @@ EOF_PREP
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
+  echo "post_push_main_status=$push_main_status"
   echo "artifacts=.local/prep.md .local/prep.env"
 }
 

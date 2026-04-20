@@ -70,8 +70,26 @@ mainline_drift_requires_sync() {
     return 0
   fi
 
+  # When overlapping files or critical infra drift exist, check for actual merge
+  # conflicts first. Overlapping files != merge conflicts; Git can auto-merge
+  # in many cases, so only block when real conflicts are present.
   if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
-    echo "Mainline drift relevance: sync required before merge."
+    local merge_base
+    merge_base=$(git merge-base "$prep_head_sha" origin/main 2>/dev/null || true)
+    if [ -n "$merge_base" ]; then
+      local conflict_count
+      conflict_count=$(git merge-tree "$merge_base" "$prep_head_sha" origin/main 2>/dev/null | grep -c "^<<<<<<<" || true)
+      if [ "$conflict_count" -eq 0 ]; then
+        echo "Mainline drift relevance: overlapping files detected but no merge conflicts; safe to merge without sync."
+        print_file_list_with_limit "Mainline files overlapping PR touched files" "$overlap_file"
+        print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file"
+        rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+        return 1
+      fi
+      echo "Mainline drift relevance: $conflict_count merge conflict(s) detected; sync required before merge."
+    else
+      echo "Mainline drift relevance: unable to compute merge base; sync required before merge."
+    fi
     print_file_list_with_limit "Mainline files overlapping PR touched files" "$overlap_file"
     print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file"
     rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
@@ -164,6 +182,110 @@ merge_verify() {
   echo "merge-verify passed for PR #$pr"
 }
 
+refresh_merge_prep_metadata() {
+  local pr="$1"
+  local prep_head_sha="$2"
+  local pushed_from_sha="$3"
+  local contrib="$4"
+
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id)
+  local coauthor_email="${contrib_id}+${contrib}@users.noreply.github.com"
+
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    PR_AUTHOR "$contrib" \
+    PR_URL "${PR_URL:-}" \
+    PR_HEAD "$PR_HEAD" \
+    PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
+    PREP_HEAD_SHA "$prep_head_sha" \
+    COAUTHOR_EMAIL "$coauthor_email" \
+    > .local/prep.env
+}
+
+run_merge_changelog_with_diagnostics() {
+  local changelog_result=""
+  if ! changelog_result=$(ensure_pr_changelog_entry "$@"); then
+    if [ -n "$changelog_result" ]; then
+      printf '%s\n' "$changelog_result" >&2
+    fi
+    return 1
+  fi
+
+  printf '%s\n' "$changelog_result"
+}
+
+normalize_merge_changelog_section() {
+  local raw_section="${1:-Changes}"
+  local normalized
+  normalized=$(printf '%s' "$raw_section" | tr '[:upper:]' '[:lower:]')
+
+  case "$normalized" in
+    fixes|fix)
+      printf '%s\n' "Fixes"
+      ;;
+    changes|change|enhancement|feature)
+      printf '%s\n' "Changes"
+      ;;
+    *)
+      echo "Unsupported changelog section override: $raw_section"
+      exit 1
+      ;;
+  esac
+}
+
+resolve_merge_changelog_section() {
+  local pr_json="$1"
+
+  # 1. 环境变量显式覆写（最高优先级）
+  if [ -n "${OPENCLAW_PR_CHANGELOG_SECTION:-}" ]; then
+    normalize_merge_changelog_section "$OPENCLAW_PR_CHANGELOG_SECTION"
+    return 0
+  fi
+
+  local label_names
+  label_names=$(printf '%s\n' "$pr_json" | jq -r '.labels[]?.name // empty' | tr '[:upper:]' '[:lower:]')
+
+  # 2. 标签明确为 bug/fix 系列 → Fixes
+  if printf '%s\n' "$label_names" | rg -q '(^|[-_[:space:]])(bug|fix|bugfix|hotfix)([-_[:space:]]|$)'; then
+    printf '%s\n' "Fixes"
+    return 0
+  fi
+
+  # 3. 标签明确为 feature/enhancement → Changes
+  if printf '%s\n' "$label_names" | rg -q '(^|[-_[:space:]])(feature|enhancement)([-_[:space:]]|$)'; then
+    printf '%s\n' "Changes"
+    return 0
+  fi
+
+  # 4. 标签没有分类信号时 fallback 到 PR 标题的 Conventional Commits 前缀
+  #    仓库里大量 PR 只打 size: * 一类无关标签、靠标题 `fix:`/`feat:` 表达分类
+  local pr_title_lower
+  pr_title_lower=$(printf '%s\n' "$pr_json" | jq -r '.title // empty' | tr '[:upper:]' '[:lower:]')
+  if [ -n "$pr_title_lower" ]; then
+    # `fix`, `fix:`, `fix(scope):`, `fix!:`, `bugfix(...)`, `hotfix ...` 都视为 Fixes
+    if printf '%s\n' "$pr_title_lower" | rg -q '^(fix|bugfix|hotfix)([[:space:]]*[(:!])'; then
+      printf '%s\n' "Fixes"
+      return 0
+    fi
+    if printf '%s\n' "$pr_title_lower" | rg -q '^(feat|feature|enhance|enhancement)([[:space:]]*[(:!])'; then
+      printf '%s\n' "Changes"
+      return 0
+    fi
+  fi
+
+  # 5. 兜底默认
+  printf '%s\n' "Changes"
+}
+
+write_merge_prep_log_entry() {
+  local changelog_status="$1"
+  cat >> .local/prep.md <<EOF_PREP
+- Merge-stage changelog status: $changelog_status.
+- Merge is ready to execute the deterministic gh pr merge step.
+EOF_PREP
+}
+
 merge_run() {
   local pr="$1"
   enter_worktree "$pr" false
@@ -178,7 +300,7 @@ merge_run() {
   source .local/prep.env
 
   local pr_meta_json
-  pr_meta_json=$(gh pr view "$pr" --json number,title,state,isDraft,author)
+  pr_meta_json=$(gh pr view "$pr" --json number,title,state,isDraft,author,labels)
   local pr_title
   pr_title=$(printf '%s\n' "$pr_meta_json" | jq -r .title)
   local pr_number
@@ -217,6 +339,56 @@ merge_run() {
 
   local reviewer_email="${reviewer_email_candidates[0]}"
   local reviewer_coauthor_email="${reviewer_id}+${reviewer}@users.noreply.github.com"
+  local changelog_preview=""
+
+  local changelog_status="not_required"
+  if [ -s .local/gates.env ]; then
+    # shellcheck disable=SC1091
+    source .local/gates.env
+    if [ "${CHANGELOG_REQUIRED:-false}" = "true" ]; then
+      changelog_status="required_pending"
+    fi
+  fi
+
+  if [ "$changelog_status" = "required_pending" ]; then
+    checkout_prep_branch "$pr"
+    local resolved_changelog_entry
+    resolved_changelog_entry=$(resolve_pr_changelog_entry "$pr" "$contrib" "$pr_title")
+    local changelog_section
+    changelog_section=$(resolve_merge_changelog_section "$pr_meta_json")
+    changelog_preview=$(printf '%s' "$resolved_changelog_entry" | tr '\n' ' ' | sed 's/[[:space:]]\+$//')
+    local changelog_result
+    if ! changelog_result=$(run_merge_changelog_with_diagnostics "$pr" "$contrib" "$pr_title" "$changelog_section" "$resolved_changelog_entry"); then
+      echo "Changelog validation failed during merge-run." >&2
+      exit 1
+    fi
+    echo "$changelog_result"
+
+    if printf '%s\n' "$changelog_result" | rg -q '^pr_changelog_changed=true$'; then
+      local commit_msg
+      commit_msg=$(printf '%s' "$pr_title" | sed 's/[[:space:]]\+$//')
+      scripts/committer --fast "$commit_msg" CHANGELOG.md
+
+      local prep_head_sha_before_push
+      prep_head_sha_before_push=$(git rev-parse HEAD)
+      local lease_sha
+      lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+      local push_result_env=".local/merge-changelog-push-result.env"
+      push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha_before_push" "$lease_sha" false false "$push_result_env"
+      # shellcheck disable=SC1090
+      source "$push_result_env"
+      PREP_HEAD_SHA="$PUSH_PREP_HEAD_SHA"
+      refresh_merge_prep_metadata "$pr" "$PREP_HEAD_SHA" "$PUSHED_FROM_SHA" "$contrib"
+      merge_verify "$pr"
+      # shellcheck disable=SC1091
+      source .local/prep.env
+      changelog_status="added_and_pushed"
+    else
+      changelog_status="already_present"
+    fi
+  fi
+
+  write_merge_prep_log_entry "$changelog_status"
 
   cat > .local/merge-body.txt <<EOF_BODY
 Merged via squash.
@@ -249,6 +421,11 @@ EOF_BODY
     local encoded_ref
     encoded_ref=$(jq -rn --arg value "heads/$head_ref" '$value|@uri')
     if gh api -X DELETE "repos/$repo_owner/$repo_name/git/refs/$encoded_ref" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if ! gh api "repos/$repo_owner/$repo_name/git/ref/$encoded_ref" >/dev/null 2>&1; then
+      echo "Remote branch cleanup: branch already absent for $repo_owner/$repo_name:$head_ref"
       return 0
     fi
 

@@ -2,14 +2,16 @@
 // Secret scanning alert handler for OpenClaw maintainers.
 // Usage: node secret-scanning.mjs <command> [options]
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
 const REPO = "openclaw/openclaw";
 const REPO_URL = `https://github.com/${REPO}`;
+const GH_BIN = process.env.OPENCLAW_SECRET_SCAN_GH_BIN || "gh";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -26,9 +28,11 @@ function tmpFile(purpose) {
 }
 
 function gh(args, { json = true, allowFailure = false } = {}) {
-  const proc = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const proc = spawnSync(GH_BIN, args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   if (proc.status !== 0 && !allowFailure) {
-    fail(`gh ${args.slice(0, 3).join(" ")} failed:\n${(proc.stderr || proc.stdout || "").trim()}`);
+    fail(
+      `${GH_BIN} ${args.slice(0, 3).join(" ")} failed:\n${(proc.stderr || proc.stdout || "").trim()}`,
+    );
   }
   if (proc.status !== 0) {
     return {
@@ -203,6 +207,40 @@ function createDiscussionComment(discussionNodeId, body, replyToNodeId) {
     fail(`Failed to create discussion comment: ${JSON.stringify(result.errors)}`);
   }
   return result?.data?.addDiscussionComment?.comment;
+}
+
+function cmdSmoke() {
+  const bodyFile = tmpFile("smoke-body.md");
+  fs.writeFileSync(bodyFile, "redacted body\n", "utf8");
+
+  const summaryFile = tmpFile("smoke-summary.json");
+  fs.writeFileSync(
+    summaryFile,
+    JSON.stringify([
+      {
+        number: 12,
+        secret_type: "OpenAI API Key",
+        location_label: "PR comment",
+        location_url: `${REPO_URL}/pull/12#issuecomment-1200`,
+        actions: "comment redacted; author notified",
+        history_cleared: false,
+      },
+      {
+        number: 13,
+        secret_type: "AWS Access Key",
+        location_label: "Issue body",
+        location_url: `${REPO_URL}/issues/13`,
+        actions: "body redacted in place",
+        history_cleared: true,
+      },
+    ]),
+    "utf8",
+  );
+
+  cmdNotify("12", "alice", "pull_request_comment", "OpenAI API Key,AWS Access Key");
+  cmdSummary(summaryFile);
+  console.error(`smoke-body-file=${bodyFile}`);
+  console.error(`smoke-summary-file=${summaryFile}`);
 }
 
 // ─── Commands ───────────────────────────────────────────────────────────────
@@ -770,6 +808,7 @@ const commands = {
   resolve: () => cmdResolve(args[0], args[1], args[2]),
   "list-open": () => cmdListOpen(),
   summary: () => cmdSummary(args[0]),
+  smoke: () => cmdSmoke(),
 };
 
 if (!command || !commands[command]) {
@@ -789,6 +828,7 @@ if (!command || !commands[command]) {
       "  resolve <n> [resolution] [comment] Close alert",
       "  list-open                          List open alerts",
       "  summary <json-file>               Print formatted summary",
+      "  smoke                              Run mock CLI smoke flow",
     ].join("\n"),
   );
   process.exit(1);

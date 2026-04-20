@@ -237,7 +237,7 @@
 - `pnpm test:live` defaults quiet now. Keep `[live]` progress; suppress profile/gateway chatter. Full logs: `OPENCLAW_LIVE_TEST_QUIET=0 pnpm test:live`.
 - Full kit + what’s covered: `docs/help/testing.md`.
 - Changelog: user-facing changes only; no internal/meta notes (version alignment, appcast reminders, release process).
-- Changelog placement: in the active version block, append new entries to the end of the target section (`### Changes` or `### Fixes`); do not insert new entries at the top of a section.
+- Changelog placement: in the active version block, new entries go into the target section (`### Changes` or `### Fixes`). The automated wrapper (`scripts/changelog-add-unreleased.ts`) inserts by PR number ascending — find the first existing bullet whose PR number is greater than yours and slot in right before it; if yours is the largest, append to the end. This spreads concurrent PRs across the section body and reduces merge conflicts compared to always appending at the tail. Historical unordered entries are left alone; only the new entry is placed.
 - Changelog attribution: use at most one contributor mention per line; prefer `Thanks @author` and do not also add `by @author` on the same entry.
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
