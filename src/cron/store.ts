@@ -6,8 +6,22 @@ import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { CronStoreFile } from "./types.js";
 
-const serializedStoreCache = new Map<string, string>();
-const storesNeedingSplitMigration = new Set<string>();
+type SerializedStoreCacheEntry = {
+  configJson?: string;
+  stateJson?: string;
+  needsSplitMigration: boolean;
+};
+
+const serializedStoreCache = new Map<string, SerializedStoreCacheEntry>();
+
+function getSerializedStoreCache(storePath: string): SerializedStoreCacheEntry {
+  let entry = serializedStoreCache.get(storePath);
+  if (!entry) {
+    entry = { needsSplitMigration: false };
+    serializedStoreCache.set(storePath, entry);
+  }
+  return entry;
+}
 
 function resolveDefaultCronDir(): string {
   return path.join(resolveConfigDir(), "cron");
@@ -176,20 +190,16 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 
     const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
     const stateJson = JSON.stringify(extractStateFile(store), null, 2);
-    serializedStoreCache.set(storePath, configJson);
-    serializedStoreCache.set(`${storePath}:state`, stateJson);
-    if (hasLegacyInlineState) {
-      storesNeedingSplitMigration.add(storePath);
-    } else {
-      storesNeedingSplitMigration.delete(storePath);
-    }
+    serializedStoreCache.set(storePath, {
+      configJson,
+      stateJson,
+      needsSplitMigration: hasLegacyInlineState,
+    });
 
     return store;
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
-      serializedStoreCache.delete(`${storePath}:state`);
-      storesNeedingSplitMigration.delete(storePath);
       return { version: 1, jobs: [] };
     }
     throw err;
@@ -224,14 +234,11 @@ export async function saveCronStore(
   const stateJson = JSON.stringify(stateFile, null, 2);
 
   const statePath = resolveStatePath(storePath);
-  const stateCacheKey = `${storePath}:state`;
+  const cache = serializedStoreCache.get(storePath);
 
-  const cachedConfig = serializedStoreCache.get(storePath);
-  const cachedState = serializedStoreCache.get(stateCacheKey);
-
-  const configChanged = cachedConfig !== configJson;
-  const stateChanged = cachedState !== stateJson;
-  const migrating = storesNeedingSplitMigration.has(storePath);
+  const configChanged = cache?.configJson !== configJson;
+  const stateChanged = cache?.stateJson !== stateJson;
+  const migrating = cache?.needsSplitMigration === true;
   let stateNeedsWrite = stateChanged;
 
   if (!stateNeedsWrite) {
@@ -251,10 +258,12 @@ export async function saveCronStore(
     return;
   }
 
+  const updatedCache = getSerializedStoreCache(storePath);
+
   // Write state first so migration never leaves stripped config without runtime state.
   if (stateNeedsWrite || migrating) {
     await atomicWrite(statePath, stateJson);
-    serializedStoreCache.set(stateCacheKey, stateJson);
+    updatedCache.stateJson = stateJson;
   }
 
   if (configChanged || migrating) {
@@ -270,9 +279,9 @@ export async function saveCronStore(
       }
     }
     await atomicWrite(storePath, configJson);
-    serializedStoreCache.set(storePath, configJson);
+    updatedCache.configJson = configJson;
   }
-  storesNeedingSplitMigration.delete(storePath);
+  updatedCache.needsSplitMigration = false;
 }
 
 const RENAME_MAX_RETRIES = 3;
