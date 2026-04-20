@@ -305,10 +305,15 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 # cache key is the command string, which doesn't change when npm's
 # `dist-tags.latest` moves. Bumping the ARG value changes the command string,
 # forcing this layer to rebuild and the agent fleet to pick up the new CLI.
-ARG BLINK_CLI_VERSION=0.7.1
+ARG BLINK_CLI_VERSION=0.7.2
 RUN npm install -g "@blinkdotnew/cli@${BLINK_CLI_VERSION}" clawhub@latest
 ENV NPM_CONFIG_PREFIX=/data/npm-global
-ENV PATH="/data/npm-global/bin:${PATH}"
+# /data/npm-global is the Fly persistent volume — put it AFTER the image-baked
+# paths so agents can still `npm install -g` at runtime without sudo, but the
+# image-pinned CLI version always wins over any stale volume-resident binary.
+# Previously /data/npm-global/bin was first, which meant agents with old CLIs
+# installed on the volume would silently run the wrong version.
+ENV PATH="${PATH}:/data/npm-global/bin"
 
 # gosu = drop privileges cleanly from root → node in the entrypoint.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gosu \
