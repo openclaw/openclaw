@@ -623,6 +623,33 @@ export async function preflightDiscordMessage(
     ? params.data.rawMember.roles
     : [];
   const conversationRuntime = await loadConversationRuntime();
+  // Resolve role-mention override before route call so resolveAgentRoute can use it.
+  // Multiple matched agents → no override (ambiguous); DMs excluded.
+  const mentionedRoleAgentId = (() => {
+    if (isDirectMessage) {
+      return undefined;
+    }
+    const agents = params.cfg.agents?.list;
+    if (!Array.isArray(agents)) {
+      return undefined;
+    }
+    const matched: string[] = [];
+    for (const role of message.mentionedRoles ?? []) {
+      const roleId = (role as { id?: string }).id ?? "";
+      for (const agent of agents) {
+        if (agent.identity?.discordRoleIds?.includes(roleId) && !matched.includes(agent.id)) {
+          matched.push(agent.id);
+        }
+      }
+    }
+    if (matched.length > 1) {
+      logDebug(
+        `[discord-preflight] mentionedRoleAgentId: multiple agents matched (${matched.join(", ")}), skipping override`,
+      );
+      return undefined;
+    }
+    return matched[0];
+  })();
   const route = resolveDiscordConversationRoute({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -635,6 +662,7 @@ export async function preflightDiscordMessage(
       conversationId: messageChannelId,
     }),
     parentConversationId: earlyThreadParentId,
+    mentionedRoleAgentId,
   });
   const bindingConversationId = isDirectMessage
     ? (resolveDiscordConversationIdentity({
@@ -693,6 +721,12 @@ export async function preflightDiscordMessage(
         matchedBy: "binding.channel",
       });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
+  // Suppress self-mention: no override needed when the role mention matches the
+  // agent already routing this channel (avoids spurious isMentionRoute flag).
+  const effectiveMentionedRoleAgentId =
+    mentionedRoleAgentId && mentionedRoleAgentId !== effectiveRoute.agentId
+      ? mentionedRoleAgentId
+      : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
   const bypassMentionRequirement = isBoundThreadSession;
   if (
@@ -1029,7 +1063,8 @@ export async function preflightDiscordMessage(
     ignoreOtherMentions &&
     hasUserOrRoleMention &&
     !wasMentioned &&
-    !mentionDecision.implicitMention
+    !mentionDecision.implicitMention &&
+    !effectiveMentionedRoleAgentId
   ) {
     logDebug(`[discord-preflight] drop: other-mention`);
     logVerbose(
@@ -1079,20 +1114,6 @@ export async function preflightDiscordMessage(
     }
   }
 
-  // Resolve role-mention override: first matching role ID wins, DMs excluded.
-  const mentionedRoleAgentId = (() => {
-    if (isDirectMessage) return undefined;
-    const agents = freshCfg.agents?.list;
-    if (!Array.isArray(agents)) return undefined;
-    for (const role of message.mentionedRoles ?? []) {
-      const roleId = String((role as { id?: unknown }).id ?? "");
-      for (const agent of agents) {
-        if (agent.identity?.discordRoleIds?.includes(roleId)) return agent.id;
-      }
-    }
-    return undefined;
-  })();
-
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
   );
@@ -1128,7 +1149,7 @@ export async function preflightDiscordMessage(
     messageText,
     wasMentioned,
     wasBotMentioned: !isDirectMessage && wasMentioned,
-    mentionedRoleAgentId,
+    mentionedRoleAgentId: effectiveMentionedRoleAgentId,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,

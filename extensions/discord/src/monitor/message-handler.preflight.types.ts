@@ -57,6 +57,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   baseText: string;
   messageText: string;
   wasMentioned: boolean;
+  mentionedRoleAgentId?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;

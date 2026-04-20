@@ -54,7 +54,7 @@ export async function runAgentStep(params: {
   const result = await waitForAgentRunAndReadUpdatedAssistantReply({
     runId: resolvedRunId,
     sessionKey: params.sessionKey,
-    timeoutMs: Math.min(params.timeoutMs, 60_000),
+    timeoutMs: Math.min(params.timeoutMs, 120_000),
   });
   if (result.status === "ok" || result.status === "error") {
     await retireSessionMcpRuntimeForSessionKey({

@@ -233,9 +233,9 @@ export function createSessionsSendTool(opts?: {
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
+          : 75;
       const timeoutMs = timeoutSeconds * 1000;
-      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+      const announceTimeoutMs = timeoutSeconds === 0 ? 60_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const visibilityGuard = await createSessionVisibilityGuard({
