@@ -26,6 +26,8 @@ export type CronEvent = {
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
+  /** Human-readable ISO-8601 representation of `nextRunAtMs`. */
+  nextRunAt?: string;
 } & CronRunTelemetry;
 
 export type Logger = {
