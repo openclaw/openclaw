@@ -33,6 +33,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
@@ -47,6 +48,13 @@ let sessionResetModelRuntimePromise: Promise<
 let stageSandboxMediaRuntimePromise: Promise<
   typeof import("./stage-sandbox-media.runtime.js")
 > | null = null;
+let mediaUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../media-understanding/apply.runtime.js")
+> | null = null;
+let linkUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../link-understanding/apply.runtime.js")
+> | null = null;
+let commandsCoreRuntimePromise: Promise<typeof import("./commands-core.runtime.js")> | null = null;
 
 function loadSessionResetModelRuntime() {
   sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
@@ -56,6 +64,21 @@ function loadSessionResetModelRuntime() {
 function loadStageSandboxMediaRuntime() {
   stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
   return stageSandboxMediaRuntimePromise;
+}
+
+function loadMediaUnderstandingApplyRuntime() {
+  mediaUnderstandingApplyRuntimePromise ??= import("../../media-understanding/apply.runtime.js");
+  return mediaUnderstandingApplyRuntimePromise;
+}
+
+function loadLinkUnderstandingApplyRuntime() {
+  linkUnderstandingApplyRuntimePromise ??= import("../../link-understanding/apply.runtime.js");
+  return linkUnderstandingApplyRuntimePromise;
+}
+
+function loadCommandsCoreRuntime() {
+  commandsCoreRuntimePromise ??= import("./commands-core.runtime.js");
+  return commandsCoreRuntimePromise;
 }
 
 let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
@@ -97,18 +120,6 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   return channel.filter((name) => agentSet.has(name));
 }
 
-function hasInboundMedia(ctx: MsgContext): boolean {
-  return Boolean(
-    ctx.StickerMediaIncluded ||
-    ctx.Sticker ||
-    normalizeOptionalString(ctx.MediaPath) ||
-    normalizeOptionalString(ctx.MediaUrl) ||
-    ctx.MediaPaths?.some((value) => normalizeOptionalString(value)) ||
-    ctx.MediaUrls?.some((value) => normalizeOptionalString(value)) ||
-    ctx.MediaTypes?.length,
-  );
-}
-
 function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
   if (!message) {
@@ -126,7 +137,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   if (!hasInboundMedia(params.ctx)) {
     return false;
   }
-  const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
+  const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
   await applyMediaUnderstanding(params);
   return true;
 }
@@ -138,7 +149,7 @@ async function applyLinkUnderstandingIfNeeded(params: {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
   }
-  const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
+  const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
   await applyLinkUnderstanding(params);
   return true;
 }
@@ -301,22 +312,25 @@ export async function getReplyFromConfig(
     });
   }
 
-  const channelModelOverride = resolveChannelModelOverride({
-    cfg,
-    channel:
-      groupResolution?.channel ??
-      sessionEntry.channel ??
-      sessionEntry.origin?.provider ??
-      (typeof finalized.OriginatingChannel === "string"
-        ? finalized.OriginatingChannel
-        : undefined) ??
-      finalized.Provider,
-    groupId: groupResolution?.id ?? sessionEntry.groupId,
-    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
-    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
-    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-    parentSessionKey: sessionCtx.ParentSessionKey,
-  });
+  const channelModelOverride = cfg.channels?.modelByChannel
+    ? resolveChannelModelOverride({
+        cfg,
+        channel:
+          groupResolution?.channel ??
+          sessionEntry.channel ??
+          sessionEntry.origin?.provider ??
+          (typeof finalized.OriginatingChannel === "string"
+            ? finalized.OriginatingChannel
+            : undefined) ??
+          finalized.Provider,
+        groupId: groupResolution?.id ?? sessionEntry.groupId,
+        groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
+        groupChannel:
+          sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
+        groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+        parentSessionKey: sessionCtx.ParentSessionKey,
+      })
+    : null;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -488,7 +502,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
+    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
     const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,

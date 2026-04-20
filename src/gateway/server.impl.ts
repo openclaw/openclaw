@@ -10,7 +10,9 @@ import {
   getRuntimeConfig,
   isNixMode,
   loadConfig,
+  promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
+  recoverConfigFromLastKnownGood,
   registerConfigWriteListener,
   writeConfigFile,
 } from "../config/config.js";
@@ -18,7 +20,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { logAcceptedEnvOption } from "../infra/env.js";
+import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -208,7 +210,7 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   const minimalTestGateway =
-    process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+    isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -243,6 +245,7 @@ export async function startGatewayServer(
 
   let cfgAtStart: OpenClawConfig;
   let startupInternalWriteHash: string | null = null;
+  let startupLastGoodSnapshot = configSnapshot;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   const authBootstrap = await prepareGatewayStartupConfig({
     configSnapshot,
@@ -294,6 +297,7 @@ export async function startGatewayServer(
   {
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
+    startupLastGoodSnapshot = startupSnapshot;
   }
   const pluginBootstrap = await prepareGatewayPluginBootstrap({
     cfgAtStart,
@@ -517,9 +521,10 @@ export async function startGatewayServer(
       clearSecretsRuntimeSnapshot,
       closeMcpServer: async () => await closeMcpLoopbackServer(),
     });
-  const closeOnStartupFailure = async () => {
-    await runClosePrelude();
-    await createGatewayCloseHandler({
+  const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
+    channelManager;
+  const createCloseHandler = () =>
+    createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       canvasHost,
@@ -547,11 +552,12 @@ export async function startGatewayServer(
       wss,
       httpServer,
       httpServers,
-    })({ reason: "gateway startup failed" });
+    });
+  const closeOnStartupFailure = async () => {
+    await runClosePrelude();
+    await createCloseHandler()({ reason: "gateway startup failed" });
   };
 
-  const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
-    channelManager;
   try {
     const earlyRuntime = await startGatewayEarlyRuntime({
       minimalTestGateway,
@@ -599,7 +605,6 @@ export async function startGatewayServer(
     Object.assign(
       runtimeState,
       startGatewayEventSubscriptions({
-        minimalTestGateway,
         broadcast,
         broadcastToConnIds,
         nodeSendToSession,
@@ -784,6 +789,8 @@ export async function startGatewayServer(
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshot,
+      recoverSnapshot: recoverConfigFromLastKnownGood,
+      promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
       subscribeToWrites: registerConfigWriteListener,
       deps,
       broadcast,
@@ -814,40 +821,15 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       clients,
     });
+    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err) => {
+      log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
+    });
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
   }
 
-  const close = createGatewayCloseHandler({
-    bonjourStop: runtimeState.bonjourStop,
-    tailscaleCleanup: runtimeState.tailscaleCleanup,
-    canvasHost,
-    canvasHostServer,
-    releasePluginRouteRegistry,
-    stopChannel,
-    pluginServices: runtimeState.pluginServices,
-    cron: runtimeState.cronState.cron,
-    heartbeatRunner: runtimeState.heartbeatRunner,
-    updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-    stopTaskRegistryMaintenance,
-    nodePresenceTimers,
-    broadcast,
-    tickInterval: runtimeState.tickInterval,
-    healthInterval: runtimeState.healthInterval,
-    dedupeCleanup: runtimeState.dedupeCleanup,
-    mediaCleanup: runtimeState.mediaCleanup,
-    agentUnsub: runtimeState.agentUnsub,
-    heartbeatUnsub: runtimeState.heartbeatUnsub,
-    transcriptUnsub: runtimeState.transcriptUnsub,
-    lifecycleUnsub: runtimeState.lifecycleUnsub,
-    chatRunState,
-    clients,
-    configReloader: runtimeState.configReloader,
-    wss,
-    httpServer,
-    httpServers,
-  });
+  const close = createCloseHandler();
 
   return {
     close: async (opts) => {

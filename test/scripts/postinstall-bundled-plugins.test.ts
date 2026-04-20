@@ -100,7 +100,7 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("installs bundled plugin deps outside of source checkouts", async () => {
+  it("does not install bundled plugin deps outside of source checkouts by default", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
@@ -119,7 +119,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {
@@ -215,7 +215,7 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("restores only postinstall-generated QA lab compat sidecar after pruning old installs", async () => {
+  it("restores only postinstall-generated QA compat sidecars after pruning old installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
     const currentFile = path.join(packageRoot, "dist", "entry.js");
     const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
@@ -241,11 +241,17 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
+      fs.readFile(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+        "utf8",
+      ),
+    ).resolves.toContain("QA channel implementation is not packaged");
+    await expect(
       fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
-    ).resolves.toContain("QA Lab is not packaged");
+    ).resolves.toContain("QA lab implementation is not packaged");
   });
 
-  it("creates only an empty QA lab compat sidecar for fresh installs", async () => {
+  it("creates only empty QA compat sidecars for fresh installs", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-qa-compat-");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
     await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), "export {};\n");
@@ -257,13 +263,30 @@ describe("bundled plugin postinstall", () => {
         removedFiles: ["dist/entry-old.js"],
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).toEqual(["dist/extensions/qa-lab/runtime-api.js"]);
+    ).toEqual([
+      "dist/extensions/qa-channel/runtime-api.js",
+      "dist/extensions/qa-lab/runtime-api.js",
+    ]);
 
+    await expect(
+      fs.readFile(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+        "utf8",
+      ),
+    ).resolves.toBe(
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
+    );
     await expect(
       fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
     ).resolves.toBe(
-      "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
+      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
     );
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -408,6 +431,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_global: "true",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
@@ -471,7 +495,7 @@ describe("bundled plugin postinstall", () => {
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home" },
+      env: { HOME: "/tmp/home", OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1" },
       extensionsDir,
       packageRoot,
       arch: "arm64",
@@ -591,6 +615,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_global: "true",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
@@ -630,6 +655,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         HOME: "/tmp/home",
       },
       extensionsDir,
@@ -654,6 +680,7 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",

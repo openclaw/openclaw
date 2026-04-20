@@ -10,12 +10,14 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
+import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
+  resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
@@ -111,7 +113,11 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
-import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import {
+  buildBeforeModelResolveAttachments,
+  resolveEffectiveRuntimeModel,
+  resolveHookModelSelection,
+} from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -255,6 +261,10 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const canonicalWorkspace = resolveUserPath(
+        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+      );
+      const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -296,6 +306,7 @@ export async function runEmbeddedPiAgent(
 
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
+        attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
         hookRunner,
@@ -681,7 +692,9 @@ export async function runEmbeddedPiAgent(
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
+            memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
+            isCanonicalWorkspace,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
@@ -1726,7 +1739,7 @@ export async function runEmbeddedPiAgent(
                   source: "planning_only_retry",
                 },
               });
-              void params.onAgentEvent?.({
+              params.onAgentEvent?.({
                 stream: "plan",
                 data: {
                   phase: "update",

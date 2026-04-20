@@ -59,7 +59,10 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = ["dist/extensions/qa-channel/runtime-api.js"] as const;
+const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+] as const;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
@@ -550,6 +553,9 @@ export function collectForbiddenPackedContentErrors(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   const errors: string[] = [];
   for (const packedPath of paths) {
+    if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+      continue;
+    }
     if (
       !FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES.some((prefix) => packedPath.startsWith(prefix))
     ) {

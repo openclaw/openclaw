@@ -5,6 +5,7 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
+import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
@@ -17,6 +18,7 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
@@ -60,6 +62,7 @@ function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): st
 export function resolveExtraActionMediaSourceParamKeys(params: {
   cfg: OpenClawConfig;
   action?: ChannelMessageActionName;
+  args: Record<string, unknown>;
   channel?: string;
   accountId?: string | null;
   sessionKey?: string | null;
@@ -68,6 +71,9 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): string[] {
+  if (!hasPotentialPluginActionParam(params.args)) {
+    return [];
+  }
   return resolveChannelMessageToolMediaSourceParamKeys({
     cfg: params.cfg,
     action: params.action,
@@ -112,28 +118,9 @@ function resolveAttachmentMaxBytes(params: {
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
-  const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
-  const channelCfg = params.cfg.channels?.[params.channel];
-  const channelObj =
-    channelCfg && typeof channelCfg === "object"
-      ? (channelCfg as Record<string, unknown>)
-      : undefined;
-  const channelMediaMax =
-    typeof channelObj?.mediaMaxMb === "number" ? channelObj.mediaMaxMb : undefined;
-  const accountsObj =
-    channelObj?.accounts && typeof channelObj.accounts === "object"
-      ? (channelObj.accounts as Record<string, unknown>)
-      : undefined;
-  const accountCfg = accountId && accountsObj ? accountsObj[accountId] : undefined;
-  const accountMediaMax =
-    accountCfg && typeof accountCfg === "object"
-      ? (accountCfg as Record<string, unknown>).mediaMaxMb
-      : undefined;
   // Priority: account-specific > channel-level > global default
   const limitMb =
-    (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ??
-    channelMediaMax ??
-    params.cfg.agents?.defaults?.mediaMaxMb;
+    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
   return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
 }
 

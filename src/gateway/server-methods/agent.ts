@@ -5,7 +5,10 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
-import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  resolveBareResetBootstrapFileAccess,
+  resolveBareSessionResetPromptState,
+} from "../../auto-reply/reply/session-reset-prompt.js";
 import {
   buildSessionStartupContextPrelude,
   shouldApplyStartupContext,
@@ -29,7 +32,12 @@ import {
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  classifySessionKeyShape,
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -37,7 +45,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { createRunningTaskRun } from "../../tasks/task-executor.js";
+import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -63,7 +71,6 @@ import {
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
-import { emitSessionsChanged } from "./sessions.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -82,6 +89,7 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { emitSessionsChanged } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
@@ -123,7 +131,25 @@ async function runSessionResetFromAgent(params: {
   };
 }
 
-
+function resolveSessionRuntimeWorkspace(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  sessionEntry?: SessionEntry;
+  spawnedBy?: string;
+}): {
+  runtimeWorkspaceDir: string;
+  isCanonicalWorkspace: boolean;
+} {
+  const sessionAgentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const workspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
+    spawnedBy: params.spawnedBy,
+    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
+  });
+  return {
+    runtimeWorkspaceDir: workspaceOverride ?? resolveAgentWorkspaceDir(params.cfg, sessionAgentId),
+    isCanonicalWorkspace: !workspaceOverride,
+  };
+}
 
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
@@ -457,13 +483,54 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (postResetMessage) {
         message = postResetMessage;
       } else {
+        const resetLoadedSession = loadSessionEntry(requestedSessionKey);
+        const resetCfg = resetLoadedSession?.cfg ?? cfg;
+        const resetSessionEntry = resetLoadedSession?.entry;
+        const resetSpawnedBy = canonicalizeSpawnedByForAgent(
+          resetCfg,
+          resolveAgentIdFromSessionKey(requestedSessionKey),
+          resetSessionEntry?.spawnedBy,
+        );
+        const { runtimeWorkspaceDir, isCanonicalWorkspace } = resolveSessionRuntimeWorkspace({
+          cfg: resetCfg,
+          sessionKey: requestedSessionKey,
+          sessionEntry: resetSessionEntry,
+          spawnedBy: resetSpawnedBy,
+        });
+        const resetSessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKey);
+        const resetBaseModelRef = resolveSessionModelRef(
+          resetCfg,
+          resetSessionEntry,
+          resetSessionAgentId,
+        );
+        const resetEffectiveModelRef = {
+          provider: providerOverride || resetBaseModelRef.provider,
+          model: modelOverride || resetBaseModelRef.model,
+        };
+        const bareResetPromptState = await resolveBareSessionResetPromptState({
+          cfg: resetCfg,
+          workspaceDir: runtimeWorkspaceDir,
+          isPrimaryRun:
+            !isSubagentSessionKey(requestedSessionKey) && !isAcpSessionKey(requestedSessionKey),
+          isCanonicalWorkspace,
+          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
+            cfg: resetCfg,
+            agentId: resetSessionAgentId,
+            sessionKey: requestedSessionKey,
+            workspaceDir: runtimeWorkspaceDir,
+            modelProvider: resetEffectiveModelRef.provider,
+            modelId: resetEffectiveModelRef.model,
+          }),
+        });
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
         // Date is embedded in the prompt so agents read the correct daily
         // memory files; skip further timestamp injection to avoid duplication.
-        message = buildBareSessionResetPrompt(cfg);
+        message = bareResetPromptState.prompt;
         skipTimestampInjection = true;
-        shouldPrependStartupContext = shouldApplyStartupContext({ cfg, action: resetReason });
+        shouldPrependStartupContext =
+          bareResetPromptState.shouldPrependStartupContext &&
+          shouldApplyStartupContext({ cfg, action: resetReason });
       }
     }
 
@@ -757,12 +824,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (shouldPrependStartupContext && resolvedSessionKey) {
-      const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
-      const runtimeWorkspaceDir =
-        resolveIngressWorkspaceOverrideForSpawnedRun({
-          spawnedBy: spawnedByValue,
-          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-        }) ?? resolveAgentWorkspaceDir(cfgForAgent ?? cfg, sessionAgentId);
+      const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
+        cfg: cfgForAgent ?? cfg,
+        sessionKey: resolvedSessionKey,
+        sessionEntry,
+        spawnedBy: spawnedByValue,
+      });
       const startupContextPrelude = await buildSessionStartupContextPrelude({
         workspaceDir: runtimeWorkspaceDir,
         cfg: cfgForAgent ?? cfg,

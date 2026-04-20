@@ -1,4 +1,3 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "openclaw/plugin-sdk/agent-runtime";
 import { vi } from "vitest";
 import {
   removeAckReactionAfterReply,
@@ -9,6 +8,9 @@ import {
   resolveInboundMentionDecision,
 } from "../../../src/channels/mention-gating.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+
+const DEFAULT_PROVIDER = "openai";
+const DEFAULT_MODEL = "gpt-5.4";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -40,40 +42,33 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
   return result as T;
 }
 
+function createTaskFlowSessionMock() {
+  return {
+    sessionKey: "agent:main:main",
+    createManaged: vi.fn(),
+    get: vi.fn(),
+    list: vi.fn(() => []),
+    findLatest: vi.fn(),
+    resolve: vi.fn(),
+    getTaskSummary: vi.fn(),
+    setWaiting: vi.fn(),
+    resume: vi.fn(),
+    finish: vi.fn(),
+    fail: vi.fn(),
+    requestCancel: vi.fn(),
+    cancel: vi.fn(),
+    runTask: vi.fn(),
+  };
+}
+
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
-    bindSession: vi.fn(() => ({
-      sessionKey: "agent:main:main",
-      createManaged: vi.fn(),
-      get: vi.fn(),
-      list: vi.fn(() => []),
-      findLatest: vi.fn(),
-      resolve: vi.fn(),
-      getTaskSummary: vi.fn(),
-      setWaiting: vi.fn(),
-      resume: vi.fn(),
-      finish: vi.fn(),
-      fail: vi.fn(),
-      requestCancel: vi.fn(),
-      cancel: vi.fn(),
-      runTask: vi.fn(),
-    })) as unknown as PluginRuntime["taskFlow"]["bindSession"],
-    fromToolContext: vi.fn(() => ({
-      sessionKey: "agent:main:main",
-      createManaged: vi.fn(),
-      get: vi.fn(),
-      list: vi.fn(() => []),
-      findLatest: vi.fn(),
-      resolve: vi.fn(),
-      getTaskSummary: vi.fn(),
-      setWaiting: vi.fn(),
-      resume: vi.fn(),
-      finish: vi.fn(),
-      fail: vi.fn(),
-      requestCancel: vi.fn(),
-      cancel: vi.fn(),
-      runTask: vi.fn(),
-    })) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
+    bindSession: vi.fn(
+      createTaskFlowSessionMock,
+    ) as unknown as PluginRuntime["taskFlow"]["bindSession"],
+    fromToolContext: vi.fn(
+      createTaskFlowSessionMock,
+    ) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
   };
   const base: PluginRuntime = {
     version: "1.0.0-test",
