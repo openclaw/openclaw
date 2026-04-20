@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeModelRef } from "./agents/model-selection-normalize.js";
+import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
+import { parseBrowserMajorVersion } from "./plugin-sdk/browser-host-inspection.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   vi.fn((params: { artifactBasename: string }) => {
@@ -55,53 +58,8 @@ vi.mock("./plugin-sdk/facade-runtime.js", () => ({
 }));
 
 describe("plugin activation boundary", () => {
-  let configHelpersPromise:
-    | Promise<{
-        isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
-      }>
-    | undefined;
-  let modelSelectionPromise:
-    | Promise<{
-        normalizeModelRef: typeof import("./agents/model-selection-normalize.js").normalizeModelRef;
-      }>
-    | undefined;
-  let browserHelpersPromise:
-    | Promise<{
-        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-host-inspection.js").parseBrowserMajorVersion;
-      }>
-    | undefined;
-  function importConfigHelpers() {
-    configHelpersPromise ??= import("./config/channel-configured-shared.js").then(
-      (channelConfigured) => ({
-        isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
-      }),
-    );
-    return configHelpersPromise;
-  }
-
-  function importModelSelection() {
-    modelSelectionPromise ??= import("./agents/model-selection-normalize.js").then((module) => ({
-      normalizeModelRef: module.normalizeModelRef,
-    }));
-    return modelSelectionPromise;
-  }
-
-  function importBrowserHelpers() {
-    browserHelpersPromise ??= import("./plugin-sdk/browser-host-inspection.js").then(
-      (inspection) => ({
-        parseBrowserMajorVersion: inspection.parseBrowserMajorVersion,
-      }),
-    );
-    return browserHelpersPromise;
-  }
-
-  it("keeps generic boundaries cold and loads only narrow browser helper surfaces on use", async () => {
+  it("keeps generic boundaries cold and loads only narrow browser helper surfaces on use", () => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
-
-    const [{ isStaticallyChannelConfigured }, { normalizeModelRef }] = await Promise.all([
-      importConfigHelpers(),
-      importModelSelection(),
-    ]);
 
     expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
       true,
@@ -126,10 +84,8 @@ describe("plugin activation boundary", () => {
     });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
 
-    const browser = await importBrowserHelpers();
-
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-    expect(browser.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
+    expect(parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(
       loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(
         ([params]) => params.artifactBasename,
