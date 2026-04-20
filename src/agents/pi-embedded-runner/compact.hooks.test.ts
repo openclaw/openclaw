@@ -878,3 +878,108 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).toHaveBeenCalled();
   });
 });
+
+describe("compactEmbeddedPiSession harness compaction", () => {
+  beforeEach(() => {
+    resetCompactHooksHarnessMocks();
+    hookRunner.hasHooks.mockReset();
+    hookRunner.hasHooks.mockReturnValue(false);
+    hookRunner.runBeforeCompaction.mockReset();
+    hookRunner.runAfterCompaction.mockReset();
+    resolveContextEngineMock.mockReset();
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true },
+      compact: contextEngineCompactMock,
+    });
+    contextEngineCompactMock.mockReset();
+    mockResolvedModel();
+  });
+
+  it("runs post-compaction side-effects when harness compacts successfully", async () => {
+    const harnessResult = {
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 500,
+        tokensAfter: 200,
+        details: { backend: "codex-app-server" },
+      },
+    };
+    const { maybeCompactAgentHarnessSession } = await import("../harness/selection.js");
+    (maybeCompactAgentHarnessSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      harnessResult,
+    );
+
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+
+    try {
+      const result = await compactEmbeddedPiSession(
+        wrappedCompactionArgs({ config: compactionConfig("await") }),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      // Context engine should NOT have been called — harness owns compaction
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      // Post-compaction side-effects SHOULD have fired so memory flush is not skipped
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({ sessionFile: TEST_SESSION_FILE });
+      expect(sync).toHaveBeenCalledWith({
+        reason: "post-compaction",
+        sessionFiles: [TEST_SESSION_FILE],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("does not run post-compaction side-effects when harness compaction fails", async () => {
+    const harnessResult = { ok: false, compacted: false, reason: "harness error" };
+    const { maybeCompactAgentHarnessSession } = await import("../harness/selection.js");
+    (maybeCompactAgentHarnessSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      harnessResult,
+    );
+
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+
+    try {
+      const result = await compactEmbeddedPiSession(wrappedCompactionArgs());
+      expect(result.ok).toBe(false);
+      expect(result.compacted).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("falls through to normal compaction when harness returns undefined", async () => {
+    const { maybeCompactAgentHarnessSession } = await import("../harness/selection.js");
+    (maybeCompactAgentHarnessSession as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { summary: "engine-summary", tokensAfter: 50 },
+    });
+
+    try {
+      await compactEmbeddedPiSession(wrappedCompactionArgs({ config: compactionConfig("await") }));
+      expect(contextEngineCompactMock).toHaveBeenCalled();
+      expect(listener).toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+});

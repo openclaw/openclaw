@@ -42,6 +42,26 @@ export async function compactEmbeddedPiSession(
 ): Promise<EmbeddedPiCompactResult> {
   const harnessResult = await maybeCompactAgentHarnessSession(params);
   if (harnessResult) {
+    // When a harness owns compaction of its internal thread, OpenClaw still needs
+    // to run its own post-compaction bookkeeping: transcript update + memory index
+    // sync so that memory flush is not skipped and the transcript reflects a
+    // compaction boundary.  Without this, memory flush rides the same dispatch
+    // path and gets short-circuited, and the OpenClaw-side transcript shows no
+    // compaction marker — causing repeated re-triggering every turn.
+    if (harnessResult.ok && harnessResult.compacted && params.sessionFile) {
+      try {
+        await runPostCompactionSideEffects({
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+        });
+      } catch (err) {
+        log.warn("[compaction] harness post-compaction side-effects failed", {
+          sessionKey: params.sessionKey,
+          errorMessage: formatErrorMessage(err as Error),
+        });
+      }
+    }
     return harnessResult;
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
