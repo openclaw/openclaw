@@ -26,7 +26,7 @@ const TtsToolSchema = Type.Object({
  */
 function sanitizeTranscriptForToolContent(text: string): string {
   return text
-    .replace(/^([ \t]*)MEDIA:/gim, "$1\u2060MEDIA:")
+    .replace(/^([^\S\r\n]*)MEDIA:/gim, "$1\u2060MEDIA:")
     .replace(/\[\[/g, "[\u2060[")
     .replace(/^([ \t]*)(`{3,})/gm, (_match, indent: string, fence: string) => {
       const [first = "", ...rest] = fence;
