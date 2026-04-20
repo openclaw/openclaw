@@ -113,7 +113,11 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
-import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import {
+  buildBeforeModelResolveAttachments,
+  resolveEffectiveRuntimeModel,
+  resolveHookModelSelection,
+} from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -300,14 +304,9 @@ export async function runEmbeddedPiAgent(
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
 
-      const attachments = (params.images ?? []).map((img) => ({
-        kind: "image" as const,
-        mimeType: img.mimeType,
-      }));
-
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
         hookRunner,
