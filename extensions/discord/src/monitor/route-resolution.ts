@@ -84,9 +84,15 @@ export function resolveDiscordEffectiveRoute(params: {
   boundSessionKey?: string | null;
   configuredRoute?: { route: ResolvedAgentRoute } | null;
   matchedBy?: ResolvedAgentRoute["matchedBy"];
+  mentionedRoleAgentId?: string;
 }): ResolvedAgentRoute {
   const boundSessionKey = params.boundSessionKey?.trim();
   if (!boundSessionKey) {
+    // Agent role @-mention overrides the configured channel binding.
+    // /focus thread binding (boundSessionKey) still wins over a mention.
+    if (params.mentionedRoleAgentId) {
+      return params.route;
+    }
     return params.configuredRoute?.route ?? params.route;
   }
   return {

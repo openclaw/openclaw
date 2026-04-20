@@ -719,12 +719,15 @@ export async function preflightDiscordMessage(
         boundSessionKey,
         configuredRoute,
         matchedBy: "binding.channel",
+        mentionedRoleAgentId,
       });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
-  // Suppress self-mention: no override needed when the role mention matches the
-  // agent already routing this channel (avoids spurious isMentionRoute flag).
+  // Suppress self-mention: compare against the channel's natural/pre-mention
+  // agent (configuredRoute), not effectiveRoute which already reflects the
+  // mention override. Keeps cross-channel mentions intact.
+  const naturalChannelAgentId = configuredRoute?.route?.agentId;
   const effectiveMentionedRoleAgentId =
-    mentionedRoleAgentId && mentionedRoleAgentId !== effectiveRoute.agentId
+    mentionedRoleAgentId && mentionedRoleAgentId !== naturalChannelAgentId
       ? mentionedRoleAgentId
       : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
