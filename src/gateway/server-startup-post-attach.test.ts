@@ -106,7 +106,7 @@ vi.mock("./server-tailscale.js", () => ({
 }));
 
 const { startGatewayPostAttachRuntime } = await import("./server-startup-post-attach.js");
-const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
+const { STARTUP_UNAVAILABLE_GATEWAY_METHODS, createStartupGateBarrier } =
   await import("./server-startup-unavailable-methods.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
@@ -130,13 +130,18 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const startupGateBarrier = createStartupGateBarrier();
+
+    expect(startupGateBarrier.isOpen()).toBe(false);
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
       unavailableGatewayMethods,
+      startupGateBarrier,
     });
 
     expect([...unavailableGatewayMethods]).toEqual([]);
+    expect(startupGateBarrier.isOpen()).toBe(true);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
@@ -153,11 +158,13 @@ describe("startGatewayPostAttachRuntime", () => {
       return await sidecarsReady;
     });
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+    const startupGateBarrier = createStartupGateBarrier();
 
     const startup = startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
+        startupGateBarrier,
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars }),
     );
@@ -170,12 +177,14 @@ describe("startGatewayPostAttachRuntime", () => {
     );
 
     expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
+    expect(startupGateBarrier.isOpen()).toBe(false);
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
 
     resumeSidecars();
     await startup;
 
     expect([...unavailableGatewayMethods]).toEqual([]);
+    expect(startupGateBarrier.isOpen()).toBe(true);
     expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
   });
 });
@@ -234,6 +243,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       error: vi.fn(),
     },
     unavailableGatewayMethods: new Set<string>(),
+    startupGateBarrier: createStartupGateBarrier(),
     ...overrides,
   };
 }

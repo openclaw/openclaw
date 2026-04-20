@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
+import { createStartupGateBarrier } from "./server-startup-unavailable-methods.js";
 
 describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
@@ -63,6 +64,7 @@ describe("createGatewayRequestContext", () => {
       wizardRunner: vi.fn(async () => undefined),
       broadcastVoiceWakeChanged: vi.fn(),
       unavailableGatewayMethods: new Set(),
+      startupGateBarrier: createStartupGateBarrier(),
     });
 
     expect(context.cron).toBe(cronA);

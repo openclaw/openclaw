@@ -13,6 +13,7 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { StartupGateBarrier } from "../server-startup-unavailable-methods.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -105,6 +106,7 @@ export type GatewayRequestContext = {
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
   unavailableGatewayMethods?: ReadonlySet<string>;
+  startupGateBarrier?: StartupGateBarrier;
 };
 
 export type GatewayRequestOptions = {
