@@ -4,6 +4,32 @@
 # Env:   LINEAR_ISSUE_ID (optional)
 set -euo pipefail
 
+# ── Dispatch backend registry ────────────────────────────────────────────────
+# Keyed by PIPELINE_DISPATCH_BACKEND env var. "acp" is the default.
+declare -A DISPATCH_BACKENDS=(
+  ["acp"]="dispatch_acp.mjs"
+  ["run-codex"]=""          # legacy: fall back to old codex exec path
+  ["claude-code"]="dispatch_claude.mjs"
+)
+declare -A DISPATCH_BACKEND_ENV=(
+  ["acp"]="OPENCLAW_GATEWAY_TOKEN GITHUB_TOKEN LINEAR_API_KEY"
+  ["run-codex"]="GITHUB_TOKEN LINEAR_API_KEY OPENAI_API_KEY"
+  ["claude-code"]="ANTHROPIC_API_KEY CLAUDE_CODE_API_KEY GITHUB_TOKEN LINEAR_API_KEY"
+)
+
+# Validate backend at startup — fail loudly on unknown value
+BACKEND_RAW="${PIPELINE_DISPATCH_BACKEND:-}"
+if [[ -z "$BACKEND_RAW" ]]; then
+  PIPELINE_DISPATCH_BACKEND="acp"
+  BACKEND_SOURCE="default"
+elif [[ "${DISPATCH_BACKENDS[$BACKEND_RAW]+_}" ]]; then
+  PIPELINE_DISPATCH_BACKEND="$BACKEND_RAW"
+  BACKEND_SOURCE="env"
+else
+  echo "[eng-codex] ERROR: unknown PIPELINE_DISPATCH_BACKEND='${BACKEND_RAW}'. Valid: ${!DISPATCH_BACKENDS[*]}" >&2
+  exit 1
+fi
+
 # ── Args ────────────────────────────────────────────────────────────────────
 TASK="${1:?Usage: run_codex.sh <task> <owner/repo> [task_id] [complexity]}"
 OWNER_REPO="${2:?OWNER_REPO is required (e.g. sebbyyyywebbyyy/my-app)}"
@@ -110,6 +136,9 @@ except: print('error')
 linear_add_comment() {
   local issue_id="$1" body="$2"
   [[ -z "$LINEAR_API_KEY" || -z "$issue_id" ]] && return 0
+  # Strip sentinel lines before posting to Linear
+  local clean_body
+  clean_body=$(echo "$body" | grep -v '^@@DISPATCH_RESULT@@' || true)
   local payload
   payload=$(python3 -c "
 import json, sys
@@ -118,7 +147,7 @@ query = 'mutation { commentCreate(input: { issueId: \"%s\", body: %s }) { succes
     issue_id, json.dumps(body)
 )
 print(json.dumps({'query': query}))
-" "$issue_id" "$body")
+" "$issue_id" "$clean_body")
   curl -s -X POST https://api.linear.app/graphql \
     -H "Authorization: ${LINEAR_API_KEY}" \
     -H "Content-Type: application/json" \
@@ -151,8 +180,115 @@ except:
 " 2>/dev/null
 }
 
+# ── Sentinel result parser ────────────────────────────────────────────────────
+# Reverse-scans output for the LAST @@DISPATCH_RESULT@@ line, returns JSON.
+_parse_dispatch_result() {
+  local output="$1"
+  echo "$output" | grep '^@@DISPATCH_RESULT@@ ' | tail -1 | sed 's/^@@DISPATCH_RESULT@@ //' || echo ""
+}
+
+# ── Phase executor ────────────────────────────────────────────────────────────
+# Backend-agnostic supervised runner. Replaces run_codex_phase.
+DISPATCH_RUN_ID=""
+
+run_dispatch_supervised() {
+  local phase="$1"
+  local prompt="$2"
+  local phase_timeout="${3:-600}"
+  local phase_log="${WORKTREE}/.eng/phase-${phase}.log"
+  local dispatcher_script="${SKILL_DIR}/${DISPATCH_BACKENDS[$PIPELINE_DISPATCH_BACKEND]:-}"
+
+  log "INFO" "Running phase: ${phase} | backend: ${PIPELINE_DISPATCH_BACKEND} (${BACKEND_SOURCE}) | timeout: ${phase_timeout}s"
+
+  # ── Legacy codex exec path ──────────────────────────────────────────────────
+  if [[ "$PIPELINE_DISPATCH_BACKEND" == "run-codex" ]]; then
+    (
+      cd "${WORKTREE}"
+      timeout "${phase_timeout}" codex exec -s danger-full-access --ephemeral "${prompt}" 2>&1 \
+        | tee -a "${phase_log}"
+    )
+    local exit_code="${PIPESTATUS[0]}"
+    if [[ "${exit_code}" -ne 0 && -f "${phase_log}" ]]; then
+      local repeated_error
+      repeated_error=$(tail -30 "${phase_log}" | sort | uniq -c | sort -rn | \
+        awk '$1 >= 5 && /exit code [1-9]|command not found|permission denied|No such file|STUCK/ {print; exit}' || true)
+      if [[ -n "$repeated_error" ]]; then
+        log "ERROR" "DOOM-LOOP detected in phase ${phase}: ${repeated_error}"
+        echo "STUCK: Doom-loop detected after 5+ repeated shell failures. Stopping." >&2
+        return 2
+      fi
+    fi
+    return "${exit_code}"
+  fi
+
+  # ── Dispatcher path (acp, claude-code, ...) ─────────────────────────────────
+  if [[ -z "$dispatcher_script" || ! -f "$dispatcher_script" ]]; then
+    log "ERROR" "Dispatcher script not found for backend '${PIPELINE_DISPATCH_BACKEND}': ${dispatcher_script}"
+    return 1
+  fi
+
+  # Build stdin JSON — prompt passed via stdin, not argv, to survive large prompts and metacharacters
+  local inner_timeout
+  # Inner budget: 90% of outer so dispatcher can exit cleanly before outer SIGKILL
+  inner_timeout=$(python3 -c "import math; print(int(math.floor(${phase_timeout} * 0.9)))")
+  local stdin_json
+  stdin_json=$(python3 -c "
+import json, sys
+print(json.dumps({
+  'schema': 1,
+  'prompt': sys.argv[1],
+  'agentId': 'eng',
+  'timeoutSec': int(sys.argv[2]),
+}))
+" "$prompt" "$inner_timeout")
+
+  local output exit_code
+  output=$(echo "$stdin_json" | timeout "${phase_timeout}" node "${dispatcher_script}" 2>&1 | tee -a "${phase_log}")
+  exit_code="${PIPESTATUS[1]}"
+
+  # Extract sentinel result
+  local result_json
+  result_json=$(_parse_dispatch_result "$output")
+
+  # Capture runId for Linear correlation
+  if [[ -n "$result_json" ]]; then
+    local run_id_from_result
+    run_id_from_result=$(echo "$result_json" | python3 -c "
+import json,sys
+try: print(json.loads(sys.stdin.read()).get('runId',''))
+except: print('')
+" 2>/dev/null || true)
+    [[ -n "$run_id_from_result" ]] && DISPATCH_RUN_ID="$run_id_from_result"
+  fi
+
+  # Doom-loop detection on non-zero exit
+  if [[ "${exit_code}" -ne 0 && -f "${phase_log}" ]]; then
+    local error_code
+    error_code=$(echo "$result_json" | python3 -c "
+import json,sys
+try: print(json.loads(sys.stdin.read()).get('errorCode',''))
+except: print('')
+" 2>/dev/null || true)
+    if [[ "$error_code" == "timeout" ]]; then
+      log "ERROR" "Phase ${phase} timed out (backend: ${PIPELINE_DISPATCH_BACKEND})"
+      return 2
+    fi
+    local repeated_error
+    repeated_error=$(tail -30 "${phase_log}" | grep -v '^@@DISPATCH_RESULT@@' | sort | uniq -c | sort -rn | \
+      awk '$1 >= 5 && /exit code [1-9]|command not found|permission denied|No such file|STUCK/ {print; exit}' || true)
+    if [[ -n "$repeated_error" ]]; then
+      log "ERROR" "DOOM-LOOP detected in phase ${phase}: ${repeated_error}"
+      return 2
+    fi
+  fi
+
+  return "${exit_code}"
+}
+
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 log "INFO" "Starting task: ${TASK} | repo: ${OWNER_REPO} | complexity: ${COMPLEXITY}"
+log "INFO" "dispatch backend: ${PIPELINE_DISPATCH_BACKEND} (source: ${BACKEND_SOURCE})"
+
 bash "${SKILL_DIR}/preflight.sh" || fail "Pre-flight checks failed"
 
 # ── Fetch Linear comments ─────────────────────────────────────────────────────
@@ -190,10 +326,10 @@ log "INFO" "Worktree created: ${WORKTREE} (branch: ${BRANCH})"
 # Create .eng dirs inside worktree
 mkdir -p "${WORKTREE}/.eng"
 
-# Export for Codex subprocess inheritance
+# Export for subprocess inheritance
 export LINEAR_API_KEY LINEAR_ISSUE_ID
 
-# Write Linear question helper so Codex can post blockers/questions to the ticket
+# Write Linear question helper so agent can post blockers/questions to the ticket
 if [[ -n "$LINEAR_ISSUE_ID" && -n "${LINEAR_API_KEY:-}" ]]; then
   cat > "${WORKTREE}/.eng/linear-ask.sh" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -226,39 +362,9 @@ fi
 # ── Phase execution ───────────────────────────────────────────────────────────
 COMMIT_HASH=""
 
-run_codex_phase() {
-  local phase="$1"
-  local prompt="$2"
-  local phase_timeout="${3:-600}"
-  local phase_log="${WORKTREE}/.eng/phase-${phase}.log"
-
-  log "INFO" "Running phase: ${phase} (timeout: ${phase_timeout}s)"
-  (
-    cd "${WORKTREE}"
-    timeout "${phase_timeout}" codex exec -s danger-full-access --ephemeral "${prompt}" 2>&1 \
-      | tee -a "${phase_log}"
-  )
-  local exit_code="${PIPESTATUS[0]}"
-
-  # Doom-loop detection: only run if codex exited non-zero
-  # Matches actual shell failures only — NOT legitimate code strings in diffs
-  if [[ "${exit_code}" -ne 0 && -f "${phase_log}" ]]; then
-    local repeated_error
-    repeated_error=$(tail -30 "${phase_log}" | sort | uniq -c | sort -rn | \
-      awk '$1 >= 5 && /exit code [1-9]|command not found|permission denied|No such file|STUCK/ {print; exit}' || true)
-    if [[ -n "$repeated_error" ]]; then
-      log "ERROR" "DOOM-LOOP detected in phase ${phase}: ${repeated_error}"
-      echo "STUCK: Doom-loop detected after 5+ repeated shell failures. Stopping." >&2
-      return 2
-    fi
-  fi
-
-  return "${exit_code}"
-}
-
 if [[ "$COMPLEXITY" == "trivial" ]]; then
   # ── Trivial: single invocation ────────────────────────────────────────────
-  run_codex_phase "implement" \
+  run_dispatch_supervised "implement" \
     "Task: ${TASK}
 ${COMMENTS_BLOCK}
 Repository: ${OWNER_REPO}
@@ -270,13 +376,13 @@ Then implement the task in this git worktree, run tests/checks, and commit.
 Never push. Write a clear commit message.
 If you are blocked or need clarification, post a question: bash .eng/linear-ask.sh \"Your question\"" \
     600 \
-    || fail "Codex invocation failed"
+    || fail "Dispatch failed"
 
 else
   # ── Standard/Complex: three-phase ─────────────────────────────────────────
 
   # Phase 1: Research (8 min)
-  run_codex_phase "research" \
+  run_dispatch_supervised "research" \
     "Task: ${TASK}
 ${COMMENTS_BLOCK}
 Repository: ${OWNER_REPO}
@@ -298,7 +404,7 @@ If you are blocked or need clarification, post a question: bash .eng/linear-ask.
     || log "WARN" "Research phase exited non-zero — proceeding anyway"
 
   # Phase 2: Plan (5 min)
-  run_codex_phase "plan" \
+  run_dispatch_supervised "plan" \
     "Task: ${TASK}
 
 Repository: ${OWNER_REPO}
@@ -316,7 +422,7 @@ Include:
     || log "WARN" "Plan phase exited non-zero — proceeding anyway"
 
   # Phase 3: Implement (20 min)
-  run_codex_phase "implement" \
+  run_dispatch_supervised "implement" \
     "Task: ${TASK}
 
 Repository: ${OWNER_REPO}
@@ -358,7 +464,7 @@ if [[ -n "$COMMIT_HASH" && -f "$REVIEWER" ]]; then
       log "WARN" "Review failed on attempt ${attempt}"
       REVIEW_PASSED=false
       if [[ "$attempt" -lt 2 ]]; then
-        # Fix pass: read review issues and run a targeted Codex fix
+        # Fix pass: read review issues and run a targeted dispatch fix
         REVIEW_JSON="${REVIEWS_DIR}/${TASK_ID}-attempt${attempt}.json"
         if [[ -f "$REVIEW_JSON" ]]; then
           ISSUES=$(python3 -c "
@@ -368,7 +474,7 @@ issues = d.get('issues', [])
 lines = [f\"- {i.get('severity','?').upper()} in {i.get('file','?')}:{i.get('line','?')}: {i.get('description','')} — Suggestion: {i.get('suggestion','')}\" for i in issues]
 print('\n'.join(lines))
 " 2>/dev/null || echo "See review file for details")
-          run_codex_phase "fix-${attempt}" \
+          run_dispatch_supervised "fix-${attempt}" \
             "The code review found the following issues that must be fixed:
 ${ISSUES}
 
@@ -446,8 +552,13 @@ fi
 
 # ── Linear update ─────────────────────────────────────────────────────────────
 if [[ -n "$LINEAR_ISSUE_ID" ]]; then
+  # Include runId for dispatch correlation if we captured one
+  RUN_ID_LINE=""
+  [[ -n "$DISPATCH_RUN_ID" ]] && RUN_ID_LINE="
+RunId: \`${DISPATCH_RUN_ID}\`"
+
   if [[ -n "$COMMIT_HASH" ]]; then
-    _COMMENT="eng-codex completed — review: ${REVIEW_STATUS}
+    _COMMENT="eng-codex completed — review: ${REVIEW_STATUS}${RUN_ID_LINE}
 
 Commit: \`${COMMIT_HASH}\`
 Repo: \`${OWNER_REPO}\`
@@ -481,4 +592,5 @@ echo "│  Repo:    ${OWNER_REPO}"
 echo "│  Commit:  ${COMMIT_HASH:-none}"
 echo "│  Review:  ${REVIEW_STATUS}"
 [[ -n "$LINEAR_ISSUE_ID" ]] && echo "│  Linear:  ${LINEAR_ISSUE_ID}"
+[[ -n "$DISPATCH_RUN_ID" ]] && echo "│  RunId:   ${DISPATCH_RUN_ID}"
 echo "└────────────────────────────────────────────────────────────"
