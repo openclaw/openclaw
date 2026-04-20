@@ -24,7 +24,7 @@ function applyTokenHubProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     ...models[TOKENHUB_DEFAULT_MODEL_REF],
     // Provider-specific alias to keep alias resolution deterministic when
     // both Tencent providers are enabled (see buildModelAliasIndex).
-    alias: models[TOKENHUB_DEFAULT_MODEL_REF]?.alias ?? "HY3 Preview (TokenHub)",
+    alias: models[TOKENHUB_DEFAULT_MODEL_REF]?.alias ?? "Hy3 preview (TokenHub)",
   };
 
   return applyProviderConfigWithModelCatalog(cfg, {
@@ -53,7 +53,7 @@ function applyTokenPlanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     ...models[TOKEN_PLAN_DEFAULT_MODEL_REF],
     // Provider-specific alias to keep alias resolution deterministic when
     // both Tencent providers are enabled (see buildModelAliasIndex).
-    alias: models[TOKEN_PLAN_DEFAULT_MODEL_REF]?.alias ?? "HY3 Preview (Token Plan)",
+    alias: models[TOKEN_PLAN_DEFAULT_MODEL_REF]?.alias ?? "Hy3 preview (Token Plan)",
   };
 
   return applyProviderConfigWithModelCatalog(cfg, {
