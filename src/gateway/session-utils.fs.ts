@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions/main-session.runtime.js";
+import { loadConfig } from "../config/config.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../config/sessions/main-session.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -153,17 +158,26 @@ function resolveMainSessionTranscriptFiles(
     return null;
   }
   // Activate the chained read only for the configured main session key, not a hardcoded
-  // literal. `resolveMainSessionKeyFromConfig` returns "global", "agent:<default>:<mainKey>",
-  // etc., depending on `session.scope` / `session.mainKey` / `agents.default`. For any
-  // other session (isolated, subagent, heartbeat, explicit agent session) the legacy
-  // single-file path is correct.
-  let configuredMainKey: string;
+  // literal. `resolveMainSessionKey` returns "global", "agent:<default>:<mainKey>", etc.,
+  // depending on `session.scope` / `session.mainKey` / `agents.default`. Stores can also
+  // carry legacy main-key aliases (e.g. `agent:main:main` when the configured default
+  // agent is "ops"), so we canonicalize `context.key` via `canonicalizeMainSessionAlias`
+  // before comparing. For any non-main session (isolated, subagent, heartbeat, explicit
+  // agent session) the canonicalizer returns the raw key unchanged and the comparison
+  // fails, so the legacy single-file path is correct.
+  let cfg;
   try {
-    configuredMainKey = resolveMainSessionKeyFromConfig();
+    cfg = loadConfig();
   } catch {
     return null;
   }
-  if (context.key !== configuredMainKey) {
+  const canonicalMainKey = resolveMainSessionKey(cfg);
+  const canonicalContextKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolveDefaultAgentId(cfg),
+    sessionKey: context.key,
+  });
+  if (canonicalContextKey !== canonicalMainKey) {
     return null;
   }
   const entry = context.entry as Record<string, unknown> | undefined;
