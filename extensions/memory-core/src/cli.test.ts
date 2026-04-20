@@ -493,6 +493,42 @@ describe("memory cli", () => {
     );
   });
 
+  it("shows dreaming off when global dreaming is disabled even if per-phase toggles are present", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: true,
+            config: {
+              dreaming: {
+                enabled: false,
+                frequency: "15 2 * * *",
+                phases: {
+                  light: { enabled: true },
+                  deep: { enabled: true },
+                  rem: { enabled: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Dreaming: 15 2 * * *"));
+  });
+
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
