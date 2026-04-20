@@ -2,6 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const loadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const createLazyFacadeValue = vi.hoisted(() => {
+  return <TFacade extends object, K extends keyof TFacade>(
+    load: () => TFacade,
+    key: K,
+  ): TFacade[K] =>
+    ((...args: unknown[]) => {
+      const value = load()[key];
+      if (typeof value !== "function") {
+        return value;
+      }
+      return (value as (...runtimeArgs: unknown[]) => unknown)(...args);
+    }) as TFacade[K];
+});
 const createLazyFacadeObjectValue = vi.hoisted(() => {
   return <T extends object>(load: () => T): T =>
     new Proxy(
@@ -25,6 +38,7 @@ const createLazyFacadeValue = vi.hoisted(() => {
 });
 
 vi.mock("../plugin-sdk/facade-runtime.js", () => ({
+  createLazyFacadeValue,
   createLazyFacadeObjectValue,
   createLazyFacadeValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
