@@ -666,10 +666,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // groups don't drop valid @mentions of the bot.
     const nativeBotMention =
       isGroup &&
-      doesSignalMentionTargetBot(dataMessage.mentions, {
-        phone: deps.account,
-        uuid: deps.accountUuid,
-      });
+      doesSignalMentionTargetBot(
+        dataMessage.mentions,
+        { phone: deps.account, uuid: deps.accountUuid },
+        rawMessage,
+      );
     const wasMentioned =
       isGroup && (nativeBotMention || matchesMentionPatterns(messageText, mentionRegexes));
     const requireMention =

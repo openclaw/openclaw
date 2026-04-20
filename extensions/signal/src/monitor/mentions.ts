@@ -29,6 +29,7 @@ function clampBounds(start: number, length: number, textLength: number) {
 export function doesSignalMentionTargetBot(
   mentions: SignalMention[] | null | undefined,
   botAccount: { phone?: string | null; uuid?: string | null },
+  message?: string | null,
 ): boolean {
   if (!mentions?.length) {
     return false;
@@ -39,8 +40,16 @@ export function doesSignalMentionTargetBot(
     return false;
   }
   for (const mention of mentions) {
-    if (!mention) {
+    if (!isValidMention(mention)) {
       continue;
+    }
+    // Require the mention span to reference a real placeholder in the message
+    // text, matching the same structural check renderSignalMentions uses.
+    if (message != null) {
+      const { start, end } = clampBounds(mention.start!, mention.length!, message.length);
+      if (start >= end || !message.slice(start, end).includes(OBJECT_REPLACEMENT)) {
+        continue;
+      }
     }
     const mentionUuid = mention.uuid?.trim();
     if (botUuid && mentionUuid && mentionUuid === botUuid) {

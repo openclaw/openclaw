@@ -368,6 +368,8 @@ describe("renderSignalMentions", () => {
 });
 
 describe("doesSignalMentionTargetBot", () => {
+  const PH = "\uFFFC";
+
   it("returns false when no mentions are supplied", () => {
     expect(doesSignalMentionTargetBot(undefined, { uuid: "u" })).toBe(false);
     expect(doesSignalMentionTargetBot(null, { uuid: "u" })).toBe(false);
@@ -375,30 +377,74 @@ describe("doesSignalMentionTargetBot", () => {
   });
 
   it("returns false when the bot has no identity", () => {
-    expect(doesSignalMentionTargetBot([{ uuid: "u" }], {})).toBe(false);
-    expect(doesSignalMentionTargetBot([{ uuid: "u" }], { uuid: "", phone: "" })).toBe(false);
+    expect(doesSignalMentionTargetBot([{ uuid: "u", start: 0, length: 1 }], {}, `${PH} hi`)).toBe(
+      false,
+    );
+    expect(
+      doesSignalMentionTargetBot(
+        [{ uuid: "u", start: 0, length: 1 }],
+        { uuid: "", phone: "" },
+        `${PH} hi`,
+      ),
+    ).toBe(false);
   });
 
-  it("matches by bot uuid", () => {
-    expect(doesSignalMentionTargetBot([{ uuid: "bot-u" }], { uuid: "bot-u" })).toBe(true);
-    expect(doesSignalMentionTargetBot([{ uuid: "other" }], { uuid: "bot-u" })).toBe(false);
+  it("matches by bot uuid when message contains placeholder", () => {
+    const msg = `${PH} ping`;
+    expect(
+      doesSignalMentionTargetBot([{ uuid: "bot-u", start: 0, length: 1 }], { uuid: "bot-u" }, msg),
+    ).toBe(true);
+    expect(
+      doesSignalMentionTargetBot([{ uuid: "other", start: 0, length: 1 }], { uuid: "bot-u" }, msg),
+    ).toBe(false);
   });
 
   it("matches by bot phone with E.164 normalization", () => {
+    const msg = `${PH} ping`;
     expect(
-      doesSignalMentionTargetBot([{ number: "15551234567" }], { phone: "+1 (555) 123-4567" }),
+      doesSignalMentionTargetBot(
+        [{ number: "15551234567", start: 0, length: 1 }],
+        { phone: "+1 (555) 123-4567" },
+        msg,
+      ),
     ).toBe(true);
     expect(
-      doesSignalMentionTargetBot([{ number: "+15550009999" }], { phone: "+15551234567" }),
+      doesSignalMentionTargetBot(
+        [{ number: "+15550009999", start: 0, length: 1 }],
+        { phone: "+15551234567" },
+        msg,
+      ),
     ).toBe(false);
   });
 
   it("matches when any of several mentions targets the bot", () => {
+    const msg = `${PH} ${PH} ${PH}`;
     expect(
       doesSignalMentionTargetBot(
-        [{ uuid: "someone" }, { uuid: "bot-u" }, { number: "+15550001111" }],
+        [
+          { uuid: "someone", start: 0, length: 1 },
+          { uuid: "bot-u", start: 2, length: 1 },
+          { number: "+15550001111", start: 4, length: 1 },
+        ],
         { uuid: "bot-u" },
+        msg,
       ),
     ).toBe(true);
+  });
+
+  it("rejects forged mentions whose text span has no placeholder", () => {
+    // Mention metadata claims bot uuid at offset 0, but message has plain text
+    expect(
+      doesSignalMentionTargetBot(
+        [{ uuid: "bot-u", start: 0, length: 5 }],
+        { uuid: "bot-u" },
+        "hello world",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects mentions with missing start/length", () => {
+    const msg = `${PH} ping`;
+    expect(doesSignalMentionTargetBot([{ uuid: "bot-u" }], { uuid: "bot-u" }, msg)).toBe(false);
   });
 });
