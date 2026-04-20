@@ -142,11 +142,7 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  const hasMessageTargetContext =
-    deliveryPlan.mode !== "webhook" &&
-    (deliveryPlan.to !== undefined ||
-      deliveryPlan.threadId !== undefined ||
-      deliveryPlan.accountId !== undefined);
+  const hasMessageTargetContext = deliveryPlan.mode !== "webhook" && deliveryPlan.to !== undefined;
   if (!deliveryPlan.requested && !hasMessageTargetContext) {
     const resolvedDelivery = {
       ok: false as const,
