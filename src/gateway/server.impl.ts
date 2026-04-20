@@ -830,6 +830,7 @@ export async function startGatewayServer(
         onSidecarsReady: () => {
           startupSidecarsReady = true;
         },
+        startupTrace,
       }),
     ));
     startupTrace.mark("ready");

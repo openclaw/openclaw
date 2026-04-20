@@ -102,6 +102,28 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("does not cache startup-pending readiness", () => {
+    withReadinessClock(() => {
+      let startupPending = true;
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getStartupPending: () => startupPending,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["startup-sidecars"],
+        uptimeMs: 300_000,
+      });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+      startupPending = false;
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
