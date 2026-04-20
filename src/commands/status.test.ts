@@ -1270,28 +1270,28 @@ describe("statusCommand", () => {
   it("prints safe gateway pairing recovery guidance", async () => {
     expect(
       resolvePairingRecoveryContext({
-        error: "connect failed: pairing required (requestId: req-123)",
-        closeReason: "pairing required (requestId: req-123)",
+        error: "scope upgrade pending approval (requestId: req-123)",
+        closeReason: "pairing required",
       }),
-    ).toEqual({ requestId: "req-123", reason: null, remediationHint: null });
+    ).toEqual({ requestId: "req-123", reason: "scope-upgrade", remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         error: "connect failed: pairing required",
         closeReason: "connect failed",
       }),
-    ).toEqual({ requestId: null, reason: null, remediationHint: null });
+    ).toEqual({ requestId: null, reason: "not-paired", remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
         closeReason: "pairing required (requestId: req-123;rm -rf /)",
       }),
-    ).toEqual({ requestId: null, reason: null, remediationHint: null });
+    ).toEqual({ requestId: null, reason: "not-paired", remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         error: "connect failed: pairing required",
         closeReason: "pairing required (requestId: req-close-456)",
       }),
-    ).toEqual({ requestId: "req-close-456", reason: null, remediationHint: null });
+    ).toEqual({ requestId: "req-close-456", reason: "not-paired", remediationHint: null });
     expect(
       resolvePairingRecoveryContext({
         details: {
@@ -1326,8 +1326,7 @@ describe("statusCommand", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
     });
     mockProbeGatewayResult({
-      error:
-        "connect failed: pairing required: device is asking for more scopes than currently approved",
+      error: "scope upgrade pending approval (requestId: req-123)",
       connectErrorDetails: {
         code: "PAIRING_REQUIRED",
         reason: "scope-upgrade",
@@ -1336,8 +1335,7 @@ describe("statusCommand", () => {
       },
       close: {
         code: 1008,
-        reason:
-          "pairing required: device is asking for more scopes than currently approved (requestId: req-123)",
+        reason: "pairing required",
       },
     });
     const joined = await runStatusAndGetJoinedLogs();

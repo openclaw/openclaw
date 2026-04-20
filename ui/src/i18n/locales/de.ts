@@ -247,6 +247,15 @@ export const de: TranslationMap = {
     },
     pairing: {
       hint: "Dieses Gerät benötigt eine Pairing-Freigabe vom Gateway-Host.",
+      scopeUpgradeTitle: "Umfangserweiterung wartet auf Genehmigung.",
+      scopeUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber der angeforderte erweiterte Umfang wartet auf Genehmigung.",
+      roleUpgradeTitle: "Rollenänderung wartet auf Genehmigung.",
+      roleUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber die angeforderte Rollenänderung wartet auf Genehmigung.",
+      metadataUpgradeTitle: "Änderung der Gerätemetadaten wartet auf Genehmigung.",
+      metadataUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber die Änderung der Metadaten wartet auf Genehmigung.",
       mobileHint:
         "Auf dem Mobilgerät? Kopieren Sie die vollständige URL (einschließlich #token=...) von openclaw dashboard --no-open auf Ihrem Desktop.",
       docsTitle: "Gerätekopplungs-Dokumentation (öffnet sich in neuem Tab)",

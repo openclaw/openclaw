@@ -245,6 +245,15 @@ export const fr: TranslationMap = {
     },
     pairing: {
       hint: "Cet appareil nécessite une approbation d’appairage de l’hôte Gateway.",
+      scopeUpgradeTitle: "Mise à niveau de portée en attente d’approbation.",
+      scopeUpgradeSummary:
+        "Cet appareil est déjà appairé, mais l’élargissement de portée demandé est en attente d’approbation.",
+      roleUpgradeTitle: "Mise à niveau du rôle en attente d’approbation.",
+      roleUpgradeSummary:
+        "Cet appareil est déjà appairé, mais le changement de rôle demandé est en attente d’approbation.",
+      metadataUpgradeTitle: "Modification des métadonnées de l’appareil en attente d’approbation.",
+      metadataUpgradeSummary:
+        "Cet appareil est déjà appairé, mais la modification des métadonnées est en attente d’approbation.",
       mobileHint:
         "Sur mobile ? Copiez l’URL complète (y compris #token=...) depuis openclaw dashboard --no-open sur votre ordinateur.",
       docsTitle: "Documentation sur l’appairage des appareils (s’ouvre dans un nouvel onglet)",

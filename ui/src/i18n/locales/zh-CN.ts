@@ -239,6 +239,12 @@ export const zh_CN: TranslationMap = {
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",
+      scopeUpgradeTitle: "范围升级等待批准。",
+      scopeUpgradeSummary: "此设备已配对，但请求的更广范围仍在等待批准。",
+      roleUpgradeTitle: "角色升级等待批准。",
+      roleUpgradeSummary: "此设备已配对，但请求的角色变更仍在等待批准。",
+      metadataUpgradeTitle: "设备元数据更改等待批准。",
+      metadataUpgradeSummary: "此设备已配对，但元数据更改仍在等待批准。",
       mobileHint:
         "在手机上？从桌面运行 openclaw dashboard --no-open 复制完整 URL（包括 #token=...）。",
       docsTitle: "设备配对文档（在新标签页中打开）",

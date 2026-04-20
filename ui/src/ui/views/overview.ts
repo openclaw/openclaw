@@ -22,8 +22,9 @@ import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
+  type PairingHint,
+  resolvePairingHint,
   shouldShowInsecureContextHint,
-  shouldShowPairingHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
 
@@ -63,6 +64,31 @@ export type OverviewProps = {
   onRefreshLogs: () => void;
 };
 
+const PAIRING_HINT_COPY: Record<
+  PairingHint["kind"],
+  {
+    titleKey: string | null;
+    summaryKey: string | null;
+  }
+> = {
+  "pairing-required": {
+    titleKey: null,
+    summaryKey: null,
+  },
+  "scope-upgrade-pending": {
+    titleKey: "overview.pairing.scopeUpgradeTitle",
+    summaryKey: "overview.pairing.scopeUpgradeSummary",
+  },
+  "role-upgrade-pending": {
+    titleKey: "overview.pairing.roleUpgradeTitle",
+    summaryKey: "overview.pairing.roleUpgradeSummary",
+  },
+  "metadata-upgrade-pending": {
+    titleKey: "overview.pairing.metadataUpgradeTitle",
+    summaryKey: "overview.pairing.metadataUpgradeSummary",
+  },
+};
+
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
     | {
@@ -79,20 +105,24 @@ export function renderOverview(props: OverviewProps) {
   const isTrustedProxy = authMode === "trusted-proxy";
 
   const pairingHint = (() => {
-    if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
+    const pairingState = resolvePairingHint(props.connected, props.lastError, props.lastErrorCode);
+    if (!pairingState) {
       return null;
     }
+    const copy = PAIRING_HINT_COPY[pairingState.kind];
+    const title = copy.titleKey ? t(copy.titleKey) : t("overview.pairing.hint");
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.pairing.hint")}
+        ${title}
+        ${copy.summaryKey
+          ? html`<div style="margin-top: 6px">${t(copy.summaryKey)}</div>`
+          : nothing}
         <div style="margin-top: 6px">
-          If the device was already paired, this usually means it asked for more access than you
-          previously approved. OpenClaw keeps the old approval and creates a new pending upgrade
-          request instead of widening scopes silently.
-        </div>
-        <div style="margin-top: 6px">
-          <span class="mono">openclaw devices list</span><br />
-          <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
+          ${pairingState.requestId
+            ? html`<span class="mono">openclaw devices approve ${pairingState.requestId}</span
+                ><br />`
+            : nothing}
+          <span class="mono">openclaw devices list</span>
         </div>
         <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
         <div style="margin-top: 6px">

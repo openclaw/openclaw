@@ -243,6 +243,15 @@ export const pt_BR: TranslationMap = {
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
+      scopeUpgradeTitle: "Ampliação de escopo aguardando aprovação.",
+      scopeUpgradeSummary:
+        "Este dispositivo já está pareado, mas a ampliação de escopo solicitada está aguardando aprovação.",
+      roleUpgradeTitle: "Alteração de função aguardando aprovação.",
+      roleUpgradeSummary:
+        "Este dispositivo já está pareado, mas a alteração de função solicitada está aguardando aprovação.",
+      metadataUpgradeTitle: "Alteração de metadados do dispositivo aguardando aprovação.",
+      metadataUpgradeSummary:
+        "Este dispositivo já está pareado, mas a alteração de metadados está aguardando aprovação.",
       mobileHint:
         "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
       docsTitle: "Documentação de pareamento de dispositivo (abre em nova aba)",

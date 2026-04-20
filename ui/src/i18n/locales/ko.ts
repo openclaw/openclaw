@@ -242,6 +242,15 @@ export const ko: TranslationMap = {
     },
     pairing: {
       hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
+      scopeUpgradeTitle: "범위 업그레이드가 승인 대기 중입니다.",
+      scopeUpgradeSummary:
+        "이 기기는 이미 페어링되어 있지만, 요청된 더 넓은 범위는 승인을 기다리고 있습니다.",
+      roleUpgradeTitle: "역할 업그레이드가 승인 대기 중입니다.",
+      roleUpgradeSummary:
+        "이 기기는 이미 페어링되어 있지만, 요청된 역할 변경은 승인을 기다리고 있습니다.",
+      metadataUpgradeTitle: "기기 메타데이터 변경이 승인 대기 중입니다.",
+      metadataUpgradeSummary:
+        "이 기기는 이미 페어링되어 있지만, 메타데이터 변경은 승인을 기다리고 있습니다.",
       mobileHint:
         "모바일에서 사용 중이신가요? 데스크톱에서 openclaw dashboard --no-open으로 전체 URL(#token=... 포함)을 복사하세요.",
       docsTitle: "기기 페어링 문서(새 탭에서 열림)",

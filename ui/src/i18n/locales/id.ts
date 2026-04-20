@@ -243,6 +243,15 @@ export const id: TranslationMap = {
     },
     pairing: {
       hint: "Perangkat ini memerlukan persetujuan pairing dari host gateway.",
+      scopeUpgradeTitle: "Peningkatan cakupan menunggu persetujuan.",
+      scopeUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perluasan cakupan yang diminta sedang menunggu persetujuan.",
+      roleUpgradeTitle: "Peningkatan peran menunggu persetujuan.",
+      roleUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perubahan peran yang diminta sedang menunggu persetujuan.",
+      metadataUpgradeTitle: "Perubahan metadata perangkat menunggu persetujuan.",
+      metadataUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perubahan metadata sedang menunggu persetujuan.",
       mobileHint:
         "Di seluler? Salin URL lengkap (termasuk #token=...) dari openclaw dashboard --no-open di desktop Anda.",
       docsTitle: "Dokumentasi pemasangan perangkat (dibuka di tab baru)",

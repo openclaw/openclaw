@@ -1,6 +1,7 @@
 import { withProgress } from "../cli/progress.js";
 import {
   normalizePairingConnectRequestId,
+  readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
 } from "../gateway/protocol/connect-error-details.js";
@@ -84,15 +85,15 @@ export function resolvePairingRecoveryContext(params: {
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
-  if (!source || !/pairing required/i.test(source)) {
+  const pairing = readConnectPairingRequiredMessage(source);
+  if (!pairing) {
     return null;
   }
-  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
-  const requestId =
-    requestIdMatch && requestIdMatch[1]
-      ? (normalizePairingConnectRequestId(requestIdMatch[1]) ?? null)
-      : null;
-  return { requestId: requestId || null, reason: null, remediationHint: null };
+  return {
+    requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
+    reason: pairing.reason ?? null,
+    remediationHint: null,
+  };
 }
 
 export async function statusCommand(
