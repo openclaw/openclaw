@@ -9,6 +9,7 @@ export const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 export const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 export const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 
+const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
@@ -26,7 +27,7 @@ export function createPerplexityWebSearchProviderBase() {
     id: "perplexity",
     label: "Perplexity Search",
     hint: "Requires Perplexity API key or OpenRouter API key · structured results",
-    onboardingScopes: ["text-inference"],
+    onboardingScopes: [...PERPLEXITY_ONBOARDING_SCOPES],
     credentialLabel: "Perplexity API key",
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
     placeholder: "pplx-...",
