@@ -312,6 +312,66 @@ describe("gateway broadcaster", () => {
     ]);
   });
 
+  it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
+    const pairingSocket = makeRecordingSocket();
+    const nodeSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+    const writeSocket = makeRecordingSocket();
+    const adminSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: pairingSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
+        connId: "c-pairing",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: nodeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "node", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-node",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: readSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        connId: "c-read",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: writeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.write"] } as GatewayWsClient["connect"],
+        connId: "c-write",
+        usesSharedGatewayAuth: false,
+      },
+      {
+        socket: adminSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
+        connId: "c-admin",
+        usesSharedGatewayAuth: false,
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("plugin.myplugin.custom", { data: "test" });
+    broadcast("plugin.otherplugin.state", { state: "updated" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).not.toHaveBeenCalled();
+    expect(writeSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(2);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "plugin.myplugin.custom",
+      "plugin.otherplugin.state",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "plugin.myplugin.custom",
+      "plugin.otherplugin.state",
+    ]);
+  });
+
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
     const pairingSocket = makeRecordingSocket();
     const nodeSocket = makeRecordingSocket();

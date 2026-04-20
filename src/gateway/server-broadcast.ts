@@ -58,6 +58,17 @@ export type {
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
+  // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
+  // for operator.write and operator.admin scopes. Explicit plugin.* entries
+  // in EVENT_SCOPE_GUARDS take precedence (e.g., plugin.approval.*).
+  if (!required && event.startsWith("plugin.")) {
+    const role = client.connect.role ?? "operator";
+    if (role !== "operator") {
+      return false;
+    }
+    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+    return scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE);
+  }
   if (!required) {
     return false;
   }
