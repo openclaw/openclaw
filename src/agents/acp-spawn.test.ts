@@ -23,6 +23,14 @@ function createDefaultSpawnConfig(): OpenClawConfig {
       backend: "acpx",
       allowedAgents: ["codex"],
     },
+    agents: {
+      defaults: {
+        subagents: {
+          allowAgents: ["codex"],
+          maxSpawnDepth: 2,
+        },
+      },
+    },
     session: {
       mainKey: "main",
       scope: "per-sender",
@@ -704,7 +712,9 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
             maxSpawnDepth: 2,
           },
         },
@@ -734,22 +744,18 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
             maxSpawnDepth: 2,
           },
         },
       },
     });
-    hoisted.loadSessionStoreMock.mockReturnValueOnce({
-      "agent:main:subagent:flat-leaf": {
-        sessionId: "subagent-flat-leaf",
-        spawnDepth: 2,
-      },
-    });
 
     const result = await spawnAcpDirect(createSpawnRequest(), {
       ...createRequesterContext(),
-      agentSessionKey: "agent:main:subagent:flat-leaf",
+      agentSessionKey: "agent:main:subagent:parent:subagent:leaf",
     });
 
     const failed = expectFailedSpawn(result, "forbidden");
@@ -762,7 +768,9 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
             maxChildrenPerAgent: 1,
           },
         },
@@ -788,6 +796,7 @@ describe("spawnAcpDirect", () => {
         allowedAgents: ["codex", "writer"],
       },
       agents: {
+        ...hoisted.state.cfg.agents,
         list: [
           {
             id: "main",
@@ -1653,6 +1662,7 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           sandbox: { mode: "all" },
         },
       },
@@ -1754,6 +1764,7 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           heartbeat: {
             every: "30m",
             target: "last",
@@ -1837,6 +1848,7 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           heartbeat: {
             every: "30m",
             target: "discord",
@@ -1871,6 +1883,7 @@ describe("spawnAcpDirect", () => {
       },
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           heartbeat: {
             every: "30m",
             target: "last",
@@ -1899,6 +1912,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
       agents: {
+        ...hoisted.state.cfg.agents,
         list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "research" }],
       },
     });
@@ -1923,6 +1937,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
       agents: {
+        ...hoisted.state.cfg.agents,
         list: [
           {
             id: "research",
