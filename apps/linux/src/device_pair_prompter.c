@@ -34,6 +34,9 @@ typedef struct {
      * chasing the info pointer (which the hook owns during present).
      */
     gchar             *active_request_id;
+    gchar             *last_pairing_required_request_id;
+    gchar             *last_pairing_required_detail;
+    gboolean           pairing_required_reopen_state_cached;
 
     /* Test seam */
     OcPairPresentHook  present_hook;
@@ -47,6 +50,9 @@ static gboolean queue_contains_request_id(const gchar *request_id);
 static void     remove_request_from_queue(const gchar *request_id);
 
 static void pop_and_present_next(void);
+static void pairing_required_reopen_state_clear(const gchar *reason);
+static void pairing_required_reopen_state_cache(const gchar *request_id,
+                                                const gchar *detail);
 
 /* ──────────────────────────── parent lifetime ──────────────────────────── */
 
@@ -84,6 +90,35 @@ static void parent_assign(GtkWindow *parent) {
         g_state.parent = parent;
         g_object_weak_ref(G_OBJECT(parent), on_parent_destroyed, NULL);
     }
+}
+
+static void pairing_required_reopen_state_clear(const gchar *reason) {
+    if (!g_state.pairing_required_reopen_state_cached &&
+        !g_state.last_pairing_required_request_id &&
+        !g_state.last_pairing_required_detail) {
+        return;
+    }
+
+    g_state.pairing_required_reopen_state_cached = FALSE;
+    g_clear_pointer(&g_state.last_pairing_required_request_id, g_free);
+    g_clear_pointer(&g_state.last_pairing_required_detail, g_free);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                 "device pairing reopen state cleared reason=%s",
+                 reason ? reason : "(none)");
+}
+
+static void pairing_required_reopen_state_cache(const gchar *request_id,
+                                                const gchar *detail) {
+    g_state.pairing_required_reopen_state_cached = TRUE;
+
+    g_clear_pointer(&g_state.last_pairing_required_request_id, g_free);
+    g_state.last_pairing_required_request_id =
+        (request_id && request_id[0]) ? g_strdup(request_id) : NULL;
+
+    g_clear_pointer(&g_state.last_pairing_required_detail, g_free);
+    g_state.last_pairing_required_detail =
+        (detail && detail[0]) ? g_strdup(detail) : NULL;
 }
 
 /* ──────────────────────────── helpers ──────────────────────────── */
@@ -360,6 +395,12 @@ static void handle_device_pair_resolved(JsonNode *payload) {
                 "device.pair.resolved request_id=%s outcome=%s",
                 request_id, outcome ? outcome : "(n/a)");
 
+    if (g_state.pairing_required_reopen_state_cached &&
+        g_state.last_pairing_required_request_id &&
+        g_strcmp0(g_state.last_pairing_required_request_id, request_id) == 0) {
+        pairing_required_reopen_state_clear("pair request resolved");
+    }
+
     /*
      * Three cases:
      *   1. request is currently being presented to the local operator →
@@ -495,6 +536,7 @@ static void handle_pairing_required(JsonNode *payload) {
         detail = oc_json_string_member(obj, "detail");
         if (!detail) detail = oc_json_string_member(obj, "message");
     }
+    pairing_required_reopen_state_cache(request_id, detail);
     /*
      * Ask gateway_ws for the locally-loaded deviceId so the bootstrap
      * window can render the "This machine" fingerprint alongside the
@@ -547,6 +589,7 @@ void device_pair_prompter_shutdown(void) {
     }
     g_state.presenting = FALSE;
     g_clear_pointer(&g_state.active_request_id, g_free);
+    pairing_required_reopen_state_clear("prompter shutdown");
     parent_clear_ref();
 }
 
@@ -592,6 +635,17 @@ void device_pair_prompter_raise(void) {
         pairing_bootstrap_window_raise();
         return;
     }
+    if (gateway_ws_is_pairing_required()) {
+        if (!g_state.pairing_required_reopen_state_cached) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY,
+                        "pairing required but bootstrap reopen cache missing; reopening with fallback metadata");
+        }
+        pairing_bootstrap_window_show(g_state.parent,
+                                      g_state.last_pairing_required_request_id,
+                                      gateway_ws_get_device_id(),
+                                      g_state.last_pairing_required_detail);
+        return;
+    }
     if (g_state.presenting) {
         device_pair_approval_window_raise_active();
     }
@@ -609,6 +663,7 @@ void device_pair_prompter_notify_transport_authenticated(void) {
      * single module owns the full show → raise → hide lifecycle of the
      * bootstrap surface. No other caller may drive those APIs directly.
      */
+    pairing_required_reopen_state_clear("transport authenticated");
     pairing_bootstrap_window_hide();
 }
 
