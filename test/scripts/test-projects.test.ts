@@ -6,6 +6,7 @@ import {
   buildVitestRunPlans,
   listFullExtensionVitestProjectConfigs,
   shouldAcquireLocalHeavyCheckLock,
+  resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
 } from "../../scripts/test-projects.test-support.mjs";
@@ -27,6 +28,20 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/utils/provider-utils.ts",
       ]),
     ).toBeNull();
+  });
+
+  it("keeps test runner implementation edits on runner tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "scripts/check-changed.mjs",
+        "scripts/test-projects.test-support.d.mts",
+        "scripts/test-projects.test-support.mjs",
+        "test/scripts/changed-lanes.test.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+    });
   });
 
   it("routes changed extension vitest configs to their own shard", () => {
