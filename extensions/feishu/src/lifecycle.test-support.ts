@@ -89,11 +89,25 @@ const {
   sendCardFeishuMock,
 } = feishuLifecycleTestMocks;
 
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+vi.mock("./client.js", () => {
   return {
-    ...actual,
+    FEISHU_HTTP_TIMEOUT_ENV_VAR: "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS",
+    FEISHU_HTTP_TIMEOUT_MAX_MS: 300_000,
+    FEISHU_HTTP_TIMEOUT_MS: 30_000,
+    FEISHU_USER_AGENT: "openclaw-feishu-test",
+    clearClientCache: vi.fn(),
+    createFeishuClient: vi.fn(() => {
+      throw new Error("unexpected Feishu client call in lifecycle test");
+    }),
+    createFeishuWSClient: vi.fn(async () => ({
+      close: vi.fn(),
+      start: vi.fn(),
+    })),
     createEventDispatcher: createEventDispatcherMock,
+    getFeishuClient: vi.fn(() => null),
+    getFeishuUserAgent: vi.fn(() => "openclaw-feishu-test"),
+    pluginVersion: "test",
+    setFeishuClientRuntimeForTest: vi.fn(),
   };
 });
 
