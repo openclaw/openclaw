@@ -43,9 +43,12 @@ import {
   runHomeserverRestartResumeScenario,
   runInitialCatchupThenIncrementalScenario,
   runPostRestartRoomContinueScenario,
+  runRestartReplayDedupeScenario,
   runRestartResumeScenario,
+  runStaleSyncReplayDedupeScenario,
 } from "./scenario-runtime-restart.js";
 import {
+  runAllowlistHotReloadScenario,
   runBlockStreamingScenario,
   runMatrixQaCanary,
   runMembershipLossScenario,
@@ -232,6 +235,10 @@ export async function runMatrixQaScenario(
       return await runPostRestartRoomContinueScenario(context);
     case "matrix-initial-catchup-then-incremental":
       return await runInitialCatchupThenIncrementalScenario(context);
+    case "matrix-restart-replay-dedupe":
+      return await runRestartReplayDedupeScenario(context);
+    case "matrix-stale-sync-replay-dedupe":
+      return await runStaleSyncReplayDedupeScenario(context);
     case "matrix-room-membership-loss":
       return await runMembershipLossScenario(context);
     case "matrix-homeserver-restart-resume":
@@ -243,6 +250,18 @@ export async function runMatrixQaScenario(
         actorId: "driver",
         actorUserId: context.driverUserId,
         body: buildExactMarkerPrompt(token),
+        context,
+        token,
+      });
+    }
+    case "matrix-mxid-prefixed-command-block": {
+      const token = buildMatrixQaToken("MATRIX_QA_MXID_COMMAND");
+      return await runNoReplyScenario({
+        accessToken: context.observerAccessToken,
+        actorId: "observer",
+        actorUserId: context.observerUserId,
+        body: `${context.sutUserId} /new`,
+        mentionUserIds: [context.sutUserId],
         context,
         token,
       });
@@ -273,6 +292,8 @@ export async function runMatrixQaScenario(
         token,
       });
     }
+    case "matrix-allowlist-hot-reload":
+      return await runAllowlistHotReloadScenario(context);
     case "matrix-multi-actor-ordering":
       return await runMultiActorOrderingScenario(context);
     case "matrix-inbound-edit-ignored":
