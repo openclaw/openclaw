@@ -75,6 +75,22 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
     });
 
+    it("includes claude-opus-4.7", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7");
+    });
+
+    it("includes claude-opus-4.5", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.5");
+    });
+
+    it("includes claude-haiku-4.5", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-haiku-4.5");
+    });
+
+    it("includes gemini-2.5-pro", () => {
+      expect(getDefaultCopilotModelIds()).toContain("gemini-2.5-pro");
+    });
+
     it("returns a mutable copy", () => {
       const a = getDefaultCopilotModelIds();
       const b = getDefaultCopilotModelIds();
