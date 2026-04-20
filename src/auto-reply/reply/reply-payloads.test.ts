@@ -32,7 +32,19 @@ vi.mock("../../channels/plugins/bundled.js", () => ({
             targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
           },
         }
-      : undefined,
+      : channel === "bundled-demo"
+        ? {
+            outbound: {
+              targetsMatchForReplySuppression: ({
+                originTarget,
+                targetKey,
+              }: {
+                originTarget: string;
+                targetKey: string;
+              }) => originTarget === targetKey,
+            },
+          }
+        : undefined,
 }));
 
 describe("filterMessagingToolMediaDuplicates", () => {
@@ -217,6 +229,19 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messagingToolSentTargets: [
           { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
         ],
+      }),
+    ).toBe(true);
+  });
+
+  it("uses bundled channel suppression matchers even when the plugin is not loaded", () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createTestRegistry([]));
+
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "bundled-demo",
+        originatingTo: "room-a",
+        messagingToolSentTargets: [{ tool: "message", provider: "bundled-demo", to: "room-a" }],
       }),
     ).toBe(true);
   });

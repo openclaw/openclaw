@@ -1,6 +1,6 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
-import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -109,8 +109,7 @@ function targetsMatchForSuppression(params: {
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  const pluginMatch = getLoadedChannelPlugin(params.provider)?.outbound
-    ?.targetsMatchForReplySuppression;
+  const pluginMatch = getChannelPlugin(params.provider)?.outbound?.targetsMatchForReplySuppression;
   if (pluginMatch) {
     return pluginMatch({
       originTarget: params.originTarget,

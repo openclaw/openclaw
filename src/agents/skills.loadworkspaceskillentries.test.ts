@@ -44,6 +44,7 @@ vi.mock("../plugins/manifest-registry.js", async () => {
 let fakeHome = "";
 let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
+const tempDirs: string[] = [];
 let workspaceCaseIndex = 0;
 
 async function createTempWorkspaceDir() {
@@ -86,6 +87,12 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  if (envSnapshot.previousOpenClawHome === undefined) {
+    delete process.env.OPENCLAW_HOME;
+  } else {
+    process.env.OPENCLAW_HOME = envSnapshot.previousOpenClawHome;
+  }
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 afterAll(async () => {
