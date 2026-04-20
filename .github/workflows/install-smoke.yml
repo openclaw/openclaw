@@ -64,7 +64,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Build install-smoke CI manifest
         id: manifest
@@ -202,7 +201,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "true"
-          use-sticky-disk: "false"
 
       - name: Run installer docker tests
         env:

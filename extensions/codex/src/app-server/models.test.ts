@@ -4,10 +4,25 @@ import { listCodexAppServerModels } from "./models.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 
+const mocks = vi.hoisted(() => ({
+  bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
+  resolveOpenClawAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
+}));
+
+vi.mock("./auth-bridge.js", () => ({
+  bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+}));
+
 describe("listCodexAppServerModels", () => {
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();
+    mocks.bridgeCodexAppServerStartOptions.mockClear();
+    mocks.resolveOpenClawAgentDir.mockClear();
   });
 
   it("lists app-server models through the typed helper", async () => {
@@ -15,6 +30,7 @@ describe("listCodexAppServerModels", () => {
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
 
     const listPromise = listCodexAppServerModels({ limit: 12, timeoutMs: 1000 });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
