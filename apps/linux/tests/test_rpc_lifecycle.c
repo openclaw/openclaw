@@ -23,17 +23,7 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
-static int tests_run = 0;
-static int tests_passed = 0;
-
-#define ASSERT(cond, msg) do { \
-    tests_run++; \
-    if (!(cond)) { \
-        g_printerr("FAIL [%s:%d]: %s\n", __FILE__, __LINE__, msg); \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
+#define ASSERT(cond, msg) g_assert_true(cond)
 
 /* ── Mock gateway_ws ─────────────────────────────────────────────── */
 
@@ -557,25 +547,25 @@ static void test_ws_rpc_frame_structure(void) {
 
 /* ── Main ────────────────────────────────────────────────────────── */
 
-int main(void) {
-    /* Section lifecycle */
-    test_lifecycle_disconnected();
-    test_lifecycle_error_response();
-    test_lifecycle_timeout_recovery();
-    test_lifecycle_reconnect_after_failure();
-    test_lifecycle_channels_full_pipeline();
-    test_lifecycle_mutation_success();
-    test_lifecycle_mutation_error();
+int main(int argc, char **argv) {
+    g_test_init(&argc, &argv, NULL);
+    g_log_set_always_fatal((GLogLevelFlags)(G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL));
 
-    /* WS↔RPC integration */
-    test_ws_rpc_authenticated_dispatch();
-    test_ws_rpc_unmatched_safety();
-    test_ws_rpc_disconnect_cleanup();
-    test_ws_rpc_send_path_safety();
-    test_ws_rpc_frame_structure();
+    g_test_add_func("/rpc_lifecycle/section/disconnected", test_lifecycle_disconnected);
+    g_test_add_func("/rpc_lifecycle/section/error_response", test_lifecycle_error_response);
+    g_test_add_func("/rpc_lifecycle/section/timeout_recovery", test_lifecycle_timeout_recovery);
+    g_test_add_func("/rpc_lifecycle/section/reconnect_after_failure", test_lifecycle_reconnect_after_failure);
+    g_test_add_func("/rpc_lifecycle/section/channels_full_pipeline", test_lifecycle_channels_full_pipeline);
+    g_test_add_func("/rpc_lifecycle/section/mutation_success", test_lifecycle_mutation_success);
+    g_test_add_func("/rpc_lifecycle/section/mutation_error", test_lifecycle_mutation_error);
 
+    g_test_add_func("/rpc_lifecycle/ws_rpc/authenticated_dispatch", test_ws_rpc_authenticated_dispatch);
+    g_test_add_func("/rpc_lifecycle/ws_rpc/unmatched_safety", test_ws_rpc_unmatched_safety);
+    g_test_add_func("/rpc_lifecycle/ws_rpc/disconnect_cleanup", test_ws_rpc_disconnect_cleanup);
+    g_test_add_func("/rpc_lifecycle/ws_rpc/send_path_safety", test_ws_rpc_send_path_safety);
+    g_test_add_func("/rpc_lifecycle/ws_rpc/frame_structure", test_ws_rpc_frame_structure);
+
+    int status = g_test_run();
     g_free(mock_last_sent_text);
-
-    g_print("rpc_lifecycle: %d/%d tests passed\n", tests_passed, tests_run);
-    return (tests_passed == tests_run) ? 0 : 1;
+    return status;
 }

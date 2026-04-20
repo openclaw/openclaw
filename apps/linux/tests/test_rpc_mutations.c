@@ -17,17 +17,7 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
-static int tests_run = 0;
-static int tests_passed = 0;
-
-#define ASSERT(cond, msg) do { \
-    tests_run++; \
-    if (!(cond)) { \
-        g_printerr("FAIL [%s:%d]: %s\n", __FILE__, __LINE__, msg); \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
+#define ASSERT(cond, msg) g_assert_true(cond)
 
 /* ── Stub state ──────────────────────────────────────────────────── */
 
@@ -1282,68 +1272,60 @@ static void test_qr_login_start_without_qrdataurl(void) {
     json_node_unref(node5);
 }
 
-int main(void) {
-    /* Skills */
-    test_skills_enable();
-    test_skills_disable();
-    test_skills_install();
-    test_skills_install_no_id();
-    test_skills_update();
-    test_skills_update_env();
-    test_skills_update_api_key();
-    test_skills_api_key_patterns();
+int main(int argc, char **argv) {
+    g_test_init(&argc, &argv, NULL);
 
-    /* Sessions */
-    test_sessions_patch();
-    test_sessions_patch_partial();
-    test_sessions_patch_model_only();
-    test_sessions_reset();
-    test_sessions_delete();
-    test_sessions_compact();
+    g_test_add_func("/rpc_mutations/skills/enable", test_skills_enable);
+    g_test_add_func("/rpc_mutations/skills/disable", test_skills_disable);
+    g_test_add_func("/rpc_mutations/skills/install", test_skills_install);
+    g_test_add_func("/rpc_mutations/skills/install_no_id", test_skills_install_no_id);
+    g_test_add_func("/rpc_mutations/skills/update", test_skills_update);
+    g_test_add_func("/rpc_mutations/skills/update_env", test_skills_update_env);
+    g_test_add_func("/rpc_mutations/skills/update_api_key", test_skills_update_api_key);
+    g_test_add_func("/rpc_mutations/skills/api_key_patterns", test_skills_api_key_patterns);
 
-    /* Cron */
-    test_cron_enable();
-    test_cron_remove();
-    test_cron_run();
-    test_cron_add();
-    test_cron_update();
-    test_cron_add_expanded();
-    test_cron_update_expanded();
-    test_cron_update_full_payload();
-    test_cron_edit_patch_builder_helper();
+    g_test_add_func("/rpc_mutations/sessions/patch", test_sessions_patch);
+    g_test_add_func("/rpc_mutations/sessions/patch_partial", test_sessions_patch_partial);
+    g_test_add_func("/rpc_mutations/sessions/patch_model_only", test_sessions_patch_model_only);
+    g_test_add_func("/rpc_mutations/sessions/reset", test_sessions_reset);
+    g_test_add_func("/rpc_mutations/sessions/delete", test_sessions_delete);
+    g_test_add_func("/rpc_mutations/sessions/compact", test_sessions_compact);
 
-    /* Cron regression tests */
-    test_cron_session_target_mapping();
+    g_test_add_func("/rpc_mutations/cron/enable", test_cron_enable);
+    g_test_add_func("/rpc_mutations/cron/remove", test_cron_remove);
+    g_test_add_func("/rpc_mutations/cron/run", test_cron_run);
+    g_test_add_func("/rpc_mutations/cron/add", test_cron_add);
+    g_test_add_func("/rpc_mutations/cron/update", test_cron_update);
+    g_test_add_func("/rpc_mutations/cron/add_expanded", test_cron_add_expanded);
+    g_test_add_func("/rpc_mutations/cron/update_expanded", test_cron_update_expanded);
+    g_test_add_func("/rpc_mutations/cron/update_full_payload", test_cron_update_full_payload);
+    g_test_add_func("/rpc_mutations/cron/edit_patch_builder_helper", test_cron_edit_patch_builder_helper);
+    g_test_add_func("/rpc_mutations/cron/session_target_mapping", test_cron_session_target_mapping);
 
-    /* Channels */
-    test_channels_status_probe();
-    test_channels_status_no_probe();
-    test_channels_logout();
-    test_channels_logout_no_acct();
+    g_test_add_func("/rpc_mutations/channels/status_probe", test_channels_status_probe);
+    g_test_add_func("/rpc_mutations/channels/status_no_probe", test_channels_status_no_probe);
+    g_test_add_func("/rpc_mutations/channels/logout", test_channels_logout);
+    g_test_add_func("/rpc_mutations/channels/logout_no_acct", test_channels_logout_no_acct);
 
-    /* Config */
-    test_config_get();
-    test_config_schema();
-    test_config_set();
-    test_config_set_with_hash();
-    test_config_set_null_hash();
-    test_config_get_no_scope();
-    test_config_save_preserves_unrelated_keys();
+    g_test_add_func("/rpc_mutations/config/get", test_config_get);
+    g_test_add_func("/rpc_mutations/config/schema", test_config_schema);
+    g_test_add_func("/rpc_mutations/config/set", test_config_set);
+    g_test_add_func("/rpc_mutations/config/set_with_hash", test_config_set_with_hash);
+    g_test_add_func("/rpc_mutations/config/set_null_hash", test_config_set_null_hash);
+    g_test_add_func("/rpc_mutations/config/get_no_scope", test_config_get_no_scope);
+    g_test_add_func("/rpc_mutations/config/save_preserves_unrelated_keys", test_config_save_preserves_unrelated_keys);
 
-    /* Nodes */
-    test_node_pair_approve();
-    test_node_pair_reject();
-    test_node_list();
-    test_node_pair_list();
+    g_test_add_func("/rpc_mutations/nodes/pair_approve", test_node_pair_approve);
+    g_test_add_func("/rpc_mutations/nodes/pair_reject", test_node_pair_reject);
+    g_test_add_func("/rpc_mutations/nodes/list", test_node_list);
+    g_test_add_func("/rpc_mutations/nodes/pair_list", test_node_pair_list);
 
-    /* WhatsApp login flow */
-    test_web_login_start();
-    test_web_login_wait();
-    test_web_login_wait_null_account();
-    test_qr_login_start_without_qrdataurl();
+    g_test_add_func("/rpc_mutations/web_login/start", test_web_login_start);
+    g_test_add_func("/rpc_mutations/web_login/wait", test_web_login_wait);
+    g_test_add_func("/rpc_mutations/web_login/wait_null_account", test_web_login_wait_null_account);
+    g_test_add_func("/rpc_mutations/web_login/qr_login_start_without_qrdataurl", test_qr_login_start_without_qrdataurl);
 
+    int status = g_test_run();
     stub_reset();
-
-    g_print("rpc_mutations: %d/%d tests passed\n", tests_passed, tests_run);
-    return (tests_passed == tests_run) ? 0 : 1;
+    return status;
 }

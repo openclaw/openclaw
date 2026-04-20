@@ -12,17 +12,7 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
-static int tests_run = 0;
-static int tests_passed = 0;
-
-#define ASSERT(cond, msg) do { \
-    tests_run++; \
-    if (!(cond)) { \
-        g_printerr("FAIL [%s:%d]: %s\n", __FILE__, __LINE__, msg); \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
+#define ASSERT(cond, msg) g_assert_true(cond)
 
 static JsonNode* parse_json(const gchar *json_str) {
     JsonParser *parser = json_parser_new();
@@ -1171,98 +1161,83 @@ static void test_config_schema_empty(void) {
 
 /* ── Main ────────────────────────────────────────────────────────── */
 
-int main(void) {
-    /* Channels — happy path */
-    test_channels_parse_basic();
-    test_channels_parse_empty();
-    test_channels_parse_null();
-    /* Channels — negative */
-    test_channels_wrong_type_channel_order();
-    test_channels_mixed_type_channel_order_elements();
-    test_channels_labels_wrong_type();
-    test_channels_accounts_not_array();
-    test_channels_non_object_payload();
+int main(int argc, char **argv) {
+    g_test_init(&argc, &argv, NULL);
 
-    /* Skills — happy path */
-    test_skills_parse_basic();
-    test_skills_parse_empty();
-    /* Skills — negative */
-    test_skills_missing_array();
-    test_skills_array_wrong_type();
-    test_skills_mixed_valid_invalid();
-    test_skills_partial_fields();
-    test_skills_wrong_type_booleans();
-    test_skills_null_input();
+    g_test_add_func("/gateway_data/channels/parse_basic", test_channels_parse_basic);
+    g_test_add_func("/gateway_data/channels/parse_empty", test_channels_parse_empty);
+    g_test_add_func("/gateway_data/channels/parse_null", test_channels_parse_null);
+    g_test_add_func("/gateway_data/channels/wrong_type_channel_order", test_channels_wrong_type_channel_order);
+    g_test_add_func("/gateway_data/channels/mixed_type_channel_order_elements", test_channels_mixed_type_channel_order_elements);
+    g_test_add_func("/gateway_data/channels/labels_wrong_type", test_channels_labels_wrong_type);
+    g_test_add_func("/gateway_data/channels/accounts_not_array", test_channels_accounts_not_array);
+    g_test_add_func("/gateway_data/channels/non_object_payload", test_channels_non_object_payload);
 
-    /* Sessions — happy path */
-    test_sessions_parse_basic();
-    /* Sessions — negative */
-    test_sessions_missing_array();
-    test_sessions_array_wrong_type();
-    test_sessions_partial_item();
-    test_sessions_mixed_valid_invalid();
-    test_sessions_wrong_type_fields();
-    test_sessions_null_input();
-    test_sessions_empty();
+    g_test_add_func("/gateway_data/skills/parse_basic", test_skills_parse_basic);
+    g_test_add_func("/gateway_data/skills/parse_empty", test_skills_parse_empty);
+    g_test_add_func("/gateway_data/skills/missing_array", test_skills_missing_array);
+    g_test_add_func("/gateway_data/skills/array_wrong_type", test_skills_array_wrong_type);
+    g_test_add_func("/gateway_data/skills/mixed_valid_invalid", test_skills_mixed_valid_invalid);
+    g_test_add_func("/gateway_data/skills/partial_fields", test_skills_partial_fields);
+    g_test_add_func("/gateway_data/skills/wrong_type_booleans", test_skills_wrong_type_booleans);
+    g_test_add_func("/gateway_data/skills/null_input", test_skills_null_input);
 
-    /* Cron — happy path */
-    test_cron_parse_basic();
-    test_cron_parse_schedule_kind_every();
-    test_cron_parse_schedule_kind_at();
-    test_cron_parse_routing_fields_from_root();
-    /* Cron — negative */
-    test_cron_missing_jobs();
-    test_cron_jobs_wrong_type();
-    test_cron_malformed_state();
-    test_cron_mixed_valid_invalid();
-    test_cron_partial_fields();
-    test_cron_null_input();
-    test_cron_empty();
+    g_test_add_func("/gateway_data/sessions/parse_basic", test_sessions_parse_basic);
+    g_test_add_func("/gateway_data/sessions/missing_array", test_sessions_missing_array);
+    g_test_add_func("/gateway_data/sessions/array_wrong_type", test_sessions_array_wrong_type);
+    g_test_add_func("/gateway_data/sessions/partial_item", test_sessions_partial_item);
+    g_test_add_func("/gateway_data/sessions/mixed_valid_invalid", test_sessions_mixed_valid_invalid);
+    g_test_add_func("/gateway_data/sessions/wrong_type_fields", test_sessions_wrong_type_fields);
+    g_test_add_func("/gateway_data/sessions/null_input", test_sessions_null_input);
+    g_test_add_func("/gateway_data/sessions/empty", test_sessions_empty);
 
-    /* Nodes — happy path */
-    test_nodes_parse_basic();
-    test_nodes_parse_empty();
-    /* Nodes — negative */
-    test_nodes_missing_array();
-    test_nodes_array_wrong_type();
-    test_nodes_partial_fields();
-    test_nodes_mixed_valid_invalid();
-    test_nodes_wrong_type_fields();
-    test_nodes_null_input();
-    test_nodes_non_object_payload();
+    g_test_add_func("/gateway_data/cron/parse_basic", test_cron_parse_basic);
+    g_test_add_func("/gateway_data/cron/parse_schedule_kind_every", test_cron_parse_schedule_kind_every);
+    g_test_add_func("/gateway_data/cron/parse_schedule_kind_at", test_cron_parse_schedule_kind_at);
+    g_test_add_func("/gateway_data/cron/parse_routing_fields_from_root", test_cron_parse_routing_fields_from_root);
+    g_test_add_func("/gateway_data/cron/missing_jobs", test_cron_missing_jobs);
+    g_test_add_func("/gateway_data/cron/jobs_wrong_type", test_cron_jobs_wrong_type);
+    g_test_add_func("/gateway_data/cron/malformed_state", test_cron_malformed_state);
+    g_test_add_func("/gateway_data/cron/mixed_valid_invalid", test_cron_mixed_valid_invalid);
+    g_test_add_func("/gateway_data/cron/partial_fields", test_cron_partial_fields);
+    g_test_add_func("/gateway_data/cron/null_input", test_cron_null_input);
+    g_test_add_func("/gateway_data/cron/empty", test_cron_empty);
 
-    /* Cron Status */
-    test_cron_status_parse_basic();
-    test_cron_status_null();
-    test_cron_status_empty();
+    g_test_add_func("/gateway_data/nodes/parse_basic", test_nodes_parse_basic);
+    g_test_add_func("/gateway_data/nodes/parse_empty", test_nodes_parse_empty);
+    g_test_add_func("/gateway_data/nodes/missing_array", test_nodes_missing_array);
+    g_test_add_func("/gateway_data/nodes/array_wrong_type", test_nodes_array_wrong_type);
+    g_test_add_func("/gateway_data/nodes/partial_fields", test_nodes_partial_fields);
+    g_test_add_func("/gateway_data/nodes/mixed_valid_invalid", test_nodes_mixed_valid_invalid);
+    g_test_add_func("/gateway_data/nodes/wrong_type_fields", test_nodes_wrong_type_fields);
+    g_test_add_func("/gateway_data/nodes/null_input", test_nodes_null_input);
+    g_test_add_func("/gateway_data/nodes/non_object_payload", test_nodes_non_object_payload);
 
-    /* Cron Runs */
-    test_cron_runs_parse_basic();
-    test_cron_runs_null();
+    g_test_add_func("/gateway_data/cron_status/parse_basic", test_cron_status_parse_basic);
+    g_test_add_func("/gateway_data/cron_status/null", test_cron_status_null);
+    g_test_add_func("/gateway_data/cron_status/empty", test_cron_status_empty);
 
-    /* Pairing List */
-    test_pairing_list_parse_basic();
-    test_pairing_list_empty();
-    test_pairing_list_null();
-    test_pairing_list_partial_pending();
-    test_pairing_list_partial_paired();
-    test_pairing_list_wrong_type_arrays();
-    test_pairing_list_non_object_payload();
-    test_pairing_list_repair_flag();
+    g_test_add_func("/gateway_data/cron_runs/parse_basic", test_cron_runs_parse_basic);
+    g_test_add_func("/gateway_data/cron_runs/null", test_cron_runs_null);
 
-    /* Channels — account details */
-    test_channels_with_account_details();
+    g_test_add_func("/gateway_data/pairing_list/parse_basic", test_pairing_list_parse_basic);
+    g_test_add_func("/gateway_data/pairing_list/empty", test_pairing_list_empty);
+    g_test_add_func("/gateway_data/pairing_list/null", test_pairing_list_null);
+    g_test_add_func("/gateway_data/pairing_list/partial_pending", test_pairing_list_partial_pending);
+    g_test_add_func("/gateway_data/pairing_list/partial_paired", test_pairing_list_partial_paired);
+    g_test_add_func("/gateway_data/pairing_list/wrong_type_arrays", test_pairing_list_wrong_type_arrays);
+    g_test_add_func("/gateway_data/pairing_list/non_object_payload", test_pairing_list_non_object_payload);
+    g_test_add_func("/gateway_data/pairing_list/repair_flag", test_pairing_list_repair_flag);
 
-    /* Config Snapshot */
-    test_config_get_parse_basic();
-    test_config_get_null();
-    test_config_get_no_config_obj();
+    g_test_add_func("/gateway_data/channels/with_account_details", test_channels_with_account_details);
 
-    /* Config Schema */
-    test_config_schema_parse_basic();
-    test_config_schema_null();
-    test_config_schema_empty();
+    g_test_add_func("/gateway_data/config_get/parse_basic", test_config_get_parse_basic);
+    g_test_add_func("/gateway_data/config_get/null", test_config_get_null);
+    g_test_add_func("/gateway_data/config_get/no_config_obj", test_config_get_no_config_obj);
 
-    g_print("gateway_data: %d/%d tests passed\n", tests_passed, tests_run);
-    return (tests_passed == tests_run) ? 0 : 1;
+    g_test_add_func("/gateway_data/config_schema/parse_basic", test_config_schema_parse_basic);
+    g_test_add_func("/gateway_data/config_schema/null", test_config_schema_null);
+    g_test_add_func("/gateway_data/config_schema/empty", test_config_schema_empty);
+
+    return g_test_run();
 }
