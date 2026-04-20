@@ -12,7 +12,7 @@ describe("formatConnectError", () => {
           requestId: "req-123",
         },
       }),
-    ).toBe("gateway pairing required: device is asking for more scopes than currently approved");
+    ).toBe("scope upgrade pending approval (requestId: req-123)");
   });
 
   it("formats unapproved devices with the richer contract", () => {
@@ -24,6 +24,6 @@ describe("formatConnectError", () => {
           reason: "not-paired",
         },
       }),
-    ).toBe("gateway pairing required: device is not approved yet");
+    ).toBe("device pairing required");
   });
 });

@@ -14,9 +14,7 @@ describe("formatConnectError", () => {
           requestedScopes: ["operator.admin", "operator.read"],
         },
       }),
-    ).toBe(
-      "device scope upgrade requires approval (approved: operator.read; requested: operator.admin, operator.read)",
-    );
+    ).toBe("scope upgrade pending approval");
   });
 
   it("explains role upgrades that require approval", () => {
@@ -30,6 +28,6 @@ describe("formatConnectError", () => {
           requestedRole: "node",
         },
       }),
-    ).toBe("device role upgrade requires approval (approved: operator; requested: node)");
+    ).toBe("role upgrade pending approval");
   });
 });
