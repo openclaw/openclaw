@@ -12,6 +12,7 @@ function createProfile(overrides: Partial<ResolvedBrowserProfile>): ResolvedBrow
     cdpIsLoopback: false,
     color: "#123456",
     driver: "openclaw",
+    headless: false,
     attachOnly: false,
     ...overrides,
   };

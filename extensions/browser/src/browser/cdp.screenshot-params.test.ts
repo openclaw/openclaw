@@ -75,6 +75,7 @@ const localProfile: ResolvedBrowserProfile = {
   cdpIsLoopback: true,
   color: "#FF4500",
   driver: "openclaw",
+  headless: false,
   attachOnly: false,
 };
 

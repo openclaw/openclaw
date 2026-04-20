@@ -34,6 +34,7 @@ describe("browser chrome launch args", () => {
         cdpIsLoopback: true,
         color: "#FF4500",
         driver: "openclaw",
+        headless: false,
         attachOnly: false,
       },
       userDataDir: "/tmp/openclaw-test-user-data",
