@@ -29,6 +29,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toBeNull();
   });
 
+  it("routes changed extension vitest configs to their own shard", () => {
+    expect(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+        "test/vitest/vitest.extension-discord.config.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extension-discord.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("keeps the broad changed run for shared test helpers", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [

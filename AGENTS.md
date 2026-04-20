@@ -66,6 +66,7 @@ Scoped guides:
 - Full tests: `pnpm test`
 - Changed tests only: `pnpm test:changed`
 - Extension tests: `pnpm test:extensions` or `pnpm test extensions` = all extension shards; `pnpm test extensions/<id>` = one extension lane. Heavy channels/OpenAI have dedicated shards.
+- Shard timing artifact: `.artifacts/vitest-shard-timings.json`; auto-used for balanced shard ordering. Disable with `OPENCLAW_TEST_PROJECTS_TIMINGS=0`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; do not call raw `vitest`.
 - Coverage: `pnpm test:coverage`
 - Format check/fix: `pnpm format:check` / `pnpm format`

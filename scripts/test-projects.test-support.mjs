@@ -166,11 +166,14 @@ const BROAD_CHANGED_RERUN_PATTERNS = [
   /^pnpm-lock\.yaml$/u,
   /^test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts$/u,
   /^vitest(?:\..+)?\.(?:config\.ts|paths\.mjs)$/u,
-  /^test\/vitest\/vitest(?:\..+)?\.(?:config\.ts|paths\.mjs)$/u,
+  /^test\/vitest\/vitest\.(?:config|shared\.config|scoped-config|performance-config)\.ts$/u,
   /^test\/helpers\//u,
   /^scripts\/run-vitest\.mjs$/u,
   /^scripts\/test-projects(?:\.test-support)?\.mjs$/u,
 ];
+const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
+  Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
+);
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
@@ -225,6 +228,14 @@ function toScopedIncludePattern(arg, cwd) {
     return directory === "." ? "**/*.test.ts" : `${directory}/**/*.test.ts`;
   }
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
+}
+
+function resolveVitestConfigTargetKind(relative) {
+  return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(relative) ?? null;
+}
+
+function isVitestConfigTargetForKind(kind, targetArg, cwd) {
+  return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
 }
 
 function listChangedPathsFromGit(baseRef, cwd) {
@@ -317,6 +328,10 @@ export function resolveChangedTargetArgs(
 
 function classifyTarget(arg, cwd) {
   const relative = toRepoRelativeTarget(arg, cwd);
+  const configTargetKind = resolveVitestConfigTargetKind(relative);
+  if (configTargetKind) {
+    return configTargetKind;
+  }
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
@@ -667,12 +682,17 @@ export function buildVitestRunPlans(
       kind === "e2e" ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
+    const useWholeConfigTarget = grouped.some((targetArg) =>
+      isVitestConfigTargetForKind(kind, targetArg, cwd),
+    );
     const includePatterns = useCliTargetArgs
       ? null
-      : grouped.flatMap((targetArg) => {
-          const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
-          return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
-        });
+      : useWholeConfigTarget
+        ? null
+        : grouped.flatMap((targetArg) => {
+            const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
+            return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
+          });
     const scopedTargetArgs = useCliTargetArgs ? grouped : [];
     plans.push({
       config,

@@ -16,6 +16,7 @@ title: "Tests"
 - `pnpm changed:lanes`: shows the architectural lanes triggered by the diff against `origin/main`.
 - `pnpm check:changed`: runs the smart changed gate for the diff against `origin/main`. It runs core work with core test lanes, extension work with extension test lanes, test-only work with test typecheck/tests only, and expands public Plugin SDK or plugin-contract changes to extension validation.
 - `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs use fixed shard groups and expand to leaf configs for local parallel execution; the extension group always expands to the per-extension shard configs instead of one giant root-project process.
+- Full and extension shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later runs use those timings to balance slow and fast shards. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - Selected `plugin-sdk` and `commands` test files now route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Selected `plugin-sdk` and `commands` helper source files also map `pnpm test:changed` to explicit sibling tests in those light lanes, so small helper edits avoid rerunning the heavy runtime-backed suites.
 - `auto-reply` now also splits into three dedicated configs (`core`, `top-level`, `reply`) so the reply harness does not dominate the lighter top-level status/token/helper tests.
