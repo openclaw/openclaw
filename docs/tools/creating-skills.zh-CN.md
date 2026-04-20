@@ -3,14 +3,14 @@ title: "创建技能"
 summary: "使用 SKILL.md 构建和测试自定义工作区技能"
 read_when:
   - 你正在工作区中创建新的自定义技能
-  - 你需要一个基于 SKILL.md 的技能的快速入门工作流
+  - 你需要基于 SKILL.md 的技能的快速入门工作流程
 ---
 
 # 创建技能
 
-技能教会代理如何以及何时使用工具。每个技能都是一个包含 `SKILL.md` 文件的目录，该文件带有 YAML 前言和 markdown 说明。
+技能教导代理如何以及何时使用工具。每个技能都是一个包含 `SKILL.md` 文件的目录，该文件带有 YAML 前置数据和 Markdown 说明。
 
-有关技能如何加载和优先级的信息，请参见 [技能](/tools/skills)。
+关于技能如何加载和优先级排序，请参阅 [技能](/tools/skills)。
 
 ## 创建你的第一个技能
 
@@ -25,27 +25,24 @@ read_when:
   </Step>
 
   <Step title="编写 SKILL.md">
-    在该目录中创建 `SKILL.md`。前言定义元数据，
-    markdown 正文包含给代理的说明。
+    在该目录中创建 `SKILL.md`。前置数据定义元数据，Markdown 正文包含给代理的说明。
 
     ```markdown
     ---
     name: hello_world
-    description: 一个简单的打招呼技能。
+    description: A simple skill that says hello.
     ---
 
-    # Hello World 技能
+    # Hello World Skill
 
-    当用户要求问候时，使用 `echo` 工具说
+    When the user asks for a greeting, use the `echo` tool to say
     "Hello from your custom skill!".
     ```
 
   </Step>
 
   <Step title="添加工具（可选）">
-    你可以在前言中定义自定义工具架构，或指示代理
-    使用现有的系统工具（如 `exec` 或 `browser`）。技能也可以
-    与它们记录的工具一起在插件中提供。
+    你可以在前置数据中定义自定义工具模式，或指示代理使用现有的系统工具（如 `exec` 或 `browser`）。技能也可以与它们记录的工具一起在插件中提供。
 
   </Step>
 
@@ -53,10 +50,10 @@ read_when:
     开始一个新会话，以便 OpenClaw 拾取技能：
 
     ```bash
-    # 从聊天
+    # From chat
     /new
 
-    # 或重启网关
+    # Or restart the gateway
     openclaw gateway restart
     ```
 
@@ -69,7 +66,7 @@ read_when:
   </Step>
 
   <Step title="测试它">
-    发送应该触发技能的消息：
+    发送一条应该触发技能的消息：
 
     ```bash
     openclaw agent --message "give me a greeting"
@@ -82,33 +79,33 @@ read_when:
 
 ## 技能元数据参考
 
-YAML 前言支持这些字段：
+YAML 前置数据支持这些字段：
 
-| 字段                               | 是否必需 | 描述                                         |
-| ----------------------------------- | -------- | ------------------------------------------- |
-| `name`                              | 是       | 唯一标识符（snake_case）                      |
-| `description`                       | 是       | 显示给代理的一行描述                           |
-| `metadata.openclaw.os`              | 否       | 操作系统过滤器（`["darwin"]`、`["linux"]` 等） |
-| `metadata.openclaw.requires.bins`   | 否       | PATH 上的必需二进制文件                        |
-| `metadata.openclaw.requires.config` | 否       | 必需的配置键                                  |
+| 字段                                | 必填 | 描述                                      |
+| ----------------------------------- | ---- | ------------------------------------------ |
+| `name`                              | 是   | 唯一标识符（snake_case）                   |
+| `description`                       | 是   | 显示给代理的单行描述                      |
+| `metadata.openclaw.os`              | 否   | OS 过滤器（`["darwin"]`、`["linux"]` 等） |
+| `metadata.openclaw.requires.bins`   | 否   | PATH 上的必需二进制文件                   |
+| `metadata.openclaw.requires.config` | 否   | 必需的配置键                              |
 
 ## 最佳实践
 
 - **简洁明了** — 指导模型做什么，而不是如何成为 AI
 - **安全第一** — 如果你的技能使用 `exec`，确保提示不允许来自不受信任输入的任意命令注入
-- **本地测试** — 在分享之前使用 `openclaw agent --message "..."` 进行测试
+- **本地测试** — 在分享前使用 `openclaw agent --message "..."` 进行测试
 - **使用 ClawHub** — 在 [ClawHub](https://clawhub.ai) 浏览和贡献技能
 
-## 技能的位置
+## 技能所在位置
 
-| 位置                        | 优先级 | 范围                 |
-| ------------------------------- | ---------- | --------------------- |
-| `\<workspace\>/skills/`         | 最高    | 每代理             |
-| `\<workspace\>/.agents/skills/` | 高       | 每工作区代理   |
-| `~/.agents/skills/`             | 中       | 共享代理配置文件  |
-| `~/.openclaw/skills/`           | 中       | 共享（所有代理）   |
-| 捆绑（随 OpenClaw 一起提供） | 低        | 全局                |
-| `skills.load.extraDirs`         | 最低     | 自定义共享文件夹 |
+| 位置                             | 优先级 | 范围                 |
+| -------------------------------- | ------ | -------------------- |
+| `\<workspace\>/skills/`         | 最高   | 每个代理             |
+| `\<workspace\>/.agents/skills/` | 高     | 每个工作区代理       |
+| `~/.agents/skills/`              | 中     | 共享代理配置文件     |
+| `~/.openclaw/skills/`            | 中     | 共享（所有代理）     |
+| 捆绑（随 OpenClaw 一起提供）     | 低     | 全局                 |
+| `skills.load.extraDirs`          | 最低   | 自定义共享文件夹     |
 
 ## 相关
 
