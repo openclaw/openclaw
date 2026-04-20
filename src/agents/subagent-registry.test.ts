@@ -851,6 +851,7 @@ describe("subagent registry seam flow", () => {
       cleanup: "keep",
       expectsCompletionMessage: undefined,
       spawnMode: "run",
+      agentDir: "/tmp/agent-alt",
       workspaceDir: "/tmp/workspace",
       createdAt: 1,
       startedAt: 1,
@@ -863,6 +864,7 @@ describe("subagent registry seam flow", () => {
 
     await waitForFast(() => {
       expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
+        agentDir: "/tmp/agent-alt",
         childSessionKey: "agent:main:session:child",
         reason: "released",
         workspaceDir: "/tmp/workspace",
@@ -877,5 +879,15 @@ describe("subagent registry seam flow", () => {
       allowGatewaySubagentBinding: true,
     });
     expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
+      {
+        agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+        session: { mainKey: "main", scope: "per-sender" },
+      },
+      {
+        agentDir: "/tmp/agent-alt",
+        workspaceDir: "/tmp/workspace",
+      },
+    );
   });
 });
