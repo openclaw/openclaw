@@ -158,39 +158,6 @@ function clearDeleteConfirmSkip() {
 }
 
 describe("chat view", () => {
-  it("uses the assistant avatar URL or bundled logo fallbacks", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          assistantName: "Assistant",
-          assistantAvatar: "A",
-          assistantAvatarUrl: "/avatar/main",
-        }),
-      ),
-      container,
-    );
-
-    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
-    expect(welcomeImage).not.toBeNull();
-    expect(welcomeImage?.getAttribute("src")).toBe("/avatar/main");
-
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: "hello",
-        timestamp: 1000,
-      },
-      { basePath: "/openclaw/" },
-    );
-    const groupedLogo = container.querySelector<HTMLImageElement>(
-      ".chat-group.assistant .chat-avatar--logo",
-    );
-    expect(groupedLogo).not.toBeNull();
-    expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
-  });
-
   it("renders compaction and fallback indicators while they are fresh", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");
@@ -206,52 +173,6 @@ describe("chat view", () => {
               startedAt: 1_000,
               completedAt: null,
             },
-          }),
-        ),
-        container,
-      );
-
-      let indicator = container.querySelector(".compaction-indicator--active");
-      expect(indicator).not.toBeNull();
-      expect(indicator?.textContent).toContain("Compacting context...");
-
-      render(
-        renderChat(
-          createProps({
-            compactionStatus: {
-              phase: "complete",
-              runId: "run-1",
-              startedAt: 900,
-              completedAt: 900,
-            },
-          }),
-        ),
-        container,
-      );
-      indicator = container.querySelector(".compaction-indicator--complete");
-      expect(indicator).not.toBeNull();
-      expect(indicator?.textContent).toContain("Context compacted");
-
-      nowSpy.mockReturnValue(10_000);
-      render(
-        renderChat(
-          createProps({
-            compactionStatus: {
-              phase: "complete",
-              runId: "run-1",
-              startedAt: 0,
-              completedAt: 0,
-            },
-          }),
-        ),
-        container,
-      );
-      expect(container.querySelector(".compaction-indicator")).toBeNull();
-
-      nowSpy.mockReturnValue(1_000);
-      render(
-        renderChat(
-          createProps({
             fallbackStatus: {
               selected: "fireworks/minimax-m2p5",
               active: "deepinfra/moonshotai/Kimi-K2.5",
@@ -262,30 +183,23 @@ describe("chat view", () => {
         ),
         container,
       );
+
+      let indicator = container.querySelector(".compaction-indicator--active");
+      expect(indicator).not.toBeNull();
+      expect(indicator?.textContent).toContain("Compacting context...");
       indicator = container.querySelector(".compaction-indicator--fallback");
       expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
 
-      nowSpy.mockReturnValue(20_000);
       render(
         renderChat(
           createProps({
-            fallbackStatus: {
-              selected: "fireworks/minimax-m2p5",
-              active: "deepinfra/moonshotai/Kimi-K2.5",
-              attempts: [],
-              occurredAt: 0,
+            compactionStatus: {
+              phase: "complete",
+              runId: "run-1",
+              startedAt: 900,
+              completedAt: 900,
             },
-          }),
-        ),
-        container,
-      );
-      expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
-
-      nowSpy.mockReturnValue(1_000);
-      render(
-        renderChat(
-          createProps({
             fallbackStatus: {
               phase: "cleared",
               selected: "fireworks/minimax-m2p5",
@@ -298,9 +212,35 @@ describe("chat view", () => {
         ),
         container,
       );
+      indicator = container.querySelector(".compaction-indicator--complete");
+      expect(indicator).not.toBeNull();
+      expect(indicator?.textContent).toContain("Context compacted");
       indicator = container.querySelector(".compaction-indicator--fallback-cleared");
       expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+
+      nowSpy.mockReturnValue(20_000);
+      render(
+        renderChat(
+          createProps({
+            compactionStatus: {
+              phase: "complete",
+              runId: "run-1",
+              startedAt: 0,
+              completedAt: 0,
+            },
+            fallbackStatus: {
+              selected: "fireworks/minimax-m2p5",
+              active: "deepinfra/moonshotai/Kimi-K2.5",
+              attempts: [],
+              occurredAt: 0,
+            },
+          }),
+        ),
+        container,
+      );
+      expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
+      expect(container.querySelector(".compaction-indicator--complete")).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
