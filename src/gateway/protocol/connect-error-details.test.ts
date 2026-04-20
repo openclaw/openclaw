@@ -5,6 +5,7 @@ import {
   buildPairingConnectErrorMessage,
   ConnectPairingRequiredReasons,
   describePairingConnectRequirement,
+  normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
   readPairingConnectErrorDetails,
@@ -95,5 +96,21 @@ describe("pairing connect details", () => {
     ).toBe(
       "pairing required: device is asking for a higher role than currently approved (requestId: req-789)",
     );
+  });
+
+  it("drops request ids that do not match the allowlist", () => {
+    expect(normalizePairingConnectRequestId("req-123")).toBe("req-123");
+    expect(normalizePairingConnectRequestId("req-123;rm -rf /")).toBeUndefined();
+    expect(
+      readPairingConnectErrorDetails({
+        code: "PAIRING_REQUIRED",
+        reason: "scope-upgrade",
+        requestId: "req-123;rm -rf /",
+      }),
+    ).toEqual({
+      code: "PAIRING_REQUIRED",
+      reason: "scope-upgrade",
+      remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+    });
   });
 });

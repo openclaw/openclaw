@@ -75,6 +75,7 @@ const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequired
   "scope-upgrade",
   "metadata-upgrade",
 ]);
+const PAIRING_CONNECT_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 const PAIRING_CONNECT_REASON_METADATA: Readonly<
   Record<
@@ -203,6 +204,11 @@ function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredRe
     : undefined;
 }
 
+export function normalizePairingConnectRequestId(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
+}
+
 export function describePairingConnectRequirement(
   reason: ConnectPairingRequiredReason | undefined,
 ): string {
@@ -240,7 +246,7 @@ export function buildPairingConnectErrorDetails(params: {
   requestId?: string;
   remediationHint?: string;
 }): PairingConnectErrorDetails {
-  const requestId = normalizeOptionalString(params.requestId) ?? undefined;
+  const requestId = normalizePairingConnectRequestId(params.requestId);
   const remediationHint =
     normalizeOptionalString(params.remediationHint) ??
     buildPairingConnectRemediationHint(params.reason);
@@ -256,7 +262,7 @@ export function buildPairingConnectCloseReason(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
 }): string {
-  const requestId = normalizeOptionalString(params.requestId) ?? undefined;
+  const requestId = normalizePairingConnectRequestId(params.requestId);
   const message = buildPairingConnectErrorMessage(params.reason);
   return requestId ? `${message} (requestId: ${requestId})` : message;
 }
@@ -267,16 +273,13 @@ export function readPairingConnectErrorDetails(
   if (readConnectErrorDetailCode(details) !== ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return null;
   }
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return { code: ConnectErrorDetailCodes.PAIRING_REQUIRED };
-  }
   const raw = details as {
     reason?: unknown;
     requestId?: unknown;
     remediationHint?: unknown;
   };
   const reason = normalizePairingConnectReason(raw.reason);
-  const requestId = normalizeOptionalString(raw.requestId) ?? undefined;
+  const requestId = normalizePairingConnectRequestId(raw.requestId);
   const remediationHint =
     normalizeOptionalString(raw.remediationHint) ?? buildPairingConnectRemediationHint(reason);
   return {

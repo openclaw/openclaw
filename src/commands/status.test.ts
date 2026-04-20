@@ -1306,6 +1306,20 @@ describe("statusCommand", () => {
       reason: "scope-upgrade",
       remediationHint: "Review the requested scopes, then approve the pending upgrade.",
     });
+    expect(
+      resolvePairingRecoveryContext({
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "scope-upgrade",
+          requestId: "req-structured-789;rm -rf /",
+          remediationHint: "\u001b[31mReview\nfirst\u001b[0m",
+        },
+      }),
+    ).toEqual({
+      requestId: null,
+      reason: "scope-upgrade",
+      remediationHint: "Review\\nfirst",
+    });
 
     mocks.loadConfig.mockReturnValue({
       session: {},
