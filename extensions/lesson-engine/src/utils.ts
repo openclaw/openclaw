@@ -1,7 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentName, RawLessonsFile } from "./types.js";
+import type { AgentName, Lesson, RawLessonsFile } from "./types.js";
+
+export const PINNED_TAG = "pinned";
+
+export function isPinned(lesson: Pick<Lesson, "tags">): boolean {
+  const tags = Array.isArray(lesson.tags) ? lesson.tags : [];
+  return tags.includes(PINNED_TAG);
+}
 
 export const VALID_AGENTS: readonly AgentName[] = [
   "builder",

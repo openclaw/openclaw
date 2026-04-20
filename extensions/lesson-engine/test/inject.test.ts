@@ -347,6 +347,146 @@ describe("injectLessons", () => {
       fx.cleanup();
     }
   });
+
+  test("pinned lessons always included regardless of maxLessons cap", () => {
+    const fx = makeFixture();
+    try {
+      // 12 pinned lessons + 5 regular; maxLessons=3.
+      const pinned = Array.from({ length: 12 }, (_, i) =>
+        makeLesson({
+          id: `P${i}`,
+          severity: "important",
+          hitCount: 0,
+          tags: ["pinned", "rule"],
+          lesson: `pinned rule ${i}`,
+        }),
+      );
+      const regular = Array.from({ length: 5 }, (_, i) =>
+        makeLesson({
+          id: `R${i}`,
+          severity: "critical",
+          hitCount: 10,
+          tags: ["runtime"],
+          lesson: `regular ${i}`,
+        }),
+      );
+      writeLessons(fx, "builder", makeFile([...pinned, ...regular]));
+      const result = injectLessons({
+        agent: "builder",
+        root: fx.root,
+        maxLessons: 3,
+        dryRun: true,
+      });
+      const pinnedIds = result.selected.filter((s) => s.tags.includes("pinned")).map((s) => s.id);
+      const regularIds = result.selected.filter((s) => !s.tags.includes("pinned")).map((s) => s.id);
+      expect(pinnedIds).toHaveLength(12); // all pinned included
+      expect(regularIds).toHaveLength(3); // regular capped at maxLessons=3
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("pinned lessons ignore domainTags filter", () => {
+    const fx = makeFixture();
+    try {
+      const lessons = [
+        makeLesson({
+          id: "P1",
+          severity: "high",
+          tags: ["pinned", "review"],
+          lesson: "pinned review rule",
+        }),
+        makeLesson({
+          id: "R1",
+          severity: "high",
+          tags: ["deployment"],
+          lesson: "regular deployment",
+        }),
+        makeLesson({
+          id: "R2",
+          severity: "high",
+          tags: ["review"],
+          lesson: "regular review",
+        }),
+      ];
+      writeLessons(fx, "builder", makeFile(lessons));
+      const result = injectLessons({
+        agent: "builder",
+        root: fx.root,
+        domainTags: ["deployment"],
+        dryRun: true,
+      });
+      const ids = result.selected.map((s) => s.id);
+      // P1 included even though its tags don't match "deployment"
+      // R1 included (matches), R2 excluded (doesn't match)
+      expect(ids).toContain("P1");
+      expect(ids).toContain("R1");
+      expect(ids).not.toContain("R2");
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("pinned section renders with its own header in markdown", () => {
+    const fx = makeFixture();
+    try {
+      writeLessons(
+        fx,
+        "builder",
+        makeFile([
+          makeLesson({
+            id: "P1",
+            severity: "critical",
+            tags: ["pinned"],
+            title: "pinned title",
+            lesson: "pinned lesson body",
+          }),
+          makeLesson({
+            id: "R1",
+            severity: "high",
+            tags: ["runtime"],
+            title: "regular title",
+            lesson: "regular lesson body",
+          }),
+        ]),
+      );
+      const result = injectLessons({ agent: "builder", root: fx.root, dryRun: false });
+      const content = fs.readFileSync(result.outputPath!, "utf8");
+      expect(content).toContain("长期规则（Pinned");
+      expect(content).toContain("注入教训");
+      // Pinned header must appear before the regular header
+      const pinnedIdx = content.indexOf("长期规则");
+      const regularIdx = content.indexOf("注入教训");
+      expect(pinnedIdx).toBeGreaterThanOrEqual(0);
+      expect(pinnedIdx).toBeLessThan(regularIdx);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test("injection log records pinnedCount and regularCount", () => {
+    const fx = makeFixture();
+    try {
+      writeLessons(
+        fx,
+        "builder",
+        makeFile([
+          makeLesson({ id: "P1", tags: ["pinned"], severity: "high", lesson: "p1" }),
+          makeLesson({ id: "P2", tags: ["pinned"], severity: "high", lesson: "p2" }),
+          makeLesson({ id: "R1", tags: [], severity: "critical", lesson: "r1" }),
+        ]),
+      );
+      injectLessons({ agent: "builder", root: fx.root, dryRun: false });
+      const logPath = path.join(fx.root, "builder", "memory", "lesson-injection-log.jsonl");
+      const raw = fs.readFileSync(logPath, "utf8").trim();
+      const entry = JSON.parse(raw);
+      expect(entry.pinnedCount).toBe(2);
+      expect(entry.regularCount).toBe(1);
+      expect(entry.selectedCount).toBe(3);
+    } finally {
+      fx.cleanup();
+    }
+  });
 });
 
 describe("CLI inject", () => {

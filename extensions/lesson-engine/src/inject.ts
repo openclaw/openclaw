@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentName, Lesson, LessonsFile, Severity } from "./types.js";
-import { agentDataRoot, lessonsFilePath, nowIso, readJson } from "./utils.js";
+import { agentDataRoot, isPinned, lessonsFilePath, nowIso, readJson } from "./utils.js";
 
 // ── Types ──
 
@@ -73,9 +73,22 @@ function injectedLessonsPath(agent: string, root?: string): string {
   return path.join(agentDataRoot(root), agent, "memory", "injected-lessons.md");
 }
 
+function renderLessonBlock(lines: string[], item: InjectedLesson): void {
+  lines.push(`### [${item.severity}] ${item.title}`);
+  if (item.tags.length > 0) {
+    lines.push(`Tags: ${item.tags.map((t) => `\`${t}\``).join(", ")}`);
+  }
+  lines.push(`> ${item.lesson}`);
+  if (item.fix) {
+    lines.push(`Fix: ${item.fix}`);
+  }
+  lines.push("");
+}
+
 function renderMarkdown(
   agent: AgentName,
-  selected: InjectedLesson[],
+  pinned: InjectedLesson[],
+  regular: InjectedLesson[],
   tokens: number,
   now: Date,
   maxLessons: number,
@@ -86,20 +99,16 @@ function renderMarkdown(
   );
   lines.push(`<!-- agent: ${agent} | generated: ${nowIso(now)} | tokens: ~${tokens} -->`);
   lines.push("");
+
+  if (pinned.length > 0) {
+    lines.push(`## 长期规则（Pinned / always-on）`);
+    lines.push("");
+    for (const item of pinned) renderLessonBlock(lines, item);
+  }
+
   lines.push(`## 注入教训（Top ${maxLessons} / Active）`);
   lines.push("");
-
-  for (const item of selected) {
-    lines.push(`### [${item.severity}] ${item.title}`);
-    if (item.tags.length > 0) {
-      lines.push(`Tags: ${item.tags.map((t) => `\`${t}\``).join(", ")}`);
-    }
-    lines.push(`> ${item.lesson}`);
-    if (item.fix) {
-      lines.push(`Fix: ${item.fix}`);
-    }
-    lines.push("");
-  }
+  for (const item of regular) renderLessonBlock(lines, item);
 
   return lines.join("\n");
 }
@@ -122,47 +131,64 @@ export function injectLessons(opts: InjectOptions): InjectResult {
   }
 
   // 2. Filter: active only
-  let active = lessons.filter((l) => l.lifecycle === "active");
+  const active = lessons.filter((l) => l.lifecycle === "active");
   const totalLessons = active.length;
 
-  // 3. Filter by domainTags if provided
+  // 3. Partition pinned vs regular. Pinned ignores domainTag filtering (always included).
+  const pinnedLessons = active.filter((l) => isPinned(l));
+  let regularLessons = active.filter((l) => !isPinned(l));
+
+  // 4. Filter regular by domainTags if provided
   if (opts.domainTags && opts.domainTags.length > 0) {
-    active = active.filter((l) => {
+    regularLessons = regularLessons.filter((l) => {
       const tags = Array.isArray(l.tags) ? l.tags : [];
       return matchesDomainTags(tags, opts.domainTags!);
     });
   }
 
-  // 4. Sort: severity priority (critical > high > important > minor), then hitCount desc
-  active.sort((a, b) => {
+  // 5. Sort each group: severity priority (critical > high > important > minor), then hitCount desc
+  const sortFn = (a: Lesson, b: Lesson): number => {
     const sa = SEVERITY_ORDER[a.severity] ?? 99;
     const sb = SEVERITY_ORDER[b.severity] ?? 99;
     if (sa !== sb) return sa - sb;
     return (b.hitCount ?? 0) - (a.hitCount ?? 0);
-  });
+  };
+  pinnedLessons.sort(sortFn);
+  regularLessons.sort(sortFn);
 
-  // 5. Greedy selection: up to maxLessons, within maxTokens
-  const selected: InjectedLesson[] = [];
+  // 6. Select pinned first (all of them, no maxLessons cap, no token budget cap).
+  //    Pinned = long-term rules promoted from AGENTS.md; they must always appear.
+  const pinnedSelected: InjectedLesson[] = [];
+  const regularSelected: InjectedLesson[] = [];
   let estimatedTotal = 0;
 
-  for (const l of active) {
-    if (selected.length >= maxLessons) break;
-    const text = lessonText(l);
-    const tokens = estimateTokens(text);
-    if (estimatedTotal + tokens > maxTokens) continue;
-    estimatedTotal += tokens;
-    selected.push({
-      id: l.id,
-      title: l.title ?? l.id,
-      tags: Array.isArray(l.tags) ? l.tags : [],
-      lesson: typeof l.lesson === "string" ? l.lesson : "",
-      fix: typeof l.fix === "string" ? l.fix : undefined,
-      severity: l.severity,
-      hitCount: l.hitCount ?? 0,
-    });
+  const toInjected = (l: Lesson): InjectedLesson => ({
+    id: l.id,
+    title: l.title ?? l.id,
+    tags: Array.isArray(l.tags) ? l.tags : [],
+    lesson: typeof l.lesson === "string" ? l.lesson : "",
+    fix: typeof l.fix === "string" ? l.fix : undefined,
+    severity: l.severity,
+    hitCount: l.hitCount ?? 0,
+  });
+
+  for (const l of pinnedLessons) {
+    estimatedTotal += estimateTokens(lessonText(l));
+    pinnedSelected.push(toInjected(l));
   }
 
-  // 6. Best-effort injection logging (skip on dry-run).
+  // 7. Greedy selection of regular: up to maxLessons, within maxTokens (counting pinned).
+  for (const l of regularLessons) {
+    if (regularSelected.length >= maxLessons) break;
+    const tokens = estimateTokens(lessonText(l));
+    if (estimatedTotal + tokens > maxTokens) continue;
+    estimatedTotal += tokens;
+    regularSelected.push(toInjected(l));
+  }
+
+  const selected: InjectedLesson[] = [...pinnedSelected, ...regularSelected];
+
+  // 8. Best-effort injection logging (skip on dry-run).
   //    Append one JSON line per run to {agentDataRoot}/{agent}/memory/lesson-injection-log.jsonl.
   //    Failures must not break the inject path.
   if (!dryRun) {
@@ -179,6 +205,8 @@ export function injectLessons(opts: InjectOptions): InjectResult {
         agent: opts.agent,
         selectedLessonIds: selected.map((s) => s.id),
         selectedCount: selected.length,
+        pinnedCount: pinnedSelected.length,
+        regularCount: regularSelected.length,
         estimatedTokens: estimatedTotal,
         totalActiveLessons: totalLessons,
         maxLessons,
@@ -193,13 +221,20 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     }
   }
 
-  // 7. Write output
+  // 9. Write output
   let outputPath: string | null = null;
   if (!dryRun && selected.length > 0) {
     const outPath = injectedLessonsPath(opts.agent, opts.root);
     const dir = path.dirname(outPath);
     fs.mkdirSync(dir, { recursive: true });
-    const md = renderMarkdown(opts.agent, selected, estimatedTotal, now, maxLessons);
+    const md = renderMarkdown(
+      opts.agent,
+      pinnedSelected,
+      regularSelected,
+      estimatedTotal,
+      now,
+      maxLessons,
+    );
     fs.writeFileSync(outPath, md, "utf8");
     outputPath = outPath;
   } else if (!dryRun && selected.length === 0) {
@@ -207,7 +242,7 @@ export function injectLessons(opts: InjectOptions): InjectResult {
     const outPath = injectedLessonsPath(opts.agent, opts.root);
     const dir = path.dirname(outPath);
     fs.mkdirSync(dir, { recursive: true });
-    const md = renderMarkdown(opts.agent, selected, 0, now, maxLessons);
+    const md = renderMarkdown(opts.agent, [], [], 0, now, maxLessons);
     fs.writeFileSync(outPath, md, "utf8");
     outputPath = outPath;
   }

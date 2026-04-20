@@ -144,6 +144,47 @@ describe("forget lifecycle transitions", () => {
     );
     expect(next.lessons.filter((lesson) => lesson.lifecycle === "active")).toHaveLength(1);
   });
+
+  test("pinned lessons are exempt from the maxActive cap and from demotion", () => {
+    const lessons = [
+      // 3 pinned (exempt)
+      makeLesson({
+        id: "P1",
+        tags: ["pinned"],
+        severity: "minor",
+        createdAt: "2024-01-01T00:00:00Z",
+      }),
+      makeLesson({
+        id: "P2",
+        tags: ["pinned"],
+        severity: "minor",
+        createdAt: "2024-01-02T00:00:00Z",
+      }),
+      makeLesson({
+        id: "P3",
+        tags: ["pinned"],
+        severity: "minor",
+        createdAt: "2024-01-03T00:00:00Z",
+      }),
+      // 3 regular with fresh createdAt (will fill maxActive=2)
+      makeLesson({ id: "R1", severity: "critical", createdAt: "2026-04-10T00:00:00Z" }),
+      makeLesson({ id: "R2", severity: "critical", createdAt: "2026-04-11T00:00:00Z" }),
+      makeLesson({ id: "R3", severity: "critical", createdAt: "2026-04-01T00:00:00Z" }),
+    ];
+    const { next, transitions } = forgetData(makeFile(lessons), { now: NOW, maxActive: 2 });
+    // Pinned lessons all stay active regardless of their (low) scores
+    const stillActive = next.lessons.filter((l) => l.lifecycle === "active").map((l) => l.id);
+    expect(stillActive).toContain("P1");
+    expect(stillActive).toContain("P2");
+    expect(stillActive).toContain("P3");
+    // Among regular, lowest-scoring R3 demoted; R1+R2 stay
+    expect(stillActive).toContain("R1");
+    expect(stillActive).toContain("R2");
+    expect(stillActive).not.toContain("R3");
+    // Transition only for R3
+    expect(transitions).toHaveLength(1);
+    expect(transitions[0]?.id).toBe("R3");
+  });
 });
 
 describe("forget file", () => {

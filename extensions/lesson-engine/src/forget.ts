@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import type { Lesson, LessonsFile, Severity } from "./types.js";
-import { atomicWriteJson, daysBetween, jsonClone, nowIso, readJson } from "./utils.js";
+import { atomicWriteJson, daysBetween, isPinned, jsonClone, nowIso, readJson } from "./utils.js";
 
 export const DEFAULT_MAX_ACTIVE = 50;
 export const STALE_DAYS = 90;
@@ -95,10 +95,12 @@ export function forgetData(
     }
   }
 
-  // Step 2: if active > maxActive, demote the lowest-scoring tail to stale.
+  // Step 2: if non-pinned active > maxActive, demote the lowest-scoring tail to stale.
+  // Pinned lessons (tags contains "pinned") are exempt from the cap and from demotion.
   const active = next.lessons.filter((l) => l.lifecycle === "active");
-  if (active.length > maxActive) {
-    const scored = active
+  const demotable = active.filter((l) => !isPinned(l));
+  if (demotable.length > maxActive) {
+    const scored = demotable
       .map((lesson) => ({ lesson, score: scoreLesson(lesson, now) }))
       .sort((a, b) => {
         if (a.score.total !== b.score.total) return a.score.total - b.score.total;
@@ -108,7 +110,7 @@ export function forgetData(
         if (ta !== tb) return ta - tb;
         return a.lesson.id.localeCompare(b.lesson.id);
       });
-    const toDemote = scored.slice(0, active.length - maxActive);
+    const toDemote = scored.slice(0, demotable.length - maxActive);
     for (const { lesson, score } of toDemote) {
       transitions.push({
         id: lesson.id,
