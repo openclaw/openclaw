@@ -2383,29 +2383,43 @@ export function renderApp(state: AppViewState) {
                         : `Failed to set mode: ${String(err)}`;
                   },
                 );
-                // PR-10 auto-toggle: fire a follow-up patch only when
-                // we're switching INTO or OUT OF plan mode AND the
-                // selected mode disagrees with the current autoApprove
-                // state. We always send for plan-* selections so the
-                // backend is the source of truth (and so toggling
-                // between Plan and Plan ⚡ flips the flag without
-                // re-entering plan mode).
-                if (mode.planMode === "plan") {
-                  const autoEnabled = mode.planAutoApprove === true;
-                  const autoPatch: Record<string, unknown> = {
-                    key: sessionKey,
-                    planApproval: { action: "auto", autoEnabled },
-                  };
-                  void state.client.request("sessions.patch", autoPatch).then(
-                    () => {
-                      // No-op; lastError already cleared by the
-                      // primary patch above.
-                    },
-                    (err: unknown) => {
-                      state.lastError = `Failed to ${autoEnabled ? "enable" : "disable"} auto-approve: ${String(err)}`;
-                    },
-                  );
-                }
+                // PR #68939 follow-up (selector-as-single-source-of-truth):
+                // ALWAYS fire the autoApprove sync patch, regardless of
+                // whether we're switching into or out of plan mode. Prior
+                // behavior only fired for `mode.planMode === "plan"`, which
+                // meant switching FROM "Plan ⚡" TO "Default" left
+                // `planMode.autoApprove = true` persisted on the session
+                // entry. Next `enter_plan_mode` call then silently armed
+                // auto-approve despite the user having explicitly moved
+                // off plan-auto via the selector — state drift between
+                // selector intent and persisted flag.
+                //
+                // Fix: the selector is the single source of truth. Every
+                // click syncs `autoApprove` to `mode.planAutoApprove`:
+                //   - Plan ⚡  → autoEnabled=true
+                //   - Plan    → autoEnabled=false
+                //   - Default → autoEnabled=false (clears stale flag)
+                //   - Bypass  → autoEnabled=false (clears stale flag)
+                //
+                // sessions-patch.ts:787-803 handles the "no active
+                // planMode" case gracefully (creates a fresh planMode
+                // object with mode:"normal", autoApprove:false) so the
+                // patch is safe to fire even when the session has no
+                // planMode entry yet.
+                const autoEnabled = mode.planAutoApprove === true;
+                const autoPatch: Record<string, unknown> = {
+                  key: sessionKey,
+                  planApproval: { action: "auto", autoEnabled },
+                };
+                void state.client.request("sessions.patch", autoPatch).then(
+                  () => {
+                    // No-op; lastError already cleared by the
+                    // primary patch above.
+                  },
+                  (err: unknown) => {
+                    state.lastError = `Failed to ${autoEnabled ? "enable" : "disable"} auto-approve: ${String(err)}`;
+                  },
+                );
               },
               // PR-8 follow-up: inline plan approval card lives above
               // the chat input. Replaces the modal overlay so the rest

@@ -1402,9 +1402,33 @@ export class OpenClawApp extends LitElement {
       ),
     );
     if (pending.kind === "plan") {
-      if (row.planMode?.approval !== "pending") {
-        return null;
-      }
+      // PR #68939 follow-up (pendingInteraction is source of truth):
+      // The prior guard here was `if (row.planMode?.approval !== "pending") return null;`
+      // That's stale under Eva's PR-3 discriminated-union design where
+      // `pendingInteraction.status === "pending"` is the canonical
+      // "there's a plan pending" signal. The persister at
+      // `plan-snapshot-persister.ts:299 (persistApprovalMetadata)` writes
+      // pendingInteraction but does NOT write `planMode.approval = "pending"`.
+      // The separate `persistPlanApprovalId` in
+      // `pi-embedded-subscribe.handlers.tools.ts:115` WOULD write it, but
+      // only when `current.mode === "plan"` at the moment of exit_plan_mode;
+      // if the prior cycle's close-on-complete left `mode: "normal"`
+      // (or an aborted auto-approve left a weird transitional state),
+      // the approval flag never transitions to "pending". My prior guard
+      // here then returned null and dismissed the card — the
+      // "popped up and went away instantly" bug.
+      //
+      // Fix: trust `pendingInteraction.status` (already gated above at
+      // line 1395 "pending.status !== 'pending'"). No additional check
+      // against `planMode.approval` needed — if a plan interaction is
+      // pending, the card should render.
+      //
+      // This also aligns with what the UI actually does when the user
+      // clicks Approve: it fires `sessions.patch { planApproval: ... }`
+      // which transitions BOTH `pendingInteraction.status` and
+      // `planMode.approval` — so the card disappears after action
+      // regardless of which field the hydrate gate watches.
+      //
       // PR #68939 follow-up (auto-approve UX fix): when the session has
       // `planMode.autoApprove === true`, the server-side auto-approve
       // handler (`autoApproveIfEnabled` in pi-embedded-subscribe.handlers
