@@ -8,6 +8,7 @@ const {
   getPendingDevicePairingMock,
   listDevicePairingMock,
   removePairedDeviceMock,
+  rejectDevicePairingMock,
   revokeDeviceTokenMock,
   rotateDeviceTokenMock,
 } = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const {
   getPendingDevicePairingMock: vi.fn(),
   listDevicePairingMock: vi.fn(),
   removePairedDeviceMock: vi.fn(),
+  rejectDevicePairingMock: vi.fn(),
   revokeDeviceTokenMock: vi.fn(),
   rotateDeviceTokenMock: vi.fn(),
 }));
@@ -31,13 +33,21 @@ vi.mock("../../infra/device-pairing.js", async () => {
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,
     removePairedDevice: removePairedDeviceMock,
+    rejectDevicePairing: rejectDevicePairingMock,
     revokeDeviceToken: revokeDeviceTokenMock,
     rotateDeviceToken: rotateDeviceTokenMock,
   };
 });
 
-function createClient(scopes: string[], deviceId?: string) {
+function createClient(
+  scopes: string[],
+  deviceId?: string,
+  opts?: {
+    isDeviceTokenAuth?: boolean;
+  },
+) {
   return {
+    ...(opts?.isDeviceTokenAuth !== undefined ? { isDeviceTokenAuth: opts.isDeviceTokenAuth } : {}),
     connect: {
       scopes,
       ...(deviceId ? { device: { id: deviceId } } : {}),
@@ -139,7 +149,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions(
       "device.pair.remove",
       { deviceId: "device-2" },
-      { client: createClient(["operator.pairing"], "device-1") },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.pair.remove"](opts);
@@ -157,7 +167,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions(
       "device.pair.remove",
       { deviceId: " device-1 " },
-      { client: createClient(["operator.pairing"], "device-1") },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.pair.remove"](opts);
@@ -199,7 +209,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions(
       "device.token.revoke",
       { deviceId: "device-2", role: "operator" },
-      { client: createClient(["operator.admin"], "device-1") },
+      { client: createClient(["operator.admin"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.token.revoke"](opts);
@@ -220,7 +230,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions(
       "device.token.revoke",
       { deviceId: " device-1 ", role: "operator" },
-      { client: createClient(["operator.pairing"], "device-1") },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.token.revoke"](opts);
@@ -289,7 +299,7 @@ describe("deviceHandlers", () => {
         role: "operator",
         scopes: ["operator.pairing"],
       },
-      { client: createClient(["operator.pairing"], "device-1") },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.token.rotate"](opts);
@@ -382,7 +392,7 @@ describe("deviceHandlers", () => {
       "device.pair.list",
       {},
       {
-        client: createClient(["operator.pairing"], "device-1"),
+        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }),
       },
     );
 
@@ -406,6 +416,129 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("preserves the full pairing list for admin device sessions", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
+        { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
+      ],
+      paired: [
+        { deviceId: "device-1", publicKey: "pk-1", approvedAtMs: 100, createdAtMs: 50 },
+        { deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 },
+      ],
+    });
+    const opts = createOptions(
+      "device.pair.list",
+      {},
+      {
+        client: createClient(["operator.pairing", "operator.admin"], "device-1", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await deviceHandlers["device.pair.list"](opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        pending: [
+          { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
+          { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
+        ],
+        paired: [
+          {
+            deviceId: "device-1",
+            publicKey: "pk-1",
+            approvedAtMs: 100,
+            createdAtMs: 50,
+            tokens: undefined,
+          },
+          {
+            deviceId: "device-2",
+            publicKey: "pk-2",
+            approvedAtMs: 200,
+            createdAtMs: 60,
+            tokens: undefined,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
+  it("preserves the full pairing list for non-device operator sessions", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 }],
+      paired: [{ deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 }],
+    });
+    const opts = createOptions(
+      "device.pair.list",
+      {},
+      {
+        client: createClient(["operator.pairing"]),
+      },
+    );
+
+    await deviceHandlers["device.pair.list"](opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 }],
+        paired: [
+          {
+            deviceId: "device-2",
+            publicKey: "pk-2",
+            approvedAtMs: 200,
+            createdAtMs: 60,
+            tokens: undefined,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
+  it("preserves the full pairing list for shared-auth sessions carrying a device identity", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [
+        { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
+        { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
+      ],
+      paired: [{ deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 }],
+    });
+    const opts = createOptions(
+      "device.pair.list",
+      {},
+      {
+        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }),
+      },
+    );
+
+    await deviceHandlers["device.pair.list"](opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        pending: [
+          { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
+          { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
+        ],
+        paired: [
+          {
+            deviceId: "device-2",
+            publicKey: "pk-2",
+            approvedAtMs: 200,
+            createdAtMs: 60,
+            tokens: undefined,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
   it("rejects approving another device from a non-admin device session", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-2",
@@ -416,7 +549,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions(
       "device.pair.approve",
       { requestId: "req-2" },
-      { client: createClient(["operator.pairing"], "device-1") },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.pair.approve"](opts);
@@ -449,7 +582,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions(
       "device.pair.approve",
       { requestId: "req-1" },
-      { client: createClient(["operator.pairing"], "device-1") },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
     await deviceHandlers["device.pair.approve"](opts);
@@ -469,6 +602,87 @@ describe("deviceHandlers", () => {
           tokens: undefined,
         },
       },
+      undefined,
+    );
+  });
+
+  it("rejects rejecting another device from a non-admin device session", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-2",
+      deviceId: "device-2",
+      publicKey: "pk-2",
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.reject",
+      { requestId: "req-2" },
+      {
+        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }),
+      },
+    );
+
+    await deviceHandlers["device.pair.reject"](opts);
+
+    expect(rejectDevicePairingMock).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "device pairing rejection denied" }),
+    );
+  });
+
+  it("allows rejecting the caller device from a non-admin device session", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: " device-1 ",
+      publicKey: "pk-1",
+      ts: 100,
+    });
+    rejectDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-1",
+      rejectedAtMs: 123,
+    });
+    const opts = createOptions(
+      "device.pair.reject",
+      { requestId: "req-1" },
+      {
+        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }),
+      },
+    );
+
+    await deviceHandlers["device.pair.reject"](opts);
+
+    expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-1");
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { requestId: "req-1", deviceId: "device-1", rejectedAtMs: 123 },
+      undefined,
+    );
+  });
+
+  it("allows admins to reject another device", async () => {
+    rejectDevicePairingMock.mockResolvedValue({
+      requestId: "req-2",
+      deviceId: "device-2",
+      rejectedAtMs: 456,
+    });
+    const opts = createOptions(
+      "device.pair.reject",
+      { requestId: "req-2" },
+      {
+        client: createClient(["operator.pairing", "operator.admin"], "device-1", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await deviceHandlers["device.pair.reject"](opts);
+
+    expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-2");
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { requestId: "req-2", deviceId: "device-2", rejectedAtMs: 456 },
       undefined,
     );
   });
