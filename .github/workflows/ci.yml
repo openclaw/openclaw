@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -302,7 +302,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     env:
       PRE_COMMIT_CACHE_KEY_SUFFIX: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
@@ -402,7 +402,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -499,7 +499,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -584,7 +584,7 @@ jobs:
     name: "checks-fast-protocol"
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -649,7 +649,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -719,7 +719,7 @@ jobs:
     name: checks-node-extensions
     needs: [preflight, checks-node-extensions-shard]
     if: always() && needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify extension shards
@@ -737,7 +737,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -809,14 +809,17 @@ jobs:
         env:
           TASK: ${{ matrix.task }}
         run: |
-          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
-          if [ "$TASK" = "test" ]; then
-            echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
-          fi
-          if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
-          fi
+          {
+            echo "OPENCLAW_VITEST_MAX_WORKERS=2"
+            if [ "$TASK" = "test" ]; then
+              echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1"
+              echo "OPENCLAW_TEST_PROJECTS_PARALLEL=4"
+              echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1"
+            fi
+            if [ "$TASK" = "channels" ]; then
+              echo "OPENCLAW_VITEST_MAX_WORKERS=1"
+            fi
+          } >> "$GITHUB_ENV"
 
       - name: Download dist artifact
         if: matrix.task == 'test'
@@ -866,7 +869,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -928,7 +931,7 @@ jobs:
           install-bun: "false"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        run: echo "OPENCLAW_VITEST_MAX_WORKERS=4" >> "$GITHUB_ENV"
 
       - name: Restore dist cache
         id: dist-cache
@@ -998,7 +1001,7 @@ jobs:
     name: checks-node-core
     needs: [preflight, checks-node-core-test-shard]
     if: always() && needs.preflight.outputs.run_checks == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify node test shards
@@ -1016,7 +1019,7 @@ jobs:
     name: "extension-fast"
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1087,7 +1090,7 @@ jobs:
     name: "check"
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1162,7 +1165,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1232,7 +1235,7 @@ jobs:
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
-          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 4
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 8
         shell: bash
         run: |
           set -euo pipefail
@@ -1307,7 +1310,7 @@ jobs:
     name: "check-additional"
     needs: [preflight, check-additional-shard]
     if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify additional check shards
@@ -1325,7 +1328,7 @@ jobs:
     name: "build-smoke"
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1421,7 +1424,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1485,7 +1488,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1576,7 +1579,9 @@ jobs:
           pnpm -v
 
       - name: Capture node path
-        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+        run: |
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         env:
@@ -1818,7 +1823,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
