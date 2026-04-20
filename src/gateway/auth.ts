@@ -40,6 +40,8 @@ export type ResolvedGatewayAuth = {
   token?: string;
   password?: string;
   allowTailscale: boolean;
+  /** Scopes granted to device-less token/password connections. */
+  scopes?: string[];
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
@@ -294,12 +296,18 @@ export function resolveGatewayAuth(params: {
     authConfig.allowTailscale ??
     (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
 
+  const scopes =
+    Array.isArray(authConfig.scopes) && authConfig.scopes.length > 0
+      ? authConfig.scopes.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      : undefined;
+
   return {
     mode,
     modeSource,
     token,
     password,
     allowTailscale,
+    scopes,
     trustedProxy,
   };
 }

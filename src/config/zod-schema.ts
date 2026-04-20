@@ -704,6 +704,7 @@ export const OpenClawSchema = z
             token: SecretInputSchema.optional().register(sensitive),
             password: SecretInputSchema.optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
+            scopes: z.array(z.string()).optional(),
             rateLimit: z
               .object({
                 maxAttempts: z.number().optional(),
