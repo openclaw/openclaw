@@ -433,6 +433,30 @@ describe("gateway hooks helpers", () => {
       } as OpenClawConfig),
     ).not.toThrow();
   });
+
+  test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              action: "agent",
+              messageTemplate: "catch-all",
+              sessionKey: "hook:static",
+            },
+            {
+              match: { path: "gmail" },
+              action: "agent",
+              messageTemplate: "Subject: {{messages[0].subject}}",
+              sessionKey: "hook:gmail:{{messages[0].id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
