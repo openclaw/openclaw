@@ -36,7 +36,17 @@ async function expectDirectoryIds(
 ) {
   const entries = await listDirectoryEntriesWithDefaults(listFn, cfg);
   const ids = entries.map((entry) => entry.id);
-  expect(options?.sorted ? ids.toSorted((a, b) => a.localeCompare(b)) : ids).toEqual(expected);
+  expect(options?.sorted ? sortDirectoryIds(ids) : ids).toEqual(
+    options?.sorted ? sortDirectoryIds(expected) : expected,
+  );
+}
+
+function compareDirectoryIds(left: string, right: string) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function sortDirectoryIds(values: string[]) {
+  return values.toSorted(compareDirectoryIds);
 }
 
 describe("Discord directory contract", () => {
