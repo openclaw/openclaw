@@ -20,8 +20,6 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
 
-// Example-only model refs for config-wiring tests. These are not recommended
-// defaults and do not imply any preferred provider or model.
 const TEST_DREAMING_MODEL = "example/dreaming-model";
 const TEST_REM_OVERRIDE_MODEL = "example/rem-override-model";
 

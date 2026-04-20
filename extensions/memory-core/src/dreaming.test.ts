@@ -21,8 +21,6 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const constants = __testing.constants;
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-// Example-only model ref for config propagation tests. This is not a
-// recommended default and does not imply any preferred provider or model.
 const TEST_DREAMING_MODEL = "example/dreaming-model";
 
 afterEach(() => {

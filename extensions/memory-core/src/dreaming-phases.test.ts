@@ -19,8 +19,6 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
-// Example-only model ref for phase-to-subagent wiring tests. This is not a
-// recommended default and does not imply any preferred provider or model.
 const TEST_DREAMING_MODEL = "example/dreaming-model";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {

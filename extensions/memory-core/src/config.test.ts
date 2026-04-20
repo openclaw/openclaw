@@ -6,8 +6,6 @@ const manifest = JSON.parse(
   fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
 ) as { configSchema: Record<string, unknown> };
 
-// Example-only model ref for manifest schema coverage. This is not a
-// recommended default and does not imply any preferred provider or model.
 const TEST_DREAMING_MODEL = "example/dreaming-model";
 
 describe("memory-core manifest config schema", () => {

@@ -27,8 +27,6 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
-// Example-only model ref for narrative wiring tests. This is not a recommended
-// default and does not imply any preferred provider or model.
 const TEST_DREAMING_MODEL = "example/dreaming-model";
 
 afterEach(() => {
