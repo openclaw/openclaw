@@ -18,6 +18,7 @@ import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
+import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
@@ -163,7 +164,7 @@ function makeNativeTelegramCommandMessage(params: {
   body: string;
   slashSessionKey: string;
   targetSessionKey: string;
-}) {
+}): MsgContext {
   return {
     Body: params.body,
     ...TELEGRAM_DIRECT_MESSAGE,
