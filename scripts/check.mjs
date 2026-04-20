@@ -9,6 +9,7 @@ export async function main(argv = process.argv.slice(2)) {
 
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
+    { name: "temp path guard", args: ["check:temp-path-guardrails"] },
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },
     includeArchitecture

@@ -1261,6 +1261,7 @@
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
+    "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:test-types": "pnpm tsgo:test",
     "check:timed": "node scripts/check-timed.mjs",
     "check:timed:all-types": "node scripts/check-timed.mjs --include-test-types",
