@@ -620,6 +620,53 @@ describe("BlueBubbles webhook monitor", () => {
       );
     });
 
+    it("falls back to the '*' wildcard systemPrompt when no exact group match", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "*": { systemPrompt: "Default group rule: keep it short." },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-unmapped",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("Default group rule: keep it short.");
+    });
+
+    it("prefers an exact group systemPrompt over the '*' wildcard", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "*": { systemPrompt: "wildcard value" },
+            "iMessage;+;chat123456": { systemPrompt: "exact value" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("exact value");
+    });
+
     it("omits GroupSystemPrompt for DMs even when the group config would match", async () => {
       setupWebhookTarget({
         account: createMockAccount({

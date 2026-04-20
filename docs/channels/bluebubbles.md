@@ -235,7 +235,7 @@ Each entry under `channels.bluebubbles.groups.*` accepts an optional `systemProm
 }
 ```
 
-The key matches whatever BlueBubbles reports as `chatGuid` / `chatIdentifier` / numeric `chatId` for the group. DMs ignore this field; use agent-level or account-level prompt customization instead.
+The key matches whatever BlueBubbles reports as `chatGuid` / `chatIdentifier` / numeric `chatId` for the group, and a `"*"` wildcard entry provides a default for every group without an exact match (same pattern used by `requireMention` and per-group tool policies). Exact matches always win over the wildcard. DMs ignore this field; use agent-level or account-level prompt customization instead.
 
 #### Worked example: threaded replies and tapback reactions (Private API)
 
