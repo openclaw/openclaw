@@ -67,7 +67,7 @@ function resolvePrimaryCommandPluginIds(
   if (!normalizedPrimary) {
     return [];
   }
-  return resolveManifestActivationPluginIds({
+  const scopedPluginIds = resolveManifestActivationPluginIds({
     trigger: {
       kind: "command",
       command: normalizedPrimary,
@@ -76,6 +76,14 @@ function resolvePrimaryCommandPluginIds(
     workspaceDir: context.workspaceDir,
     env: context.env,
   });
+  if (scopedPluginIds.length === 0) {
+    return scopedPluginIds;
+  }
+  const memorySlot = context.activationSourceConfig.plugins?.slots?.memory?.trim();
+  if (!memorySlot) {
+    return scopedPluginIds;
+  }
+  return [...new Set([...scopedPluginIds, memorySlot])];
 }
 
 export function resolvePluginCliLoadContext(params: {
