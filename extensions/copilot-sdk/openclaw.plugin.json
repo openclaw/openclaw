@@ -31,6 +31,11 @@
         "default": false,
         "description": "When true, reject chat-completion requests that declare `tools` with HTTP 400. When false (default), tools are silently stripped with a warning. The Copilot CLI cannot execute OpenClaw-dispatched tool calls through this path."
       },
+      "allowBuiltinTools": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true (default), the Copilot CLI's built-in tools (bash, file operations, grep, etc.) are available to the model. The SDK manages the full agentic tool loop internally. When false, the model acts as a pure LLM with no tool access."
+      },
       "cliPath": {
         "type": "string",
         "description": "Optional override for the @github/copilot CLI binary path (defaults to the SDK-bundled CLI)."

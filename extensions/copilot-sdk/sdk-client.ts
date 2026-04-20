@@ -4,8 +4,9 @@
  * Responsibilities:
  *   - Lazy-load the SDK (it's a runtime dep; may be absent in minimal installs)
  *   - Maintain one client per process lifetime
- *   - Keep the permission handler locked to "deny everything" so the Copilot
- *     CLI never executes tools on behalf of OpenClaw (that is OpenClaw's job)
+ *   - Support two permission modes:
+ *       deny-all: model acts as a pure LLM (no tool access)
+ *       approve-all: SDK's built-in tools (bash, grep, file ops) can execute
  *   - Provide `listModels` and `runPrompt` helpers the shim server uses
  *
  * The SDK is in public preview; every SDK call is wrapped so failures surface
@@ -16,6 +17,16 @@ export type RunPromptOptions = {
   model: string;
   prompt: string;
   timeoutMs?: number;
+  /**
+   * When true, the SDK session approves tool-execution permissions so the
+   * Copilot CLI's built-in tools (bash, file read/write, grep, etc.) can run.
+   * The SDK manages the full agentic tool loop internally — sendAndWait
+   * returns the final assistant message after all tool calls complete.
+   *
+   * When false (default), all permissions are denied and the model acts as a
+   * pure LLM with no tool access.
+   */
+  allowBuiltinTools?: boolean;
 };
 
 export type RunPromptResult = {
@@ -114,6 +125,15 @@ export type PermissionResult = {
 export const denyAllPermissionHandler = (): PermissionResult => ({
   kind: "denied-by-rules",
   rules: [],
+});
+
+/**
+ * Permission handler that approves every request so the Copilot CLI's
+ * built-in tools (bash, file read/write, grep, etc.) can execute.
+ * The SDK manages the full agentic tool loop internally.
+ */
+export const approveAllPermissionHandler = (): PermissionResult => ({
+  kind: "approved",
 });
 
 /** How long to wait for the SDK client to start (spawn CLI + JSON-RPC handshake). */
@@ -268,10 +288,12 @@ async function buildClient(options: SdkClientOptions): Promise<SdkClient> {
       );
       return list.map((entry) => ({ id: entry.id, name: entry.name }));
     },
-    async runPrompt({ model, prompt, timeoutMs }) {
+    async runPrompt({ model, prompt, timeoutMs, allowBuiltinTools }) {
       const session = await instance.createSession({
         model,
-        onPermissionRequest: denyAllPermissionHandler,
+        onPermissionRequest: allowBuiltinTools
+          ? approveAllPermissionHandler
+          : denyAllPermissionHandler,
       });
       try {
         const result = await session.sendAndWait({ prompt }, timeoutMs);

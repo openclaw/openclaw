@@ -31,6 +31,7 @@ const PLACEHOLDER_API_KEY = "copilot-sdk";
 type PluginConfig = {
   port?: number;
   rejectToolRequests?: boolean;
+  allowBuiltinTools?: boolean;
   cliPath?: string;
 };
 
@@ -69,6 +70,7 @@ function shimFingerprint(cfg: PluginConfig): string {
     port: cfg.port ?? DEFAULT_PORT,
     cliPath: cfg.cliPath ?? null,
     rejectToolRequests: cfg.rejectToolRequests ?? false,
+    allowBuiltinTools: cfg.allowBuiltinTools ?? true,
   });
 }
 
@@ -107,6 +109,7 @@ async function ensureShim(pluginConfig: PluginConfig, deps: SharedDeps): Promise
         client,
         port: pluginConfig.port ?? DEFAULT_PORT,
         rejectToolRequests: pluginConfig.rejectToolRequests,
+        allowBuiltinTools: pluginConfig.allowBuiltinTools ?? true,
       });
       shimHandle = handle;
       return handle;

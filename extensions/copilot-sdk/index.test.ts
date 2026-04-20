@@ -323,4 +323,22 @@ describe("copilot-sdk provider plugin", () => {
 
     expect(catalog).toBeNull();
   });
+
+  it("passes allowBuiltinTools config to startShimServer", async () => {
+    const { deps, startShimServer } = buildFakeDeps();
+    const provider = await registerSingleProviderPlugin(createCopilotSdkPlugin(deps));
+
+    await provider.catalog!.run({
+      config: {
+        plugins: { entries: { "copilot-sdk": { config: { allowBuiltinTools: true } } } },
+      },
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "copilot-sdk" }),
+      resolveProviderAuth: () => ({ apiKey: "copilot-sdk", mode: "token", source: "profile" }),
+    } as never);
+
+    expect(startShimServer).toHaveBeenCalledWith(
+      expect.objectContaining({ allowBuiltinTools: true }),
+    );
+  });
 });

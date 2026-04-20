@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  approveAllPermissionHandler,
   createDedicatedClient,
   denyAllPermissionHandler,
   getSdkClient,
@@ -85,6 +86,10 @@ describe("sdk-client wrapper", () => {
     expect(denyAllPermissionHandler()).toEqual({ kind: "denied-by-rules", rules: [] });
   });
 
+  it("approveAllPermissionHandler returns approved", () => {
+    expect(approveAllPermissionHandler()).toEqual({ kind: "approved" });
+  });
+
   it("forwards listModels from the underlying SDK", async () => {
     const fake = buildFakeSdk();
     const client = await getSdkClient({ sdkFactory: async () => fake.module });
@@ -103,6 +108,24 @@ describe("sdk-client wrapper", () => {
     expect(createArg.model).toBe("gpt-5");
     expect(createArg.onPermissionRequest()).toEqual({ kind: "denied-by-rules", rules: [] });
     expect(fake.sessionDispose).toHaveBeenCalledOnce();
+  });
+
+  it("uses approve-all permission handler when allowBuiltinTools is true", async () => {
+    const fake = buildFakeSdk();
+    const client = await getSdkClient({ sdkFactory: async () => fake.module });
+
+    await client.runPrompt({ model: "gpt-5", prompt: "hello", allowBuiltinTools: true });
+    const createArg = fake.createSession.mock.calls[0][0];
+    expect(createArg.onPermissionRequest()).toEqual({ kind: "approved" });
+  });
+
+  it("uses deny-all permission handler when allowBuiltinTools is false", async () => {
+    const fake = buildFakeSdk();
+    const client = await getSdkClient({ sdkFactory: async () => fake.module });
+
+    await client.runPrompt({ model: "gpt-5", prompt: "hello", allowBuiltinTools: false });
+    const createArg = fake.createSession.mock.calls[0][0];
+    expect(createArg.onPermissionRequest()).toEqual({ kind: "denied-by-rules", rules: [] });
   });
 
   it("reuses the cached client when options are unchanged", async () => {

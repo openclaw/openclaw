@@ -249,4 +249,42 @@ describe("copilot-sdk shim server", () => {
     expect(s1).toBe(200);
     expect(s2).toBe(200);
   });
+
+  it("passes allowBuiltinTools through to runPrompt", async () => {
+    const client = buildFakeClient();
+    const handle = await startShimServer({ client, allowBuiltinTools: true });
+    handles.push(handle);
+
+    await fetchJson(`${handle.url}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+
+    expect(client.runPrompt).toHaveBeenCalledOnce();
+    const callArg = (client.runPrompt as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.allowBuiltinTools).toBe(true);
+  });
+
+  it("defaults allowBuiltinTools to false when not specified", async () => {
+    const client = buildFakeClient();
+    const handle = await startShimServer({ client });
+    handles.push(handle);
+
+    await fetchJson(`${handle.url}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+
+    expect(client.runPrompt).toHaveBeenCalledOnce();
+    const callArg = (client.runPrompt as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.allowBuiltinTools).toBe(false);
+  });
 });
