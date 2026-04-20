@@ -48,6 +48,23 @@ function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   };
 }
 
+async function captureRenameDestinations(action: () => Promise<void>): Promise<string[]> {
+  const renamedDestinations: string[] = [];
+  const origRename = fs.rename.bind(fs);
+  const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
+    renamedDestinations.push(String(dest));
+    return origRename(src, dest);
+  });
+
+  try {
+    await action();
+  } finally {
+    spy.mockRestore();
+  }
+
+  return renamedDestinations;
+}
+
 describe("resolveCronStorePath", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -216,18 +233,9 @@ describe("cron store", () => {
     const configRawBefore = await fs.readFile(store.storePath, "utf-8");
     await fs.rm(statePath);
 
-    const renamedDestinations: string[] = [];
-    const origRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
-      renamedDestinations.push(String(dest));
-      return origRename(src, dest);
-    });
-
-    try {
-      await saveCronStore(store.storePath, payload);
-    } finally {
-      spy.mockRestore();
-    }
+    const renamedDestinations = await captureRenameDestinations(() =>
+      saveCronStore(store.storePath, payload),
+    );
 
     const configRawAfter = await fs.readFile(store.storePath, "utf-8");
     const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
@@ -249,18 +257,9 @@ describe("cron store", () => {
     const stateRawBefore = await fs.readFile(statePath, "utf-8");
     await fs.rm(store.storePath);
 
-    const renamedDestinations: string[] = [];
-    const origRename = fs.rename.bind(fs);
-    const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
-      renamedDestinations.push(String(dest));
-      return origRename(src, dest);
-    });
-
-    try {
-      await saveCronStore(store.storePath, payload);
-    } finally {
-      spy.mockRestore();
-    }
+    const renamedDestinations = await captureRenameDestinations(() =>
+      saveCronStore(store.storePath, payload),
+    );
 
     const config = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
     const stateRawAfter = await fs.readFile(statePath, "utf-8");

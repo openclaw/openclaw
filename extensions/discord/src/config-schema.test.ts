@@ -20,6 +20,62 @@ function expectInvalidDiscordConfig(config: unknown) {
 }
 
 describe("discord config schema", () => {
+  it('rejects dmPolicy="open" without allowFrom "*"', () => {
+    const issues = expectInvalidDiscordConfig({
+      dmPolicy: "open",
+      allowFrom: ["123"],
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("allowFrom");
+  });
+
+  it('rejects dmPolicy="open" with empty allowFrom', () => {
+    const issues = expectInvalidDiscordConfig({
+      dmPolicy: "open",
+      allowFrom: [],
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("allowFrom");
+  });
+
+  it('rejects legacy dm.policy="open" with empty dm.allowFrom', () => {
+    const issues = expectInvalidDiscordConfig({
+      dm: { policy: "open", allowFrom: [] },
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("dm.allowFrom");
+  });
+
+  it('accepts legacy dm.policy="open" with top-level allowFrom alias', () => {
+    expectValidDiscordConfig({
+      dm: { policy: "open", allowFrom: ["123"] },
+      allowFrom: ["*"],
+    });
+  });
+
+  it("accepts textChunkLimit without reviving legacy message limits", () => {
+    const cfg = expectValidDiscordConfig({
+      enabled: true,
+      textChunkLimit: 1999,
+      maxLinesPerMessage: 17,
+    });
+
+    expect(cfg.textChunkLimit).toBe(1999);
+    expect(cfg.maxLinesPerMessage).toBe(17);
+  });
+
+  it("defaults groupPolicy to allowlist", () => {
+    const cfg = expectValidDiscordConfig({});
+
+    expect(cfg.groupPolicy).toBe("allowlist");
+  });
+
+  it("accepts historyLimit", () => {
+    const cfg = expectValidDiscordConfig({ historyLimit: 3 });
+
+    expect(cfg.historyLimit).toBe(3);
+  });
+
   it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,

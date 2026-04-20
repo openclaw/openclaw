@@ -17,6 +17,29 @@ import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
+type Awaitable<T> = T | Promise<T>;
+
+type GatewayStartupTrace = {
+  mark: (name: string) => void;
+  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
+};
+
+async function measureStartup<T>(
+  startupTrace: GatewayStartupTrace | undefined,
+  name: string,
+  run: () => Awaitable<T>,
+): Promise<T> {
+  return startupTrace ? startupTrace.measure(name, run) : await run();
+}
+
+function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !env.VITEST && env.NODE_ENV !== "test";
+}
+
+function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
+  return cfg.memory?.backend === "qmd";
+}
+
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
@@ -88,114 +111,126 @@ export async function startGatewaySidecars(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+  startupTrace?: GatewayStartupTrace;
 }) {
-  try {
-    const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
-      await Promise.all([
-        import("../config/paths.js"),
-        import("../agents/session-dirs.js"),
-        import("../agents/session-write-lock.js"),
-      ]);
-    const stateDir = resolveStateDir(process.env);
-    const sessionDirs = await resolveAgentSessionDirs(stateDir);
-    for (const sessionsDir of sessionDirs) {
-      await cleanStaleLockFiles({
-        sessionsDir,
-        staleMs: SESSION_LOCK_STALE_MS,
-        removeStale: true,
-        log: { warn: (message) => params.log.warn(message) },
+  await measureStartup(params.startupTrace, "sidecars.session-locks", async () => {
+    try {
+      const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
+        await Promise.all([
+          import("../config/paths.js"),
+          import("../agents/session-dirs.js"),
+          import("../agents/session-write-lock.js"),
+        ]);
+      const stateDir = resolveStateDir(process.env);
+      const sessionDirs = await resolveAgentSessionDirs(stateDir);
+      for (const sessionsDir of sessionDirs) {
+        await cleanStaleLockFiles({
+          sessionsDir,
+          staleMs: SESSION_LOCK_STALE_MS,
+          removeStale: true,
+          log: { warn: (message) => params.log.warn(message) },
+        });
+      }
+    } catch (err) {
+      params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+    }
+  });
+
+  await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
+    if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
+      const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
+      await startGmailWatcherWithLogs({
+        cfg: params.cfg,
+        log: params.logHooks,
       });
     }
-  } catch (err) {
-    params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-  }
+  });
 
-  if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
-    const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
-    await startGmailWatcherWithLogs({
-      cfg: params.cfg,
-      log: params.logHooks,
-    });
-  }
-
-  if (params.cfg.hooks?.gmail?.model) {
-    const [
-      { DEFAULT_MODEL, DEFAULT_PROVIDER },
-      { loadModelCatalog },
-      { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
-    ] = await Promise.all([
-      import("../agents/defaults.js"),
-      import("../agents/model-catalog.js"),
-      import("../agents/model-selection.js"),
-    ]);
-    const hooksModelRef = resolveHooksGmailModel({
-      cfg: params.cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-    });
-    if (hooksModelRef) {
-      const { provider: resolvedDefaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+  await measureStartup(params.startupTrace, "sidecars.gmail-model", async () => {
+    if (params.cfg.hooks?.gmail?.model) {
+      const [
+        { DEFAULT_MODEL, DEFAULT_PROVIDER },
+        { loadModelCatalog },
+        { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
+      ] = await Promise.all([
+        import("../agents/defaults.js"),
+        import("../agents/model-catalog.js"),
+        import("../agents/model-selection.js"),
+      ]);
+      const hooksModelRef = resolveHooksGmailModel({
         cfg: params.cfg,
         defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
       });
-      const catalog = await loadModelCatalog({ config: params.cfg });
-      const status = getModelRefStatus({
-        cfg: params.cfg,
-        catalog,
-        ref: hooksModelRef,
-        defaultProvider: resolvedDefaultProvider,
-        defaultModel,
-      });
-      if (!status.allowed) {
-        params.logHooks.warn(
-          `hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
-        );
-      }
-      if (!status.inCatalog) {
-        params.logHooks.warn(
-          `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
-        );
+      if (hooksModelRef) {
+        const { provider: resolvedDefaultProvider, model: defaultModel } =
+          resolveConfiguredModelRef({
+            cfg: params.cfg,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+          });
+        const catalog = await loadModelCatalog({ config: params.cfg });
+        const status = getModelRefStatus({
+          cfg: params.cfg,
+          catalog,
+          ref: hooksModelRef,
+          defaultProvider: resolvedDefaultProvider,
+          defaultModel,
+        });
+        if (!status.allowed) {
+          params.logHooks.warn(
+            `hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+          );
+        }
+        if (!status.inCatalog) {
+          params.logHooks.warn(
+            `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
+          );
+        }
       }
     }
-  }
+  });
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
-  try {
-    if (internalHooksConfigured) {
-      const [{ setInternalHooksEnabled }, { loadInternalHooks }] = await Promise.all([
-        import("../hooks/internal-hooks.js"),
-        import("../hooks/loader.js"),
-      ]);
-      setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
-      const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
-      if (loadedCount > 0) {
-        params.logHooks.info(
-          `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
-        );
+  await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
+    try {
+      if (internalHooksConfigured) {
+        const [{ setInternalHooksEnabled }, { loadInternalHooks }] = await Promise.all([
+          import("../hooks/internal-hooks.js"),
+          import("../hooks/loader.js"),
+        ]);
+        setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
+        const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
+        if (loadedCount > 0) {
+          params.logHooks.info(
+            `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
+          );
+        }
       }
+    } catch (err) {
+      params.logHooks.error(`failed to load hooks: ${String(err)}`);
     }
-  } catch (err) {
-    params.logHooks.error(`failed to load hooks: ${String(err)}`);
-  }
+  });
 
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
-  if (!skipChannels) {
-    try {
-      await prewarmConfiguredPrimaryModel({
-        cfg: params.cfg,
-        log: params.log,
-      });
-      await params.startChannels();
-    } catch (err) {
-      params.logChannels.error(`channel startup failed: ${String(err)}`);
+  await measureStartup(params.startupTrace, "sidecars.channels", async () => {
+    if (!skipChannels) {
+      try {
+        await prewarmConfiguredPrimaryModel({
+          cfg: params.cfg,
+          log: params.log,
+        });
+        await params.startChannels();
+      } catch (err) {
+        params.logChannels.error(`channel startup failed: ${String(err)}`);
+      }
+    } else {
+      params.logChannels.info(
+        "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+      );
     }
-  } else {
-    params.logChannels.info(
-      "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-    );
-  }
+  });
 
   if (internalHooksConfigured) {
     setTimeout(() => {
@@ -213,16 +248,18 @@ export async function startGatewaySidecars(params: {
   }
 
   let pluginServices: PluginServicesHandle | null = null;
-  try {
-    const { startPluginServices } = await import("../plugins/services.js");
-    pluginServices = await startPluginServices({
-      registry: params.pluginRegistry,
-      config: params.cfg,
-      workspaceDir: params.defaultWorkspaceDir,
-    });
-  } catch (err) {
-    params.log.warn(`plugin services failed to start: ${String(err)}`);
-  }
+  await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
+    try {
+      const { startPluginServices } = await import("../plugins/services.js");
+      pluginServices = await startPluginServices({
+        registry: params.pluginRegistry,
+        config: params.cfg,
+        workspaceDir: params.defaultWorkspaceDir,
+      });
+    } catch (err) {
+      params.log.warn(`plugin services failed to start: ${String(err)}`);
+    }
+  });
 
   if (params.cfg.acp?.enabled) {
     const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] = await Promise.all(
@@ -243,29 +280,47 @@ export async function startGatewaySidecars(params: {
       });
   }
 
-  void import("./server-startup-memory.js")
-    .then(({ startGatewayMemoryBackend }) =>
-      startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }),
-    )
-    .catch((err) => {
-      params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
+  await measureStartup(params.startupTrace, "sidecars.memory", async () => {
+    if (!shouldStartGatewayMemoryBackend(params.cfg)) {
+      return;
+    }
+    setImmediate(() => {
+      void import("./server-startup-memory.js")
+        .then(({ startGatewayMemoryBackend }) =>
+          startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }),
+        )
+        .catch((err) => {
+          params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
+        });
     });
+  });
 
-  const { shouldWakeFromRestartSentinel, scheduleRestartSentinelWake } =
-    await import("./server-restart-sentinel.js");
-  if (shouldWakeFromRestartSentinel()) {
+  await measureStartup(params.startupTrace, "sidecars.restart-sentinel", async () => {
+    if (!shouldCheckRestartSentinel()) {
+      return;
+    }
+    const { hasRestartSentinel } = await import("../infra/restart-sentinel.js");
+    if (!(await hasRestartSentinel())) {
+      return;
+    }
     setTimeout(() => {
-      void scheduleRestartSentinelWake({ deps: params.deps });
+      void import("./server-restart-sentinel.js")
+        .then(({ scheduleRestartSentinelWake }) =>
+          scheduleRestartSentinelWake({ deps: params.deps }),
+        )
+        .catch((err) => {
+          params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
+        });
     }, 750);
-  }
+  });
 
-  const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-  scheduleSubagentOrphanRecovery();
+  await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
+    const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
+    scheduleSubagentOrphanRecovery();
+  });
 
   return { pluginServices };
 }
-
-type Awaitable<T> = T | Promise<T>;
 
 type GatewayPostAttachRuntimeDeps = {
   getGlobalHookRunner: () => Awaitable<ReturnType<typeof getGlobalHookRunner>>;
@@ -329,26 +384,29 @@ export async function startGatewayPostAttachRuntime(
     unavailableGatewayMethods: Set<string>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
+    startupTrace?: GatewayStartupTrace;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
-  await runtimeDeps.logGatewayStartup({
-    cfg: params.cfgAtStart,
-    bindHost: params.bindHost,
-    bindHosts: params.bindHosts,
-    port: params.port,
-    tlsEnabled: params.tlsEnabled,
-    loadedPluginIds: params.pluginRegistry.plugins
-      .filter((plugin) => plugin.status === "loaded")
-      .map((plugin) => plugin.id),
-    log: params.log,
-    isNixMode: params.isNixMode,
-    startupStartedAt: params.startupStartedAt,
-  });
+  await measureStartup(params.startupTrace, "post-attach.log", () =>
+    runtimeDeps.logGatewayStartup({
+      cfg: params.cfgAtStart,
+      bindHost: params.bindHost,
+      bindHosts: params.bindHosts,
+      port: params.port,
+      tlsEnabled: params.tlsEnabled,
+      loadedPluginIds: params.pluginRegistry.plugins
+        .filter((plugin) => plugin.status === "loaded")
+        .map((plugin) => plugin.id),
+      log: params.log,
+      isNixMode: params.isNixMode,
+      startupStartedAt: params.startupStartedAt,
+    }),
+  );
 
   const stopGatewayUpdateCheckPromise = params.minimalTestGateway
     ? Promise.resolve(() => {})
-    : Promise.resolve(
+    : measureStartup(params.startupTrace, "post-attach.update-check", () =>
         runtimeDeps.scheduleGatewayUpdateCheck({
           cfg: params.cfgAtStart,
           log: params.log,
@@ -364,7 +422,7 @@ export async function startGatewayPostAttachRuntime(
     ? Promise.resolve(null)
     : params.tailscaleMode === "off" && !params.resetOnExit
       ? Promise.resolve(null)
-      : Promise.resolve(
+      : measureStartup(params.startupTrace, "post-attach.tailscale", () =>
           runtimeDeps.startGatewayTailscaleExposure({
             tailscaleMode: params.tailscaleMode,
             resetOnExit: params.resetOnExit,
@@ -378,21 +436,25 @@ export async function startGatewayPostAttachRuntime(
     ? Promise.resolve({ pluginServices: null })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
         params.log.info("starting channels and sidecars...");
-        const result = await runtimeDeps.startGatewaySidecars({
-          cfg: params.gatewayPluginConfigAtStart,
-          pluginRegistry: params.pluginRegistry,
-          defaultWorkspaceDir: params.defaultWorkspaceDir,
-          deps: params.deps,
-          startChannels: params.startChannels,
-          log: params.log,
-          logHooks: params.logHooks,
-          logChannels: params.logChannels,
-        });
+        const result = await measureStartup(params.startupTrace, "sidecars.total", () =>
+          runtimeDeps.startGatewaySidecars({
+            cfg: params.gatewayPluginConfigAtStart,
+            pluginRegistry: params.pluginRegistry,
+            defaultWorkspaceDir: params.defaultWorkspaceDir,
+            deps: params.deps,
+            startChannels: params.startChannels,
+            log: params.log,
+            logHooks: params.logHooks,
+            logChannels: params.logChannels,
+            startupTrace: params.startupTrace,
+          }),
+        );
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
         params.onPluginServices?.(result.pluginServices);
         params.onSidecarsReady?.();
+        params.startupTrace?.mark("sidecars.ready");
         return result;
       });
 

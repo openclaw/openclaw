@@ -46,15 +46,15 @@ export function createReadinessChecker(deps: {
   return (): ReadinessResult => {
     const now = Date.now();
     const uptimeMs = now - startedAt;
+    if (deps.getStartupPending?.()) {
+      return { ready: false, failing: ["startup-sidecars"], uptimeMs };
+    }
     if (cachedState && now - cachedAt < cacheTtlMs) {
       return { ...cachedState, uptimeMs };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const failing: string[] = [];
-    if (deps.getStartupPending?.()) {
-      failing.push("startup-sidecars");
-    }
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
       if (!accounts) {
