@@ -9,6 +9,7 @@ import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
+import { parsePageRange, providerSupportsNativePdf } from "./pdf-tool.helpers.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
@@ -391,5 +392,78 @@ describe("createPdfTool", () => {
     expect(props.pages).toBeDefined();
     expect(props.model).toBeDefined();
     expect(props.maxBytesMb).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parsePageRange tests
+// ---------------------------------------------------------------------------
+
+describe("parsePageRange", () => {
+  it("parses a single page number", () => {
+    expect(parsePageRange("3", 20)).toEqual([3]);
+  });
+
+  it("parses a page range", () => {
+    expect(parsePageRange("1-5", 20)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("parses comma-separated pages and ranges", () => {
+    expect(parsePageRange("1,3,5-7", 20)).toEqual([1, 3, 5, 6, 7]);
+  });
+
+  it("clamps to maxPages", () => {
+    expect(parsePageRange("1-100", 5)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("deduplicates and sorts", () => {
+    expect(parsePageRange("5,3,1,3,5", 20)).toEqual([1, 3, 5]);
+  });
+
+  it("throws on invalid page number", () => {
+    expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
+  });
+
+  it("throws on invalid range (start > end)", () => {
+    expect(() => parsePageRange("5-3", 20)).toThrow("Invalid page range");
+  });
+
+  it("throws on zero page number", () => {
+    expect(() => parsePageRange("0", 20)).toThrow("Invalid page number");
+  });
+
+  it("throws on negative page number", () => {
+    expect(() => parsePageRange("-1", 20)).toThrow("Invalid page number");
+  });
+
+  it("handles empty parts gracefully", () => {
+    expect(parsePageRange("1,,3", 20)).toEqual([1, 3]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// providerSupportsNativePdf tests
+// ---------------------------------------------------------------------------
+
+describe("providerSupportsNativePdf", () => {
+  it("returns true for anthropic", () => {
+    expect(providerSupportsNativePdf("anthropic")).toBe(true);
+  });
+
+  it("returns true for google", () => {
+    expect(providerSupportsNativePdf("google")).toBe(true);
+  });
+
+  it("returns false for openai", () => {
+    expect(providerSupportsNativePdf("openai")).toBe(false);
+  });
+
+  it("returns false for minimax", () => {
+    expect(providerSupportsNativePdf("minimax")).toBe(false);
+  });
+
+  it("is case-insensitive", () => {
+    expect(providerSupportsNativePdf("Anthropic")).toBe(true);
+    expect(providerSupportsNativePdf("GOOGLE")).toBe(true);
   });
 });

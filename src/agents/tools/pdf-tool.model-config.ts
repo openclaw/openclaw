@@ -47,7 +47,12 @@ export function resolvePdfModelConfigForTool(params: {
 
   const explicitImage = coerceImageModelConfig(params.cfg);
   if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return explicitImage;
+    // Don't reuse an image-only model on a native-PDF provider (e.g. google/*-image-preview
+    // returns 404 on native PDF endpoints). Fall through to auto-detect a PDF-capable model.
+    const imageProvider = explicitImage.primary?.split("/")[0]?.trim() ?? "";
+    if (!bundledProviderSupportsNativePdfDocument(imageProvider)) {
+      return explicitImage;
+    }
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
