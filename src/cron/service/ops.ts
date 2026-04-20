@@ -579,7 +579,7 @@ async function prepareManualRun(
       job,
       startedAt: preflight.now,
     });
-    const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
+    const executionJob = structuredClone(job);
     return {
       ok: true,
       ran: true,

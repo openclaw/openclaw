@@ -21,7 +21,7 @@ import { resolveAndPersistSessionFile } from "../../config/sessions/session-file
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
-import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -689,7 +689,7 @@ export async function initSessionState(params: {
       }
     }
   }
-  const threadIdFromSessionKey = parseSessionThreadInfo(
+  const threadIdFromSessionKey = parseSessionThreadInfoFast(
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
   const fallbackSessionFile = !sessionEntry.sessionFile

@@ -3,6 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node-edge-tts", () => ({
+  EdgeTTS: class {
+    async ttsPromise(): Promise<void> {}
+  },
+}));
+
 import {
   buildMicrosoftSpeechProvider,
   isCjkDominant,

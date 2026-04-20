@@ -29,6 +29,10 @@ import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
 
+vi.mock("../logger.js", () => ({
+  logWarn: vi.fn(),
+}));
+
 type MockedRunCommand = Mock<HandleSystemRunInvokeOptions["runCommand"]>;
 type MockedRunViaMacAppExecHost = Mock<HandleSystemRunInvokeOptions["runViaMacAppExecHost"]>;
 type MockedSendInvokeResult = Mock<HandleSystemRunInvokeOptions["sendInvokeResult"]>;
@@ -496,23 +500,21 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     };
   }
 
-  it("uses local execution by default when mac app exec host preference is disabled", async () => {
-    const { runCommand, runViaMacAppExecHost, sendInvokeResult } = await runSystemInvoke({
+  it("routes local, mac host, and canonical shell-wrapper requests", async () => {
+    const localInvoke = await runSystemInvoke({
       preferMacAppExecHost: false,
     });
 
-    expect(runViaMacAppExecHost).not.toHaveBeenCalled();
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    expectInvokeOk(sendInvokeResult, { payloadContains: "local-ok" });
-  });
+    expect(localInvoke.runViaMacAppExecHost).not.toHaveBeenCalled();
+    expect(localInvoke.runCommand).toHaveBeenCalledTimes(1);
+    expectInvokeOk(localInvoke.sendInvokeResult, { payloadContains: "local-ok" });
 
-  it("uses mac app exec host when explicitly preferred", async () => {
-    const { runCommand, runViaMacAppExecHost, sendInvokeResult } = await runSystemInvoke({
+    const macHostInvoke = await runSystemInvoke({
       preferMacAppExecHost: true,
       runViaResponse: createMacExecHostSuccess(),
     });
 
-    expect(runViaMacAppExecHost).toHaveBeenCalledWith({
+    expect(macHostInvoke.runViaMacAppExecHost).toHaveBeenCalledWith({
       approvals: expect.objectContaining({
         agent: expect.objectContaining({
           security: "full",
@@ -523,18 +525,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         command: ["echo", "ok"],
       }),
     });
-    expect(runCommand).not.toHaveBeenCalled();
-    expectInvokeOk(sendInvokeResult, { payloadContains: "app-ok" });
-  });
+    expect(macHostInvoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeOk(macHostInvoke.sendInvokeResult, { payloadContains: "app-ok" });
 
-  it("forwards canonical command text to mac app exec host for positional-argv shell wrappers", async () => {
-    const { runViaMacAppExecHost } = await runSystemInvoke({
+    const shellWrapperInvoke = await runSystemInvoke({
       preferMacAppExecHost: true,
       command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
       runViaResponse: createMacExecHostSuccess(),
     });
 
-    expect(runViaMacAppExecHost).toHaveBeenCalledWith({
+    expect(shellWrapperInvoke.runViaMacAppExecHost).toHaveBeenCalledWith({
       approvals: expect.anything(),
       request: expect.objectContaining({
         command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
@@ -554,21 +554,22 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   ] as const;
 
-  for (const testCase of approvedEnvShellWrapperCases) {
-    it.runIf(process.platform !== "win32")(testCase.name, async () => {
-      const tmp = createFixtureDir("openclaw-approved-wrapper-");
-      const marker = path.join(tmp, "marker");
-      const attackerScript = path.join(tmp, "sh");
-      fs.writeFileSync(attackerScript, "#!/bin/sh\necho exploited > marker\n");
-      fs.chmodSync(attackerScript, 0o755);
-      const runCommand = vi.fn(async (argv: string[]) => {
-        if (argv[0] === "/bin/sh" && argv[1] === "sh" && argv[2] === "-c") {
-          fs.writeFileSync(marker, "rewritten");
-        }
-        return createLocalRunResult();
-      });
-      const sendInvokeResult = vi.fn(async () => {});
-      try {
+  it.runIf(process.platform !== "win32")(
+    "preserves wrapper argv for approved env shell commands",
+    async () => {
+      for (const testCase of approvedEnvShellWrapperCases) {
+        const tmp = createFixtureDir("openclaw-approved-wrapper-");
+        const marker = path.join(tmp, "marker");
+        const attackerScript = path.join(tmp, "sh");
+        fs.writeFileSync(attackerScript, "#!/bin/sh\necho exploited > marker\n");
+        fs.chmodSync(attackerScript, 0o755);
+        const runCommand = vi.fn(async (argv: string[]) => {
+          if (argv[0] === "/bin/sh" && argv[1] === "sh" && argv[2] === "-c") {
+            fs.writeFileSync(marker, "rewritten");
+          }
+          return createLocalRunResult();
+        });
+        const sendInvokeResult = vi.fn(async () => {});
         const invoke = await runSystemInvoke({
           preferMacAppExecHost: testCase.preferMacAppExecHost,
           command: ["env", "sh", "-c", "echo SAFE"],
@@ -605,18 +606,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             }),
           });
           expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
-          return;
+          continue;
         }
 
         const runArgs = vi.mocked(invoke.runCommand).mock.calls[0]?.[0] as string[] | undefined;
         expect(runArgs).toEqual(["env", "sh", "-c", "echo SAFE"]);
         expect(fs.existsSync(marker)).toBe(false);
         expectInvokeOk(invoke.sendInvokeResult);
-      } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
       }
-    });
-  }
+    },
+  );
 
   it("handles transparent env wrappers in allowlist mode", async () => {
     const { runCommand, sendInvokeResult } = await runSystemInvoke({
@@ -648,59 +647,68 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "pins PATH-token executable to canonical path for approval-based runs",
+    "pins PATH-token executable to canonical path",
     async () => {
-      await withPathTokenCommand({
-        tmpPrefix: "openclaw-approval-path-pin-",
-        run: async ({ expected }) => {
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: ["poccmd", "-n", "SAFE"],
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-          expectCommandPinnedToCanonicalPath({
-            runCommand,
-            expected,
-            commandTail: ["-n", "SAFE"],
-          });
-          expectInvokeOk(sendInvokeResult);
+      for (const testCase of [
+        {
+          name: "approval-based run",
+          tmpPrefix: "openclaw-approval-path-pin-",
+          run: async (ctx: { expected: string }) => {
+            const { runCommand, sendInvokeResult } = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: ["poccmd", "-n", "SAFE"],
+              approved: true,
+              security: "full",
+              ask: "off",
+            });
+            expectCommandPinnedToCanonicalPath({
+              runCommand,
+              expected: ctx.expected,
+              commandTail: ["-n", "SAFE"],
+            });
+            expectInvokeOk(sendInvokeResult);
+          },
         },
-      });
-    },
-  );
+        {
+          name: "prepared plan",
+          tmpPrefix: "openclaw-prepare-run-path-pin-",
+          run: async (ctx: { expected: string }) => {
+            const prepared = buildSystemRunApprovalPlan({
+              command: ["poccmd", "hello"],
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
 
-  it.runIf(process.platform !== "win32")(
-    "accepts prepared plans after PATH-token hardening rewrites argv",
-    async () => {
-      await withPathTokenCommand({
-        tmpPrefix: "openclaw-prepare-run-path-pin-",
-        run: async ({ expected }) => {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["poccmd", "hello"],
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: prepared.plan.argv,
-            rawCommand: prepared.plan.commandText,
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-          expectCommandPinnedToCanonicalPath({
-            runCommand,
-            expected,
-            commandTail: ["hello"],
-          });
-          expectInvokeOk(sendInvokeResult);
+            const { runCommand, sendInvokeResult } = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.commandText,
+              approved: true,
+              security: "full",
+              ask: "off",
+            });
+            expectCommandPinnedToCanonicalPath({
+              runCommand,
+              expected: ctx.expected,
+              commandTail: ["hello"],
+            });
+            expectInvokeOk(sendInvokeResult);
+          },
         },
-      });
+      ] as const) {
+        await withPathTokenCommand({
+          tmpPrefix: testCase.tmpPrefix,
+          run: async ({ expected }) => {
+            try {
+              await testCase.run({ expected });
+            } catch (error) {
+              throw new Error(`case failed: ${testCase.name}`, { cause: error });
+            }
+          },
+        });
+      }
     },
   );
 
@@ -761,20 +769,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
       fs.chmodSync(script, 0o755);
       fs.symlinkSync(safeDir, linkDir, "dir");
-      try {
-        const { runCommand, sendInvokeResult } = await runSystemInvoke({
-          preferMacAppExecHost: false,
-          command: ["./run.sh"],
-          cwd: linkDir,
-          approved: true,
-          security: "full",
-          ask: "off",
-        });
-        expect(runCommand).not.toHaveBeenCalled();
-        expectInvokeErrorMessage(sendInvokeResult, { message: "canonical cwd" });
-      } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
-      }
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["./run.sh"],
+        cwd: linkDir,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, { message: "canonical cwd" });
     },
   );
 
@@ -787,20 +791,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const linkRoot = path.join(tmp, "approved-link");
       fs.mkdirSync(safeSub, { recursive: true });
       fs.symlinkSync(safeRoot, linkRoot, "dir");
-      try {
-        const { runCommand, sendInvokeResult } = await runSystemInvoke({
-          preferMacAppExecHost: false,
-          command: ["./run.sh"],
-          cwd: path.join(linkRoot, "sub"),
-          approved: true,
-          security: "full",
-          ask: "off",
-        });
-        expect(runCommand).not.toHaveBeenCalled();
-        expectInvokeErrorMessage(sendInvokeResult, { message: "no symlink path components" });
-      } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
-      }
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["./run.sh"],
+        cwd: path.join(linkRoot, "sub"),
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, { message: "no symlink path components" });
     },
   );
 
@@ -809,33 +809,29 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const script = path.join(tmp, "run.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
     fs.chmodSync(script, 0o755);
-    try {
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: ["./run.sh", "--flag"],
-        cwd: tmp,
-        approved: true,
-        security: "full",
-        ask: "off",
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["./run.sh", "--flag"],
+      cwd: tmp,
+      approved: true,
+      security: "full",
+      ask: "off",
+    });
+    if (process.platform === "win32") {
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
+        exact: true,
       });
-      if (process.platform === "win32") {
-        expect(runCommand).not.toHaveBeenCalled();
-        expectInvokeErrorMessage(sendInvokeResult, {
-          message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
-          exact: true,
-        });
-        return;
-      }
-      expectCommandPinnedToCanonicalPath({
-        runCommand,
-        expected: fs.realpathSync(script),
-        commandTail: ["--flag"],
-        cwd: fs.realpathSync(tmp),
-      });
-      expectInvokeOk(sendInvokeResult);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      return;
     }
+    expectCommandPinnedToCanonicalPath({
+      runCommand,
+      expected: fs.realpathSync(script),
+      commandTail: ["--flag"],
+      cwd: fs.realpathSync(tmp),
+    });
+    expectInvokeOk(sendInvokeResult);
   });
 
   it("denies approval-based execution when cwd identity drifts before execution", async () => {
@@ -845,37 +841,32 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
     fs.chmodSync(script, 0o755);
     const canonicalCwd = fs.realpathSync(tmp);
-    try {
-      await withMockedCwdIdentityDrift({
-        canonicalCwd,
-        driftDir: fallback,
-        run: async () => {
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: ["./run.sh"],
-            cwd: tmp,
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-          expect(runCommand).not.toHaveBeenCalled();
-          if (process.platform === "win32") {
-            expectInvokeErrorMessage(sendInvokeResult, {
-              message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
-              exact: true,
-            });
-            return;
-          }
+    await withMockedCwdIdentityDrift({
+      canonicalCwd,
+      driftDir: fallback,
+      run: async () => {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["./run.sh"],
+          cwd: tmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand).not.toHaveBeenCalled();
+        if (process.platform === "win32") {
           expectInvokeErrorMessage(sendInvokeResult, {
-            message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+            message: "SYSTEM_RUN_DENIED: approval requires a stable executable path",
             exact: true,
           });
-        },
-      });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-      fs.rmSync(fallback, { recursive: true, force: true });
-    }
+          return;
+        }
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+          exact: true,
+        });
+      },
+    });
   });
 
   it("denies approval-based execution when a script operand changes after approval", async () => {
@@ -885,36 +876,32 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.scriptPath, 0o755);
     }
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: fixture.command,
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-
-      fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        rawCommand: prepared.plan.commandText,
-        systemRunPlan: prepared.plan,
-        cwd: prepared.plan.cwd ?? tmp,
-        approved: true,
-        security: "full",
-        ask: "off",
-      });
-
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(sendInvokeResult, {
-        message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
-        exact: true,
-      });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+    const prepared = buildSystemRunApprovalPlan({
+      command: fixture.command,
+      cwd: tmp,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
     }
+
+    fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: prepared.plan.argv,
+      rawCommand: prepared.plan.commandText,
+      systemRunPlan: prepared.plan,
+      cwd: prepared.plan.cwd ?? tmp,
+      approved: true,
+      security: "full",
+      ask: "off",
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+      exact: true,
+    });
   });
 
   it("keeps approved shell script execution working when the script is unchanged", async () => {
@@ -924,142 +911,122 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(fixture.scriptPath, 0o755);
     }
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: fixture.command,
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-
-      const { runCommand, sendInvokeResult } = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        rawCommand: prepared.plan.commandText,
-        systemRunPlan: prepared.plan,
-        cwd: prepared.plan.cwd ?? tmp,
-        approved: true,
-        security: "full",
-        ask: "off",
-      });
-
-      expect(runCommand).toHaveBeenCalledTimes(1);
-      expectInvokeOk(sendInvokeResult);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+    const prepared = buildSystemRunApprovalPlan({
+      command: fixture.command,
+      cwd: tmp,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
     }
+
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: prepared.plan.argv,
+      rawCommand: prepared.plan.commandText,
+      systemRunPlan: prepared.plan,
+      cwd: prepared.plan.cwd ?? tmp,
+      approved: true,
+      security: "full",
+      ask: "off",
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expectInvokeOk(sendInvokeResult);
   });
 
-  it("validates approved runtime script operand stability at dispatch", async () => {
+  it("validates approved runtime script operand bindings at dispatch", async () => {
     await withFakeRuntimeOnPath({
       runtime: "tsx",
       run: async () => {
         const tmp = createFixtureDir("openclaw-approval-tsx-script-drift-");
         const fixture = createRuntimeScriptOperandFixture({ tmp, runtime: "tsx" });
         fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: fixture.command,
-            cwd: tmp,
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-
-          fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: prepared.plan.argv,
-            rawCommand: prepared.plan.commandText,
-            systemRunPlan: prepared.plan,
-            cwd: prepared.plan.cwd ?? tmp,
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-
-          expect(runCommand).not.toHaveBeenCalled();
-          expectInvokeErrorMessage(sendInvokeResult, {
-            message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
-            exact: true,
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
+        const prepared = buildSystemRunApprovalPlan({
+          command: fixture.command,
+          cwd: tmp,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
         }
+
+        fs.writeFileSync(fixture.scriptPath, fixture.changedBody);
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.commandText,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          exact: true,
+        });
         const stableTmp = createFixtureDir("openclaw-approval-tsx-script-stable-");
         const stableFixture = createRuntimeScriptOperandFixture({ tmp: stableTmp, runtime: "tsx" });
         fs.writeFileSync(stableFixture.scriptPath, stableFixture.initialBody);
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: stableFixture.command,
-            cwd: stableTmp,
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: prepared.plan.argv,
-            rawCommand: prepared.plan.commandText,
-            systemRunPlan: prepared.plan,
-            cwd: prepared.plan.cwd ?? stableTmp,
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
-
-          expect(runCommand).toHaveBeenCalledTimes(1);
-          expectInvokeOk(sendInvokeResult);
-        } finally {
-          fs.rmSync(stableTmp, { recursive: true, force: true });
+        const stablePrepared = buildSystemRunApprovalPlan({
+          command: stableFixture.command,
+          cwd: stableTmp,
+        });
+        expect(stablePrepared.ok).toBe(true);
+        if (!stablePrepared.ok) {
+          throw new Error("unreachable");
         }
-      },
-    });
-  });
 
-  it("denies approval-based execution when tsx is missing a required mutable script binding", async () => {
-    await withFakeRuntimeOnPath({
-      runtime: "tsx",
-      run: async () => {
-        const tmp = createFixtureDir("openclaw-approval-tsx-missing-binding-");
-        const fixture = createRuntimeScriptOperandFixture({ tmp, runtime: "tsx" });
-        fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: fixture.command,
-            cwd: tmp,
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
+        const stableRun = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: stablePrepared.plan.argv,
+          rawCommand: stablePrepared.plan.commandText,
+          systemRunPlan: stablePrepared.plan,
+          cwd: stablePrepared.plan.cwd ?? stableTmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
 
-          const planWithoutBinding = { ...prepared.plan };
-          delete planWithoutBinding.mutableFileOperand;
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: prepared.plan.argv,
-            rawCommand: prepared.plan.commandText,
-            systemRunPlan: planWithoutBinding,
-            cwd: prepared.plan.cwd ?? tmp,
-            approved: true,
-            security: "full",
-            ask: "off",
-          });
+        expect(stableRun.runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(stableRun.sendInvokeResult);
 
-          expect(runCommand).not.toHaveBeenCalled();
-          expectInvokeErrorMessage(sendInvokeResult, {
-            message: "SYSTEM_RUN_DENIED: approval missing script operand binding",
-            exact: true,
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
+        const missingBindingTmp = createFixtureDir("openclaw-approval-tsx-missing-binding-");
+        const missingBindingFixture = createRuntimeScriptOperandFixture({
+          tmp: missingBindingTmp,
+          runtime: "tsx",
+        });
+        fs.writeFileSync(missingBindingFixture.scriptPath, missingBindingFixture.initialBody);
+        const missingBindingPrepared = buildSystemRunApprovalPlan({
+          command: missingBindingFixture.command,
+          cwd: missingBindingTmp,
+        });
+        expect(missingBindingPrepared.ok).toBe(true);
+        if (!missingBindingPrepared.ok) {
+          throw new Error("unreachable");
         }
+
+        const planWithoutBinding = { ...missingBindingPrepared.plan };
+        delete planWithoutBinding.mutableFileOperand;
+        const missingBindingRun = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: missingBindingPrepared.plan.argv,
+          rawCommand: missingBindingPrepared.plan.commandText,
+          systemRunPlan: planWithoutBinding,
+          cwd: missingBindingPrepared.plan.cwd ?? missingBindingTmp,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(missingBindingRun.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(missingBindingRun.sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: approval missing script operand binding",
+          exact: true,
+        });
       },
     });
   });
@@ -1308,6 +1275,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("requires explicit approval for strict inline-eval carriers", async () => {
+    // The full carrier matrix lives in exec-inline-eval.test.ts; this is the
+    // handle-level smoke for strictInlineEval denial wiring.
     const cases = [
       {
         command: ["python3", "-c", "print('hi')"],
@@ -1316,22 +1285,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       {
         command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
         expected: "awk inline program requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["find", ".", "-exec", "id", "{}", ";"],
-        expected: "find -exec requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["xargs", "id"],
-        expected: "xargs inline command requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["make", "-f", "evil.mk"],
-        expected: "make -f requires explicit approval in strictInlineEval mode",
-      },
-      {
-        command: ["sed", "s/.*/id/e", "/dev/null"],
-        expected: "sed inline program requires explicit approval in strictInlineEval mode",
       },
     ] as const;
     setRuntimeConfigSnapshot({
@@ -1396,12 +1349,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("does not persist allow-always approvals for strict inline-eval carriers", async () => {
+    // Persistence behavior is covered generically in exec-approvals tests; keep
+    // one flag carrier and one inline-program carrier wired through the handler.
     const cases = [
       { executable: "python3", args: ["-c", "print('hi')"] },
       { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
-      { executable: "find", args: [".", "-exec", "id", "{}", ";"] },
-      { executable: "xargs", args: ["id"] },
-      { executable: "sed", args: ["s/.*/id/e", "/dev/null"] },
     ] as const;
     setRuntimeConfigSnapshot({
       tools: {
@@ -1454,43 +1406,39 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         approvals: createAllowlistOnMissApprovals(),
         run: async () => {
           const tempDir = createFixtureDir("openclaw-inline-eval-awk-");
-          try {
-            const executablePath = createTempExecutable({
-              dir: tempDir,
-              name: "awk",
-            });
-            const benign = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: [executablePath, "-F", ",", "-f", "script.awk", "data.csv"],
-              cwd: tempDir,
-              security: "allowlist",
-              ask: "on-miss",
-              approvalDecision: "allow-always",
-              approved: true,
-              runCommand: vi.fn(async () => createLocalRunResult("awk-ok")),
-            });
+          const executablePath = createTempExecutable({
+            dir: tempDir,
+            name: "awk",
+          });
+          const benign = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: [executablePath, "-F", ",", "-f", "script.awk", "data.csv"],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            approvalDecision: "allow-always",
+            approved: true,
+            runCommand: vi.fn(async () => createLocalRunResult("awk-ok")),
+          });
 
-            expect(benign.runCommand).toHaveBeenCalledTimes(1);
-            expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
-            expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([
-              expect.objectContaining({ pattern: executablePath }),
-            ]);
+          expect(benign.runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([
+            expect.objectContaining({ pattern: executablePath }),
+          ]);
 
-            const malicious = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: [executablePath, 'BEGIN{system("id")}', "/dev/null"],
-              cwd: tempDir,
-              security: "allowlist",
-              ask: "on-miss",
-            });
+          const malicious = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: [executablePath, 'BEGIN{system("id")}', "/dev/null"],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+          });
 
-            expect(malicious.runCommand).not.toHaveBeenCalled();
-            expectInvokeErrorMessage(malicious.sendInvokeResult, {
-              message: "awk inline program requires explicit approval in strictInlineEval mode",
-            });
-          } finally {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-          }
+          expect(malicious.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(malicious.sendInvokeResult, {
+            message: "awk inline program requires explicit approval in strictInlineEval mode",
+          });
         },
       });
     } finally {
@@ -1511,41 +1459,37 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         approvals: createAllowlistOnMissApprovals(),
         run: async () => {
           const tempDir = createFixtureDir("openclaw-inline-eval-make-");
-          try {
-            const executablePath = createTempExecutable({
-              dir: tempDir,
-              name: "make",
-            });
-            const makefilePath = path.join(tempDir, "Makefile");
-            fs.writeFileSync(makefilePath, "all:\n\t@echo inline-eval-ok\n");
-            const prepared = buildSystemRunApprovalPlan({
-              command: [executablePath, "-f", makefilePath],
-              cwd: tempDir,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
-
-            const { runCommand, sendInvokeResult } = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              systemRunPlan: prepared.plan,
-              cwd: prepared.plan.cwd ?? tempDir,
-              security: "allowlist",
-              ask: "on-miss",
-              approvalDecision: "allow-always",
-              approved: true,
-              runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
-            });
-
-            expect(runCommand).toHaveBeenCalledTimes(1);
-            expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
-            expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
-          } finally {
-            fs.rmSync(tempDir, { recursive: true, force: true });
+          const executablePath = createTempExecutable({
+            dir: tempDir,
+            name: "make",
+          });
+          const makefilePath = path.join(tempDir, "Makefile");
+          fs.writeFileSync(makefilePath, "all:\n\t@echo inline-eval-ok\n");
+          const prepared = buildSystemRunApprovalPlan({
+            command: [executablePath, "-f", makefilePath],
+            cwd: tempDir,
+          });
+          expect(prepared.ok).toBe(true);
+          if (!prepared.ok) {
+            throw new Error("unreachable");
           }
+
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            approvalDecision: "allow-always",
+            approved: true,
+            runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
+          });
+
+          expect(runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
         },
       });
     } finally {
@@ -1557,41 +1501,37 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     "auto-runs allowlisted inner scripts through transport shell wrappers",
     async () => {
       const tempDir = createFixtureDir("openclaw-shell-wrapper-inner-");
-      try {
-        const scriptsDir = path.join(tempDir, "scripts");
-        fs.mkdirSync(scriptsDir, { recursive: true });
-        const scriptPath = path.join(scriptsDir, "check_mail.sh");
-        fs.writeFileSync(scriptPath, "#!/bin/sh\necho ok\n");
-        fs.chmodSync(scriptPath, 0o755);
+      const scriptsDir = path.join(tempDir, "scripts");
+      fs.mkdirSync(scriptsDir, { recursive: true });
+      const scriptPath = path.join(scriptsDir, "check_mail.sh");
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho ok\n");
+      fs.chmodSync(scriptPath, 0o755);
 
-        await withTempApprovalsHome({
-          approvals: createAllowlistOnMissApprovals({
-            agents: {
-              main: {
-                allowlist: [{ pattern: scriptPath }],
-              },
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals({
+          agents: {
+            main: {
+              allowlist: [{ pattern: scriptPath }],
             },
-          }),
-          run: async () => {
-            const invoke = await runSystemInvoke({
-              preferMacAppExecHost: false,
-              command: ["/bin/sh", "-lc", "./scripts/check_mail.sh --limit 5"],
-              rawCommand: '/bin/sh -lc "./scripts/check_mail.sh --limit 5"',
-              cwd: tempDir,
-              security: "allowlist",
-              ask: "on-miss",
-              runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-inner-ok")),
-            });
-
-            expect(invoke.runCommand).toHaveBeenCalledTimes(1);
-            expectInvokeOk(invoke.sendInvokeResult, {
-              payloadContains: "shell-wrapper-inner-ok",
-            });
           },
-        });
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
+        }),
+        run: async () => {
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: ["/bin/sh", "-lc", "./scripts/check_mail.sh --limit 5"],
+            rawCommand: '/bin/sh -lc "./scripts/check_mail.sh --limit 5"',
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-inner-ok")),
+          });
+
+          expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(invoke.sendInvokeResult, {
+            payloadContains: "shell-wrapper-inner-ok",
+          });
+        },
+      });
     },
   );
 
@@ -1636,7 +1576,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       });
     } finally {
       platformSpy.mockRestore();
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -1694,7 +1633,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       });
     } finally {
       platformSpy.mockRestore();
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -1704,53 +1642,49 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-allow-");
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "-lc", "cd ."],
-        cwd: tempDir,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", "cd ."],
+      cwd: tempDir,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
 
-      await withTempApprovalsHome({
-        approvals: {
-          version: 1,
-          defaults: { security: "allowlist", ask: "on-miss", askFallback: "full" },
-          agents: {
-            main: {
-              allowlist: [
-                {
-                  pattern: `=command:${crypto
-                    .createHash("sha256")
-                    .update(prepared.plan.commandText)
-                    .digest("hex")
-                    .slice(0, 16)}`,
-                  source: "allow-always",
-                },
-              ],
-            },
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss", askFallback: "full" },
+        agents: {
+          main: {
+            allowlist: [
+              {
+                pattern: `=command:${crypto
+                  .createHash("sha256")
+                  .update(prepared.plan.commandText)
+                  .digest("hex")
+                  .slice(0, 16)}`,
+                source: "allow-always",
+              },
+            ],
           },
         },
-        run: async () => {
-          const rerun = await runSystemInvoke({
-            preferMacAppExecHost: false,
-            command: prepared.plan.argv,
-            rawCommand: prepared.plan.commandText,
-            systemRunPlan: prepared.plan,
-            cwd: prepared.plan.cwd ?? tempDir,
-            security: "allowlist",
-            ask: "on-miss",
-            runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-reused")),
-          });
+      },
+      run: async () => {
+        const rerun = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.commandText,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tempDir,
+          security: "allowlist",
+          ask: "on-miss",
+          runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-reused")),
+        });
 
-          expect(rerun.runCommand).toHaveBeenCalledTimes(1);
-          expectInvokeOk(rerun.sendInvokeResult, { payloadContains: "shell-wrapper-reused" });
-        },
-      });
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+        expect(rerun.runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(rerun.sendInvokeResult, { payloadContains: "shell-wrapper-reused" });
+      },
+    });
   });
 });

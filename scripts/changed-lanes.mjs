@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
 const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
@@ -221,33 +222,23 @@ function parseArgs(argv) {
     githubOutput: false,
     paths: [],
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--base") {
-      args.base = argv[index + 1] ?? args.base;
-      index += 1;
-      continue;
-    }
-    if (arg === "--head") {
-      args.head = argv[index + 1] ?? args.head;
-      index += 1;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--json") {
-      args.json = true;
-      continue;
-    }
-    if (arg === "--github-output") {
-      args.githubOutput = true;
-      continue;
-    }
-    args.paths.push(arg);
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    args,
+    [
+      stringFlag("--base", "base"),
+      stringFlag("--head", "head"),
+      booleanFlag("--staged", "staged"),
+      booleanFlag("--json", "json"),
+      booleanFlag("--github-output", "githubOutput"),
+    ],
+    {
+      onUnhandledArg(arg, target) {
+        target.paths.push(arg);
+        return "handled";
+      },
+    },
+  );
 }
 
 function isDirectRun() {

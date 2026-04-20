@@ -172,6 +172,33 @@ describe("scripts/changed-lanes", () => {
     expect(plan.runFullTests).toBe(false);
   });
 
+  it("keeps shared Vitest wiring changes on the broad changed test path", () => {
+    const result = detectChangedLanes(["test/vitest/vitest.shared.config.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.testTargets).toEqual([]);
+    expect(plan.runChangedTestsBroad).toBe(true);
+    expect(plan.runFullTests).toBe(false);
+  });
+
+  it("keeps setup changes on the broad changed test path", () => {
+    const result = detectChangedLanes(["test/setup.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.testTargets).toEqual([]);
+    expect(plan.runChangedTestsBroad).toBe(true);
+    expect(plan.runFullTests).toBe(false);
+  });
+
+  it("routes changed extension Vitest configs to only their owning shard", () => {
+    const result = detectChangedLanes(["test/vitest/vitest.extension-discord.config.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.testTargets).toEqual(["test/vitest/vitest.extension-discord.config.ts"]);
+    expect(plan.runChangedTestsBroad).toBe(false);
+    expect(plan.runFullTests).toBe(false);
+  });
+
   it("keeps an empty changed path list as a no-op", () => {
     const result = detectChangedLanes([]);
     const plan = createChangedCheckPlan(result);
@@ -189,6 +216,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
     ]);
+    expect(plan.runChangedTestsBroad).toBe(false);
     expect(plan.runFullTests).toBe(false);
   });
 
@@ -200,6 +228,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
     ]);
+    expect(plan.runChangedTestsBroad).toBe(false);
     expect(plan.runFullTests).toBe(false);
   });
 });

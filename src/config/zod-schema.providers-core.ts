@@ -1441,6 +1441,7 @@ export const BlueBubblesAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    sendTimeoutMs: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),

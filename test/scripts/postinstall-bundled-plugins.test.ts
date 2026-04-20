@@ -87,6 +87,28 @@ describe("bundled plugin postinstall", () => {
     });
   }
 
+  async function writeDiscordDaveyOptionalDependencyFixture(
+    extensionsDir: string,
+    packageRoot: string,
+  ) {
+    await writePluginPackage(extensionsDir, "discord", {
+      dependencies: {
+        "@snazzah/davey": "0.1.11",
+      },
+    });
+    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
+      JSON.stringify({
+        optionalDependencies: {
+          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
+        },
+      }),
+    );
+  }
+
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
@@ -476,22 +498,7 @@ describe("bundled plugin postinstall", () => {
   it("reinstalls bundled runtime deps when optional native children are missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
+    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
@@ -511,22 +518,7 @@ describe("bundled plugin postinstall", () => {
   it("does not reinstall when only another platform optional native child is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
+    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
     const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({

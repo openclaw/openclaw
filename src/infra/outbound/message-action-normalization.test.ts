@@ -1,21 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
-vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: (channel: string) =>
-    channel === "feishu"
-      ? {
-          actions: {
-            messageActionTargetAliases: {
-              read: { aliases: ["messageId"] },
-              pin: { aliases: ["messageId"] },
-              unpin: { aliases: ["messageId"] },
-              "list-pins": { aliases: ["chatId"] },
-              "channel-info": { aliases: ["chatId"] },
-            },
-          },
-        }
-      : undefined,
+vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
+  getBootstrapChannelPlugin: (
+    await import("./message-action-test-fixtures.js")
+  ).createFeishuMessageActionBootstrapRegistryMock(),
 }));
 
 describe("normalizeMessageActionInput", () => {
