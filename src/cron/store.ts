@@ -110,6 +110,18 @@ function backfillMissingRuntimeFields(job: CronStoreFile["jobs"][number]): void 
   }
 }
 
+function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unknown): number {
+  if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
+    return updatedAtMs;
+  }
+  if (typeof job.updatedAtMs === "number" && Number.isFinite(job.updatedAtMs)) {
+    return job.updatedAtMs;
+  }
+  return typeof job.createdAtMs === "number" && Number.isFinite(job.createdAtMs)
+    ? job.createdAtMs
+    : Date.now();
+}
+
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
@@ -140,7 +152,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       for (const job of store.jobs) {
         const entry = stateFile.jobs[job.id];
         if (entry) {
-          job.updatedAtMs = entry.updatedAtMs ?? job.updatedAtMs;
+          job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
           job.state = (entry.state ?? {}) as never;
         } else {
           backfillMissingRuntimeFields(job);

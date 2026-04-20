@@ -186,6 +186,41 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
   });
 
+  it("sanitizes invalid updatedAtMs values from the state sidecar", async () => {
+    const store = await makeStorePath();
+    const job = makeStore("job-1", true).jobs[0];
+    const config = {
+      version: 1,
+      jobs: [{ ...job, state: {}, updatedAtMs: undefined }],
+    };
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(config, null, 2), "utf-8");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [job.id]: {
+              updatedAtMs: "invalid",
+              state: { nextRunAtMs: job.createdAtMs + 60_000 },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
+  });
+
   it.skipIf(process.platform === "win32")(
     "writes store and backup files with secure permissions",
     async () => {
