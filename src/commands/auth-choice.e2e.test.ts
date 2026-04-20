@@ -252,7 +252,7 @@ describe("applyAuthChoice", () => {
       expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "global" }),
     );
     expect(result.config.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-    expect(result.config.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+    expect(result.config.agents?.defaults?.model?.primary).toBe("zai/glm-5-turbo");
 
     expect((await readAuthProfile("zai:default"))?.key).toBe("zai-test-key");
   });

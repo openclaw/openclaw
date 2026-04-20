@@ -1,0 +1,30 @@
+{
+  "workOrderFile": "/Users/vero/.openclaw/cache/coperniq/work-orders.json",
+  "employees": [
+    { "id": 8864, "name": "D2DCX Hutchinson" },
+    { "id": 8964, "name": "API API User - D2DCX Hutchinson" },
+    { "id": 13569, "name": "Seth Hart" },
+    { "id": 14199, "name": "Coperniq Admin" },
+    { "id": 14200, "name": "Ridge Payne" },
+    { "id": 14201, "name": "Coperniq Admin API" },
+    { "id": 14204, "name": "Clay Neser" },
+    { "id": 14205, "name": "Daxton Dillon" },
+    { "id": 14206, "name": "Sam LeSueur" },
+    { "id": 14229, "name": "Spencer Divver" },
+    { "id": 14230, "name": "Jordan Evans" },
+    { "id": 14231, "name": "Jake Lloyd" },
+    { "id": 14232, "name": "Thomas Morrow" },
+    { "id": 14236, "name": "Kaden Johnson" },
+    { "id": 14240, "name": "Zachary Burton" },
+    { "id": 14349, "name": "Weston Bonny" },
+    { "id": 14350, "name": "API API User - Ridge Payne" },
+    { "id": 14382, "name": "Dan Merrill" },
+    { "id": 14426, "name": "Landen Olsen" },
+    { "id": 14649, "name": "Kaleb Terranova" },
+    { "id": 14884, "name": "Junrey Sullano" },
+    { "id": 15023, "name": "Carlos Rodriguez" },
+    { "id": 15043, "name": "Tanner Orndorff" },
+    { "id": 15122, "name": "API API User - Tanner Orndorff" },
+    { "id": 15152, "name": "Dan Barlow" }
+  ]
+}

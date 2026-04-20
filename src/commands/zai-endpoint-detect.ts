@@ -6,6 +6,9 @@ import {
   ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.models.js";
 
+/** Prefer Turbo / 5.1; keep `glm-5` last (deprecated API id after 2026-04-20). */
+const ZAI_GENERAL_PROBE_MODEL_IDS = ["glm-5-turbo", "glm-5.1", "glm-5"] as const;
+
 export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
 
 export type ZaiDetectedEndpoint = {
@@ -98,30 +101,36 @@ export async function detectZaiEndpoint(params: {
 
   const timeoutMs = params.timeoutMs ?? 5_000;
 
-  // Prefer GLM-5 on the general API endpoints.
-  const glm5: Array<{ endpoint: ZaiEndpointId; baseUrl: string }> = [
+  // Prefer GLM-5 Turbo / 5.1 on general API endpoints (see ZAI_GENERAL_PROBE_MODEL_IDS).
+  const generalEndpoints: Array<{ endpoint: ZaiEndpointId; baseUrl: string }> = [
     { endpoint: "global", baseUrl: ZAI_GLOBAL_BASE_URL },
     { endpoint: "cn", baseUrl: ZAI_CN_BASE_URL },
   ];
-  for (const candidate of glm5) {
-    const result = await probeZaiChatCompletions({
-      baseUrl: candidate.baseUrl,
-      apiKey: params.apiKey,
-      modelId: "glm-5",
-      timeoutMs,
-      fetchFn: params.fetchFn,
-    });
-    if (result.ok) {
-      return {
-        endpoint: candidate.endpoint,
+  for (const candidate of generalEndpoints) {
+    for (const modelId of ZAI_GENERAL_PROBE_MODEL_IDS) {
+      const result = await probeZaiChatCompletions({
         baseUrl: candidate.baseUrl,
-        modelId: "glm-5",
-        note: `Verified GLM-5 on ${candidate.endpoint} endpoint.`,
-      };
+        apiKey: params.apiKey,
+        modelId,
+        timeoutMs,
+        fetchFn: params.fetchFn,
+      });
+      if (result.ok) {
+        let note = `Verified GLM (${modelId}) on ${candidate.endpoint} endpoint.`;
+        if (modelId === "glm-5") {
+          note += " API id glm-5 is deprecated after 2026-04-20; prefer glm-5-turbo or glm-5.1.";
+        }
+        return {
+          endpoint: candidate.endpoint,
+          baseUrl: candidate.baseUrl,
+          modelId,
+          note,
+        };
+      }
     }
   }
 
-  // Fallback: Coding Plan endpoint (GLM-5 not available there).
+  // Fallback: Coding Plan endpoint (GLM-5.x general models may not be available there).
   const coding: Array<{ endpoint: ZaiEndpointId; baseUrl: string }> = [
     { endpoint: "coding-global", baseUrl: ZAI_CODING_GLOBAL_BASE_URL },
     { endpoint: "coding-cn", baseUrl: ZAI_CODING_CN_BASE_URL },

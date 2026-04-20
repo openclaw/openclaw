@@ -194,7 +194,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
       expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5-turbo");
       await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
     });
   }, 60_000);

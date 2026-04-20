@@ -90,6 +90,9 @@ export function applyZaiProviderConfig(
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
 
   const defaultModels = [
+    buildZaiModelDefinition({ id: "glm-5-turbo" }),
+    buildZaiModelDefinition({ id: "glm-5.1" }),
+    buildZaiModelDefinition({ id: "glm-5v-turbo" }),
     buildZaiModelDefinition({ id: "glm-5" }),
     buildZaiModelDefinition({ id: "glm-4.7" }),
     buildZaiModelDefinition({ id: "glm-4.7-flash" }),

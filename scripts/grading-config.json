@@ -1,0 +1,17 @@
+{
+  "workOrderFile": "/Users/vero/.openclaw/cache/coperniq/work-orders.json",
+  "employees": [
+    {
+      "id": "sam.lesueur@vero.solar",
+      "name": "Sam LeSueur"
+    },
+    {
+      "id": "jordan.evans@vero.solar",
+      "name": "Jordan Evans"
+    },
+    {
+      "id": "clay.neser@vero.solar",
+      "name": "Clay Neser"
+    }
+  ]
+}

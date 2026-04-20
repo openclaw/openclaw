@@ -14,8 +14,16 @@ const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 
-const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
+
+function isZaiGlm5SeriesModelId(lower: string): boolean {
+  return (
+    lower === "glm-5" ||
+    lower.startsWith("glm-5.") ||
+    lower.startsWith("glm-5-") ||
+    lower.startsWith("glm-5v")
+  );
+}
 
 const ANTIGRAVITY_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTIGRAVITY_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -182,8 +190,8 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
-// Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
-// When a user configures zai/glm-5 without a models.json entry, clone glm-4.7 as a forward-compat fallback.
+// Z.ai GLM-5.x ids may not be present in pi-ai's built-in catalog yet.
+// When a user configures zai/glm-5* without a models.json entry, clone glm-4.7 as a forward-compat fallback.
 function resolveZaiGlm5ForwardCompatModel(
   provider: string,
   modelId: string,
@@ -194,9 +202,12 @@ function resolveZaiGlm5ForwardCompatModel(
   }
   const trimmed = modelId.trim();
   const lower = trimmed.toLowerCase();
-  if (lower !== ZAI_GLM5_MODEL_ID && !lower.startsWith(`${ZAI_GLM5_MODEL_ID}-`)) {
+  if (!isZaiGlm5SeriesModelId(lower)) {
     return undefined;
   }
+
+  const vision = lower.startsWith("glm-5v");
+  const input: Array<"text" | "image"> = vision ? ["text", "image"] : ["text"];
 
   for (const templateId of ZAI_GLM5_TEMPLATE_MODEL_IDS) {
     const template = modelRegistry.find("zai", templateId) as Model<Api> | null;
@@ -208,6 +219,7 @@ function resolveZaiGlm5ForwardCompatModel(
       id: trimmed,
       name: trimmed,
       reasoning: true,
+      input: vision ? input : template.input,
     } as Model<Api>);
   }
 
@@ -217,7 +229,7 @@ function resolveZaiGlm5ForwardCompatModel(
     api: "openai-completions",
     provider: "zai",
     reasoning: true,
-    input: ["text"],
+    input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,

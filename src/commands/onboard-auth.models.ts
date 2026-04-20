@@ -25,7 +25,8 @@ export const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 export const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 export const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
 export const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
-export const ZAI_DEFAULT_MODEL_ID = "glm-5";
+/** Daily-driver default; GLM-5 (`glm-5`) deprecated 2026-04-20 — prefer Turbo / 5.1. */
+export const ZAI_DEFAULT_MODEL_ID = "glm-5-turbo";
 
 export function resolveZaiBaseUrl(endpoint?: string): string {
   switch (endpoint) {
@@ -88,6 +89,11 @@ const MINIMAX_MODEL_CATALOG = {
 type MinimaxCatalogId = keyof typeof MINIMAX_MODEL_CATALOG;
 
 const ZAI_MODEL_CATALOG = {
+  "glm-5.1": { name: "GLM-5.1", reasoning: true },
+  "glm-5-turbo": { name: "GLM-5 Turbo", reasoning: true },
+  /** Vision / multimodal Slack attachments */
+  "glm-5v-turbo": { name: "GLM-5V Turbo", reasoning: true },
+  /** @deprecated API id `glm-5` sunset 2026-04-20 — use glm-5-turbo or glm-5.1 */
   "glm-5": { name: "GLM-5", reasoning: true },
   "glm-4.7": { name: "GLM-4.7", reasoning: true },
   "glm-4.7-flash": { name: "GLM-4.7 Flash", reasoning: true },
@@ -144,13 +150,16 @@ export function buildZaiModelDefinition(params: {
   cost?: ModelDefinitionConfig["cost"];
   contextWindow?: number;
   maxTokens?: number;
+  input?: ModelDefinitionConfig["input"];
 }): ModelDefinitionConfig {
   const catalog = ZAI_MODEL_CATALOG[params.id as ZaiCatalogId];
+  const defaultInput: ModelDefinitionConfig["input"] =
+    params.id === "glm-5v-turbo" ? ["text", "image"] : ["text"];
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `GLM ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? true,
-    input: ["text"],
+    input: params.input ?? defaultInput,
     cost: params.cost ?? ZAI_DEFAULT_COST,
     contextWindow: params.contextWindow ?? 204800,
     maxTokens: params.maxTokens ?? 131072,

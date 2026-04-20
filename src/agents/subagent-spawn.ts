@@ -270,7 +270,11 @@ export async function spawnSubagentDirect(
     if (typeof response?.runId === "string" && response.runId) {
       childRunId = response.runId;
     }
+    console.log(
+      `Subagent spawn request for ${childSessionKey} accepted by gateway with runId ${childRunId}`,
+    );
   } catch (err) {
+    console.error(`Subagent spawn request for ${childSessionKey} failed`, err);
     const messageText =
       err instanceof Error ? err.message : typeof err === "string" ? err : "error";
     return {

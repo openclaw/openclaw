@@ -200,7 +200,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           threadTs: streamThreadTs,
           text,
           teamId: ctx.teamId,
-          userId: message.user,
+          userId: prepared.isDirectMessage ? message.user : undefined,
         });
         replyPlan.markSent();
         return;
