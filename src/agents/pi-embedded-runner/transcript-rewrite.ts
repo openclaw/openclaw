@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
@@ -188,6 +189,133 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   };
 }
 
+type ActiveLeafBranchCompactionResult = {
+  removedEntries: number;
+  bytesRemoved: number;
+};
+
+/**
+ * After a rewrite, the session file still carries all pre-rewrite entries as
+ * abandoned sibling branches of the new leaf (append-only semantics). Because
+ * openclaw's transcript reader scans every line in the file, those abandoned
+ * entries show up as duplicates in the replay — each successive rewrite piles
+ * on another generation. This helper keeps only entries that are reachable
+ * from the current leaf via the parentId chain, plus parentId-less roots
+ * (session header / model_change), and atomically rewrites the file.
+ *
+ * Identity is based on the structural parentId chain, not textual content.
+ */
+function compactSessionFileToActiveLeafBranch(
+  sessionFile: string,
+  leafId: string | null | undefined,
+): ActiveLeafBranchCompactionResult {
+  if (!leafId) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(sessionFile, "utf-8");
+  } catch {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const rawLines = content.split("\n");
+  type ParsedLine = {
+    raw: string;
+    id?: string;
+    parentId?: string | null;
+    type?: string;
+  };
+  const parsed: ParsedLine[] = [];
+  for (const raw of rawLines) {
+    if (!raw.trim()) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(raw) as {
+        id?: unknown;
+        parentId?: unknown;
+        type?: unknown;
+      };
+      parsed.push({
+        raw,
+        id: typeof obj.id === "string" ? obj.id : undefined,
+        parentId:
+          typeof obj.parentId === "string"
+            ? obj.parentId
+            : obj.parentId === null
+              ? null
+              : undefined,
+        type: typeof obj.type === "string" ? obj.type : undefined,
+      });
+    } catch {
+      // Malformed line: keep it verbatim so we don't lose data.
+      parsed.push({ raw });
+    }
+  }
+  if (parsed.length === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const byId = new Map<string, ParsedLine>();
+  for (const line of parsed) {
+    if (line.id) {
+      byId.set(line.id, line);
+    }
+  }
+  // Walk backward from the current leaf to the root; collect all reachable ids.
+  const keepIds = new Set<string>();
+  let cursor = byId.get(leafId);
+  while (cursor) {
+    if (!cursor.id || keepIds.has(cursor.id)) {
+      break;
+    }
+    keepIds.add(cursor.id);
+    cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+  }
+  if (keepIds.size === 0) {
+    // Leaf not found in file — don't risk truncation.
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const kept: ParsedLine[] = [];
+  for (const line of parsed) {
+    // Always keep: malformed lines (no parsed id), structural roots (parentId === null).
+    // Keep identified entries only if they're on the active leaf chain.
+    if (!line.id) {
+      kept.push(line);
+      continue;
+    }
+    if (line.parentId === null) {
+      kept.push(line);
+      continue;
+    }
+    if (keepIds.has(line.id)) {
+      kept.push(line);
+    }
+  }
+  const removed = parsed.length - kept.length;
+  if (removed === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const newContent = `${kept.map((l) => l.raw).join("\n")}\n`;
+  const originalSize = Buffer.byteLength(content, "utf-8");
+  const newSize = Buffer.byteLength(newContent, "utf-8");
+  const tmp = `${sessionFile}.leaf-branch-compact.tmp`;
+  try {
+    fs.writeFileSync(tmp, newContent, "utf-8");
+    fs.renameSync(tmp, sessionFile);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Best-effort cleanup.
+    }
+    log.warn(
+      `[transcript-rewrite] leaf-branch compaction write failed: ${formatErrorMessage(err)}`,
+    );
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  return { removedEntries: removed, bytesRemoved: originalSize - newSize };
+}
+
 /**
  * Open a transcript file, rewrite message entries on the active branch, and
  * emit a transcript update when the active branch changed.
@@ -209,11 +337,15 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
       replacements: params.request.replacements,
     });
     if (result.changed) {
+      const leafId =
+        typeof sessionManager.getLeafId === "function" ? sessionManager.getLeafId() : null;
+      const compactResult = compactSessionFileToActiveLeafBranch(params.sessionFile, leafId);
       emitSessionTranscriptUpdate(params.sessionFile);
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
           `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
           `bytesFreed=${result.bytesFreed} ` +
+          `leafBranchCompaction=removed:${compactResult.removedEntries}/bytes:${compactResult.bytesRemoved} ` +
           `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
       );
     }
