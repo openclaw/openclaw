@@ -11,6 +11,7 @@ import {
 } from "../../tool-call-id.js";
 import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import { isStrictToolMode, type ToolStrictnessMode } from "../../tool-strictness.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
@@ -195,6 +196,7 @@ function normalizeToolCallNameForDispatch(
   rawName: string,
   allowedToolNames?: Set<string>,
   rawToolCallId?: string,
+  mode: ToolStrictnessMode = "off",
 ): string {
   const trimmed = rawName.trim();
   if (!trimmed) {
@@ -202,6 +204,10 @@ function normalizeToolCallNameForDispatch(
   }
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
+  }
+
+  if (isStrictToolMode(mode)) {
+    return allowedToolNames.has(trimmed) ? trimmed : rawName;
   }
 
   const exact = resolveExactAllowedToolName(trimmed, allowedToolNames);

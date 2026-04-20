@@ -18,6 +18,8 @@ export const FIELD_LABELS: Record<string, string> = {
   diagnostics: "Diagnostics",
   "diagnostics.otel": "OpenTelemetry",
   "diagnostics.cacheTrace": "Cache Trace",
+  toolStrictness: "Tool Strictness",
+  "toolStrictness.mode": "Tool Strictness Mode",
   logging: "Logging",
   "logging.level": "Log Level",
   "logging.file": "Log File Path",

@@ -32,6 +32,10 @@ export const FIELD_HELP: Record<string, string> = {
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
     "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
+  toolStrictness:
+    "Tool-call strictness controls for runtime normalization and compatibility repairs. Use strict mode when you want OpenClaw to reject selected non-canonical tool calls instead of silently repairing them.",
+  "toolStrictness.mode":
+    'Tool-call strictness mode: "off" keeps compatibility behavior, while "strict" disables selected tool-call repairs and requires canonical tool names and arguments on covered paths.',
   logging:
     "Logging behavior controls for severity, output destinations, formatting, and sensitive-data redaction. Keep levels and redaction strict enough for production while preserving useful diagnostics.",
   "logging.level":
