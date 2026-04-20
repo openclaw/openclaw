@@ -45,8 +45,22 @@ function taskReferenceAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.startedAt ?? task.createdAt;
 }
 
+/**
+ * Tasks frequently start before their registry record is created (in-flight
+ * registration). `startedAt` is captured at tool-call start, while `createdAt`
+ * is set inside `createTaskRecord` which runs later. A small negative delta
+ * (startedAt < createdAt) is therefore architecturally expected and should not
+ * produce a warning. Only flag genuinely corrupt data where the gap exceeds a
+ * generous tolerance window.
+ */
+const STARTED_BEFORE_CREATED_TOLERANCE_MS = 30_000;
+
 function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
-  if (task.startedAt && task.startedAt < task.createdAt) {
+  if (
+    task.startedAt &&
+    task.startedAt < task.createdAt &&
+    task.createdAt - task.startedAt > STARTED_BEFORE_CREATED_TOLERANCE_MS
+  ) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",

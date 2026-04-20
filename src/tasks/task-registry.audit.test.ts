@@ -99,4 +99,50 @@ describe("task-registry audit", () => {
 
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
+
+  it("does not flag startedAt slightly before createdAt (in-flight registration)", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const createdAt = now - 60_000;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "inflight",
+          status: "succeeded",
+          // startedAt captured 500ms before the task record was created —
+          // this is the normal in-flight registration pattern.
+          createdAt,
+          startedAt: createdAt - 500,
+          endedAt: createdAt + 5_000,
+          cleanupAfter: createdAt + 3_600_000,
+        }),
+      ],
+    });
+
+    expect(findings.map((f) => f.code)).toEqual([]);
+  });
+
+  it("flags startedAt far before createdAt as genuinely inconsistent", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const createdAt = now - 60_000;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "corrupt",
+          status: "succeeded",
+          // startedAt 2 minutes before createdAt — well beyond the 30s
+          // tolerance, indicating genuinely corrupt data.
+          createdAt,
+          startedAt: createdAt - 120_000,
+          endedAt: createdAt + 5_000,
+          cleanupAfter: createdAt + 3_600_000,
+        }),
+      ],
+    });
+
+    expect(findings.map((f) => [f.code, f.task.taskId])).toEqual([
+      ["inconsistent_timestamps", "corrupt"],
+    ]);
+  });
 });
