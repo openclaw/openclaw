@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SkillSnapshot } from "../../agents/skills/types.js";
+import type { VerboseLevel } from "../../auto-reply/thinking.js";
+import type { CronJobState } from "../types.js";
 import { createCronPromptExecutor } from "./run-executor.js";
 
 // Mock dependencies
@@ -41,7 +44,7 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
         sessionId: "cron-test-session-123",
         updatedAt: Date.now(),
         systemSent: false,
-        skillsSnapshot: {},
+        skillsSnapshot: {} as SkillSnapshot,
         sessionFile: undefined as string | undefined,
         ...overrides,
       },
@@ -52,23 +55,30 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
   }
 
   function makeMockParams(overrides?: Record<string, unknown>) {
-    const cronSession = makeMockCronSession(overrides?.cronSession);
+    const cronSession = makeMockCronSession(
+      overrides?.cronSession as Record<string, unknown> | undefined,
+    );
     return {
       cfg: {},
       cfgWithAgentDefaults: {},
       job: {
         id: "test-job",
         name: "Test Job",
-        schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", message: "test" },
+        schedule: { kind: "cron" as const, expr: "0 * * * *", tz: "UTC" },
+        sessionTarget: "isolated" as const,
+        payload: { kind: "agentTurn" as const, message: "test" },
+        enabled: true,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+        wakeMode: "now" as const,
+        state: {} as CronJobState,
       },
       agentId: "test-agent",
       agentDir: "/tmp/agent",
       agentSessionKey: "agent:test-agent:cron-test-session-123",
       workspaceDir: "/tmp/workspace",
       lane: "main",
-      resolvedVerboseLevel: "normal",
+      resolvedVerboseLevel: "normal" as VerboseLevel,
       thinkLevel: undefined,
       timeoutMs: 60000,
       messageChannel: undefined,
@@ -77,7 +87,7 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
         requireExplicitMessageTarget: false,
         disableMessageTool: false,
       },
-      skillsSnapshot: {},
+      skillsSnapshot: {} as SkillSnapshot,
       agentPayload: null,
       liveSelection: {
         provider: "openai",
@@ -91,13 +101,13 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
 
   it("persists sessionFile to sessionEntry when executor is created", () => {
     const params = makeMockParams();
-    
+
     // Verify sessionFile is initially undefined
     expect(params.cronSession.sessionEntry.sessionFile).toBeUndefined();
-    
+
     // Create the executor (this should set sessionFile)
     createCronPromptExecutor(params);
-    
+
     // Verify sessionFile is now set
     expect(params.cronSession.sessionEntry.sessionFile).toBe("/tmp/transcripts/cron-session.jsonl");
   });
@@ -111,20 +121,20 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
       },
       agentId: "my-agent",
     });
-    
+
     const { resolveSessionTranscriptPath } = await import("./run-execution.runtime.js");
     (resolveSessionTranscriptPath as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      "/custom/path/agent:my-agent:my-cron-job-456.jsonl"
+      "/custom/path/agent:my-agent:my-cron-job-456.jsonl",
     );
-    
+
     createCronPromptExecutor(params);
-    
+
     expect(params.cronSession.sessionEntry.sessionFile).toBe(
-      "/custom/path/agent:my-agent:my-cron-job-456.jsonl"
+      "/custom/path/agent:my-agent:my-cron-job-456.jsonl",
     );
   });
 
-  it("overwrites existing sessionFile if already set", () => {
+  it("preserves existing sessionFile if already set", () => {
     const params = makeMockParams({
       cronSession: {
         sessionEntry: {
@@ -132,15 +142,15 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
         },
       },
     });
-    
+
     // Verify old value exists
     expect(params.cronSession.sessionEntry.sessionFile).toBe("/old/path/old-session.jsonl");
-    
+
     // Create executor
     createCronPromptExecutor(params);
-    
-    // Verify it's updated to new value
-    expect(params.cronSession.sessionEntry.sessionFile).toBe("/tmp/transcripts/cron-session.jsonl");
+
+    // Verify it preserves existing value (does NOT overwrite)
+    expect(params.cronSession.sessionEntry.sessionFile).toBe("/old/path/old-session.jsonl");
   });
 
   it("calls resolveSessionTranscriptPath with correct arguments", async () => {
@@ -152,13 +162,13 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
       },
       agentId: "test-agent-id",
     });
-    
+
     const { resolveSessionTranscriptPath } = await import("./run-execution.runtime.js");
     const mockResolve = resolveSessionTranscriptPath as ReturnType<typeof vi.fn>;
     mockResolve.mockClear();
-    
+
     createCronPromptExecutor(params);
-    
+
     expect(mockResolve).toHaveBeenCalledWith("test-session-id-789", "test-agent-id");
   });
 
@@ -171,9 +181,9 @@ describe("createCronPromptExecutor - sessionFile persistence (#65151)", () => {
         },
       },
     });
-    
-    // Should not throw and should update the value
+
+    // Should not throw and should preserve existing value
     expect(() => createCronPromptExecutor(params)).not.toThrow();
-    expect(params.cronSession.sessionEntry.sessionFile).toBe("/tmp/transcripts/cron-session.jsonl");
+    expect(params.cronSession.sessionEntry.sessionFile).toBe("/existing/path.jsonl");
   });
 });
