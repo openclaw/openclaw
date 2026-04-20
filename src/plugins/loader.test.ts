@@ -2527,6 +2527,87 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
   });
 
+  it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const absolutePath = path.join(workspaceDir, "MEMORY.md");
+    fs.writeFileSync(absolutePath, "# Memory\n");
+    const memoryPlugin = writePlugin({
+      id: "capability-survives-memory",
+      filename: "capability-survives-memory.cjs",
+      body: `module.exports = {
+        id: "capability-survives-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: ${JSON.stringify(workspaceDir)},
+                  relativePath: "MEMORY.md",
+                  absolutePath: ${JSON.stringify(absolutePath)},
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+    const sidecarPlugin = writePlugin({
+      id: "capability-survives-sidecar",
+      filename: "capability-survives-sidecar.cjs",
+      body: `module.exports = {
+        id: "capability-survives-sidecar",
+        register() {},
+      };`,
+    });
+
+    const activateConfig = {
+      plugins: {
+        load: { paths: [memoryPlugin.file, sidecarPlugin.file] },
+        allow: ["capability-survives-memory", "capability-survives-sidecar"],
+        slots: { memory: "capability-survives-memory" },
+      },
+    };
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: memoryPlugin.dir,
+      config: activateConfig,
+    });
+
+    const expectedArtifacts = [
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath,
+        agentIds: ["main"],
+        contentType: "markdown" as const,
+      },
+    ];
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
+      expectedArtifacts,
+    );
+
+    // Simulate what resolvePluginWebSearchProviders and similar read-only paths do:
+    // load plugins again with activate:false. Each per-plugin snapshot/rollback must
+    // preserve the previously registered memory capability.
+    loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: memoryPlugin.dir,
+      config: activateConfig,
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
+      expectedArtifacts,
+    );
+  });
+
   it("throws when activate:false is used without cache:false", () => {
     expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
       "activate:false requires cache:false",
