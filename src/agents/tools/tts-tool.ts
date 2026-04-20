@@ -42,7 +42,7 @@ export function createTtsTool(opts?: {
             audioPath: result.audioPath,
             provider: result.provider,
             media: {
-              mediaUrl: result.audioPath,
+              mediaUrl: result.mediaUrl ?? result.audioPath,
               ...(result.voiceCompatible ? { audioAsVoice: true } : {}),
             },
           },

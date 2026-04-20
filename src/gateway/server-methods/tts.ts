@@ -116,6 +116,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,
+          mediaUrl: result.mediaUrl ?? result.audioPath,
           provider: result.provider,
           outputFormat: result.outputFormat,
           voiceCompatible: result.voiceCompatible,

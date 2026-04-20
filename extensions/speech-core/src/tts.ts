@@ -1,13 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  mkdtempSync,
-  renameSync,
-  unlinkSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { normalizeChannelId, type ChannelId } from "openclaw/plugin-sdk/channel-targets";
 import type {
@@ -24,7 +16,6 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -42,7 +33,7 @@ import {
   parseTtsDirectives,
   type ResolvedTtsConfig,
   type ResolvedTtsModelOverrides,
-  scheduleCleanup,
+  saveMediaBuffer,
   summarizeText,
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
@@ -92,6 +83,7 @@ export type TtsProviderAttempt = {
 export type TtsResult = {
   success: boolean;
   audioPath?: string;
+  mediaUrl?: string;
   error?: string;
   latencyMs?: number;
   provider?: string;
@@ -764,16 +756,18 @@ export async function textToSpeech(params: {
     };
   }
 
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-  const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
-  writeFileSync(audioPath, synthesis.audioBuffer);
-  scheduleCleanup(tempDir);
+  const savedAudio = await saveMediaBuffer(
+    synthesis.audioBuffer,
+    undefined,
+    "tool-tts",
+    undefined,
+    `voice-${Date.now()}${synthesis.fileExtension}`,
+  );
 
   return {
     success: true,
-    audioPath,
+    audioPath: savedAudio.path,
+    mediaUrl: savedAudio.path,
     latencyMs: synthesis.latencyMs,
     provider: synthesis.provider,
     fallbackFrom: synthesis.fallbackFrom,
@@ -1162,7 +1156,7 @@ export async function maybeApplyTtsToPayload(params: {
       supportsNativeVoiceNoteTts(params.channel) && result.voiceCompatible === true;
     return {
       ...nextPayload,
-      mediaUrl: result.audioPath,
+      mediaUrl: result.mediaUrl ?? result.audioPath,
       audioAsVoice: shouldVoice || params.payload.audioAsVoice,
     };
   }

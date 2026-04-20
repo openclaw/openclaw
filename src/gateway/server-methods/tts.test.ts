@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   textToSpeech: vi.fn(async () => ({
     success: true,
     audioPath: "/tmp/tts.mp3",
+    mediaUrl: "/Users/test/.openclaw/media/tool-tts/tts.mp3",
     provider: "openai",
     outputFormat: "mp3",
     voiceCompatible: false,
@@ -49,6 +50,27 @@ describe("ttsHandlers", () => {
     mocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/tts.mp3",
+      mediaUrl: "/Users/test/.openclaw/media/tool-tts/tts.mp3",
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
+  });
+
+  it("returns mediaUrl for successful conversions", async () => {
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await ttsHandlers["tts.convert"]({
+      params: {
+        text: "hello",
+      },
+      respond,
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      audioPath: "/tmp/tts.mp3",
+      mediaUrl: "/Users/test/.openclaw/media/tool-tts/tts.mp3",
       provider: "openai",
       outputFormat: "mp3",
       voiceCompatible: false,

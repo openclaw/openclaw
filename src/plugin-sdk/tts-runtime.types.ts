@@ -111,6 +111,7 @@ export type TtsTestFacade = {
 export type TtsResult = {
   success: boolean;
   audioPath?: string;
+  mediaUrl?: string;
   error?: string;
   latencyMs?: number;
   provider?: string;

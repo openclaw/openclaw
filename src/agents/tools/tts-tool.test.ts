@@ -21,6 +21,7 @@ describe("createTtsTool", () => {
     textToSpeechSpy.mockResolvedValue({
       success: true,
       audioPath: "/tmp/reply.opus",
+      mediaUrl: "/Users/test/.openclaw/media/tool-tts/reply.opus",
       provider: "test",
       voiceCompatible: true,
     });
@@ -34,7 +35,7 @@ describe("createTtsTool", () => {
         audioPath: "/tmp/reply.opus",
         provider: "test",
         media: {
-          mediaUrl: "/tmp/reply.opus",
+          mediaUrl: "/Users/test/.openclaw/media/tool-tts/reply.opus",
           audioAsVoice: true,
         },
       },
