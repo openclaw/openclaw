@@ -34,6 +34,7 @@ export type ResolvedWhatsAppInboundPolicy = {
   isSamePhone: (value?: string | null) => boolean;
   isDmSenderAllowed: (allowEntries: string[], sender?: string | null) => boolean;
   isGroupSenderAllowed: (allowEntries: string[], sender?: string | null) => boolean;
+  isConfiguredGroupAdmin: (conversationId: string, senderE164?: string | null) => boolean;
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
   resolveConversationRequireMention: (
     conversationId: string,
@@ -129,6 +130,8 @@ export function resolveWhatsAppInboundPolicy(params: {
     groupPolicy,
     groups: account.groups,
   });
+  const isConfiguredGroupAdmin = (conversationId: string, senderE164?: string | null) =>
+    isGroupAdmin(account.groups, resolveGroupConversationId(conversationId), senderE164);
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
   return {
@@ -145,6 +148,7 @@ export function resolveWhatsAppInboundPolicy(params: {
     isDmSenderAllowed: (allowEntries, sender) =>
       isSamePhone(sender) || isNormalizedSenderAllowed(allowEntries, sender),
     isGroupSenderAllowed: (allowEntries, sender) => isNormalizedSenderAllowed(allowEntries, sender),
+    isConfiguredGroupAdmin,
     resolveConversationGroupPolicy: (conversationId) =>
       resolveChannelGroupPolicy({
         cfg: resolvedGroupCfg,
@@ -153,15 +157,14 @@ export function resolveWhatsAppInboundPolicy(params: {
         hasGroupAllowFrom: effectiveGroupAllowFrom.length > 0,
       }),
     resolveConversationRequireMention: (conversationId, senderE164) => {
-      const groupId = resolveGroupConversationId(conversationId);
       // Admins don't need to be mentioned
-      if (isGroupAdmin(account.groups, groupId, senderE164)) {
+      if (isConfiguredGroupAdmin(conversationId, senderE164)) {
         return false;
       }
       return resolveChannelGroupRequireMention({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
-        groupId,
+        groupId: resolveGroupConversationId(conversationId),
       });
     },
   };
@@ -198,7 +201,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     ? (policy.account.groups?.[groupId]?.admin ?? policy.account.groups?.["*"]?.admin)
     : undefined;
   const senderIsConfiguredAdmin =
-    isGroup && groupAdmin ? isGroupAdmin(policy.account.groups, groupId, groupSender) : false;
+    isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
 
   const storeAllowFrom =
     isGroup || !policy.shouldReadStorePairingApprovals

@@ -299,6 +299,44 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("allows configured group admins through monitor ingress even when allowlist excludes them", async () => {
+    const { onMessage, listener, sock } = await startWebInboxMonitor({
+      config: {
+        channels: {
+          whatsapp: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["+15551234567"],
+            groups: {
+              "11111@g.us": {
+                admin: "+999",
+              },
+            },
+          },
+        },
+        messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      createNotifyUpsert(
+        createGroupMessage({
+          id: "grp-allowlist-admin",
+          participant: "999@s.whatsapp.net",
+          conversation: "/status",
+        }),
+      ),
+    );
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    const payload = onMessage.mock.calls[0][0];
+    expect(payload.chatType).toBe("group");
+    expect(payload.senderE164).toBe("+999");
+    expect(payload.body).toBe("/status");
+
+    await listener.close();
+  });
+
   it("allows all group senders with wildcard in groupPolicy allowlist", async () => {
     const { onMessage, listener, sock } = await startWebInboxMonitor({
       config: {
