@@ -211,94 +211,16 @@ function collectActiveBranchEntryIds(sessionManager: SessionManagerLike): Set<st
 }
 
 /**
- * Candidate abandoned-id set is not yet safe on its own: a legitimate
- * sibling branch can reference a candidate id as an ancestor. Removing
- * that id would orphan the sibling and destroy its shared history.
- *
- * Restrict the set to ids that are NOT reachable as a parentId-ancestor
- * from any non-abandoned entry in the file. Ancestry is computed by
- * walking `parentId` chains from every non-abandoned entry until we hit
- * a root or an already-visited node. Every id visited on such a walk is
- * load-bearing and must survive.
- */
-function filterAbandonedIdsByReferenceIntegrity(
-  sessionFile: string,
-  candidateAbandoned: ReadonlySet<string>,
-): Set<string> {
-  const safeToRemove = new Set<string>();
-  if (candidateAbandoned.size === 0) {
-    return safeToRemove;
-  }
-  let content: string;
-  try {
-    content = fs.readFileSync(sessionFile, "utf-8");
-  } catch {
-    return safeToRemove;
-  }
-  type Entry = { id?: string; parentId?: string | null };
-  const entries: Entry[] = [];
-  for (const raw of content.split("\n")) {
-    if (!raw.trim()) {
-      continue;
-    }
-    try {
-      const obj = JSON.parse(raw) as { id?: unknown; parentId?: unknown };
-      entries.push({
-        id: typeof obj.id === "string" ? obj.id : undefined,
-        parentId:
-          typeof obj.parentId === "string"
-            ? obj.parentId
-            : obj.parentId === null
-              ? null
-              : undefined,
-      });
-    } catch {
-      // Malformed line: ignore for ancestry computation (line is kept verbatim
-      // by the cleanup write path).
-    }
-  }
-  const byId = new Map<string, Entry>();
-  for (const entry of entries) {
-    if (entry.id) {
-      byId.set(entry.id, entry);
-    }
-  }
-  // Collect every id that is reachable as an ancestor from any non-abandoned
-  // entry. Those ids are load-bearing.
-  const ancestryLive = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.id) {
-      continue;
-    }
-    if (candidateAbandoned.has(entry.id)) {
-      continue;
-    }
-    let cursor: Entry | undefined = entry;
-    while (cursor && cursor.id) {
-      if (ancestryLive.has(cursor.id)) {
-        break;
-      }
-      ancestryLive.add(cursor.id);
-      const parentId = cursor.parentId;
-      if (typeof parentId !== "string" || !parentId) {
-        break;
-      }
-      cursor = byId.get(parentId);
-    }
-  }
-  for (const id of candidateAbandoned) {
-    if (!ancestryLive.has(id)) {
-      safeToRemove.add(id);
-    }
-  }
-  return safeToRemove;
-}
-
-/**
  * Remove ONLY those entry ids that we can prove were just abandoned by this
  * rewrite (present in the pre-rewrite active branch, absent from the
  * post-rewrite active branch) AND that no surviving entry still references
  * as an ancestor via `parentId`.
+ *
+ * Single pass: read the file once, parse each line once, compute the
+ * ancestry-live set from non-abandoned entries, and write the kept lines
+ * back atomically. Session files can reach multiple megabytes near the
+ * compaction boundary (which is exactly when this cleanup runs), so we
+ * avoid doing the read + parse twice.
  *
  * Legitimate sibling branches — alternate paths the user navigated to via
  * `sm.branch(...)` — never appear in `getBranch()` directly, so their ids
@@ -317,38 +239,89 @@ function removeSpecificAbandonedEntriesFromSessionFile(
   if (abandonedEntryIds.size === 0) {
     return { removedEntries: 0, bytesRemoved: 0 };
   }
-  const safeAbandonedIds = filterAbandonedIdsByReferenceIntegrity(sessionFile, abandonedEntryIds);
-  if (safeAbandonedIds.size === 0) {
-    return { removedEntries: 0, bytesRemoved: 0 };
-  }
   let content: string;
   try {
     content = fs.readFileSync(sessionFile, "utf-8");
   } catch {
     return { removedEntries: 0, bytesRemoved: 0 };
   }
-  const rawLines = content.split("\n");
-  const kept: string[] = [];
-  let removed = 0;
-  for (const raw of rawLines) {
+  // Single parse pass: we need each line's raw form (for write-back), its id
+  // (for candidate lookup) and its parentId (for ancestry traversal).
+  type ParsedLine = {
+    raw: string;
+    id?: string;
+    parentId?: string | null;
+  };
+  const parsed: ParsedLine[] = [];
+  for (const raw of content.split("\n")) {
     if (!raw.trim()) {
       continue;
     }
-    let shouldDrop = false;
     try {
-      const obj = JSON.parse(raw) as { id?: unknown };
-      if (typeof obj.id === "string" && safeAbandonedIds.has(obj.id)) {
-        shouldDrop = true;
-      }
+      const obj = JSON.parse(raw) as { id?: unknown; parentId?: unknown };
+      parsed.push({
+        raw,
+        id: typeof obj.id === "string" ? obj.id : undefined,
+        parentId:
+          typeof obj.parentId === "string"
+            ? obj.parentId
+            : obj.parentId === null
+              ? null
+              : undefined,
+      });
     } catch {
-      // Malformed line: never drop — keep verbatim.
-      shouldDrop = false;
+      // Malformed line: kept verbatim by the write step, ignored for ancestry.
+      parsed.push({ raw });
     }
-    if (shouldDrop) {
+  }
+  const byId = new Map<string, ParsedLine>();
+  for (const line of parsed) {
+    if (line.id) {
+      byId.set(line.id, line);
+    }
+  }
+  // Walk parentId chains backward from every non-abandoned entry. Ids visited
+  // on any such walk are load-bearing ancestors of surviving entries and must
+  // not be removed even if they are in the candidate set.
+  const ancestryLive = new Set<string>();
+  for (const line of parsed) {
+    if (!line.id) {
+      continue;
+    }
+    if (abandonedEntryIds.has(line.id)) {
+      continue;
+    }
+    let cursor: ParsedLine | undefined = line;
+    while (cursor && cursor.id) {
+      if (ancestryLive.has(cursor.id)) {
+        break;
+      }
+      ancestryLive.add(cursor.id);
+      const parentId = cursor.parentId;
+      if (typeof parentId !== "string" || !parentId) {
+        break;
+      }
+      cursor = byId.get(parentId);
+    }
+  }
+  // Final removable set = candidates \ ancestry-of-non-abandoned.
+  const safeAbandonedIds = new Set<string>();
+  for (const id of abandonedEntryIds) {
+    if (!ancestryLive.has(id)) {
+      safeAbandonedIds.add(id);
+    }
+  }
+  if (safeAbandonedIds.size === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const kept: string[] = [];
+  let removed = 0;
+  for (const line of parsed) {
+    if (line.id && safeAbandonedIds.has(line.id)) {
       removed += 1;
       continue;
     }
-    kept.push(raw);
+    kept.push(line.raw);
   }
   if (removed === 0) {
     return { removedEntries: 0, bytesRemoved: 0 };

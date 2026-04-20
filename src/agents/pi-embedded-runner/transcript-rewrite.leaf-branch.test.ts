@@ -30,13 +30,6 @@ function readEntries(sessionFile: string): RawEntry[] {
     .map((l) => JSON.parse(l) as RawEntry);
 }
 
-function buildMessage(role: "user" | "assistant" | "toolResult", text: string): AgentMessage {
-  return {
-    role,
-    content: [{ type: "text", text }],
-  } as unknown as AgentMessage;
-}
-
 describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () => {
   let dir: string;
   let sessionFile: string;
@@ -122,10 +115,12 @@ describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () 
     ];
     writeSession(sessionFile, base);
 
-    const truncatedToolResult = buildMessage(
-      "toolResult",
-      "[truncated] big tool output was elided",
-    );
+    const truncatedToolResult = makeAgentToolResultMessage({
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: "[truncated] big tool output was elided" }],
+      timestamp: 0,
+    }) as AgentMessage;
 
     const result = await rewriteTranscriptEntriesInSessionFile({
       sessionFile,
@@ -253,7 +248,12 @@ describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () 
         replacements: [
           {
             entryId: "msg-toolresult-A",
-            message: buildMessage("toolResult", "[truncated A]"),
+            message: makeAgentToolResultMessage({
+              toolCallId: "call_A",
+              toolName: "read",
+              content: [{ type: "text", text: "[truncated A]" }],
+              timestamp: 0,
+            }) as AgentMessage,
           },
         ],
       },
@@ -278,7 +278,12 @@ describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () 
         replacements: [
           {
             entryId: rewrittenToolResult!.id as string,
-            message: buildMessage("toolResult", "[truncated AA]"),
+            message: makeAgentToolResultMessage({
+              toolCallId: "call_A",
+              toolName: "read",
+              content: [{ type: "text", text: "[truncated AA]" }],
+              timestamp: 0,
+            }) as AgentMessage,
           },
         ],
       },
