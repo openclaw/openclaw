@@ -73,10 +73,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const callGateway = vi.fn(
       async () => ({}) as Record<string, unknown>,
     ) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedPiMessage = vi.fn(() => true);
     __testing.setDepsForTest({
       callGateway,
-      isRequesterSessionActive: () => true,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-1",
+        isActive: true,
+      }),
       loadConfig: () => ({}) as never,
+      queueEmbeddedPiMessage,
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -117,23 +122,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(result).toEqual(
       expect.objectContaining({
         delivered: true,
-        path: "direct",
+        path: "steered",
       }),
     );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: "agent:main:slack:channel:C123:thread:171.222",
-          deliver: false,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-          threadId: "171.222",
-          bestEffortDeliver: undefined,
-        }),
-      }),
-    );
+    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-1", "child done");
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps direct external delivery for dormant completion requesters", async () => {
@@ -142,7 +135,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ) as unknown as typeof runtimeCallGateway;
     __testing.setDepsForTest({
       callGateway,
-      isRequesterSessionActive: () => false,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-2",
+        isActive: false,
+      }),
       loadConfig: () => ({}) as never,
     });
 
@@ -202,7 +198,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ) as unknown as typeof runtimeCallGateway;
     __testing.setDepsForTest({
       callGateway,
-      isRequesterSessionActive: () => true,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-3",
+        isActive: false,
+      }),
       loadConfig: () => ({}) as never,
     });
 

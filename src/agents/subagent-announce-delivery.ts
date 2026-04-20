@@ -25,6 +25,7 @@ import {
   loadConfig,
   loadSessionStore,
   queueEmbeddedPiMessage,
+  resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
@@ -49,21 +50,43 @@ const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
-  isRequesterSessionActive: (requesterSessionKey: string) => boolean;
+  getRequesterSessionActivity: (requesterSessionKey: string) => {
+    sessionId?: string;
+    isActive: boolean;
+  };
+  queueEmbeddedPiMessage: typeof queueEmbeddedPiMessage;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   callGateway,
   loadConfig,
-  isRequesterSessionActive: (requesterSessionKey: string) => {
-    const { entry } = loadRequesterSessionEntry(requesterSessionKey);
-    const sessionId = entry?.sessionId;
-    return Boolean(sessionId && isEmbeddedPiRunActive(sessionId));
+  getRequesterSessionActivity: (requesterSessionKey: string) => {
+    const sessionId =
+      resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
+      loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
+    return {
+      sessionId,
+      isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
+    };
   },
+  queueEmbeddedPiMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
+
+function resolveRequesterSessionActivity(requesterSessionKey: string) {
+  const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(requesterSessionKey);
+  if (activity.sessionId || activity.isActive) {
+    return activity;
+  }
+  const { entry } = loadRequesterSessionEntry(requesterSessionKey);
+  const sessionId = entry?.sessionId;
+  return {
+    sessionId,
+    isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
+  };
+}
 
 function resolveDirectAnnounceTransientRetryDelaysMs() {
   return process.env.OPENCLAW_TEST_FAST === "1"
@@ -354,7 +377,7 @@ async function maybeQueueSubagentAnnounce(params: {
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const sessionId = entry?.sessionId;
+  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
   if (!sessionId) {
     return "none";
   }
@@ -364,11 +387,13 @@ async function maybeQueueSubagentAnnounce(params: {
     channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
     sessionEntry: entry,
   });
-  const isActive = isEmbeddedPiRunActive(sessionId);
 
   const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
-    const steered = queueEmbeddedPiMessage(sessionId, params.steerMessage);
+    const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
+      sessionId,
+      params.steerMessage,
+    );
     if (steered) {
       return "steered";
     }
@@ -463,16 +488,26 @@ async function sendSubagentAnnounceDirectly(params: {
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
-    const requesterSessionIsActive = subagentAnnounceDeliveryDeps.isRequesterSessionActive(
-      canonicalRequesterSessionKey,
-    );
-    // Completion announces are internal wake events only when the requester is
-    // already active and can resume through its own reply path. Dormant/manual
-    // requester sessions still need direct external delivery so completion
-    // results are not silently dropped.
-    const shouldDeliverExternally = deliveryTarget.deliver
-      ? !params.expectsCompletionMessage || !requesterSessionIsActive
-      : false;
+    const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    if (params.expectsCompletionMessage && requesterActivity.isActive) {
+      const woke = requesterActivity.sessionId
+        ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
+            requesterActivity.sessionId,
+            params.triggerMessage,
+          )
+        : false;
+      if (woke) {
+        return {
+          delivered: true,
+          path: "steered",
+        };
+      }
+      return {
+        delivered: false,
+        path: "direct",
+        error: "active requester session could not be woken",
+      };
+    }
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -490,21 +525,21 @@ async function sendSubagentAnnounceDirectly(params: {
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
-            bestEffortDeliver: shouldDeliverExternally ? params.bestEffortDeliver : undefined,
+            deliver: deliveryTarget.deliver,
+            bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
-            channel: shouldDeliverExternally ? deliveryTarget.channel : sessionOnlyOriginChannel,
-            accountId: shouldDeliverExternally
+            channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+            accountId: deliveryTarget.deliver
               ? deliveryTarget.accountId
               : sessionOnlyOriginChannel
                 ? sessionOnlyOrigin?.accountId
                 : undefined,
-            to: shouldDeliverExternally
+            to: deliveryTarget.deliver
               ? deliveryTarget.to
               : sessionOnlyOriginChannel
                 ? sessionOnlyOrigin?.to
                 : undefined,
-            threadId: shouldDeliverExternally
+            threadId: deliveryTarget.deliver
               ? deliveryTarget.threadId
               : sessionOnlyOriginChannel
                 ? sessionOnlyOrigin?.threadId
