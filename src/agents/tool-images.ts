@@ -195,6 +195,7 @@ function inferImageFileName(params: {
 }
 
 async function resizeImageBase64IfNeeded(params: {
+  buffer?: Buffer;
   base64: string;
   mimeType: string;
   maxDimensionPx: number;
@@ -208,7 +209,7 @@ async function resizeImageBase64IfNeeded(params: {
   width?: number;
   height?: number;
 }> {
-  const buf = Buffer.from(params.base64, "base64");
+  const buf = params.buffer ?? Buffer.from(params.base64, "base64");
   const meta = await getImageMetadata(buf);
   const width = meta?.width;
   const height = meta?.height;
@@ -358,17 +359,20 @@ export async function sanitizeContentBlocksImages(
     try {
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
+      const decodedBuffer = opts.rejectHeifFamily
+        ? Buffer.from(canonicalData, "base64")
+        : undefined;
       if (opts.rejectHeifFamily) {
         if (mimeType === "image/avif" || mimeType === "image/heic" || mimeType === "image/heif") {
           throw new Error("unsupported image format");
         }
-        const buffer = Buffer.from(canonicalData, "base64");
-        if (isHeifFamilyImageBuffer(buffer)) {
+        if (decodedBuffer && isHeifFamilyImageBuffer(decodedBuffer)) {
           throw new Error("unsupported image format");
         }
       }
       const fileName = inferImageFileName({ block, label, mediaPathHint });
       const resized = await resizeImageBase64IfNeeded({
+        buffer: decodedBuffer,
         base64: canonicalData,
         mimeType,
         maxDimensionPx,
