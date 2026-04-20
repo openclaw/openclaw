@@ -548,4 +548,25 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it("prefers cli_container_local over shared_secret_loopback_local for CLI clients", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("cli_container_local");
+  });
 });
