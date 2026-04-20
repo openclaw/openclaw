@@ -221,6 +221,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       pipeline: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
+      approvalId: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
       cwd: Type.Optional(
         Type.String({
@@ -261,6 +262,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         ...(typeof params.pipeline === "string" ? { pipeline: params.pipeline } : {}),
         ...(typeof params.argsJson === "string" ? { argsJson: params.argsJson } : {}),
         ...(typeof params.token === "string" ? { token: params.token } : {}),
+        ...(typeof params.approvalId === "string" ? { approvalId: params.approvalId } : {}),
         ...(typeof params.approve === "boolean" ? { approve: params.approve } : {}),
         cwd,
         timeoutMs,
