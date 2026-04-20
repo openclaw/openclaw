@@ -185,3 +185,137 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
   }
   return redactText(lines.join("\n"), resolved.patterns).split("\n");
 }
+
+// Enhanced redaction functions with additional capabilities
+
+/**
+ * Redact sensitive information from a string with custom options
+ */
+export function redactSensitiveWithOptions(
+  text: string,
+  options: {
+    mode?: RedactSensitiveMode;
+    patterns?: RedactPattern[];
+    maskChar?: string;
+  } = {}
+): string {
+  if (!text) {
+    return text;
+  }
+  
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off" || !resolved.patterns.length) {
+    return text;
+  }
+  
+  const maskChar = options.maskChar || DEFAULT_MASK_CHAR;
+  
+  let result = text;
+  for (const pattern of resolved.patterns) {
+    result = replacePatternBounded(result, pattern, (...args: string[]) => {
+      const match = args[0];
+      const groups = args.slice(1, args.length - 2);
+      
+      if (match.includes("PRIVATE KEY-----")) {
+        return redactPemBlock(match);
+      }
+      
+      const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
+      const masked = maskTokenWithChar(token, maskChar);
+      
+      if (token === match) {
+        return masked;
+      }
+      return match.replace(token, masked);
+    });
+  }
+  
+  return result;
+}
+
+/**
+ * Mask a token with a custom character
+ */
+export function maskTokenWithChar(token: string, maskChar: string = DEFAULT_MASK_CHAR): string {
+  if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
+    return maskChar.repeat(3);
+  }
+  const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
+  const end = token.slice(-DEFAULT_REDACT_KEEP_END);
+  const maskLength = Math.max(3, token.length - DEFAULT_REDACT_KEEP_START - DEFAULT_REDACT_KEEP_END);
+  return `${start}${maskChar.repeat(maskLength)}${end}`;
+}
+
+/**
+ * Redact sensitive information from an object recursively
+ */
+export function redactSensitiveObject(
+  obj: unknown,
+  options?: RedactOptions
+): unknown {
+  if (obj === null || typeof obj !== "object") {
+    if (typeof obj === "string") {
+      return redactSensitiveText(obj, options);
+    }
+    return obj;
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map((item) => redactSensitiveObject(item, options));
+  }
+  
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    // Redact common sensitive field names
+    if (/^(password|secret|token|key|apiKey|accessToken|refreshToken)$/i.test(key)) {
+      result[key] = "***";
+    } else {
+      result[key] = redactSensitiveObject(value, options);
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Check if a string contains sensitive information
+ */
+export function containsSensitiveInfo(text: string): boolean {
+  const patterns = resolvePatterns(DEFAULT_REDACT_PATTERNS);
+  for (const pattern of patterns) {
+    if (pattern.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Get a summary of redaction patterns
+ */
+export function getRedactionPatternSummary(): {
+  count: number;
+  categories: string[];
+} {
+  return {
+    count: DEFAULT_REDACT_PATTERNS.length,
+    categories: [
+      "ENV-style assignments",
+      "JSON fields",
+      "CLI flags",
+      "Authorization headers",
+      "PEM blocks",
+      "Common token prefixes",
+      "Telegram Bot API tokens",
+      "Credit card numbers",
+      "Phone numbers",
+      "Email addresses",
+      "Social Security Numbers",
+      "Chinese ID card numbers",
+      "Bank account numbers",
+      "Cloud provider keys",
+      "API keys",
+      "Secret keys"
+    ]
+  };
+}
