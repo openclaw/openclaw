@@ -79,6 +79,37 @@ function normalizeSkillScanOptions(
   };
 }
 
+type FixtureFiles = Record<string, string | undefined>;
+
+type ScanDirectoryCase = {
+  name: string;
+  files: FixtureFiles;
+  includeFiles?: readonly string[];
+  expectedRuleId: string;
+  expectedPresent: boolean;
+  expectedMinFindings?: number;
+};
+
+type SummaryCase = {
+  name: string;
+  files: FixtureFiles;
+  options?: Readonly<{
+    maxFiles?: number;
+    maxFileBytes?: number;
+    includeFiles?: readonly string[];
+  }>;
+  expected: {
+    scannedFiles: number;
+    critical?: number;
+    warn?: number;
+    info?: number;
+    findingCount?: number;
+    maxFindings?: number;
+    expectedRuleId?: string;
+    expectedPresent?: boolean;
+  };
+};
+
 afterEach(async () => {
   for (const dir of tmpDirs) {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -252,7 +283,7 @@ describe("isScannable", () => {
 // ---------------------------------------------------------------------------
 
 describe("scanDirectory", () => {
-  const scanDirectoryCases = [
+  const scanDirectoryCases: readonly ScanDirectoryCase[] = [
     {
       name: "scans .js files in a directory tree",
       files: {
@@ -322,7 +353,7 @@ describe("scanDirectory", () => {
       expectedPresent: true,
       expectedMinFindings: 1,
     },
-  ] as const;
+  ];
 
   it("scans directory trees and explicit includes", async () => {
     for (const testCase of scanDirectoryCases) {
@@ -348,7 +379,7 @@ describe("scanDirectory", () => {
 // ---------------------------------------------------------------------------
 
 describe("scanDirectoryWithSummary", () => {
-  const summaryCases = [
+  const summaryCases: readonly SummaryCase[] = [
     {
       name: "returns correct counts",
       files: {
@@ -415,7 +446,7 @@ describe("scanDirectoryWithSummary", () => {
         expectedPresent: true,
       },
     },
-  ] as const;
+  ];
 
   it("summarizes directory scan results", async () => {
     for (const testCase of summaryCases) {
