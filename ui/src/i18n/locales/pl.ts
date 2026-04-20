@@ -244,6 +244,15 @@ export const pl: TranslationMap = {
     },
     pairing: {
       hint: "To urządzenie wymaga zatwierdzenia parowania przez host Gateway.",
+      scopeUpgradeTitle: "Scope upgrade pending approval.",
+      scopeUpgradeSummary:
+        "This device is already paired, but the requested wider scope is waiting for approval.",
+      roleUpgradeTitle: "Role upgrade pending approval.",
+      roleUpgradeSummary:
+        "This device is already paired, but the requested role change is waiting for approval.",
+      metadataUpgradeTitle: "Device metadata change pending approval.",
+      metadataUpgradeSummary:
+        "This device is already paired, but the metadata change is waiting for approval.",
       mobileHint:
         "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
       docsTitle: "Dokumentacja parowania urządzeń (otwiera się w nowej karcie)",

@@ -239,6 +239,15 @@ export const zh_CN: TranslationMap = {
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",
+      scopeUpgradeTitle: "Scope upgrade pending approval.",
+      scopeUpgradeSummary:
+        "This device is already paired, but the requested wider scope is waiting for approval.",
+      roleUpgradeTitle: "Role upgrade pending approval.",
+      roleUpgradeSummary:
+        "This device is already paired, but the requested role change is waiting for approval.",
+      metadataUpgradeTitle: "Device metadata change pending approval.",
+      metadataUpgradeSummary:
+        "This device is already paired, but the metadata change is waiting for approval.",
       mobileHint:
         "在手机上？从桌面运行 openclaw dashboard --no-open 复制完整 URL（包括 #token=...）。",
       docsTitle: "设备配对文档（在新标签页中打开）",

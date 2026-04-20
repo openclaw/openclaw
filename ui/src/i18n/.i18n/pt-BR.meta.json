@@ -1,11 +1,18 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-20T06:29:49.118Z",
+  "fallbackKeys": [
+    "overview.pairing.metadataUpgradeSummary",
+    "overview.pairing.metadataUpgradeTitle",
+    "overview.pairing.roleUpgradeSummary",
+    "overview.pairing.roleUpgradeTitle",
+    "overview.pairing.scopeUpgradeSummary",
+    "overview.pairing.scopeUpgradeTitle"
+  ],
+  "generatedAt": "2026-04-20T07:50:50.998Z",
   "locale": "pt-BR",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "c7e1febc5a5715b59bbda5d9ea08187c13267c82c1fcfe3996a469205539eba0",
-  "totalKeys": 727,
+  "sourceHash": "3ca70e4eba34c7843d6a23944d24fdcf565b45d2b83e4fc371b9763235d25d3c",
+  "totalKeys": 733,
   "translatedKeys": 727,
   "workflow": 1
 }

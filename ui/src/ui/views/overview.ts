@@ -67,27 +67,25 @@ export type OverviewProps = {
 const PAIRING_HINT_COPY: Record<
   PairingHint["kind"],
   {
-    title: string;
-    summary: string | null;
+    titleKey: string | null;
+    summaryKey: string | null;
   }
 > = {
   "pairing-required": {
-    title: "",
-    summary: null,
+    titleKey: null,
+    summaryKey: null,
   },
   "scope-upgrade-pending": {
-    title: "Scope upgrade pending approval.",
-    summary:
-      "This device is already paired, but the requested wider scope is waiting for approval.",
+    titleKey: "overview.pairing.scopeUpgradeTitle",
+    summaryKey: "overview.pairing.scopeUpgradeSummary",
   },
   "role-upgrade-pending": {
-    title: "Role upgrade pending approval.",
-    summary:
-      "This device is already paired, but the requested role change is waiting for approval.",
+    titleKey: "overview.pairing.roleUpgradeTitle",
+    summaryKey: "overview.pairing.roleUpgradeSummary",
   },
   "metadata-upgrade-pending": {
-    title: "Device metadata change pending approval.",
-    summary: "This device is already paired, but the metadata change is waiting for approval.",
+    titleKey: "overview.pairing.metadataUpgradeTitle",
+    summaryKey: "overview.pairing.metadataUpgradeSummary",
   },
 };
 
@@ -112,14 +110,16 @@ export function renderOverview(props: OverviewProps) {
       return null;
     }
     const copy = PAIRING_HINT_COPY[pairingState.kind];
-    const title = copy.title || t("overview.pairing.hint");
+    const title = copy.titleKey ? t(copy.titleKey) : t("overview.pairing.hint");
     const approveCommand = pairingState.requestId
       ? `openclaw devices approve ${pairingState.requestId}`
       : "openclaw devices approve --latest";
     return html`
       <div class="muted" style="margin-top: 8px">
         ${title}
-        ${copy.summary ? html`<div style="margin-top: 6px">${copy.summary}</div>` : nothing}
+        ${copy.summaryKey
+          ? html`<div style="margin-top: 6px">${t(copy.summaryKey)}</div>`
+          : nothing}
         <div style="margin-top: 6px">
           <span class="mono">${approveCommand}</span><br />
           <span class="mono">openclaw devices list</span>
