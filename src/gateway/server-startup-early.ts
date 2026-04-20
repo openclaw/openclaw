@@ -8,6 +8,7 @@ import {
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
 import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
+import { wireSessionRunCancelRequester } from "./chat-abort.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
@@ -117,9 +118,25 @@ export async function startGatewayEarlyRuntime(params: {
           : {}),
       });
 
+  // Wire the plugin -> core cancel seam against the live chat-abort state so
+  // delegated-task code (including plugins) can abort the owning run through
+  // `requestSessionRunCancel({ kind: "session_run", sessionKey, runId })`.
+  const sessionRunCancelRequesterUnsub = wireSessionRunCancelRequester({
+    chatAbortControllers: params.chatAbortControllers,
+    chatRunBuffers: params.chatRunBuffers,
+    chatDeltaSentAt: params.chatDeltaSentAt,
+    chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
+    chatAbortedRuns: params.chatRunState.abortedRuns,
+    removeChatRun: params.removeChatRun,
+    agentRunSeq: params.agentRunSeq,
+    broadcast: params.broadcast,
+    nodeSendToSession: params.nodeSendToSession,
+  });
+
   return {
     bonjourStop,
     skillsChangeUnsub,
+    sessionRunCancelRequesterUnsub,
     maintenance,
   };
 }

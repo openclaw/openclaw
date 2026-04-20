@@ -1,4 +1,8 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import {
+  emitSessionRunCancel,
+  setSessionRunAbortRequester,
+} from "../sessions/session-run-cancel.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
@@ -99,12 +103,33 @@ export function abortChatRunById(
   ops.chatDeltaSentAt.delete(runId);
   ops.chatDeltaLastBroadcastLen.delete(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
+  // Fan out cancel to delegated-task handlers before broadcasting the UI event
+  // so plugin-owned tasks tied to this run observe the stop deterministically.
+  emitSessionRunCancel(
+    { kind: "session_run", sessionKey, runId },
+    stopReason ? { source: "chat-abort", message: stopReason } : { source: "chat-abort" },
+  );
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   ops.agentRunSeq.delete(runId);
   if (removed?.clientRunId) {
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
+}
+
+// Wires the `requestSessionRunCancel` seam so plugin-owned delegated tasks
+// can trigger a real core abort for the owning OpenClaw run without any
+// plugin-specific branching in core. Returns a disposer that removes the
+// requester (idempotent, safe to call during shutdown).
+export function wireSessionRunCancelRequester(ops: ChatAbortOps): () => void {
+  return setSessionRunAbortRequester((target, reason) => {
+    const { aborted } = abortChatRunById(ops, {
+      runId: target.runId,
+      sessionKey: target.sessionKey,
+      ...(reason?.message ? { stopReason: reason.message } : {}),
+    });
+    return aborted;
+  });
 }
 
 export function abortChatRunsForSessionKey(
