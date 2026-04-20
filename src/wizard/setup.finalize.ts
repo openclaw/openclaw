@@ -30,7 +30,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
-import { runTui } from "../tui/tui.js";
+import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -423,7 +423,7 @@ export async function finalizeSetupWizard(
 
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
-      await runTui({
+      await launchTuiCli({
         url: links.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : "",
@@ -431,6 +431,7 @@ export async function finalizeSetupWizard(
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
       });
+      restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
       launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
