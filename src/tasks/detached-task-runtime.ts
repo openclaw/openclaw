@@ -1,85 +1,106 @@
+import type {
+  DetachedTaskLifecycleRuntime,
+  DetachedTaskLifecycleRuntimeRegistration,
+} from "./detached-task-runtime-contract.js";
 import {
-  completeTaskRunByRunId as completeTaskRunByRunIdInCore,
-  createQueuedTaskRun as createQueuedTaskRunInCore,
-  createRunningTaskRun as createRunningTaskRunInCore,
-  failTaskRunByRunId as failTaskRunByRunIdInCore,
-  recordTaskRunProgressByRunId as recordTaskRunProgressByRunIdInCore,
-  setDetachedTaskDeliveryStatusByRunId as setDetachedTaskDeliveryStatusByRunIdInCore,
-  startTaskRunByRunId as startTaskRunByRunIdInCore,
+  clearDetachedTaskLifecycleRuntimeRegistration,
+  getDetachedTaskLifecycleRuntimeRegistration as getDetachedTaskLifecycleRuntimeRegistrationState,
+  getRegisteredDetachedTaskLifecycleRuntime,
+  registerDetachedTaskLifecycleRuntime,
+} from "./detached-task-runtime-state.js";
+import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
+import {
+  completeTaskRunByRunId as completeTaskRunByRunIdFromExecutor,
+  createQueuedTaskRun as createQueuedTaskRunFromExecutor,
+  createRunningTaskRun as createRunningTaskRunFromExecutor,
+  failTaskRunByRunId as failTaskRunByRunIdFromExecutor,
+  recordTaskRunProgressByRunId as recordTaskRunProgressByRunIdFromExecutor,
+  setDetachedTaskDeliveryStatusByRunId as setDetachedTaskDeliveryStatusByRunIdFromExecutor,
+  startTaskRunByRunId as startTaskRunByRunIdFromExecutor,
 } from "./task-executor.js";
 
-export type DetachedTaskLifecycleRuntime = {
-  createQueuedTaskRun: typeof createQueuedTaskRunInCore;
-  createRunningTaskRun: typeof createRunningTaskRunInCore;
-  startTaskRunByRunId: typeof startTaskRunByRunIdInCore;
-  recordTaskRunProgressByRunId: typeof recordTaskRunProgressByRunIdInCore;
-  completeTaskRunByRunId: typeof completeTaskRunByRunIdInCore;
-  failTaskRunByRunId: typeof failTaskRunByRunIdInCore;
-  setDetachedTaskDeliveryStatusByRunId: typeof setDetachedTaskDeliveryStatusByRunIdInCore;
-};
+export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
-  createQueuedTaskRun: createQueuedTaskRunInCore,
-  createRunningTaskRun: createRunningTaskRunInCore,
-  startTaskRunByRunId: startTaskRunByRunIdInCore,
-  recordTaskRunProgressByRunId: recordTaskRunProgressByRunIdInCore,
-  completeTaskRunByRunId: completeTaskRunByRunIdInCore,
-  failTaskRunByRunId: failTaskRunByRunIdInCore,
-  setDetachedTaskDeliveryStatusByRunId: setDetachedTaskDeliveryStatusByRunIdInCore,
+  createQueuedTaskRun: createQueuedTaskRunFromExecutor,
+  createRunningTaskRun: createRunningTaskRunFromExecutor,
+  startTaskRunByRunId: startTaskRunByRunIdFromExecutor,
+  recordTaskRunProgressByRunId: recordTaskRunProgressByRunIdFromExecutor,
+  completeTaskRunByRunId: completeTaskRunByRunIdFromExecutor,
+  failTaskRunByRunId: failTaskRunByRunIdFromExecutor,
+  setDetachedTaskDeliveryStatusByRunId: setDetachedTaskDeliveryStatusByRunIdFromExecutor,
+  cancelDetachedTaskRunById: cancelDetachedTaskRunByIdInCore,
 };
 
-let detachedTaskLifecycleRuntime = DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
-
 export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime {
-  return detachedTaskLifecycleRuntime;
+  return getRegisteredDetachedTaskLifecycleRuntime() ?? DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
+}
+
+export function getDetachedTaskLifecycleRuntimeRegistration():
+  | DetachedTaskLifecycleRuntimeRegistration
+  | undefined {
+  return getDetachedTaskLifecycleRuntimeRegistrationState();
+}
+
+export function registerDetachedTaskRuntime(
+  pluginId: string,
+  runtime: DetachedTaskLifecycleRuntime,
+): void {
+  registerDetachedTaskLifecycleRuntime(pluginId, runtime);
 }
 
 export function setDetachedTaskLifecycleRuntime(runtime: DetachedTaskLifecycleRuntime): void {
-  detachedTaskLifecycleRuntime = runtime;
+  registerDetachedTaskRuntime("__test__", runtime);
 }
 
 export function resetDetachedTaskLifecycleRuntimeForTests(): void {
-  detachedTaskLifecycleRuntime = DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
+  clearDetachedTaskLifecycleRuntimeRegistration();
 }
 
 export function createQueuedTaskRun(
   ...args: Parameters<DetachedTaskLifecycleRuntime["createQueuedTaskRun"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["createQueuedTaskRun"]> {
-  return detachedTaskLifecycleRuntime.createQueuedTaskRun(...args);
+  return getDetachedTaskLifecycleRuntime().createQueuedTaskRun(...args);
 }
 
 export function createRunningTaskRun(
   ...args: Parameters<DetachedTaskLifecycleRuntime["createRunningTaskRun"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["createRunningTaskRun"]> {
-  return detachedTaskLifecycleRuntime.createRunningTaskRun(...args);
+  return getDetachedTaskLifecycleRuntime().createRunningTaskRun(...args);
 }
 
 export function startTaskRunByRunId(
   ...args: Parameters<DetachedTaskLifecycleRuntime["startTaskRunByRunId"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["startTaskRunByRunId"]> {
-  return detachedTaskLifecycleRuntime.startTaskRunByRunId(...args);
+  return getDetachedTaskLifecycleRuntime().startTaskRunByRunId(...args);
 }
 
 export function recordTaskRunProgressByRunId(
   ...args: Parameters<DetachedTaskLifecycleRuntime["recordTaskRunProgressByRunId"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["recordTaskRunProgressByRunId"]> {
-  return detachedTaskLifecycleRuntime.recordTaskRunProgressByRunId(...args);
+  return getDetachedTaskLifecycleRuntime().recordTaskRunProgressByRunId(...args);
 }
 
 export function completeTaskRunByRunId(
   ...args: Parameters<DetachedTaskLifecycleRuntime["completeTaskRunByRunId"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["completeTaskRunByRunId"]> {
-  return detachedTaskLifecycleRuntime.completeTaskRunByRunId(...args);
+  return getDetachedTaskLifecycleRuntime().completeTaskRunByRunId(...args);
 }
 
 export function failTaskRunByRunId(
   ...args: Parameters<DetachedTaskLifecycleRuntime["failTaskRunByRunId"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["failTaskRunByRunId"]> {
-  return detachedTaskLifecycleRuntime.failTaskRunByRunId(...args);
+  return getDetachedTaskLifecycleRuntime().failTaskRunByRunId(...args);
 }
 
 export function setDetachedTaskDeliveryStatusByRunId(
   ...args: Parameters<DetachedTaskLifecycleRuntime["setDetachedTaskDeliveryStatusByRunId"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["setDetachedTaskDeliveryStatusByRunId"]> {
-  return detachedTaskLifecycleRuntime.setDetachedTaskDeliveryStatusByRunId(...args);
+  return getDetachedTaskLifecycleRuntime().setDetachedTaskDeliveryStatusByRunId(...args);
+}
+
+export function cancelDetachedTaskRunById(
+  ...args: Parameters<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]>
+): ReturnType<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]> {
+  return getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById(...args);
 }

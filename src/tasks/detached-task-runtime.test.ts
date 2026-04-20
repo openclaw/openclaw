@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cancelDetachedTaskRunById,
   completeTaskRunByRunId,
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskRuntime,
   recordTaskRunProgressByRunId,
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
@@ -35,7 +38,7 @@ describe("detached-task-runtime", () => {
     resetDetachedTaskLifecycleRuntimeForTests();
   });
 
-  it("dispatches lifecycle operations through the installed runtime", () => {
+  it("dispatches lifecycle operations through the installed runtime", async () => {
     const defaultRuntime = getDetachedTaskLifecycleRuntime();
     const queuedTask = createFakeTaskRecord({
       taskId: "task-queued",
@@ -48,7 +51,7 @@ describe("detached-task-runtime", () => {
     });
     const updatedTasks = [runningTask];
 
-    const fakeRuntime = {
+    const fakeRuntime: typeof defaultRuntime = {
       createQueuedTaskRun: vi.fn(() => queuedTask),
       createRunningTaskRun: vi.fn(() => runningTask),
       startTaskRunByRunId: vi.fn(() => updatedTasks),
@@ -56,6 +59,11 @@ describe("detached-task-runtime", () => {
       completeTaskRunByRunId: vi.fn(() => updatedTasks),
       failTaskRunByRunId: vi.fn(() => updatedTasks),
       setDetachedTaskDeliveryStatusByRunId: vi.fn(() => updatedTasks),
+      cancelDetachedTaskRunById: vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+        task: runningTask,
+      })),
     };
 
     setDetachedTaskLifecycleRuntime(fakeRuntime);
@@ -89,6 +97,10 @@ describe("detached-task-runtime", () => {
       runId: "run-running",
       deliveryStatus: "delivered",
     });
+    await cancelDetachedTaskRunById({
+      cfg: {} as never,
+      taskId: runningTask.taskId,
+    });
 
     expect(fakeRuntime.createQueuedTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-queued", task: "Queue task" }),
@@ -111,8 +123,26 @@ describe("detached-task-runtime", () => {
     expect(fakeRuntime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-running", deliveryStatus: "delivered" }),
     );
+    expect(fakeRuntime.cancelDetachedTaskRunById).toHaveBeenCalledWith({
+      cfg: {} as never,
+      taskId: runningTask.taskId,
+    });
 
     resetDetachedTaskLifecycleRuntimeForTests();
     expect(getDetachedTaskLifecycleRuntime()).toBe(defaultRuntime);
+  });
+
+  it("tracks registered detached runtimes by plugin id", () => {
+    const runtime = {
+      ...getDetachedTaskLifecycleRuntime(),
+    };
+
+    registerDetachedTaskRuntime("tests/detached-runtime", runtime);
+
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toMatchObject({
+      pluginId: "tests/detached-runtime",
+      runtime,
+    });
+    expect(getDetachedTaskLifecycleRuntime()).toBe(runtime);
   });
 });
