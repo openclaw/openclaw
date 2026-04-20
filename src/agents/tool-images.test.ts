@@ -24,6 +24,14 @@ describe("tool image sanitizing", () => {
       .toBuffer();
   };
 
+  const createIsoBmffImage = (majorBrand: string, compatibleBrands: string[] = []) => {
+    const brands = [majorBrand, "\0\0\0\0", ...compatibleBrands];
+    const payload = Buffer.concat(brands.map((brand) => Buffer.from(brand, "ascii")));
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(payload.length + 8, 0);
+    return Buffer.concat([size, Buffer.from("ftyp", "ascii"), payload]);
+  };
+
   it("shrinks oversized images to the configured byte limit", async () => {
     const maxBytes = 128 * 1024;
     const width = 900;
@@ -123,6 +131,34 @@ describe("tool image sanitizing", () => {
       {
         type: "text",
         text: "[test] omitted image payload: invalid base64",
+      },
+    ]);
+  });
+
+  it("drops HEIF tool image payloads before native decode", async () => {
+    const heif = createIsoBmffImage("heic", ["mif1"]);
+    const out = await sanitizeContentBlocksImages(
+      [{ type: "image", data: heif.toString("base64"), mimeType: "image/heif" }],
+      "test",
+    );
+    expect(out).toEqual([
+      {
+        type: "text",
+        text: "[test] omitted image payload: Error: unsupported image format",
+      },
+    ]);
+  });
+
+  it("drops AVIF payloads even when mislabeled as jpeg", async () => {
+    const avif = createIsoBmffImage("avif", ["mif1"]);
+    const out = await sanitizeContentBlocksImages(
+      [{ type: "image", data: avif.toString("base64"), mimeType: "image/jpeg" }],
+      "test",
+    );
+    expect(out).toEqual([
+      {
+        type: "text",
+        text: "[test] omitted image payload: Error: unsupported image format",
       },
     ]);
   });

@@ -27,6 +27,20 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
 const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 const log = createSubsystemLogger("agents/tool-images");
+const HEIF_FAMILY_BRANDS = new Set([
+  "avif",
+  "avis",
+  "heic",
+  "heif",
+  "heix",
+  "hevc",
+  "heim",
+  "heis",
+  "hevm",
+  "hevs",
+  "mif1",
+  "msf1",
+]);
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
   if (!block || typeof block !== "object") {
@@ -59,6 +73,33 @@ function inferMimeTypeFromBase64(base64: string): string | undefined {
     return "image/gif";
   }
   return undefined;
+}
+
+function readIsoBmffBrand(buffer: Buffer, offset: number): string | undefined {
+  if (offset < 0 || offset + 4 > buffer.length) {
+    return undefined;
+  }
+  return buffer.toString("ascii", offset, offset + 4);
+}
+
+function isHeifFamilyImageBuffer(buffer: Buffer): boolean {
+  if (buffer.length < 16 || buffer.toString("ascii", 4, 8) !== "ftyp") {
+    return false;
+  }
+
+  const majorBrand = readIsoBmffBrand(buffer, 8);
+  if (majorBrand && HEIF_FAMILY_BRANDS.has(majorBrand)) {
+    return true;
+  }
+
+  for (let offset = 16; offset + 4 <= buffer.length; offset += 4) {
+    const brand = readIsoBmffBrand(buffer, offset);
+    if (brand && HEIF_FAMILY_BRANDS.has(brand)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function formatBytesShort(bytes: number): string {
@@ -307,8 +348,15 @@ export async function sanitizeContentBlocksImages(
     }
 
     try {
+      const buffer = Buffer.from(canonicalData, "base64");
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
+      if (mimeType === "image/avif" || mimeType === "image/heic" || mimeType === "image/heif") {
+        throw new Error("unsupported image format");
+      }
+      if (isHeifFamilyImageBuffer(buffer)) {
+        throw new Error("unsupported image format");
+      }
       const fileName = inferImageFileName({ block, label, mediaPathHint });
       const resized = await resizeImageBase64IfNeeded({
         base64: canonicalData,
