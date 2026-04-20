@@ -35,6 +35,48 @@ type DoctorPairingSnapshot = {
   paired: DoctorPairedDevice[];
 };
 
+type PendingPairingIssue =
+  | {
+      kind: "first-time";
+      pending: DevicePairingPendingRequest;
+      deviceLabel: string;
+      approveCommand: string;
+      inspectCommand: string;
+    }
+  | {
+      kind: "public-key-repair";
+      pending: DevicePairingPendingRequest;
+      deviceLabel: string;
+      approveCommand: string;
+      inspectCommand: string;
+      removeCommand: string;
+    }
+  | {
+      kind: "role-upgrade";
+      pending: DevicePairingPendingRequest;
+      deviceLabel: string;
+      approveCommand: string;
+      inspectCommand: string;
+      approvedRoles: string[];
+      requestedRoles: string[];
+    }
+  | {
+      kind: "scope-upgrade";
+      pending: DevicePairingPendingRequest;
+      deviceLabel: string;
+      approveCommand: string;
+      inspectCommand: string;
+      approvedScopes: string[];
+      requestedScopes: string[];
+    }
+  | {
+      kind: "repair";
+      pending: DevicePairingPendingRequest;
+      deviceLabel: string;
+      approveCommand: string;
+      inspectCommand: string;
+    };
+
 type StoredDeviceIdentity = {
   version: 1;
   deviceId: string;
@@ -187,62 +229,101 @@ function hasPendingScopeUpgrade(params: {
   return false;
 }
 
+function resolvePendingPairingIssue(
+  pending: DevicePairingPendingRequest,
+  paired: DoctorPairedDevice | undefined,
+): PendingPairingIssue {
+  const deviceLabel = describeDevice({
+    deviceId: pending.deviceId,
+    displayName: pending.displayName,
+    clientId: pending.clientId,
+  });
+  const approveCommand = formatCliCommand(`openclaw devices approve ${pending.requestId}`);
+  const inspectCommand = formatCliCommand("openclaw devices list");
+  if (!paired) {
+    return {
+      kind: "first-time",
+      pending,
+      deviceLabel,
+      approveCommand,
+      inspectCommand,
+    };
+  }
+  if (paired.publicKey !== pending.publicKey) {
+    return {
+      kind: "public-key-repair",
+      pending,
+      deviceLabel,
+      approveCommand,
+      inspectCommand,
+      removeCommand: formatCliCommand(`openclaw devices remove ${pending.deviceId}`),
+    };
+  }
+  const requestedRoles = uniqueStrings(pending.roles, pending.role);
+  const approvedRoles = listApprovedPairedDeviceRoles(paired);
+  if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
+    return {
+      kind: "role-upgrade",
+      pending,
+      deviceLabel,
+      approveCommand,
+      inspectCommand,
+      approvedRoles,
+      requestedRoles,
+    };
+  }
+  const approvedScopes = resolveApprovedScopes(paired);
+  const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
+  if (
+    hasPendingScopeUpgrade({
+      requestedRoles,
+      pendingScopes: requestedScopes,
+      approvedRoles,
+      approvedScopes,
+    })
+  ) {
+    return {
+      kind: "scope-upgrade",
+      pending,
+      deviceLabel,
+      approveCommand,
+      inspectCommand,
+      approvedScopes,
+      requestedScopes,
+    };
+  }
+  return {
+    kind: "repair",
+    pending,
+    deviceLabel,
+    approveCommand,
+    inspectCommand,
+  };
+}
+
+function formatPendingPairingIssue(issue: PendingPairingIssue): string {
+  switch (issue.kind) {
+    case "first-time":
+      return `- Pending device pairing request ${issue.pending.requestId} for ${issue.deviceLabel}. Review with ${issue.inspectCommand}, then approve with ${issue.approveCommand}.`;
+    case "public-key-repair":
+      return `- Pending device repair ${issue.pending.requestId} for ${issue.deviceLabel}: the current device identity no longer matches the approved pairing record. This commonly loops on pairing-required for an already paired device. Remove the stale record with ${issue.removeCommand}, then rerun ${issue.inspectCommand} and approve with ${issue.approveCommand}.`;
+    case "role-upgrade":
+      return `- Pending role upgrade ${issue.pending.requestId} for ${issue.deviceLabel}: approved roles [${formatRoles(issue.approvedRoles)}], requested roles [${formatRoles(issue.requestedRoles)}]. Review with ${issue.inspectCommand}, then approve with ${issue.approveCommand}.`;
+    case "scope-upgrade":
+      return `- Pending scope upgrade ${issue.pending.requestId} for ${issue.deviceLabel}: approved scopes [${formatScopes(issue.approvedScopes)}], requested scopes [${formatScopes(issue.requestedScopes)}]. Review with ${issue.inspectCommand}, then approve with ${issue.approveCommand}.`;
+    case "repair":
+      return `- Pending device repair ${issue.pending.requestId} for ${issue.deviceLabel}: the device is already paired, but a new approval is still required before the requested auth can be used. Review with ${issue.inspectCommand}, then approve with ${issue.approveCommand}.`;
+  }
+  throw new Error("Unsupported pending pairing issue");
+}
+
 function collectPendingPairingIssues(snapshot: DoctorPairingSnapshot): string[] {
   const pairedByDeviceId = new Map(snapshot.paired.map((device) => [device.deviceId, device]));
-  const lines: string[] = [];
-  for (const pending of snapshot.pending) {
-    const deviceLabel = describeDevice({
-      deviceId: pending.deviceId,
-      displayName: pending.displayName,
-      clientId: pending.clientId,
-    });
-    const approveCommand = formatCliCommand(`openclaw devices approve ${pending.requestId}`);
-    const inspectCommand = formatCliCommand("openclaw devices list");
-    const paired = pairedByDeviceId.get(pending.deviceId);
-    if (!paired) {
-      lines.push(
-        `- Pending device pairing request ${pending.requestId} for ${deviceLabel}. Review with ${inspectCommand}, then approve with ${approveCommand}.`,
-      );
-      continue;
-    }
-
-    if (paired.publicKey !== pending.publicKey) {
-      const removeCommand = formatCliCommand(`openclaw devices remove ${pending.deviceId}`);
-      lines.push(
-        `- Pending device repair ${pending.requestId} for ${deviceLabel}: the current device identity no longer matches the approved pairing record. This commonly loops on pairing-required for an already paired device. Remove the stale record with ${removeCommand}, then rerun ${inspectCommand} and approve with ${approveCommand}.`,
-      );
-      continue;
-    }
-
-    const requestedRoles = uniqueStrings(pending.roles, pending.role);
-    const approvedRoles = listApprovedPairedDeviceRoles(paired);
-    const approvedScopes = resolveApprovedScopes(paired);
-    const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
-    const roleUpgrade = requestedRoles.some((role) => !approvedRoles.includes(role));
-    if (roleUpgrade) {
-      lines.push(
-        `- Pending role upgrade ${pending.requestId} for ${deviceLabel}: approved roles [${formatRoles(approvedRoles)}], requested roles [${formatRoles(requestedRoles)}]. Review with ${inspectCommand}, then approve with ${approveCommand}.`,
-      );
-      continue;
-    }
-    if (
-      hasPendingScopeUpgrade({
-        requestedRoles,
-        pendingScopes: requestedScopes,
-        approvedRoles,
-        approvedScopes,
-      })
-    ) {
-      lines.push(
-        `- Pending scope upgrade ${pending.requestId} for ${deviceLabel}: approved scopes [${formatScopes(approvedScopes)}], requested scopes [${formatScopes(requestedScopes)}]. Review with ${inspectCommand}, then approve with ${approveCommand}.`,
-      );
-      continue;
-    }
-    lines.push(
-      `- Pending device repair ${pending.requestId} for ${deviceLabel}: the device is already paired, but a new approval is still required before the requested auth can be used. Review with ${inspectCommand}, then approve with ${approveCommand}.`,
-    );
-  }
-  return lines;
+  return snapshot.pending.map((pending) =>
+    formatPendingPairingIssue(
+      resolvePendingPairingIssue(pending, pairedByDeviceId.get(pending.deviceId)),
+    ),
+  );
 }
 
 function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): string[] {
