@@ -1,51 +1,47 @@
----
-summary: "GLM 模型系列概览 + 如何在 OpenClaw 中使用它"
+﻿---
+summary: "GLM 妯″瀷绯诲垪姒傝 + 濡備綍鍦?OpenClaw 涓娇鐢ㄥ畠"
 read_when:
-  - 你想在 OpenClaw 中使用 GLM 模型
-  - 你需要模型命名约定和设置方法
+  - 浣犳兂鍦?OpenClaw 涓娇鐢?GLM 妯″瀷
+  - 浣犻渶瑕佹ā鍨嬪懡鍚嶇害瀹氬拰璁剧疆鏂规硶
 title: "GLM (Zhipu)"
 ---
 
-# GLM 模型
+# GLM 妯″瀷
 
-GLM 是通过 Z.AI 平台提供的一个**模型系列**（不是公司）。在 OpenClaw 中，GLM 模型通过 `zai` 提供商和类似 `zai/glm-5` 的模型 ID 访问。
-
-## 开始使用
-
+GLM 鏄€氳繃 Z.AI 骞冲彴鎻愪緵鐨勪竴涓?*妯″瀷绯诲垪**锛堜笉鏄叕鍙革級銆傚湪 OpenClaw 涓紝GLM 妯″瀷閫氳繃 `zai` 鎻愪緵鍟嗗拰绫讳技 `zai/glm-5` 鐨勬ā鍨?ID 璁块棶銆?
+## 寮€濮嬩娇鐢?
 <Steps>
-  <Step title="选择认证路由并运行设置向导">
-    选择与你的 Z.AI 计划和区域匹配的设置选项：
-
-    | 认证选项 | 最适合 |
+  <Step title="閫夋嫨璁よ瘉璺敱骞惰繍琛岃缃悜瀵?>
+    閫夋嫨涓庝綘鐨?Z.AI 璁″垝鍜屽尯鍩熷尮閰嶇殑璁剧疆閫夐」锛?
+    | 璁よ瘉閫夐」 | 鏈€閫傚悎 |
     | ----------- | -------- |
-    | `zai-api-key` | 具有端点自动检测功能的通用 API 密钥设置 |
-    | `zai-coding-global` | Coding Plan 用户（全球） |
-    | `zai-coding-cn` | Coding Plan 用户（中国区域） |
-    | `zai-global` | 通用 API（全球） |
-    | `zai-cn` | 通用 API（中国区域） |
+    | `zai-api-key` | 鍏锋湁绔偣鑷姩妫€娴嬪姛鑳界殑閫氱敤 API 瀵嗛挜璁剧疆 |
+    | `zai-coding-global` | Coding Plan 鐢ㄦ埛锛堝叏鐞冿級 |
+    | `zai-coding-cn` | Coding Plan 鐢ㄦ埛锛堜腑鍥藉尯鍩燂級 |
+    | `zai-global` | 閫氱敤 API锛堝叏鐞冿級 |
+    | `zai-cn` | 閫氱敤 API锛堜腑鍥藉尯鍩燂級 |
 
     ```bash
-    # 示例：通用自动检测
-    openclaw onboard --auth-choice zai-api-key
+    # 绀轰緥锛氶€氱敤鑷姩妫€娴?    openclaw onboard --auth-choice zai-api-key
 
-    # 示例：Coding Plan 全球
+    # 绀轰緥锛欳oding Plan 鍏ㄧ悆
     openclaw onboard --auth-choice zai-coding-global
     ```
 
   </Step>
-  <Step title="将 GLM 设置为默认模型">
+  <Step title="灏?GLM 璁剧疆涓洪粯璁ゆā鍨?>
     ```bash
     openclaw config set agents.defaults.model.primary "zai/glm-5.1"
     ```
   </Step>
-  <Step title="验证模型可用">
+  <Step title="楠岃瘉妯″瀷鍙敤">
     ```bash
     openclaw models list --provider zai
     ```
   </Step>
 </Steps>
 
-## 配置示例
+## 閰嶇疆绀轰緥
 
 ```json5
 {
@@ -55,14 +51,12 @@ GLM 是通过 Z.AI 平台提供的一个**模型系列**（不是公司）。在
 ```
 
 <Tip>
-`zai-api-key` 允许 OpenClaw 从密钥中检测匹配的 Z.AI 端点，并自动应用正确的基 URL。当你想要强制使用特定的 Coding Plan 或通用 API 接口时，请使用明确的区域选项。
-</Tip>
+`zai-api-key` 鍏佽 OpenClaw 浠庡瘑閽ヤ腑妫€娴嬪尮閰嶇殑 Z.AI 绔偣锛屽苟鑷姩搴旂敤姝ｇ‘鐨勫熀 URL銆傚綋浣犳兂瑕佸己鍒朵娇鐢ㄧ壒瀹氱殑 Coding Plan 鎴栭€氱敤 API 鎺ュ彛鏃讹紝璇蜂娇鐢ㄦ槑纭殑鍖哄煙閫夐」銆?</Tip>
 
-## 内置 GLM 模型
+## 鍐呯疆 GLM 妯″瀷
 
-OpenClaw 当前为内置的 `zai` 提供商预置了这些 GLM 引用：
-
-| 模型 | 模型 |
+OpenClaw 褰撳墠涓哄唴缃殑 `zai` 鎻愪緵鍟嗛缃簡杩欎簺 GLM 寮曠敤锛?
+| 妯″瀷 | 妯″瀷 |
 | --------------- | ---------------- |
 | `glm-5.1` | `glm-4.7` |
 | `glm-5` | `glm-4.7-flash` |
@@ -74,28 +68,23 @@ OpenClaw 当前为内置的 `zai` 提供商预置了这些 GLM 引用：
 | `glm-4.5v` | |
 
 <Note>
-默认的内置模型引用是 `zai/glm-5.1`。GLM 版本和可用性可能会发生变化；请查看 Z.AI 的文档以获取最新信息。
-</Note>
+榛樿鐨勫唴缃ā鍨嬪紩鐢ㄦ槸 `zai/glm-5.1`銆侴LM 鐗堟湰鍜屽彲鐢ㄦ€у彲鑳戒細鍙戠敓鍙樺寲锛涜鏌ョ湅 Z.AI 鐨勬枃妗ｄ互鑾峰彇鏈€鏂颁俊鎭€?</Note>
 
-## 高级说明
+## 楂樼骇璇存槑
 
 <AccordionGroup>
-  <Accordion title="端点自动检测">
-    当你使用 `zai-api-key` 认证选项时，OpenClaw 会检查密钥格式以确定正确的 Z.AI 基 URL。明确的区域选项（`zai-coding-global`、`zai-coding-cn`、`zai-global`、`zai-cn`）会覆盖自动检测并直接固定端点。
-  </Accordion>
+  <Accordion title="绔偣鑷姩妫€娴?>
+    褰撲綘浣跨敤 `zai-api-key` 璁よ瘉閫夐」鏃讹紝OpenClaw 浼氭鏌ュ瘑閽ユ牸寮忎互纭畾姝ｇ‘鐨?Z.AI 鍩?URL銆傛槑纭殑鍖哄煙閫夐」锛坄zai-coding-global`銆乣zai-coding-cn`銆乣zai-global`銆乣zai-cn`锛変細瑕嗙洊鑷姩妫€娴嬪苟鐩存帴鍥哄畾绔偣銆?  </Accordion>
 
-  <Accordion title="提供商详情">
-    GLM 模型由 `zai` 运行时提供商提供。有关完整的提供商配置、区域端点和其他功能，请参阅 [Z.AI 提供商文档](/providers/zai)。
-  </Accordion>
+  <Accordion title="鎻愪緵鍟嗚鎯?>
+    GLM 妯″瀷鐢?`zai` 杩愯鏃舵彁渚涘晢鎻愪緵銆傛湁鍏冲畬鏁寸殑鎻愪緵鍟嗛厤缃€佸尯鍩熺鐐瑰拰鍏朵粬鍔熻兘锛岃鍙傞槄 [Z.AI 鎻愪緵鍟嗘枃妗(/providers/zai)銆?  </Accordion>
 </AccordionGroup>
 
-## 相关内容
+## 鐩稿叧鍐呭
 
 <CardGroup cols={2}>
-  <Card title="Z.AI 提供商" href="/providers/zai" icon="server">
-    完整的 Z.AI 提供商配置和区域端点。
-  </Card>
-  <Card title="模型选择" href="/concepts/model-providers" icon="layers">
-    选择提供商、模型引用和故障转移行为。
-  </Card>
+  <Card title="Z.AI 鎻愪緵鍟? href="/providers/zai" icon="server">
+    瀹屾暣鐨?Z.AI 鎻愪緵鍟嗛厤缃拰鍖哄煙绔偣銆?  </Card>
+  <Card title="妯″瀷閫夋嫨" href="/concepts/model-providers" icon="layers">
+    閫夋嫨鎻愪緵鍟嗐€佹ā鍨嬪紩鐢ㄥ拰鏁呴殰杞Щ琛屼负銆?  </Card>
 </CardGroup>

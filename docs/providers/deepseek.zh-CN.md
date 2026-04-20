@@ -1,37 +1,33 @@
----
+﻿---
 title: "DeepSeek"
-summary: "DeepSeek 设置（认证 + 模型选择）"
+summary: "DeepSeek 璁剧疆锛堣璇?+ 妯″瀷閫夋嫨锛?
 read_when:
-  - 你想在 OpenClaw 中使用 DeepSeek
-  - 你需要 API 密钥环境变量或 CLI 认证选项
+  - 浣犳兂鍦?OpenClaw 涓娇鐢?DeepSeek
+  - 浣犻渶瑕?API 瀵嗛挜鐜鍙橀噺鎴?CLI 璁よ瘉閫夐」
 ---
 
 # DeepSeek
 
-[DeepSeek](https://www.deepseek.com) 提供具有 OpenAI 兼容 API 的强大 AI 模型。
-
-| 属性 | 值 |
+[DeepSeek](https://www.deepseek.com) 鎻愪緵鍏锋湁 OpenAI 鍏煎 API 鐨勫己澶?AI 妯″瀷銆?
+| 灞炴€?| 鍊?|
 | -------- | -------------------------- |
-| 提供商 | `deepseek` |
-| 认证 | `DEEPSEEK_API_KEY` |
-| API | OpenAI 兼容 |
-| 基 URL | `https://api.deepseek.com` |
+| 鎻愪緵鍟?| `deepseek` |
+| 璁よ瘉 | `DEEPSEEK_API_KEY` |
+| API | OpenAI 鍏煎 |
+| 鍩?URL | `https://api.deepseek.com` |
 
-## 开始使用
-
+## 寮€濮嬩娇鐢?
 <Steps>
-  <Step title="获取你的 API 密钥">
-    在 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 创建 API 密钥。
-  </Step>
-  <Step title="运行设置向导">
+  <Step title="鑾峰彇浣犵殑 API 瀵嗛挜">
+    鍦?[platform.deepseek.com](https://platform.deepseek.com/api_keys) 鍒涘缓 API 瀵嗛挜銆?  </Step>
+  <Step title="杩愯璁剧疆鍚戝">
     ```bash
     openclaw onboard --auth-choice deepseek-api-key
     ```
 
-    这会提示输入你的 API 密钥，并将 `deepseek/deepseek-chat` 设置为默认模型。
-
+    杩欎細鎻愮ず杈撳叆浣犵殑 API 瀵嗛挜锛屽苟灏?`deepseek/deepseek-chat` 璁剧疆涓洪粯璁ゆā鍨嬨€?
   </Step>
-  <Step title="验证模型可用">
+  <Step title="楠岃瘉妯″瀷鍙敤">
     ```bash
     openclaw models list --provider deepseek
     ```
@@ -39,8 +35,8 @@ read_when:
 </Steps>
 
 <AccordionGroup>
-  <Accordion title="非交互式设置">
-    对于脚本化或无人值守安装，直接传递所有标志：
+  <Accordion title="闈炰氦浜掑紡璁剧疆">
+    瀵逛簬鑴氭湰鍖栨垨鏃犱汉鍊煎畧瀹夎锛岀洿鎺ヤ紶閫掓墍鏈夋爣蹇楋細
 
     ```bash
     openclaw onboard --non-interactive \
@@ -55,21 +51,19 @@ read_when:
 </AccordionGroup>
 
 <Warning>
-如果网关作为守护进程（launchd/systemd）运行，请确保该进程可以访问 `DEEPSEEK_API_KEY`（例如，在 `~/.openclaw/.env` 中或通过 `env.shellEnv`）。
-</Warning>
+濡傛灉缃戝叧浣滀负瀹堟姢杩涚▼锛坙aunchd/systemd锛夎繍琛岋紝璇风‘淇濊杩涚▼鍙互璁块棶 `DEEPSEEK_API_KEY`锛堜緥濡傦紝鍦?`~/.openclaw/.env` 涓垨閫氳繃 `env.shellEnv`锛夈€?</Warning>
 
-## 内置目录
+## 鍐呯疆鐩綍
 
-| 模型引用 | 名称 | 输入 | 上下文 | 最大输出 | 说明 |
+| 妯″瀷寮曠敤 | 鍚嶇О | 杈撳叆 | 涓婁笅鏂?| 鏈€澶ц緭鍑?| 璇存槑 |
 | ---------------------------- | ----------------- | ----- | ------- | ---------- | ------------------------------------------------- |
-| `deepseek/deepseek-chat` | DeepSeek Chat | text | 131,072 | 8,192 | 默认模型；DeepSeek V3.2 非思考接口 |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text | 131,072 | 65,536 | 启用思考的 V3.2 接口 |
+| `deepseek/deepseek-chat` | DeepSeek Chat | text | 131,072 | 8,192 | 榛樿妯″瀷锛汥eepSeek V3.2 闈炴€濊€冩帴鍙?|
+| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text | 131,072 | 65,536 | 鍚敤鎬濊€冪殑 V3.2 鎺ュ彛 |
 
 <Tip>
-当前两个内置模型在源代码中都宣传了流式使用兼容性。
-</Tip>
+褰撳墠涓や釜鍐呯疆妯″瀷鍦ㄦ簮浠ｇ爜涓兘瀹ｄ紶浜嗘祦寮忎娇鐢ㄥ吋瀹规€с€?</Tip>
 
-## 配置示例
+## 閰嶇疆绀轰緥
 
 ```json5
 {
@@ -82,13 +76,11 @@ read_when:
 }
 ```
 
-## 相关内容
+## 鐩稿叧鍐呭
 
 <CardGroup cols={2}>
-  <Card title="模型选择" href="/concepts/model-providers" icon="layers">
-    选择提供商、模型引用和故障转移行为。
-  </Card>
-  <Card title="配置参考" href="/gateway/configuration-reference" icon="gear">
-    代理、模型和提供商的完整配置参考。
-  </Card>
+  <Card title="妯″瀷閫夋嫨" href="/concepts/model-providers" icon="layers">
+    閫夋嫨鎻愪緵鍟嗐€佹ā鍨嬪紩鐢ㄥ拰鏁呴殰杞Щ琛屼负銆?  </Card>
+  <Card title="閰嶇疆鍙傝€? href="/gateway/configuration-reference" icon="gear">
+    浠ｇ悊銆佹ā鍨嬪拰鎻愪緵鍟嗙殑瀹屾暣閰嶇疆鍙傝€冦€?  </Card>
 </CardGroup>

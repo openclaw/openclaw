@@ -1,55 +1,49 @@
----
-summary: "使用千帆的统一 API 在 OpenClaw 中访问多个模型"
+﻿---
+summary: "浣跨敤鍗冨竼鐨勭粺涓€ API 鍦?OpenClaw 涓闂涓ā鍨?
 read_when:
-  - 你想为多个 LLM 使用单个 API 密钥
-  - 你需要百度千帆设置指导
-title: "Qianfan"
+  - 浣犳兂涓哄涓?LLM 浣跨敤鍗曚釜 API 瀵嗛挜
+  - 浣犻渶瑕佺櫨搴﹀崈甯嗚缃寚瀵?title: "Qianfan"
 ---
 
 # Qianfan
 
-千帆是百度的 MaaS 平台，提供**统一 API**，可通过单个端点和 API 密钥将请求路由到多个模型。它是 OpenAI 兼容的，因此大多数 OpenAI SDK 只需切换基 URL 即可使用。
-
-| 属性 | 值 |
+鍗冨竼鏄櫨搴︾殑 MaaS 骞冲彴锛屾彁渚?*缁熶竴 API**锛屽彲閫氳繃鍗曚釜绔偣鍜?API 瀵嗛挜灏嗚姹傝矾鐢卞埌澶氫釜妯″瀷銆傚畠鏄?OpenAI 鍏煎鐨勶紝鍥犳澶у鏁?OpenAI SDK 鍙渶鍒囨崲鍩?URL 鍗冲彲浣跨敤銆?
+| 灞炴€?| 鍊?|
 | -------- | --------------------------------- |
-| 提供商 | `qianfan` |
-| 认证 | `QIANFAN_API_KEY` |
-| API | OpenAI 兼容 |
-| 基 URL | `https://qianfan.baidubce.com/v2` |
+| 鎻愪緵鍟?| `qianfan` |
+| 璁よ瘉 | `QIANFAN_API_KEY` |
+| API | OpenAI 鍏煎 |
+| 鍩?URL | `https://qianfan.baidubce.com/v2` |
 
-## 开始使用
-
+## 寮€濮嬩娇鐢?
 <Steps>
-  <Step title="创建百度云账户">
-    在 [千帆控制台](https://console.bce.baidu.com/qianfan/ais/console/apiKey) 注册或登录，确保已启用千帆 API 访问权限。
-  </Step>
-  <Step title="生成 API 密钥">
-    创建新应用或选择现有应用，然后生成 API 密钥。密钥格式为 `bce-v3/ALTAK-...`。
-  </Step>
-  <Step title="运行设置向导">
+  <Step title="鍒涘缓鐧惧害浜戣处鎴?>
+    鍦?[鍗冨竼鎺у埗鍙癩(https://console.bce.baidu.com/qianfan/ais/console/apiKey) 娉ㄥ唽鎴栫櫥褰曪紝纭繚宸插惎鐢ㄥ崈甯?API 璁块棶鏉冮檺銆?  </Step>
+  <Step title="鐢熸垚 API 瀵嗛挜">
+    鍒涘缓鏂板簲鐢ㄦ垨閫夋嫨鐜版湁搴旂敤锛岀劧鍚庣敓鎴?API 瀵嗛挜銆傚瘑閽ユ牸寮忎负 `bce-v3/ALTAK-...`銆?  </Step>
+  <Step title="杩愯璁剧疆鍚戝">
     ```bash
     openclaw onboard --auth-choice qianfan-api-key
     ```
   </Step>
-  <Step title="验证模型可用">
+  <Step title="楠岃瘉妯″瀷鍙敤">
     ```bash
     openclaw models list --provider qianfan
     ```
   </Step>
 </Steps>
 
-## 可用模型
+## 鍙敤妯″瀷
 
-| 模型引用 | 输入 | 上下文 | 最大输出 | 思考 | 说明 |
+| 妯″瀷寮曠敤 | 杈撳叆 | 涓婁笅鏂?| 鏈€澶ц緭鍑?| 鎬濊€?| 璇存槑 |
 | ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |
-| `qianfan/deepseek-v3.2` | text | 98,304 | 32,768 | Yes | 默认模型 |
-| `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000 | 64,000 | Yes | 多模态 |
+| `qianfan/deepseek-v3.2` | text | 98,304 | 32,768 | Yes | 榛樿妯″瀷 |
+| `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000 | 64,000 | Yes | 澶氭ā鎬?|
 
 <Tip>
-默认的内置模型引用是 `qianfan/deepseek-v3.2`。仅当你需要自定义基 URL 或模型元数据时，才需要覆盖 `models.providers.qianfan`。
-</Tip>
+榛樿鐨勫唴缃ā鍨嬪紩鐢ㄦ槸 `qianfan/deepseek-v3.2`銆備粎褰撲綘闇€瑕佽嚜瀹氫箟鍩?URL 鎴栨ā鍨嬪厓鏁版嵁鏃讹紝鎵嶉渶瑕佽鐩?`models.providers.qianfan`銆?</Tip>
 
-## 配置示例
+## 閰嶇疆绀轰緥
 
 ```json5
 {
@@ -94,39 +88,29 @@ title: "Qianfan"
 ```
 
 <AccordionGroup>
-  <Accordion title="传输和兼容性">
-    千帆通过 OpenAI 兼容的传输路径运行，而不是原生 OpenAI 请求整形。这意味着标准 OpenAI SDK 功能可用，但特定于提供商的参数可能不会被转发。
-  </Accordion>
+  <Accordion title="浼犺緭鍜屽吋瀹规€?>
+    鍗冨竼閫氳繃 OpenAI 鍏煎鐨勪紶杈撹矾寰勮繍琛岋紝鑰屼笉鏄師鐢?OpenAI 璇锋眰鏁村舰銆傝繖鎰忓懗鐫€鏍囧噯 OpenAI SDK 鍔熻兘鍙敤锛屼絾鐗瑰畾浜庢彁渚涘晢鐨勫弬鏁板彲鑳戒笉浼氳杞彂銆?  </Accordion>
 
-  <Accordion title="目录和覆盖">
-    当前内置目录包括 `deepseek-v3.2` 和 `ernie-5.0-thinking-preview`。仅当你需要自定义基 URL 或模型元数据时，才添加或覆盖 `models.providers.qianfan`。
-
+  <Accordion title="鐩綍鍜岃鐩?>
+    褰撳墠鍐呯疆鐩綍鍖呮嫭 `deepseek-v3.2` 鍜?`ernie-5.0-thinking-preview`銆備粎褰撲綘闇€瑕佽嚜瀹氫箟鍩?URL 鎴栨ā鍨嬪厓鏁版嵁鏃讹紝鎵嶆坊鍔犳垨瑕嗙洊 `models.providers.qianfan`銆?
     <Note>
-    模型引用使用 `qianfan/` 前缀（例如 `qianfan/deepseek-v3.2`）。
-    </Note>
+    妯″瀷寮曠敤浣跨敤 `qianfan/` 鍓嶇紑锛堜緥濡?`qianfan/deepseek-v3.2`锛夈€?    </Note>
 
   </Accordion>
 
-  <Accordion title="故障排除">
-    - 确保你的 API 密钥以 `bce-v3/ALTAK-` 开头，并在百度云控制台中启用了千帆 API 访问权限。
-    - 如果未列出模型，请确认你的账户已激活千帆服务。
-    - 默认基 URL 为 `https://qianfan.baidubce.com/v2`。仅当使用自定义端点或代理时才更改它。
-  </Accordion>
+  <Accordion title="鏁呴殰鎺掗櫎">
+    - 纭繚浣犵殑 API 瀵嗛挜浠?`bce-v3/ALTAK-` 寮€澶达紝骞跺湪鐧惧害浜戞帶鍒跺彴涓惎鐢ㄤ簡鍗冨竼 API 璁块棶鏉冮檺銆?    - 濡傛灉鏈垪鍑烘ā鍨嬶紝璇风‘璁や綘鐨勮处鎴峰凡婵€娲诲崈甯嗘湇鍔°€?    - 榛樿鍩?URL 涓?`https://qianfan.baidubce.com/v2`銆備粎褰撲娇鐢ㄨ嚜瀹氫箟绔偣鎴栦唬鐞嗘椂鎵嶆洿鏀瑰畠銆?  </Accordion>
 </AccordionGroup>
 
-## 相关内容
+## 鐩稿叧鍐呭
 
 <CardGroup cols={2}>
-  <Card title="模型选择" href="/concepts/model-providers" icon="layers">
-    选择提供商、模型引用和故障转移行为。
-  </Card>
-  <Card title="配置参考" href="/gateway/configuration" icon="gear">
-    完整的 OpenClaw 配置参考。
-  </Card>
-  <Card title="代理设置" href="/concepts/agent" icon="robot">
-    配置代理默认值和模型分配。
-  </Card>
-  <Card title="千帆 API 文档" href="https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb" icon="arrow-up-right-from-square">
-    官方千帆 API 文档。
-  </Card>
+  <Card title="妯″瀷閫夋嫨" href="/concepts/model-providers" icon="layers">
+    閫夋嫨鎻愪緵鍟嗐€佹ā鍨嬪紩鐢ㄥ拰鏁呴殰杞Щ琛屼负銆?  </Card>
+  <Card title="閰嶇疆鍙傝€? href="/gateway/configuration" icon="gear">
+    瀹屾暣鐨?OpenClaw 閰嶇疆鍙傝€冦€?  </Card>
+  <Card title="浠ｇ悊璁剧疆" href="/concepts/agent" icon="robot">
+    閰嶇疆浠ｇ悊榛樿鍊煎拰妯″瀷鍒嗛厤銆?  </Card>
+  <Card title="鍗冨竼 API 鏂囨。" href="https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb" icon="arrow-up-right-from-square">
+    瀹樻柟鍗冨竼 API 鏂囨。銆?  </Card>
 </CardGroup>
