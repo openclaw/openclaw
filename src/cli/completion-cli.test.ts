@@ -18,6 +18,13 @@ function createCompletionProgram(): Command {
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
 
+  const wiki = program.command("wiki").description("Wiki commands");
+  wiki
+    .command("ingest")
+    .description("Ingest a local file into the wiki sources folder")
+    .argument("<path>", "Local file path to ingest")
+    .option("--title <title>", "Override the source title");
+
   return program;
 }
 
@@ -29,6 +36,14 @@ describe("completion-cli", () => {
     expect(script).toContain("(status) _openclaw_gateway_status ;;");
     expect(script).toContain("(restart) _openclaw_gateway_restart ;;");
     expect(script).toContain("--force[Force the action]");
+  });
+
+  it("adds zsh positional file completion for nested leaf commands", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("_openclaw_wiki_ingest()");
+    expect(script).toContain('"1:Local file path to ingest:_files"');
+    expect(script).toContain('"--title[Override the source title]"');
   });
 
   it("defers zsh registration until compinit is available", async () => {
