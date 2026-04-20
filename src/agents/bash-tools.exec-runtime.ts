@@ -515,6 +515,7 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  shell?: string;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
@@ -666,7 +667,7 @@ export async function runExecProcess(opts: {
           (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
       };
     }
-    const { shell, args: shellArgs } = getShellConfig();
+    const { shell, args: shellArgs } = getShellConfig(opts.shell);
     const childArgv = [shell, ...shellArgs, execCommand];
     if (opts.usePty) {
       return {
