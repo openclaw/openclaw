@@ -1,0 +1,253 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE}
+    build:
+      context: .
+      args:
+        OPENCLAW_INSTALL_RUST: "1"
+        OPENCLAW_INSTALL_PIPELINE: "1"
+        OPENCLAW_PIPELINE_PY_PKG: "opendataloader-pdf[hybrid]==2.2.1"
+    # user omitted — image ends with USER node (UID 1000), matching host jpow UID
+    restart: unless-stopped
+    # network_mode: host removed — use bridge + explicit loopback port publish instead.
+    # This gives the container its own network namespace (fixes C1/C2: root+host-net coupling).
+    ports:
+      - "127.0.0.1:18789:18789"   # gateway API — loopback only, not Tailscale or LAN
+      - "127.0.0.1:18791:18791"   # bridge port +1 (OPENCLAW_BRIDGE_PORT=18790)
+      - "127.0.0.1:18792:18792"   # bridge port +2
+    extra_hosts:
+      - "host.docker.internal:172.18.0.1"  # openclaw_default bridge gateway — avoids DOCKER-ISOLATION DROP on docker0
+    env_file:
+      - .env
+    environment:
+      - HOME=/home/node
+      # Override the host-side OPENCLAW_CONFIG_DIR from .env with the container-internal mount path.
+      # The volume mount source still uses the host value; this controls what the gateway code sees.
+      - OPENCLAW_CONFIG_DIR=/home/node/.openclaw
+      - NODE_ENV=production
+      - TERM=xterm-256color
+      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
+      - PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - OCPIPELINE_VENV=/opt/ocpipeline
+      - LINEAR_PDF_OCR_ROUTE_MAP={"*":{"hybrid":"docling-fast","hybrid_url":"http://pdf-hybrid:5002"}}
+      - RUSTUP_HOME=/usr/local/rustup
+      - CARGO_HOME=/usr/local/cargo
+      - OPENCLAW_BROWSER_WS=${OPENCLAW_BROWSER_WS}
+      - XDG_CONFIG_HOME=/home/node/.openclaw
+      # OAuth mode: OpenAI API key secret is intentionally disabled
+      - OPENAI_API_KEY=
+      - DISCORD_BOT_TOKEN=
+      - DISCORD_APPLICATION_ID=
+      - OPENCLAW_GATEWAY_TOKEN=
+      - GOG_KEYRING_PASSWORD=
+      - PERPLEXITY_API_KEY=
+      - GEMINI_API_KEY=
+      - NOTION_API_KEY=
+      - GITHUB_TOKEN=
+      - GITHUB_TOKEN_PATH=/run/secrets/github_token
+      - GOOGLE_CALENDAR_CREDENTIALS_PATH=/run/secrets/google_calendar_credentials
+      - DISCORD_BOT_TOKEN_PATH=/run/secrets/discord_bot_token
+      - DISCORD_APPLICATION_ID_PATH=/run/secrets/discord_application_id
+      - OPENCLAW_GATEWAY_TOKEN_PATH=/run/secrets/gateway_token
+      - GOG_KEYRING_PASSWORD_PATH=/run/secrets/gog_keyring_password
+      - PERPLEXITY_API_KEY_PATH=/run/secrets/perplexity_api_key
+      - GEMINI_API_KEY_PATH=/run/secrets/gemini_api_key
+      - NOTION_API_KEY_PATH=/run/secrets/notion_api_key
+      - GOOGLE_MAPS_API_KEY=
+      - GOOGLE_MAPS_API_KEY_PATH=/run/secrets/google_maps_api_key
+      - LINEAR_API_KEY=
+      - LINEAR_API_KEY_PATH=/run/secrets/linear_api_key
+      - LINEAR_WEBHOOK_SECRET=
+      - LINEAR_WEBHOOK_SECRET_PATH=/run/secrets/linear_webhook_secret
+      - LINEAR_ALLOWED_TEAM_IDS=
+      - LINEAR_ALLOWED_TEAM_IDS_PATH=/run/secrets/linear_allowed_team_ids
+      - GRANOLA_API_KEY=
+      - GRANOLA_API_KEY_PATH=/run/secrets/granola_api_key
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ./entrypoint-secrets.sh:/usr/local/bin/entrypoint-secrets.sh:ro
+      # .ssh volume removed — deploy key injected via Docker secret instead (see github_deploy_key)
+      - /home/jpow/obsidian-vault:/home/node/obsidian:rw
+      - /home/jpow/.codex:/home/node/.codex:rw
+    secrets:
+      - source: discord_bot_token
+        target: discord_bot_token
+        mode: 0400
+      - source: discord_application_id
+        target: discord_application_id
+        mode: 0400
+      - source: gateway_token
+        target: gateway_token
+        mode: 0400
+      - source: gog_keyring_password
+        target: gog_keyring_password
+        mode: 0400
+      - source: perplexity_api_key
+        target: perplexity_api_key
+        mode: 0400
+      - source: gemini_api_key
+        target: gemini_api_key
+        mode: 0400
+      - source: notion_api_key
+        target: notion_api_key
+        mode: 0400
+      - source: github_token
+        target: github_token
+        mode: 0400
+      - source: google_calendar_credentials
+        target: google_calendar_credentials
+        mode: 0400
+      - source: google_maps_api_key
+        target: google_maps_api_key
+        mode: 0400
+      - source: linear_api_key
+        target: linear_api_key
+        mode: 0400
+      - source: linear_webhook_secret
+        target: linear_webhook_secret
+        mode: 0400
+      - source: linear_allowed_team_ids
+        target: linear_allowed_team_ids
+        mode: 0400
+      - source: github_deploy_key
+        target: github_deploy_key
+        mode: 0400
+      - source: github_known_hosts
+        target: github_known_hosts
+        mode: 0444
+      - source: granola_api_key
+        target: granola_api_key
+        mode: 0400
+    entrypoint: ["/usr/local/bin/entrypoint-secrets.sh"]
+    # --bind lan: gateway listens on 0.0.0.0 inside the container.
+    # The ports: mapping above restricts host-side exposure to 127.0.0.1 only.
+    command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
+
+  # ── PDF pipeline runner ─────────────────────────────────────────────────────
+  # Separate service so lifecycle (restart, stop_grace_period) is independent
+  # of the gateway.  Uses the same image (OPENCLAW_INSTALL_PIPELINE=1).
+  # Concurrency within the service is guarded by runner.lock + PID check.
+  pdf-pipeline:
+    image: ${OPENCLAW_IMAGE}
+    build:
+      context: .
+      args:
+        OPENCLAW_INSTALL_RUST: "1"
+        OPENCLAW_INSTALL_PIPELINE: "1"
+        OPENCLAW_PIPELINE_PY_PKG: "opendataloader-pdf[hybrid]==2.2.1"
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 2m
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+      pdf-hybrid:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:172.18.0.1"
+    env_file:
+      - .env
+    environment:
+      - HOME=/home/node
+      - OPENCLAW_CONFIG_DIR=/home/node/.openclaw
+      - NODE_ENV=production
+      - OCPIPELINE_VENV=/opt/ocpipeline
+      - LINEAR_PDF_OCR_ROUTE_MAP={"*":{"hybrid":"docling-fast","hybrid_url":"http://pdf-hybrid:5002"}}
+      - OPENCLAW_PIPELINE_LOGS=/home/node/.openclaw/logs/pipeline
+      - OPENCLAW_PIPELINE_ARTIFACT_ROOT=/home/node/.openclaw/workspace-engineering
+      - PIPELINE_MAX_RETRIES=5
+      - PIPELINE_RETRY_DELAY_SEC=30
+      - PIPELINE_SCHEDULE_INTERVAL_SEC=300
+      # Blanked here; loaded from Docker secrets at runtime by entrypoint
+      - LINEAR_API_KEY=
+      - GITHUB_TOKEN=
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
+      - ./scripts/preflight-pipeline.sh:/usr/local/bin/preflight-pipeline.sh:ro
+      - ./scripts/entrypoint-pipeline-runner.sh:/usr/local/bin/entrypoint-pipeline-runner.sh:ro
+    secrets:
+      - source: linear_api_key
+        target: linear_api_key
+        mode: 0400
+      - source: github_token
+        target: github_token
+        mode: 0400
+      - source: github_deploy_key
+        target: github_deploy_key
+        mode: 0400
+      - source: github_known_hosts
+        target: github_known_hosts
+        mode: 0444
+    healthcheck:
+      # Override Dockerfile HEALTHCHECK (gateway port probe doesn't apply here).
+      # Verify the runner lockfile was touched within the last pipeline cycle (10 min).
+      # linear_eng_pipeline.py rewrites the lockfile on each run; schedule is 5 min.
+      test: ["CMD-SHELL", "find /home/node/.openclaw/workspace-engineering/.eng/pipeline/runner.lock -mmin -10 -type f | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    entrypoint: ["/usr/local/bin/entrypoint-pipeline-runner.sh"]
+
+  # ── opendataloader-pdf hybrid server ────────────────────────────────────────
+  # Long-running HTTP server for docling-fast OCR/layout extraction.
+  # Exposed on the compose network only (no host port mapping).
+  # All services reach it at http://pdf-hybrid:5002 via LINEAR_PDF_OCR_ROUTE_MAP.
+  pdf-hybrid:
+    image: ${OPENCLAW_IMAGE}
+    build:
+      context: .
+      args:
+        OPENCLAW_INSTALL_PIPELINE: "1"
+        OPENCLAW_PIPELINE_PY_PKG: "opendataloader-pdf[hybrid]==2.2.1"
+    restart: unless-stopped
+    expose:
+      - "5002"
+    environment:
+      - HOME=/home/node
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    entrypoint:
+      - /opt/ocpipeline/bin/opendataloader-pdf-hybrid
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "5002"
+
+secrets:
+  discord_bot_token:
+    file: /home/jpow/.openclaw/secrets/discord_bot_token
+  discord_application_id:
+    file: /home/jpow/.openclaw/secrets/discord_application_id
+  gateway_token:
+    file: /home/jpow/.openclaw/secrets/gateway_token
+  gog_keyring_password:
+    file: /home/jpow/.openclaw/secrets/gog_keyring_password
+  perplexity_api_key:
+    file: /home/jpow/.openclaw/secrets/perplexity_api_key
+  gemini_api_key:
+    file: /home/jpow/.openclaw/secrets/gemini_api_key
+  notion_api_key:
+    file: /home/jpow/.openclaw/secrets/notion_api_key
+  github_token:
+    file: /home/jpow/.openclaw/secrets/github_token
+  google_calendar_credentials:
+    file: /home/jpow/.openclaw/secrets/google_calendar_credentials
+  google_maps_api_key:
+    file: /home/jpow/.openclaw/secrets/google_maps_api_key
+  linear_api_key:
+    file: /home/jpow/.openclaw/secrets/linear_api_key
+  linear_webhook_secret:
+    file: /home/jpow/.openclaw/secrets/linear_webhook_secret
+  linear_allowed_team_ids:
+    file: /home/jpow/.openclaw/secrets/linear_allowed_team_ids
+  github_deploy_key:
+    file: /home/jpow/.openclaw/secrets/github_deploy_key
+  github_known_hosts:
+    file: /home/jpow/.openclaw/secrets/github_known_hosts
+  granola_api_key:
+    file: /home/jpow/.openclaw/secrets/granola_api_key
