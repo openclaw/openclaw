@@ -1685,6 +1685,58 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.compact resets token accounting when manual compaction leaves zero tokens", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    embeddedRunMock.compactEmbeddedPiSession.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        tokensAfter: 0,
+      },
+    });
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          totalTokens: 999,
+          totalTokensFresh: false,
+          estimatedCostUsd: 0.25,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const compacted = await rpcReq<{
+      ok: true;
+      key: string;
+      compacted: boolean;
+      result?: { tokensAfter?: number };
+    }>(ws, "sessions.compact", {
+      key: "main",
+    });
+
+    expect(compacted.ok).toBe(true);
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { compactionCount?: number; totalTokens?: number; totalTokensFresh?: boolean; estimatedCostUsd?: number }
+    >;
+    expect(store["agent:main:main"]?.compactionCount).toBe(1);
+    expect(store["agent:main:main"]?.totalTokens).toBe(0);
+    expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+    expect(store["agent:main:main"]?.estimatedCostUsd).toBe(0);
+
+    ws.close();
+  });
+
   test("sessions.patch preserves nested model ids under provider overrides", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
     const storePath = path.join(dir, "sessions.json");

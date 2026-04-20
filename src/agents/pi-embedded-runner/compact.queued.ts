@@ -13,6 +13,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { resolveHookMessageProvider } from "../../utils/hook-message-provider.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
@@ -124,7 +125,10 @@ export async function compactEmbeddedPiSession(
           sessionKey: params.sessionKey,
           config: params.config,
         });
-        const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+        const resolvedMessageProvider = resolveHookMessageProvider({
+          sessionKey: params.sessionKey,
+          provider: params.messageChannel ?? params.messageProvider,
+        });
         const hookCtx = {
           sessionId: params.sessionId,
           agentId: sessionAgentId,

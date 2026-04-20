@@ -158,6 +158,26 @@ describe("handleCompactionStart", () => {
       }),
     );
   });
+
+  it("normalizes messageProvider before emitting compaction hook context", async () => {
+    hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_compaction");
+    const ctx = createCompactionContext({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:telegram:direct:ou_test",
+      initialCount: 1,
+      messageProvider: "Telegram",
+    });
+
+    handleCompactionStart(ctx);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageCount: 0 }),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:ou_test",
+        messageProvider: "telegram",
+      }),
+    );
+  });
 });
 
 describe("handleCompactionEnd", () => {

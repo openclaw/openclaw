@@ -4,6 +4,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveHookMessageProvider } from "../../utils/hook-message-provider.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
@@ -155,7 +156,10 @@ export async function emitResetCommandHooks(params: {
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,
-            messageProvider: params.ctx.OriginatingChannel || params.command.channel || undefined,
+            messageProvider: resolveHookMessageProvider({
+              sessionKey: params.sessionKey,
+              provider: params.ctx.OriginatingChannel || params.command.channel,
+            }),
           },
         );
       } catch (err: unknown) {

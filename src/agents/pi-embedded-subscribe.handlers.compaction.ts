@@ -3,6 +3,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
+import { resolveHookMessageProvider } from "../utils/hook-message-provider.js";
 
 export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
@@ -31,7 +32,10 @@ export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext) {
         },
         {
           sessionKey: ctx.params.sessionKey,
-          messageProvider: ctx.params.messageProvider ?? undefined,
+          messageProvider: resolveHookMessageProvider({
+            sessionKey: ctx.params.sessionKey,
+            provider: ctx.params.messageProvider,
+          }),
         },
       )
       .catch((err) => {
@@ -103,7 +107,10 @@ export function handleCompactionEnd(
           },
           {
             sessionKey: ctx.params.sessionKey,
-            messageProvider: ctx.params.messageProvider ?? undefined,
+            messageProvider: resolveHookMessageProvider({
+              sessionKey: ctx.params.sessionKey,
+              provider: ctx.params.messageProvider,
+            }),
           },
         )
         .catch((err) => {
