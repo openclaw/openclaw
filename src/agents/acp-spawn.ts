@@ -263,7 +263,7 @@ function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): numb
     return (
       task.runtime === "acp" &&
       isActiveTaskStatus(task.status) &&
-      Boolean(childSessionKey) &&
+      childSessionKey !== undefined &&
       !trackedChildSessionKeys.has(childSessionKey)
     );
   }).length;
