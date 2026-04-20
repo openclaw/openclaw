@@ -392,6 +392,75 @@ async function autoApproveIfEnabled(params: {
     params.log?.info?.(
       `auto-mode: plan auto-approved sessionKey=${params.sessionKey} approvalId=${params.approvalId}`,
     );
+    // PR #68939 follow-up (auto-mode continuation fix): after
+    // sessions.patch lands, the server has written
+    // `[PLAN_DECISION]: approved` to the pending-injection queue on
+    // the session entry, but the agent's main run has already
+    // ended — no one is polling the queue. The agent sits idle
+    // until the user sends a follow-up message (at which point the
+    // queued injection fires alongside their message). Effect:
+    // "auto-mode" silently still requires user intervention.
+    //
+    // Fix: mirror what the Control UI does after a manual click in
+    // `ui/src/ui/chat/plan-resume.ts:resumePendingPlanInteraction` —
+    // fire a `chat.send` with `deliver: false` to kick a fresh
+    // agent run. The runtime consumes the queued `[PLAN_DECISION]`
+    // injection on that run, and the agent proceeds to execute the
+    // approved plan. `deliver: false` keeps the synthetic "continue"
+    // out of the user-visible transcript. `idempotencyKey` keyed to
+    // the approvalId makes it safe if the UI ALSO attempts a resume
+    // for the same approval (e.g. a connected tab auto-resuming
+    // from its own approval-event handler) — the second call is a
+    // no-op.
+    //
+    // Works in headless / Telegram-only / no-UI scenarios where a
+    // UI-driven resume trigger wouldn't fire at all. Failure is
+    // non-fatal: if the resume trigger itself errors out, the
+    // injection stays queued on disk and the user's next real
+    // message will consume it — same behavior as pre-fix. Log at
+    // warn so operators notice without spamming error budgets.
+    try {
+      // PR #68939 follow-up (auto-mode continuation, v2): observed a
+      // bug where firing a bare "continue" message does not cause the
+      // agent to consume the queued `[PLAN_DECISION]: approved`
+      // injection — the agent's new turn loads with "continue" as the
+      // user instruction but doesn't dig into the pending-injection
+      // queue, so it reasons its way to "waiting on approval" and
+      // sits idle. Live-confirmed: queue contains the
+      // `plan-decision-plan-...` entry post-auto-approve but the
+      // agent's response ignored it.
+      //
+      // Pragmatic fix: include the canonical [PLAN_DECISION]: approved
+      // signal IN the synthetic chat.send message itself. The agent
+      // sees the decision as its current user instruction, not as a
+      // queued injection it might miss. This mirrors the literal text
+      // the persister writes into the queue, so the agent's reasoning
+      // is identical whether it picked the signal up from the queue
+      // or directly from the message.
+      const resumeMessage =
+        "[PLAN_DECISION]: approved — auto-mode resumed. " +
+        "The user has auto-approved the plan you just submitted via exit_plan_mode. " +
+        "Execute the approved plan now without re-planning. " +
+        "If a step is no longer viable, mark it cancelled and add a revised step.";
+      await callGatewayTool(
+        "chat.send",
+        {},
+        {
+          sessionKey: params.sessionKey,
+          message: resumeMessage,
+          deliver: false,
+          idempotencyKey: `auto-approve-resume-${params.approvalId}`,
+        },
+      );
+      params.log?.info?.(
+        `auto-mode: resume trigger fired sessionKey=${params.sessionKey} approvalId=${params.approvalId}`,
+      );
+    } catch (resumeErr) {
+      params.log?.warn?.(
+        `auto-approve resume trigger failed (plan is approved server-side; agent will resume on user's next message): ` +
+          `sessionKey=${params.sessionKey} approvalId=${params.approvalId}: ${String(resumeErr)}`,
+      );
+    }
   } catch (err) {
     // Use error-level logging instead of warn so operators notice the
     // silent fall-back. The user sees the approval card stay open and
