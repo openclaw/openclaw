@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+﻿import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -227,7 +227,7 @@ export function registerCronAddCommand(cron: Command) {
             const idRegex = /^[a-z0-9][a-z0-9_-]*[a-z0-9]$/;
             if (!idRegex.test(customId)) {
               throw new Error(
-                "--id must be a slug-like string (lowercase alphanumeric, hyphens, underscores, 2+ chars)",
+                "--id must be a slug-like string (lowercase alphanumeric, hyphens, underscores, at least 2 chars)",
               );
             }
             // Check for reasonable length
