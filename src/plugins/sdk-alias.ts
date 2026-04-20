@@ -437,13 +437,35 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
 // the full cycle every time. See #68983.
 const aliasMapCache = new Map<string, Record<string, string>>();
 
+function buildPluginLoaderAliasMapCacheKey(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  pluginSdkResolution: PluginSdkResolutionPreference;
+}) {
+  return [
+    params.modulePath,
+    params.argv1 ?? "",
+    params.moduleUrl ?? "",
+    params.pluginSdkResolution,
+    process.cwd(),
+    process.env.NODE_ENV === "production" ? "production" : "non-production",
+    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
+  ].join("\0");
+}
+
 export function buildPluginLoaderAliasMap(
   modulePath: string,
   argv1: string | undefined = STARTUP_ARGV1,
   moduleUrl?: string,
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
 ): Record<string, string> {
-  const cacheKey = `${modulePath}\0${argv1 ?? ""}\0${moduleUrl ?? ""}\0${pluginSdkResolution}`;
+  const cacheKey = buildPluginLoaderAliasMapCacheKey({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+  });
   const cached = aliasMapCache.get(cacheKey);
   if (cached) {
     return cached;

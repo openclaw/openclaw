@@ -1128,6 +1128,56 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(a).not.toBe(b);
   });
 
+  it("does not reuse a public alias map after private qa aliases are enabled", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("private-qa", "src/index.ts"));
+
+    const publicAliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      buildPluginLoaderAliasMap(entry),
+    );
+    const privateAliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
+      buildPluginLoaderAliasMap(entry),
+    );
+
+    expect(publicAliases).not.toBe(privateAliases);
+    expect(publicAliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
+    expect(fs.realpathSync(privateAliases["openclaw/plugin-sdk/qa-runtime"] ?? "")).toBe(
+      fs.realpathSync(sourceQaRuntimePath),
+    );
+  });
+
+  it("does not reuse a development alias map in production mode", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = { source: true };\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = { dist: true };\n", "utf-8");
+    const entry = writePluginEntry(fixture.root, bundledPluginFile("env-mode", "src/index.ts"));
+
+    const developmentAliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(entry),
+    );
+    const productionAliases = withEnv({ NODE_ENV: "production" }, () =>
+      buildPluginLoaderAliasMap(entry),
+    );
+
+    expect(developmentAliases).not.toBe(productionAliases);
+    expect(fs.realpathSync(developmentAliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(productionAliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(distRootAlias),
+    );
+  });
+
   it("memoized result has identical content to a freshly computed map", () => {
     const fixture = createPluginSdkAliasFixture();
     fs.writeFileSync(
