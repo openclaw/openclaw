@@ -77,7 +77,10 @@ export async function checkInboundAccessControl(params: {
       params.senderE164 != null
         ? policy.isConfiguredGroupAdmin(params.from, params.senderE164)
         : false;
-    if (senderIsConfiguredGroupAdmin) {
+    const allowlistDenied =
+      senderAccess.reasonCode === "group_policy_empty_allowlist" ||
+      senderAccess.reasonCode === "group_policy_not_allowlisted";
+    if (allowlistDenied && senderIsConfiguredGroupAdmin) {
       return {
         allowed: true,
         shouldMarkRead: true,

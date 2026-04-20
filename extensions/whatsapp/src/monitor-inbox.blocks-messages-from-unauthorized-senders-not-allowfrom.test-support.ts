@@ -236,6 +236,39 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("still blocks configured group admins when groupPolicy is 'disabled'", async () => {
+    const { onMessage, listener, sock } = await startWebInboxMonitor({
+      config: {
+        channels: {
+          whatsapp: {
+            groupPolicy: "disabled",
+            groups: {
+              "11111@g.us": {
+                admin: "+999",
+              },
+            },
+          },
+        },
+        messages: TIMESTAMP_OFF_MESSAGES_CFG,
+      },
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      createNotifyUpsert(
+        createGroupMessage({
+          id: "grp-disabled-admin",
+          participant: "999@s.whatsapp.net",
+          conversation: "/status",
+        }),
+      ),
+    );
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("blocks group messages from senders not in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
     const { onMessage, listener, sock } = await startWebInboxMonitor({
       config: {
