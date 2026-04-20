@@ -513,7 +513,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
+  it("clears unresolved mutating failure when same tool succeeds on a different target", () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
     emitToolRun({
@@ -534,7 +534,7 @@ describe("subscribeEmbeddedPiSession", () => {
       result: { ok: true },
     });
 
-    expect(subscription.getLastToolError()?.toolName).toBe("write");
+    expect(subscription.getLastToolError()).toBeUndefined();
   });
 
   it("keeps unresolved session_status model-mutation failure on later read-only status success", () => {
