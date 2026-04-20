@@ -375,6 +375,30 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts.join("")).toBe("gemma-visible-ok");
   });
 
+  it("keeps intermediate chunk drains in history mode before text_end", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 200 },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitOpenAiResponsesTextEvent({
+      emit,
+      type: "text_delta",
+      text: "  nested list item",
+      delta: "  nested list item",
+      id: "item_intermediate_chunk_indent",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const delivered = onBlockReply.mock.calls[0]?.[0]?.text ?? "";
+    expect(delivered.startsWith("  ")).toBe(true);
+    expect(delivered).toContain("nested");
+    expect(subscription.assistantTexts).toEqual([delivered]);
+  });
+
   it("preserves a repeated structured suffix when the preamble names the full repeated output literally", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

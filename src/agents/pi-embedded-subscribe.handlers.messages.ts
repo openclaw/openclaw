@@ -495,7 +495,8 @@ export function handleMessageUpdate(
   ) {
     ctx.blockChunker?.drain({
       force: false,
-      emit: (text) => ctx.emitBlockChunk(text, { finalDelivery: true }),
+      emit: (text) =>
+        ctx.emitBlockChunk(text, evtType === "text_end" ? { finalDelivery: true } : undefined),
     });
   }
 

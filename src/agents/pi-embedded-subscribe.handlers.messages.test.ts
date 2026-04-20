@@ -613,4 +613,30 @@ describe("handleMessageEnd", () => {
       },
     });
   });
+
+  it("sanitizes leaked channel delimiters before emitting a message_end replacement update", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: {
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Visible answer",
+        blockReplyBreak: "text_end",
+        deltaBuffer: "",
+        blockBuffer: "",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "internal planning<channel|>Visible answer" }],
+        stopReason: "stop",
+        usage: {},
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+  });
 });
