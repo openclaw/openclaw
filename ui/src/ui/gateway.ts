@@ -225,6 +225,31 @@ export type GatewayBrowserClientOptions = {
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
+const CONTROL_UI_CANVAS_CAPABILITY_TTL_MS = 10 * 60_000;
+const CONTROL_UI_CANVAS_CAPABILITY_REFRESH_LEAD_MS = 60_000;
+const CONTROL_UI_CANVAS_CAPABILITY_REFRESH_DELAY_MS = Math.max(
+  1_000,
+  CONTROL_UI_CANVAS_CAPABILITY_TTL_MS - CONTROL_UI_CANVAS_CAPABILITY_REFRESH_LEAD_MS,
+);
+
+function hasScopedCanvasHostUrl(canvasHostUrl: string | null | undefined): boolean {
+  const trimmed = canvasHostUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const pathname = new URL(trimmed).pathname.replace(/\/+$/, "");
+    const capabilityPrefix = `${CANVAS_CAPABILITY_PATH_PREFIX}/`;
+    if (!pathname.startsWith(capabilityPrefix)) {
+      return false;
+    }
+    const capability = pathname.slice(capabilityPrefix.length);
+    return Boolean(capability) && !capability.includes("/");
+  } catch {
+    return false;
+  }
+}
 
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
@@ -294,6 +319,7 @@ export class GatewayBrowserClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: number | null = null;
+  private canvasCapabilityRefreshTimer: number | null = null;
   private backoffMs = 800;
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
@@ -309,6 +335,7 @@ export class GatewayBrowserClient {
   stop() {
     this.closed = true;
     this.clearConnectTimer();
+    this.clearCanvasCapabilityRefreshTimer();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -332,6 +359,7 @@ export class GatewayBrowserClient {
       const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
+      this.clearCanvasCapabilityRefreshTimer();
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
@@ -363,6 +391,20 @@ export class GatewayBrowserClient {
       this.connectTimer = null;
       this.connect();
     }, delay);
+  }
+
+  private scheduleCanvasCapabilityRefresh() {
+    if (this.closed || this.ws?.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.clearCanvasCapabilityRefreshTimer();
+    this.canvasCapabilityRefreshTimer = window.setTimeout(() => {
+      this.canvasCapabilityRefreshTimer = null;
+      if (this.closed || this.ws?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      this.ws.close(4000, "canvas capability refresh");
+    }, CONTROL_UI_CANVAS_CAPABILITY_REFRESH_DELAY_MS);
   }
 
   private flushPending(err: Error) {
@@ -448,6 +490,7 @@ export class GatewayBrowserClient {
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.clearCanvasCapabilityRefreshTimer();
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
@@ -457,6 +500,9 @@ export class GatewayBrowserClient {
       });
     }
     this.backoffMs = 800;
+    if (hasScopedCanvasHostUrl(hello.canvasHostUrl)) {
+      this.scheduleCanvasCapabilityRefresh();
+    }
     this.opts.onHello?.(hello);
   }
 
@@ -639,6 +685,13 @@ export class GatewayBrowserClient {
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
       this.connectTimer = null;
+    }
+  }
+
+  private clearCanvasCapabilityRefreshTimer() {
+    if (this.canvasCapabilityRefreshTimer !== null) {
+      window.clearTimeout(this.canvasCapabilityRefreshTimer);
+      this.canvasCapabilityRefreshTimer = null;
     }
   }
 }

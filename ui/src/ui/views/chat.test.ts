@@ -718,9 +718,7 @@ describe("chat view", () => {
     let iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
     expect(iframe).not.toBeNull();
     expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe?.getAttribute("src")).toBe(
-      "/__openclaw__/canvas/documents/cv_inline_default/index.html",
-    );
+    expect(iframe?.getAttribute("src")).toBeNull();
     expect(container.textContent).toContain("Inline canvas result.");
     expect(container.textContent).toContain("Inline demo");
     expect(container.textContent).toContain("Raw details");
