@@ -12,6 +12,7 @@ const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
+const DEFAULT_MASK_CHAR = "*";
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
@@ -197,39 +198,40 @@ export function redactSensitiveWithOptions(
     mode?: RedactSensitiveMode;
     patterns?: RedactPattern[];
     maskChar?: string;
-  } = {}
+  } = {},
 ): string {
   if (!text) {
     return text;
   }
-  
+
   const resolved = resolveRedactOptions(options);
   if (resolved.mode === "off" || !resolved.patterns.length) {
     return text;
   }
-  
+
   const maskChar = options.maskChar || DEFAULT_MASK_CHAR;
-  
+
   let result = text;
   for (const pattern of resolved.patterns) {
     result = replacePatternBounded(result, pattern, (...args: string[]) => {
       const match = args[0];
       const groups = args.slice(1, args.length - 2);
-      
+
       if (match.includes("PRIVATE KEY-----")) {
         return redactPemBlock(match);
       }
-      
-      const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
+
+      const token =
+        groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
       const masked = maskTokenWithChar(token, maskChar);
-      
+
       if (token === match) {
         return masked;
       }
       return match.replace(token, masked);
     });
   }
-  
+
   return result;
 }
 
@@ -242,28 +244,28 @@ export function maskTokenWithChar(token: string, maskChar: string = DEFAULT_MASK
   }
   const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
   const end = token.slice(-DEFAULT_REDACT_KEEP_END);
-  const maskLength = Math.max(3, token.length - DEFAULT_REDACT_KEEP_START - DEFAULT_REDACT_KEEP_END);
+  const maskLength = Math.max(
+    3,
+    token.length - DEFAULT_REDACT_KEEP_START - DEFAULT_REDACT_KEEP_END,
+  );
   return `${start}${maskChar.repeat(maskLength)}${end}`;
 }
 
 /**
  * Redact sensitive information from an object recursively
  */
-export function redactSensitiveObject(
-  obj: unknown,
-  options?: RedactOptions
-): unknown {
+export function redactSensitiveObject(obj: unknown, options?: RedactOptions): unknown {
   if (obj === null || typeof obj !== "object") {
     if (typeof obj === "string") {
       return redactSensitiveText(obj, options);
     }
     return obj;
   }
-  
+
   if (Array.isArray(obj)) {
     return obj.map((item) => redactSensitiveObject(item, options));
   }
-  
+
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     // Redact common sensitive field names
@@ -273,7 +275,7 @@ export function redactSensitiveObject(
       result[key] = redactSensitiveObject(value, options);
     }
   }
-  
+
   return result;
 }
 
@@ -315,7 +317,7 @@ export function getRedactionPatternSummary(): {
       "Bank account numbers",
       "Cloud provider keys",
       "API keys",
-      "Secret keys"
-    ]
+      "Secret keys",
+    ],
   };
 }
