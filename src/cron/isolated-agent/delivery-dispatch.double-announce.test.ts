@@ -712,7 +712,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
   });
 
-  it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {
+  it("no delivery requested means deliveryAttempted stays undefined and no delivery is sent", async () => {
+    // Fix for #69281: when deliveryRequested is false, delivered/deliveryAttempted
+    // are undefined (not false) so resolveDeliveryStatus can distinguish
+    // "not requested" from "attempted and failed".
     const params = makeBaseParams({
       synthesizedText: "Task done.",
       deliveryRequested: false,
@@ -720,7 +723,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.deliveryAttempted).toBe(false);
+    expect(state.deliveryAttempted).toBeUndefined();
+    expect(state.delivered).toBeUndefined();
   });
 
   it("text delivery always bypasses the write-ahead queue", async () => {

@@ -73,12 +73,16 @@ describe("dispatchCronDelivery - Issue #69281", () => {
     expect(result.deliveryAttempted).toBeUndefined();
   });
 
-  it("returns delivered: undefined with mode none", async () => {
+  it("returns delivered: undefined even when mode is 'announce' if deliveryRequested is false", async () => {
+    // Proves it's the deliveryRequested flag — not the mode string — that gates
+    // the early return. A job could have mode "announce" but still be marked
+    // deliveryRequested=false by the upstream resolveCronDeliveryPlan (e.g. when
+    // the plan resolved to announce but was later suppressed).
     const params = makeMinimalParams({
       deliveryRequested: false,
       job: {
         ...makeMinimalJob(),
-        delivery: { mode: "none" },
+        delivery: { mode: "announce", channel: "discord", to: "test" },
       },
     });
 
