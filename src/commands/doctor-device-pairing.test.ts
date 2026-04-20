@@ -1,0 +1,186 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../infra/device-identity.js";
+import {
+  approveDevicePairing,
+  requestDevicePairing,
+  rotateDeviceToken,
+} from "../infra/device-pairing.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+
+const callGatewayMock = vi.hoisted(() => vi.fn());
+const noteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+}));
+
+vi.mock("../terminal/note.js", () => ({
+  note: (...args: unknown[]) => noteMock(...args),
+}));
+
+describe("noteDevicePairingHealth", () => {
+  let noteDevicePairingHealth: typeof import("./doctor-device-pairing.js").noteDevicePairingHealth;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    callGatewayMock.mockReset();
+    noteMock.mockReset();
+    ({ noteDevicePairingHealth } = await import("./doctor-device-pairing.js"));
+  });
+
+  afterEach(() => {
+    callGatewayMock.mockReset();
+    noteMock.mockReset();
+  });
+
+  it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const identity = loadOrCreateDeviceIdentity();
+          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+          const initial = await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey,
+            role: "operator",
+            scopes: ["operator.read"],
+            clientId: "control-ui",
+            clientMode: "webchat",
+            displayName: "Dashboard",
+          });
+          await approveDevicePairing(initial.request.requestId, {
+            callerScopes: ["operator.read"],
+          });
+          await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey,
+            role: "operator",
+            scopes: ["operator.admin"],
+            clientId: "control-ui",
+            clientMode: "webchat",
+            displayName: "Dashboard",
+          });
+
+          await noteDevicePairingHealth({
+            cfg: { gateway: { mode: "local" } },
+            healthOk: false,
+          });
+
+          expect(noteMock).toHaveBeenCalledTimes(1);
+          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+          expect(noteMock.mock.calls[0]?.[1]).toBe("Device pairing");
+          expect(message).toContain("Pending scope upgrade");
+          expect(message).toContain("operator.admin");
+          expect(message).toContain("openclaw devices approve");
+          expect(callGatewayMock).not.toHaveBeenCalled();
+        },
+      );
+    });
+  });
+
+  it("warns when the local cached device token predates the gateway rotation", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const identity = loadOrCreateDeviceIdentity();
+          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+          const initial = await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey,
+            role: "operator",
+            scopes: ["operator.read"],
+            clientId: "control-ui",
+            clientMode: "webchat",
+            displayName: "Dashboard",
+          });
+          await approveDevicePairing(initial.request.requestId, {
+            callerScopes: ["operator.read"],
+          });
+
+          storeDeviceAuthToken({
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "stale-local-token",
+            scopes: ["operator.read"],
+          });
+          const deviceAuthPath = path.join(stateDir, "identity", "device-auth.json");
+          const store = JSON.parse(await fs.readFile(deviceAuthPath, "utf8")) as {
+            version: 1;
+            deviceId: string;
+            tokens: Record<
+              string,
+              { token: string; role: string; scopes: string[]; updatedAtMs: number }
+            >;
+          };
+          store.tokens.operator.updatedAtMs = 1;
+          await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+
+          const rotated = await rotateDeviceToken({
+            deviceId: identity.deviceId,
+            role: "operator",
+          });
+          expect(rotated.ok).toBe(true);
+
+          await noteDevicePairingHealth({
+            cfg: { gateway: { mode: "local" } },
+            healthOk: false,
+          });
+
+          expect(noteMock).toHaveBeenCalledTimes(1);
+          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+          expect(message).toContain("stale device-token pattern");
+          expect(message).toContain("openclaw devices rotate");
+        },
+      );
+    });
+  });
+
+  it("uses gateway device pairing state when the gateway is healthy", async () => {
+    callGatewayMock.mockResolvedValue({
+      pending: [
+        {
+          requestId: "req-gateway-1",
+          deviceId: "device-gateway-1",
+          publicKey: "pubkey",
+          role: "operator",
+          roles: ["operator"],
+          scopes: ["operator.admin"],
+          clientId: "control-ui",
+          clientMode: "webchat",
+          displayName: "Dashboard",
+          ts: 1,
+          isRepair: false,
+        },
+      ],
+      paired: [],
+    });
+
+    await noteDevicePairingHealth({
+      cfg: { gateway: { mode: "remote" } },
+      healthOk: true,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "device.pair.list",
+      }),
+    );
+    expect(noteMock).toHaveBeenCalledTimes(1);
+    expect(String(noteMock.mock.calls[0]?.[0] ?? "")).toContain("req-gateway-1");
+  });
+});
