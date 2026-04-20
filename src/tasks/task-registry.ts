@@ -1453,6 +1453,12 @@ export function createTaskRecord(params: {
     scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
+  // Callers capture `startedAt` at tool-call time (Date.now()) and register the
+  // task a moment later, so a naive `createdAt = now` can land after `startedAt`
+  // and violate the createdAt <= startedAt invariant that audit relies on.
+  // Clamp to startedAt when it is already in the past to keep the invariant true.
+  const createdAt =
+    typeof params.startedAt === "number" && params.startedAt < now ? params.startedAt : now;
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
@@ -1471,7 +1477,7 @@ export function createTaskRecord(params: {
     status,
     deliveryStatus,
     notifyPolicy,
-    createdAt: now,
+    createdAt,
     startedAt: params.startedAt,
     lastEventAt,
     cleanupAfter: params.cleanupAfter,

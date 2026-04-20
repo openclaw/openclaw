@@ -277,6 +277,70 @@ describe("task-registry", () => {
     });
   });
 
+  it("clamps createdAt to startedAt when a task is registered in a started state (#69229)", async () => {
+    // Regression: callers (e.g. pi-embedded subagent tools) capture
+    // `startedAt = Date.now()` at tool-call time, then later call
+    // createTaskRecord(). A naive `createdAt = Date.now()` inside the registry
+    // lands after `startedAt`, breaking the createdAt <= startedAt invariant
+    // that `task-registry.audit` relies on and producing false-positive
+    // `inconsistent_timestamps` warnings for the majority of tasks.
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const startedAt = Date.now() - 5_000;
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-clamp-createdat",
+        task: "measure",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt,
+      });
+
+      expect(task.startedAt).toBe(startedAt);
+      expect(task.createdAt).toBe(startedAt);
+      expect(task.createdAt).toBeLessThanOrEqual(task.startedAt ?? Number.POSITIVE_INFINITY);
+    });
+  });
+
+  it("keeps createdAt at now when startedAt is omitted or in the future", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const before = Date.now();
+      const queued = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-no-startedat",
+        task: "queued",
+        status: "queued",
+        deliveryStatus: "not_applicable",
+      });
+      expect(queued.createdAt).toBeGreaterThanOrEqual(before);
+
+      const futureStartedAt = Date.now() + 60_000;
+      const futureStart = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-future-startedat",
+        task: "future",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: futureStartedAt,
+      });
+      expect(futureStart.createdAt).toBeLessThan(futureStartedAt);
+    });
+  });
+
   it("ignores late agent events for operator-cancelled tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
