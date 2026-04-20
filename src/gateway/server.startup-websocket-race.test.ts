@@ -1,5 +1,6 @@
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
 
 const machineNameDelay = vi.hoisted(() => {
@@ -94,6 +95,41 @@ describe("gateway startup websocket readiness", () => {
       expect(server).toBeDefined();
     } finally {
       machineNameDelay.release();
+      if (server) {
+        await server.close();
+      }
+      if (previousMinimal === undefined) {
+        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+      } else {
+        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
+      }
+    }
+  });
+
+  it("accepts an immediate websocket connection once startup resolves", async () => {
+    machineNameDelay.reset();
+    const previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      const port = await getFreePort();
+      machineNameDelay.release();
+      server = await startGatewayServer(port, {
+        auth: { mode: "none" },
+      });
+
+      client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        timeoutMs: 5_000,
+        timeoutMessage: "expected websocket connect to succeed immediately after startup",
+      });
+
+      expect(client).toBeDefined();
+    } finally {
+      if (client) {
+        await disconnectGatewayClient(client);
+      }
       if (server) {
         await server.close();
       }
