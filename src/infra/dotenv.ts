@@ -75,6 +75,9 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
   "OPENAI_API_KEY_",
+  // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
+  // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
+  "OPENCLAW_",
   "OPENCLAW_CLAWHUB_",
   "OPENCLAW_DISABLE_",
   "OPENCLAW_SKIP_",
