@@ -1580,7 +1580,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // If reading the current file fails, write cfg as-is (no env restoration)
     }
 
-    const dir = path.dirname(configPath);
+    // Resolve the real path so atomic rename replaces the target of any
+    // user-managed symlink (git-tracked workspace config, dotfiles, etc.)
+    // instead of clobbering the symlink itself. realpath fails when the
+    // config does not yet exist, so fall back to the raw path.
+    let realConfigPath = configPath;
+    if (snapshot.exists) {
+      try {
+        realConfigPath = await deps.fs.promises.realpath(configPath);
+      } catch {
+        realConfigPath = configPath;
+      }
+    }
+    const dir = path.dirname(realConfigPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     await tightenStateDirPermissionsIfNeeded({
       configPath,
@@ -1730,13 +1742,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       try {
-        await deps.fs.promises.rename(tmp, configPath);
+        await deps.fs.promises.rename(tmp, realConfigPath);
       } catch (err) {
         const code = (err as { code?: string }).code;
         // Windows doesn't reliably support atomic replace via rename when dest exists.
         if (code === "EPERM" || code === "EEXIST") {
-          await deps.fs.promises.copyFile(tmp, configPath);
-          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+          await deps.fs.promises.copyFile(tmp, realConfigPath);
+          await deps.fs.promises.chmod(realConfigPath, 0o600).catch(() => {
             // best-effort
           });
           await deps.fs.promises.unlink(tmp).catch(() => {

@@ -287,6 +287,47 @@ describe("config io write", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves a symlinked config by writing through to its realpath target (#69396)",
+    async () => {
+      // Users who keep their config under version control commonly symlink
+      // ~/.openclaw/openclaw.json to a workspace file (see TOOLS.md). Before
+      // this fix, atomic rename replaced the symlink with a regular file,
+      // breaking dotfiles/Nix/Chezmoi deployments and forcing users to keep
+      // re-creating the symlink after every config touch.
+      await withSuiteHome(async (home) => {
+        const workspaceDir = path.join(home, "workspace", "config");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const realTarget = path.join(workspaceDir, "openclaw.json");
+        await fs.writeFile(
+          realTarget,
+          `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+          "utf-8",
+        );
+
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(stateDir, { recursive: true });
+        const configPath = path.join(stateDir, "openclaw.json");
+        await fs.symlink(realTarget, configPath);
+
+        const io = createFastConfigIO(home);
+        await io.writeConfigFile({ gateway: { mode: "local", port: 27890 } });
+
+        const symlinkStat = await fs.lstat(configPath);
+        expect(symlinkStat.isSymbolicLink()).toBe(true);
+
+        const targetStat = await fs.stat(configPath);
+        const realTargetStat = await fs.stat(realTarget);
+        expect(targetStat.ino).toBe(realTargetStat.ino);
+
+        const persistedFromTarget = JSON.parse(await fs.readFile(realTarget, "utf-8")) as {
+          gateway?: { port?: number };
+        };
+        expect(persistedFromTarget.gateway?.port).toBe(27890);
+      });
+    },
+  );
+
   it("writes disabled plugin entries without requiring plugin config", async () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
