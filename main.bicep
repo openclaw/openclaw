@@ -337,7 +337,10 @@ EXECUTOR_EOF
 # ── Token Budget Plugin ──────────────────────────────────────────
 # Copy plugin files from the Docker image to the Azure File Share.
 # Source files live in custom-plugins/token-budget/ in the repo.
-cp -r /app/custom-plugins/token-budget /home/node/.openclaw/extensions/token-budget
+# mkdir -p ensures the destination exists; cp with trailing slash
+# copies contents into the directory (idempotent across redeploys).
+mkdir -p /home/node/.openclaw/extensions/token-budget
+cp -r /app/custom-plugins/token-budget/* /home/node/.openclaw/extensions/token-budget/
 # Token budget plugin config
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.enabled true
 node --require /tmp/patch.js openclaw.mjs config set plugins.entries.token-budget.config.monthlyLimit 2000000
