@@ -230,6 +230,16 @@ No `pnpm build` needed: no lazy-boundary or packaged-surface changes. No changel
   - `corepack pnpm test src/agents/tool-images.test.ts src/media/image-ops.input-guard.test.ts`
   - `corepack pnpm format:check src/agents/tool-images.ts src/agents/tool-images.test.ts`
 - Next PR actions after push: resolve only the still-open Codex thread, remove stale trigger comments, then post fresh `@codex review` and `@greptile review` comments so both agents review the new head commit instead of the prior stale state.
+- Re-read `USER.md`, refreshed `gh issue view 482 -R NVIDIA-dev/openclaw-tracking --json number,title,body,state,labels,url`, and pulled the full PR 69378 review-thread state again to isolate the remaining comment loop.
+- Confirmed the repeated review cycle had narrowed to one live Codex thread only: `#discussion_r3113049509` on `src/agents/tool-images.ts`, while Greptile was already green on the current branch direction.
+- Root cause of the new recurrence: the HEIF-family brand set still omitted the valid sequence brand `hevx`, so a mislabeled ISO BMFF payload using `hevx` could bypass the predecode guard and invite another Codex finding on each fresh review.
+- Patched `src/agents/tool-images.ts` to include `hevx` in `HEIF_FAMILY_BRANDS`.
+- Added a focused regression in `src/agents/tool-images.test.ts` that proves a mislabeled `hevx` payload is rejected before native decode.
+- Validation completed successfully:
+  - `corepack pnpm test src/agents/tool-images.test.ts`
+  - `corepack pnpm format:check src/agents/tool-images.ts src/agents/tool-images.test.ts`
+  - `corepack pnpm check:changed`
+- Loop summary: comments kept coming back because new `@codex review` triggers were posted while there was still one unresolved latest-head Codex issue; after the parser fixes, the final remaining recurrence was a genuine missed brand token rather than stale thread noise.
 
 [CLAUDE COMMENTS RESOLUTION]
 
@@ -339,3 +349,61 @@ PR maintenance:
 ### Verdict
 
 DOES NOT RESOLVE — the PR hardens `sanitizeToolResultImages()` and related tests, but the issue's actual MCP tool-result path still bypasses that helper and remains vulnerable.
+
+[CLAUDE COMMENTS RESOLUTION]
+
+Pulled PR 69378 review threads and compared against the latest HEAD. State at
+task start: 7 threads resolved, 2 open on `e25cf1074a`.
+
+Loop diagnosis — why new comments kept arriving:
+
+- Greptile reviewed once on `8fbbc189` and stopped; its threads stayed stale/resolved.
+- Codex re-reviews every head commit. Each earlier fix created a new small
+  surface that Codex then flagged:
+  - `939f989e` → P1 tool-only scoping (fixed in `58b3b03c`)
+  - `939f989e` → P1 ISO BMFF special sizes (fixed in `e241314d8b`)
+  - `e241314d8b` → P3 extended `ftyp` minor-version offset (fixed in `048077d008`)
+  - `048077d008` → P2 read-tool HEIF opt-out (fixed in `46ff433291`)
+  - `46ff433291` → P2 preserve read-tool opt-out through replay (fixed in `e25cf1074a`)
+  - `e25cf1074a` → P1 legacy sessions missing metadata + P2 USER.md commit (both addressed here).
+    Each fix was correct for its own thread; Codex just kept finding the
+    adjacent seam that the previous fix had shifted. The sequence converges as
+    fewer untested shapes remain.
+
+Open threads on HEAD `e25cf1074a`:
+
+1. P1 Codex on `src/agents/pi-embedded-helpers/images.ts`: legacy sessions
+   without `details.imageSanitization` fell through to the
+   `rejectHeifFamily: true` default, so historical read-tool HEIC/HEIF content
+   got dropped during replay.
+2. P2 Codex on `USER.md`: internal worklog was committed into the product
+   branch in `e25cf1074a`.
+
+Fix applied (commit `effb5d92c7`, `fix(images): allow legacy read-tool heif replay`):
+
+- `src/agents/pi-embedded-helpers/images.ts`: `readToolImageSanitizationDetails`
+  now takes the tool name. When `details.imageSanitization` is missing and the
+  tool is in `LEGACY_HEIF_ALLOWED_TOOL_NAMES` (currently only `read`), it
+  returns `rejectHeifFamily: false` to preserve legacy replay. Other legacy
+  tool results (e.g. MCP) stay under the default reject path so stored
+  untrusted content is not retroactively trusted.
+- `src/agents/pi-embedded-helpers.sanitize-session-messages-images.removes-empty-assistant-text-blocks-but-preserves.test.ts`:
+  added `preserves legacy read-tool HEIF content during transcript replay
+when metadata is missing` covering the legacy-session fallback. Existing
+  test for MCP legacy rejection still passes.
+- Removed `USER.md` from git tracking (`git rm --cached`). Local file still
+  present (gitignored via `.gitignore:91`).
+
+Validation:
+
+- `corepack pnpm test src/agents/pi-embedded-helpers.sanitize-session-messages-images.removes-empty-assistant-text-blocks-but-preserves.test.ts src/agents/tool-images.test.ts src/media/image-ops.input-guard.test.ts` — pass (31 + 4).
+- `corepack pnpm format:check` on the touched files — pass after `corepack pnpm format`.
+- `corepack pnpm check:changed` — pass (372 test files, 3901 tests).
+
+PR maintenance:
+
+- Deleted stale review trigger comments (IDs 4283423673, 4283423682).
+- Resolved both open threads: `PRRT_kwDOQb6kR858S4SA`, `PRRT_kwDOQb6kR858S4SC`.
+- Posted fresh triggers on HEAD `effb5d92c7`:
+  - https://github.com/openclaw/openclaw/pull/69378#issuecomment-4283529845 (`@codex review`)
+  - https://github.com/openclaw/openclaw/pull/69378#issuecomment-4283530212 (`@greptile review`)

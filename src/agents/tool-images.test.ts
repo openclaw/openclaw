@@ -240,6 +240,20 @@ describe("tool image sanitizing", () => {
     ]);
   });
 
+  it("drops mislabeled HEIF sequence-brand payloads before native decode", async () => {
+    const hevx = createIsoBmffImage("hevx", ["mif1"]);
+    const out = await sanitizeToolResultImages(
+      {
+        content: [{ type: "image", data: hevx.toString("base64"), mimeType: "image/jpeg" }],
+        details: {},
+      },
+      "test",
+    );
+    expect(out.content).toEqual([
+      { type: "text", text: "[test] omitted image payload: Error: unsupported image format" },
+    ]);
+  });
+
   it("does not treat extended ftyp minor version as a compatible brand", async () => {
     const mp4 = createIsoBmffImage("mp41", [], "extended", "heic");
     const out = await sanitizeToolResultImages(

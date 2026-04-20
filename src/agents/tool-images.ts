@@ -37,6 +37,7 @@ const HEIF_FAMILY_BRANDS = new Set([
   "heif",
   "heix",
   "hevc",
+  "hevx",
   "heim",
   "heis",
   "hevm",
