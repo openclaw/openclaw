@@ -14,7 +14,7 @@ function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
 
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
-  const suffixes = ["a", "b", "c", "d"];
+  const suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"];
   const groups = Object.fromEntries(
     ["registry", "core"].flatMap((family) =>
       suffixes.map((suffix) => [`checks-fast-contracts-channels-${family}-${suffix}`, []]),
