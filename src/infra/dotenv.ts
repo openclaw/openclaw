@@ -70,7 +70,7 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
