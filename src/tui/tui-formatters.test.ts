@@ -300,7 +300,9 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("preserves code-like tokens (dots and parens) to avoid breaking code snippets", () => {
-    const input = "user.has_opted_out?('work_break_notifications')";
+    // Must be > 128 chars to trigger LONG_TOKEN_RE and the isCopySensitiveToken path.
+    const segment = "user.has_opted_out?('work_break_notifications')";
+    const input = segment.repeat(4); // 188 chars, contains dots and parens
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
