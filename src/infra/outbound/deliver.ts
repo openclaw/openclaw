@@ -1373,8 +1373,11 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
-  for (const payload of normalizedPayloads) {
+  const deliveredPayloadIndices = new Set<number>();
+  for (let payloadIndex = 0; payloadIndex < normalizedPayloads.length; payloadIndex++) {
+    const payload = normalizedPayloads[payloadIndex];
     let payloadSummary = buildPayloadSummary(payload);
+    let payloadDelivered = false;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryStarted = false;
@@ -1448,6 +1451,7 @@ async function deliverOutboundPayloadsCore(
       if (!effectivePayload) {
         continue;
       }
+      payloadDelivered = true;
       payloadSummary = buildPayloadSummary(effectivePayload);
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
 
@@ -1644,6 +1648,7 @@ async function deliverOutboundPayloadsCore(
       });
     } catch (err) {
       errorDeliveryDiagnostics(err);
+      payloadDelivered = false;
       emitMessageSent({
         success: false,
         content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -1653,11 +1658,18 @@ async function deliverOutboundPayloadsCore(
         throw err;
       }
       params.onError?.(err, payloadSummary);
+    } finally {
+      if (payloadDelivered) {
+        deliveredPayloadIndices.add(payloadIndex);
+      }
     }
   }
   if (params.mirror && results.length > 0) {
-    // Collect all dropped media notices across payloads for transcript mirror.
-    const allDropped = payloads.flatMap((p) => p.droppedMedia ?? []);
+    // Only collect dropped-media notices from payloads that were actually
+    // delivered (not cancelled by message_sending hooks or errored).
+    const allDropped = normalizedPayloads
+      .filter((_, i) => deliveredPayloadIndices.has(i))
+      .flatMap((p) => p.droppedMedia ?? []);
     const droppedNotice = allDropped.length > 0 ? formatDroppedMediaNotice(allDropped) : "";
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,
