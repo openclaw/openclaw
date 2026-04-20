@@ -298,21 +298,9 @@ function resolveExecutionConfig(
     thinking: normalizeThinking(record?.thinking) ?? fallback.thinking,
     budget: normalizeBudget(record?.budget) ?? fallback.budget,
     ...(model ? { model } : {}),
-    ...(typeof maxOutputTokens === "number"
-      ? { maxOutputTokens }
-      : typeof fallback.maxOutputTokens === "number"
-        ? { maxOutputTokens: fallback.maxOutputTokens }
-        : {}),
-    ...(typeof temperature === "number"
-      ? { temperature }
-      : typeof fallback.temperature === "number"
-        ? { temperature: fallback.temperature }
-        : {}),
-    ...(typeof timeoutMs === "number"
-      ? { timeoutMs }
-      : typeof fallback.timeoutMs === "number"
-        ? { timeoutMs: fallback.timeoutMs }
-        : {}),
+    ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
+    ...(typeof temperature === "number" ? { temperature } : {}),
+    ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
   };
 }
 

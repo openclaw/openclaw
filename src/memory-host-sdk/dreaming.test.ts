@@ -161,16 +161,16 @@ describe("memory dreaming host helpers", () => {
     });
     expect(resolved.phases.light.execution).toMatchObject({
       model: TEST_DREAMING_MODEL,
-      timeoutMs: 45_000,
     });
     expect(resolved.phases.deep.execution).toMatchObject({
       model: TEST_DREAMING_MODEL,
-      timeoutMs: 45_000,
     });
     expect(resolved.phases.rem.execution).toMatchObject({
       model: TEST_REM_OVERRIDE_MODEL,
-      timeoutMs: 45_000,
     });
+    expect(resolved.phases.light.execution).not.toHaveProperty("timeoutMs");
+    expect(resolved.phases.deep.execution).not.toHaveProperty("timeoutMs");
+    expect(resolved.phases.rem.execution).not.toHaveProperty("timeoutMs");
   });
 
   it("dedupes shared workspaces across all configured agents", () => {
