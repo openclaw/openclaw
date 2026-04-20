@@ -81,8 +81,19 @@ export function resolveCronStorePath(storePath?: string) {
 }
 
 async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
+  let raw: string;
   try {
-    const raw = await fs.promises.readFile(statePath, "utf-8");
+    raw = await fs.promises.readFile(statePath, "utf-8");
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return null;
+    }
+    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
+      cause: err,
+    });
+  }
+
+  try {
     const parsed = parseJsonWithJson5Fallback(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
@@ -92,10 +103,7 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
       return null;
     }
     return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
+  } catch {
     // Best-effort: if state file is corrupt, treat as absent.
     return null;
   }

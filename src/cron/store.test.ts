@@ -243,6 +243,45 @@ describe("cron store", () => {
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
   });
 
+  it("treats a corrupt state sidecar as absent", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("job-1", true);
+    payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await saveCronStore(store.storePath, payload);
+    await fs.writeFile(statePath, "{ not json", "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(payload.jobs[0].createdAtMs);
+    expect(loaded.jobs[0]?.state).toEqual({});
+  });
+
+  it("propagates unreadable state sidecar errors", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("job-1", true);
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await saveCronStore(store.storePath, payload);
+
+    const origReadFile = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+      if (filePath === statePath) {
+        const err = new Error("permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return origReadFile(filePath, options as never) as never;
+    });
+
+    try {
+      await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to read cron state/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("sanitizes invalid updatedAtMs values from the state sidecar", async () => {
     const store = await makeStorePath();
     const job = makeStore("job-1", true).jobs[0];
