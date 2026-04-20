@@ -2,7 +2,9 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
+import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import {
   renderMessageGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
@@ -102,6 +104,32 @@ function renderMessageGroups(
   );
 }
 
+function renderBuiltMessageGroups(
+  container: HTMLElement,
+  props: Partial<BuildChatItemsProps>,
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  const groups = buildChatItems({
+    sessionKey: "main",
+    messages: [],
+    toolMessages: [],
+    streamSegments: [],
+    stream: null,
+    streamStartedAt: null,
+    showToolCalls: true,
+    ...props,
+  }).filter((item) => item.kind === "group");
+  renderMessageGroups(container, groups, opts);
+}
+
+function clearDeleteConfirmSkip() {
+  try {
+    getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
+  } catch {
+    /* noop */
+  }
+}
+
 async function flushAssistantAttachmentAvailabilityChecks() {
   for (let i = 0; i < 6; i++) {
     await Promise.resolve();
@@ -114,6 +142,50 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("positions delete confirm by message side", () => {
+    const renderDeletable = (role: "user" | "assistant") => {
+      const container = document.createElement("div");
+      clearDeleteConfirmSkip();
+      renderGroupedMessage(
+        container,
+        {
+          role,
+          content: `hello from ${role}`,
+          timestamp: 1000,
+        },
+        role,
+        { onDelete: vi.fn() },
+      );
+      return container;
+    };
+
+    const userContainer = renderDeletable("user");
+    const userDeleteButton = userContainer.querySelector<HTMLButtonElement>(
+      ".chat-group.user .chat-group-delete",
+    );
+    expect(userDeleteButton).not.toBeNull();
+    userDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const userConfirm = userContainer.querySelector<HTMLElement>(
+      ".chat-group.user .chat-delete-confirm",
+    );
+    expect(userConfirm).not.toBeNull();
+    expect(userConfirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+
+    const assistantContainer = renderDeletable("assistant");
+    const assistantDeleteButton = assistantContainer.querySelector<HTMLButtonElement>(
+      ".chat-group.assistant .chat-group-delete",
+    );
+    expect(assistantDeleteButton).not.toBeNull();
+    assistantDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const assistantConfirm = assistantContainer.querySelector<HTMLElement>(
+      ".chat-group.assistant .chat-delete-confirm",
+    );
+    expect(assistantConfirm).not.toBeNull();
+    expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+  });
+
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
     const container = document.createElement("div");
     const message = {
@@ -853,5 +925,117 @@ describe("grouped chat rendering", () => {
     expect(assistantBubble?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
     expect(assistantBubble?.textContent).toContain("This item is ready.");
     expect(assistantBubble?.textContent).toContain("Live history preview");
+  });
+
+  it("renders hidden assistant_message canvas results with the configured sandbox", () => {
+    const container = document.createElement("div");
+    const renderCanvas = (params: { embedSandboxMode?: "trusted"; suffix: string }) =>
+      renderBuiltMessageGroups(
+        container,
+        {
+          showToolCalls: false,
+          messages: [
+            {
+              id: `assistant-canvas-inline-${params.suffix}`,
+              role: "assistant",
+              content: [{ type: "text", text: "Inline canvas result." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: `tool-artifact-inline-${params.suffix}`,
+              role: "tool",
+              toolCallId: `call-artifact-inline-${params.suffix}`,
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                view: {
+                  backend: "canvas",
+                  id: `cv_inline_${params.suffix}`,
+                  url: `/__openclaw__/canvas/documents/cv_inline_${params.suffix}/index.html`,
+                  title: "Inline demo",
+                  preferred_height: 360,
+                },
+                presentation: {
+                  target: "assistant_message",
+                },
+              }),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        },
+        {
+          embedSandboxMode: params.embedSandboxMode ?? "scripts",
+        },
+      );
+
+    renderCanvas({ suffix: "default" });
+
+    let iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(iframe?.getAttribute("src")).toBe(
+      "/__openclaw__/canvas/documents/cv_inline_default/index.html",
+    );
+    expect(container.textContent).toContain("Inline canvas result.");
+    expect(container.textContent).toContain("Inline demo");
+    expect(container.textContent).toContain("Raw details");
+
+    renderCanvas({ embedSandboxMode: "trusted", suffix: "trusted" });
+    iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
+    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+  });
+
+  it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {
+    const container = document.createElement("div");
+    renderBuiltMessageGroups(
+      container,
+      {
+        showToolCalls: true,
+        messages: [
+          {
+            id: "assistant-canvas-inline-visible",
+            role: "assistant",
+            content: [{ type: "text", text: "Inline canvas result." }],
+            timestamp: Date.now(),
+          },
+        ],
+        toolMessages: [
+          {
+            id: "tool-artifact-inline-visible",
+            role: "tool",
+            toolCallId: "call-artifact-inline-visible",
+            toolName: "canvas_render",
+            content: JSON.stringify({
+              kind: "canvas",
+              view: {
+                backend: "canvas",
+                id: "cv_inline_visible",
+                url: "/__openclaw__/canvas/documents/cv_inline_visible/index.html",
+                title: "Inline demo",
+                preferred_height: 360,
+              },
+              presentation: {
+                target: "assistant_message",
+              },
+            }),
+            timestamp: Date.now() + 1,
+          },
+        ],
+      },
+      {
+        isToolMessageExpanded: () => true,
+      },
+    );
+
+    const assistantBubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
+    expect(allPreviews).toHaveLength(1);
+    expect(assistantBubble?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("canvas_render");
+    expect(container.textContent).toContain("Inline canvas result.");
+    expect(container.textContent).toContain("Inline demo");
   });
 });

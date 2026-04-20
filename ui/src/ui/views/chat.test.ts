@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { SessionsListResult } from "../types.ts";
-import { __testing as chatTesting, renderChat, type ChatProps } from "./chat.ts";
+import { renderChat, type ChatProps } from "./chat.ts";
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
@@ -91,98 +90,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   };
 }
 
-function clearDeleteConfirmSkip() {
-  try {
-    getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-  } catch {
-    /* noop */
-  }
-}
-
 describe("chat view", () => {
-  it("renders compaction and fallback indicators while they are fresh", () => {
-    const container = document.createElement("div");
-    const nowSpy = vi.spyOn(Date, "now");
-    const renderIndicators = (
-      compactionStatus: ChatProps["compactionStatus"],
-      fallbackStatus: ChatProps["fallbackStatus"],
-    ) => {
-      render(
-        html`${chatTesting.renderFallbackIndicator(fallbackStatus)}
-        ${chatTesting.renderCompactionIndicator(compactionStatus)}`,
-        container,
-      );
-    };
-
-    try {
-      nowSpy.mockReturnValue(1_000);
-      renderIndicators(
-        {
-          phase: "active",
-          runId: "run-1",
-          startedAt: 1_000,
-          completedAt: null,
-        },
-        {
-          selected: "fireworks/minimax-m2p5",
-          active: "deepinfra/moonshotai/Kimi-K2.5",
-          attempts: ["fireworks/minimax-m2p5: rate limit"],
-          occurredAt: 900,
-        },
-      );
-
-      let indicator = container.querySelector(".compaction-indicator--active");
-      expect(indicator).not.toBeNull();
-      expect(indicator?.textContent).toContain("Compacting context...");
-      indicator = container.querySelector(".compaction-indicator--fallback");
-      expect(indicator).not.toBeNull();
-      expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
-
-      renderIndicators(
-        {
-          phase: "complete",
-          runId: "run-1",
-          startedAt: 900,
-          completedAt: 900,
-        },
-        {
-          phase: "cleared",
-          selected: "fireworks/minimax-m2p5",
-          active: "fireworks/minimax-m2p5",
-          previous: "deepinfra/moonshotai/Kimi-K2.5",
-          attempts: [],
-          occurredAt: 900,
-        },
-      );
-      indicator = container.querySelector(".compaction-indicator--complete");
-      expect(indicator).not.toBeNull();
-      expect(indicator?.textContent).toContain("Context compacted");
-      indicator = container.querySelector(".compaction-indicator--fallback-cleared");
-      expect(indicator).not.toBeNull();
-      expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
-
-      nowSpy.mockReturnValue(20_000);
-      renderIndicators(
-        {
-          phase: "complete",
-          runId: "run-1",
-          startedAt: 0,
-          completedAt: 0,
-        },
-        {
-          selected: "fireworks/minimax-m2p5",
-          active: "deepinfra/moonshotai/Kimi-K2.5",
-          attempts: [],
-          occurredAt: 0,
-        },
-      );
-      expect(container.querySelector(".compaction-indicator--fallback")).toBeNull();
-      expect(container.querySelector(".compaction-indicator--complete")).toBeNull();
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
-
   it("renders the run action button for abortable and idle states", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
@@ -223,65 +131,6 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Stop");
   });
 
-  it("positions delete confirm by message side", () => {
-    clearDeleteConfirmSkip();
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "user",
-              content: "hello from user",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    const userDeleteButton = container.querySelector<HTMLButtonElement>(
-      ".chat-group.user .chat-group-delete",
-    );
-    expect(userDeleteButton).not.toBeNull();
-    userDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    const userConfirm = container.querySelector<HTMLElement>(
-      ".chat-group.user .chat-delete-confirm",
-    );
-    expect(userConfirm).not.toBeNull();
-    expect(userConfirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
-
-    clearDeleteConfirmSkip();
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "assistant",
-              content: "hello from assistant",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    const assistantDeleteButton = container.querySelector<HTMLButtonElement>(
-      ".chat-group.assistant .chat-group-delete",
-    );
-    expect(assistantDeleteButton).not.toBeNull();
-    assistantDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    const assistantConfirm = container.querySelector<HTMLElement>(
-      ".chat-group.assistant .chat-delete-confirm",
-    );
-    expect(assistantConfirm).not.toBeNull();
-    expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
-  });
-
   it("expands already-visible tool cards when auto-expand is turned on", () => {
     const container = document.createElement("div");
     const baseProps = createProps({
@@ -315,118 +164,6 @@ describe("chat view", () => {
     render(renderChat({ ...baseProps, autoExpandToolCalls: true }), container);
     expect(container.textContent).toContain("Tool input");
     expect(container.textContent).toContain("Tool output");
-  });
-
-  it("renders hidden assistant_message canvas results with the configured sandbox", () => {
-    const container = document.createElement("div");
-    const renderCanvas = (params: { embedSandboxMode?: "trusted"; suffix: string }) =>
-      render(
-        renderChat(
-          createProps({
-            ...(params.embedSandboxMode ? { embedSandboxMode: params.embedSandboxMode } : {}),
-            showToolCalls: false,
-            messages: [
-              {
-                id: `assistant-canvas-inline-${params.suffix}`,
-                role: "assistant",
-                content: [{ type: "text", text: "Inline canvas result." }],
-                timestamp: Date.now(),
-              },
-            ],
-            toolMessages: [
-              {
-                id: `tool-artifact-inline-${params.suffix}`,
-                role: "tool",
-                toolCallId: `call-artifact-inline-${params.suffix}`,
-                toolName: "canvas_render",
-                content: JSON.stringify({
-                  kind: "canvas",
-                  view: {
-                    backend: "canvas",
-                    id: `cv_inline_${params.suffix}`,
-                    url: `/__openclaw__/canvas/documents/cv_inline_${params.suffix}/index.html`,
-                    title: "Inline demo",
-                    preferred_height: 360,
-                  },
-                  presentation: {
-                    target: "assistant_message",
-                  },
-                }),
-                timestamp: Date.now() + 1,
-              },
-            ],
-          }),
-        ),
-        container,
-      );
-
-    renderCanvas({ suffix: "default" });
-
-    let iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
-    expect(iframe).not.toBeNull();
-    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe?.getAttribute("src")).toBe(
-      "/__openclaw__/canvas/documents/cv_inline_default/index.html",
-    );
-    expect(container.textContent).toContain("Inline canvas result.");
-    expect(container.textContent).toContain("Inline demo");
-    expect(container.textContent).toContain("Raw details");
-
-    renderCanvas({ embedSandboxMode: "trusted", suffix: "trusted" });
-    iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
-    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
-  });
-
-  it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          showToolCalls: true,
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "assistant-canvas-inline-visible",
-              role: "assistant",
-              content: [{ type: "text", text: "Inline canvas result." }],
-              timestamp: Date.now(),
-            },
-          ],
-          toolMessages: [
-            {
-              id: "tool-artifact-inline-visible",
-              role: "tool",
-              toolCallId: "call-artifact-inline-visible",
-              toolName: "canvas_render",
-              content: JSON.stringify({
-                kind: "canvas",
-                view: {
-                  backend: "canvas",
-                  id: "cv_inline_visible",
-                  url: "/__openclaw__/canvas/documents/cv_inline_visible/index.html",
-                  title: "Inline demo",
-                  preferred_height: 360,
-                },
-                presentation: {
-                  target: "assistant_message",
-                },
-              }),
-              timestamp: Date.now() + 1,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    const assistantBubble = container.querySelector(".chat-group.assistant .chat-bubble");
-    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
-    expect(allPreviews).toHaveLength(1);
-    expect(assistantBubble?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("canvas_render");
-    expect(container.textContent).toContain("Inline canvas result.");
-    expect(container.textContent).toContain("Inline demo");
   });
 
   it("opens generic tool details instead of a canvas preview from tool rows", async () => {

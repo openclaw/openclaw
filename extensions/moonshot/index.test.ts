@@ -12,7 +12,7 @@ describe("moonshot provider plugin", () => {
       provider.buildReplayPolicy?.({
         provider: "moonshot",
         modelApi: "openai-completions",
-        modelId: "kimi-k2.5",
+        modelId: "kimi-k2.6",
       } as never),
     ).toMatchObject({
       sanitizeToolCallIds: true,
@@ -29,7 +29,7 @@ describe("moonshot provider plugin", () => {
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "moonshot",
-      modelId: "kimi-k2.5",
+      modelId: "kimi-k2.6",
       thinkingLevel: "off",
       streamFn: capturedStream.streamFn,
     } as never);
@@ -38,7 +38,7 @@ describe("moonshot provider plugin", () => {
       {
         api: "openai-completions",
         provider: "moonshot",
-        id: "kimi-k2.5",
+        id: "kimi-k2.6",
       } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},

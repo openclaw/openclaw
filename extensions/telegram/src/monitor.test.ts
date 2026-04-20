@@ -743,7 +743,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
+    expect(api.getUpdates).toHaveBeenCalledWith(
+      { offset: 549076204, limit: 1, timeout: 0 },
+      expect.any(AbortSignal),
+    );
     expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
   });
 
