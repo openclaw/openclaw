@@ -13,7 +13,7 @@ import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./
 
 type ReplyOptionsWithoutModelSelected = Omit<
   Omit<GetReplyOptions, "onToolResult" | "onBlockReply">,
-  "onModelSelected"
+  "onModelSelected" | "onContextUsage"
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
@@ -124,7 +124,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     onRecordError: params.onRecordError,
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, onContextUsage, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
@@ -143,6 +143,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     replyOptions: {
       ...params.replyOptions,
       onModelSelected,
+      onContextUsage,
     },
   });
 }
