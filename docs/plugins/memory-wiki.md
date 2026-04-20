@@ -330,7 +330,16 @@ Key toggles:
   `{workspaceDir}/wiki` stays `{workspaceDir}/wiki` and downstream filesystem
   operations fail visibly, rather than silently collapsing to the filesystem
   root, the process CWD, or another tenant's vault. Make sure the tokens you
-  use are always populated by the invocation contexts you care about.
+  use are always populated by the invocation contexts you care about. When
+  `vault.path` is templated, the memory-prompt supplement and
+  memory-corpus supplement (which feed `memory_search`/`memory_get` the wiki
+  corpus) are not registered — their SDK contracts do not thread the
+  per-invocation context needed to resolve the template, and registering
+  them with the unexpanded literal path would leave `memory_*` reading from
+  a different vault than `wiki_search`/`wiki_get` resolve to in the same
+  conversation. In per-org setups the `wiki_*` tools remain the single
+  authoritative per-context entry point for the wiki vault; use a literal
+  `vault.path` if you want the `memory_*` corpus merge as well.
 - `vault.renderMode`: `native` or `obsidian`
 - `bridge.readMemoryArtifacts`: import active memory plugin public artifacts
 - `bridge.followMemoryEvents`: include event logs in bridge mode

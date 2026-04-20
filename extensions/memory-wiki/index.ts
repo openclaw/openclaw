@@ -1,6 +1,7 @@
 import { definePluginEntry } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import {
+  containsVaultPathTemplate,
   memoryWikiConfigSchema,
   resolveMemoryWikiConfig,
   resolveMemoryWikiConfigForCtx,
@@ -24,10 +25,27 @@ export default definePluginEntry({
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
 
-    api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
-    api.registerMemoryCorpusSupplement(
-      createWikiCorpusSupplement({ config, appConfig: api.config }),
-    );
+    // When `vault.path` is templated (e.g. `{workspaceDir}/wiki`) the real
+    // vault location is only knowable at wiki-tool invocation time, where the
+    // registered factory calls `resolveMemoryWikiConfigForCtx(config, ctx)`.
+    // `registerMemoryPromptSupplement` and `registerMemoryCorpusSupplement`
+    // capture `config` at plugin registration time and their SDK contracts do
+    // not thread `workspaceDir`/`agentId`/`agentDir`, so registering them with
+    // an unresolved templated path would leave `memory_search`/`memory_get`
+    // (wiki corpus) and the memory prompt section reading from the literal
+    // templated path while `wiki_search`/`wiki_get` read from the per-context
+    // expanded path — an inconsistency that can return cross-tenant results
+    // inside the same conversation. When the operator opts into templating we
+    // skip both surfaces so the `wiki_*` tools remain the single authoritative
+    // per-context entry point for the wiki vault.
+    const vaultPathIsTemplated = containsVaultPathTemplate(config.vault.path);
+
+    if (!vaultPathIsTemplated) {
+      api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
+      api.registerMemoryCorpusSupplement(
+        createWikiCorpusSupplement({ config, appConfig: api.config }),
+      );
+    }
     registerMemoryWikiGatewayMethods({ api, config, appConfig: api.config });
     api.registerTool(
       (ctx) => createWikiStatusTool(resolveMemoryWikiConfigForCtx(config, ctx), api.config),

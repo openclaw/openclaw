@@ -58,4 +58,35 @@ describe("memory-wiki plugin", () => {
       ],
     });
   });
+
+  it("skips memory prompt and corpus supplements when vault.path is templated", async () => {
+    const {
+      api,
+      registerCli,
+      registerGatewayMethod,
+      registerMemoryCorpusSupplement,
+      registerMemoryPromptSupplement,
+      registerTool,
+    } = createPluginApi({
+      pluginConfig: { vault: { path: "{workspaceDir}/wiki" } },
+    });
+
+    await plugin.register(api);
+
+    // Templated vault paths can only be resolved at wiki-tool invocation time.
+    // The memory-corpus supplement and prompt-section builder would otherwise
+    // keep reading the unexpanded literal path while `wiki_search`/`wiki_get`
+    // run against the per-context expansion, producing cross-tenant results
+    // for the same conversation. Skip registration to enforce a single
+    // per-context entry point via the `wiki_*` tools.
+    expect(registerMemoryCorpusSupplement).not.toHaveBeenCalled();
+    expect(registerMemoryPromptSupplement).not.toHaveBeenCalled();
+
+    // The rest of the surface is unchanged — tools, gateway methods, and CLI
+    // still register so operators can use the per-context `wiki_*` path and
+    // keep operator-facing gateway/CLI surfaces for administration.
+    expect(registerTool).toHaveBeenCalledTimes(5);
+    expect(registerGatewayMethod).toHaveBeenCalled();
+    expect(registerCli).toHaveBeenCalledTimes(1);
+  });
 });
