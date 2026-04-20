@@ -81,9 +81,15 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronBashPayload;
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronBashPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -111,6 +117,39 @@ type CronAgentTurnPayloadPatch = {
 } & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
     toolsAllow?: string[] | null;
   };
+/**
+ * bash-kind cron payload (feat/bash-kind).
+ *
+ * Runs `command` via /bin/bash -c, captures stdout, applies timeout and
+ * output-size limits. Designed for cron jobs that just shell out and relay
+ * output — avoids spawning a full agent turn (major LLM-token savings).
+ *
+ * Delivery semantics match `agentTurn`:
+ *   - delivery.mode = "announce" → stdout delivered to channel/to
+ *   - delivery.mode = "webhook"  → stdout POST'd to webhook URL
+ *   - delivery.mode = "none"     → stdout discarded (but logged)
+ *
+ * If `command` prints exactly "NO_REPLY", delivery is suppressed (consistent
+ * with the agentTurn convention used by many silent-on-success crons).
+ */
+type CronBashPayloadFields = {
+  command: string;
+  /** Timeout in seconds before the child process is killed. Default: 300. */
+  timeoutSeconds?: number;
+  /** Optional working directory for the spawned process. */
+  cwd?: string;
+  /**
+   * Optional environment variables to inject. Merged on top of the gateway's
+   * environment. Values must be strings.
+   */
+  env?: Record<string, string>;
+  /** Output byte ceiling before truncation (default 65536). */
+  maxOutputBytes?: number;
+};
+
+type CronBashPayload = { kind: "bash" } & CronBashPayloadFields;
+type CronBashPayloadPatch = { kind: "bash" } & Partial<CronBashPayloadFields>;
+
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;

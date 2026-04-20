@@ -164,8 +164,14 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (
+    isIsolatedLike &&
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "bash"
+  ) {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "bash"',
+    );
   }
 }
 

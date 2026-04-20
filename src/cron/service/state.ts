@@ -103,6 +103,23 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  /**
+   * bash-kind executor (feat/bash-kind). Runs a shell command, captures
+   * stdout, and returns an outcome compatible with runIsolatedAgentJob's
+   * result shape. Delivery layer treats the two paths uniformly.
+   */
+  runBashJob?: (params: {
+    job: CronJob;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    {
+      summary?: string;
+      outputText?: string;
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      suppressDelivery?: boolean;
+    } & CronRunOutcome
+  >;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;

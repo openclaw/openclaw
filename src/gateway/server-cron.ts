@@ -330,6 +330,58 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
+    runBashJob: async ({ job, abortSignal }) => {
+      if (job.payload.kind !== "bash") {
+        return { status: "skipped", error: "expected payload.kind=bash" };
+      }
+      const { runCronBashJob } = await import("../cron/bash-run/run.js");
+      const result = await runCronBashJob({ job, abortSignal });
+      // If the command printed NO_REPLY or empty, suppress downstream delivery.
+      if (result.suppressDelivery) {
+        return {
+          status: result.status,
+          error: result.error,
+          summary: result.summary,
+          outputText: result.outputText,
+          delivered: false,
+          deliveryAttempted: false,
+          suppressDelivery: true,
+        };
+      }
+      // Otherwise, hand stdout to the same delivery plumbing used by agentTurn.
+      if (result.status === "ok" && result.outputText) {
+        try {
+          const target = await resolveDeliveryTarget(
+            params.cfg,
+            undefined,
+            {
+              channel: job.delivery?.channel,
+              to: job.delivery?.to,
+              accountId: job.delivery?.accountId,
+            },
+          );
+          if (target.ok && job.delivery && job.delivery.mode === "announce") {
+            await deliverOutboundPayloads({
+              cfg: params.cfg,
+              channel: target.channel,
+              to: target.to,
+              accountId: target.accountId,
+              threadId: target.threadId,
+              payloads: [{ text: result.outputText }],
+              deps: createOutboundSendDeps(params.deps),
+            });
+            return { ...result, delivered: true, deliveryAttempted: true };
+          }
+        } catch (err) {
+          return {
+            ...result,
+            status: "error",
+            error: `bash delivery failed: ${String(err)}`,
+          };
+        }
+      }
+      return { ...result, delivered: false, deliveryAttempted: false };
+    },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       let sessionKey = `cron:${job.id}`;

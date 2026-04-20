@@ -1,6 +1,20 @@
 import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
+function cronBashPayloadSchema(params: { command: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("bash"),
+      command: params.command,
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 1, maximum: 3600 })),
+      cwd: Type.Optional(Type.String()),
+      env: Type.Optional(Type.Record(Type.String(), Type.String())),
+      maxOutputBytes: Type.Optional(Type.Integer({ minimum: 1024, maximum: 1_048_576 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
 function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSchema }) {
   return Type.Object(
     {
@@ -139,6 +153,7 @@ export const CronPayloadSchema = Type.Union([
     message: NonEmptyString,
     toolsAllow: Type.Array(Type.String()),
   }),
+  cronBashPayloadSchema({ command: NonEmptyString }),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -153,6 +168,7 @@ export const CronPayloadPatchSchema = Type.Union([
     message: Type.Optional(NonEmptyString),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
+  cronBashPayloadSchema({ command: Type.Optional(NonEmptyString) }),
 ]);
 
 export const CronFailureAlertSchema = Type.Object(
