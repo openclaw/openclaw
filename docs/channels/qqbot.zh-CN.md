@@ -116,10 +116,10 @@ openclaw channels add --channel qqbot --account bot2 --token "222222222:secret-o
 
 STT 和 TTS 支持两级配置，带优先级回退：
 
-| 设置 | 插件特定      | 框架回退            |
-| ------- | -------------------- | ----------------------------- |
-| STT     | `channels.qqbot.stt` | `tools.media.audio.models[0]` |
-| TTS     | `channels.qqbot.tts` | `messages.tts`                |
+| 设置 | 插件特定             | 框架回退                      |
+| ---- | -------------------- | ----------------------------- |
+| STT  | `channels.qqbot.stt` | `tools.media.audio.models[0]` |
+| TTS  | `channels.qqbot.tts` | `messages.tts`                |
 
 ```json5
 {
@@ -149,11 +149,11 @@ STT 和 TTS 支持两级配置，带优先级回退：
 
 ## 目标格式
 
-| 格式                     | 描述        |
-| -------------------------- | ------------------ |
+| 格式                       | 描述       |
+| -------------------------- | ---------- |
 | `qqbot:c2c:OPENID`         | 私聊 (C2C) |
-| `qqbot:group:GROUP_OPENID` | 群聊         |
-| `qqbot:channel:CHANNEL_ID` | 频道      |
+| `qqbot:group:GROUP_OPENID` | 群聊       |
+| `qqbot:channel:CHANNEL_ID` | 频道       |
 
 > 每个机器人都有自己的用户 OpenID 集。机器人 A 收到的 OpenID **不能** 用于通过机器人 B 发送消息。
 
@@ -161,11 +161,11 @@ STT 和 TTS 支持两级配置，带优先级回退：
 
 AI 队列之前拦截的内置命令：
 
-| 命令        | 描述                          |
-| -------------- | ------------------------------------ |
-| `/bot-ping`    | 延迟测试                         |
-| `/bot-version` | 显示 OpenClaw 框架版本  |
-| `/bot-help`    | 列出所有命令                    |
+| 命令           | 描述                       |
+| -------------- | -------------------------- |
+| `/bot-ping`    | 延迟测试                   |
+| `/bot-version` | 显示 OpenClaw 框架版本     |
+| `/bot-help`    | 列出所有命令               |
 | `/bot-upgrade` | 显示 QQBot 升级指南链接    |
 | `/bot-logs`    | 将最近的网关日志导出为文件 |
 
