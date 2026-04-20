@@ -88,7 +88,15 @@ function sanitizeFieldValueForSink(
       allowDirectMask: shouldAllowDirectStringFallback(key),
     });
   }
-  return sanitizeValueForSink(value, resolved, seen, depth + 1);
+  // Propagate credential-key context so that non-string values (e.g. objects
+  // with a toJSON serializer) still receive forced masking after serialization.
+  return sanitizeValueForSink(
+    value,
+    resolved,
+    seen,
+    depth + 1,
+    isCredentialFieldName(key) ? { allowDirectMask: true } : undefined,
+  );
 }
 
 function sanitizeErrorForSink(
@@ -148,9 +156,10 @@ function sanitizeValueForSink(
   resolved: ResolvedRedactOptions,
   seen: WeakSet<object>,
   depth: number,
+  options?: { allowDirectMask?: boolean },
 ): unknown {
   if (typeof value === "string") {
-    return sanitizeStringForSink(value, resolved);
+    return sanitizeStringForSink(value, resolved, options);
   }
   if (
     value === null ||
@@ -183,7 +192,9 @@ function sanitizeValueForSink(
       seen.add(value);
       try {
         const serialized = maybeToJson.call(value);
-        return sanitizeValueForSink(serialized, resolved, seen, depth + 1);
+        // Preserve the caller's credential-key context across toJSON expansion so
+        // that forced masking is not lost when the object serializes to a string.
+        return sanitizeValueForSink(serialized, resolved, seen, depth + 1, options);
       } catch {
         // fall through to record sanitization if toJSON throws
       } finally {

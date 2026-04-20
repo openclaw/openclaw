@@ -114,21 +114,19 @@ describe("redact-sink", () => {
     expect(sanitized.tagged).toEqual({ kind: "tagged", id: "abc" });
   });
 
-  it("falls back to record sanitization when toJSON throws", () => {
-    const record = {
-      broken: {
-        toJSON() {
-          throw new Error("bad");
-        },
-        safe: "value",
+  it("forces masking when a credential-named field holds an object with toJSON", () => {
+    // The toJSON path must honour the credential-key context so that the
+    // serialized string is still forced-masked even when pattern matching misses it.
+    const tokenObj = {
+      toJSON() {
+        return SECRET; // returns an 18+ char string that patterns won't catch
       },
     };
 
-    const sanitized = sanitizeLogRecordForSink(record, resolved) as {
-      broken: { safe: string };
-    };
+    const record = { token: tokenObj };
+    const sanitized = sanitizeLogRecordForSink(record, resolved) as unknown as { token: string };
 
-    // Must not throw; fall through to plain sanitization which keeps enumerable keys.
-    expect(sanitized.broken.safe).toBe("value");
+    expect(sanitized.token).toBe(MASKED);
+    expect(sanitized.token).not.toContain(SECRET);
   });
 });
