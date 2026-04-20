@@ -189,6 +189,7 @@ function escapeZshDescription(value: string): string {
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/'/g, "'\\''")
+    .replace(/:/g, "\\:")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
 }
@@ -220,7 +221,13 @@ function generateZshPositionals(cmd: Command): string {
   return cmd.registeredArguments
     .map((arg, index) => {
       const description = escapeZshDescription(arg.description || arg.name());
-      const position = arg.variadic ? "*::" : arg.required ? `${index + 1}:` : "::";
+      const position = arg.variadic
+        ? arg.required
+          ? "*:"
+          : "*::"
+        : arg.required
+          ? `${index + 1}:`
+          : `${index + 1}::`;
       const action = generateZshArgumentAction(arg.name(), arg.description || "");
       return `"${position}${description}${action ? `:${action}` : ":"}"`;
     })
@@ -230,6 +237,8 @@ function generateZshPositionals(cmd: Command): string {
 function generateZshSubcmdList(cmd: Command): string {
   const list = cmd.commands
     .map((c) => {
+      // These specs are single-quoted in zsh, so keep the narrower inline escaping here
+      // instead of reusing escapeZshDescription, which would over-escape double quotes.
       const desc = c
         .description()
         .replace(/\\/g, "\\\\")
