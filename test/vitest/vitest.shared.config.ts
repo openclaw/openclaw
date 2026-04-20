@@ -254,7 +254,6 @@ export const sharedVitestConfig = {
         branches: 55,
         statements: 70,
       },
-      include: ["./src/**/*.ts"],
       exclude: [
         `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
         "apps/**",
