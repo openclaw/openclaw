@@ -96,6 +96,31 @@ describe("secrets configure plan helpers", () => {
     expect(paths).not.toContain("mcp.servers.mission-control.headers.X-Feature-Flag");
   });
 
+  it("surfaces numeric-only MCP values when the key name is credential-like", () => {
+    const config = {
+      mcp: {
+        servers: {
+          demo: {
+            env: {
+              API_KEY: "123456", // pragma: allowlist secret
+              RETRY_COUNT: "3000",
+            },
+            headers: {
+              Authorization: "123456", // pragma: allowlist secret
+              "X-Retry-Count": "3000",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const paths = buildConfigureCandidates(config).map((entry) => entry.path);
+    expect(paths).toContain("mcp.servers.demo.env.API_KEY");
+    expect(paths).toContain("mcp.servers.demo.headers.Authorization");
+    expect(paths).not.toContain("mcp.servers.demo.env.RETRY_COUNT");
+    expect(paths).not.toContain("mcp.servers.demo.headers.X-Retry-Count");
+  });
+
   it("collects provider upserts and deletes", () => {
     const original = {
       secrets: {
