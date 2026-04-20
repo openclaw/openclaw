@@ -324,7 +324,13 @@ Key toggles:
   to their own vaults. Example: `{workspaceDir}/wiki`. Templates are only
   expanded for the tool surfaces (`wiki_status`, `wiki_lint`, `wiki_apply`,
   `wiki_search`, `wiki_get`); the `openclaw wiki` CLI and non-agent gateway
-  methods use the literal configured path.
+  methods use the literal configured path. Tokens absent from the invocation
+  context expand to an empty string and the resulting path is normalized, so
+  compound templates that mix optional tokens (for example
+  `{agentId}/{sessionKey}/wiki`) can silently collapse a segment when the
+  optional token is unpopulated, producing broader isolation than intended.
+  Prefer single-token templates or verify every token you rely on is
+  guaranteed by your invocation context.
 - `vault.renderMode`: `native` or `obsidian`
 - `bridge.readMemoryArtifacts`: import active memory plugin public artifacts
 - `bridge.followMemoryEvents`: include event logs in bridge mode

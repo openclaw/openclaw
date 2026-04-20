@@ -216,14 +216,15 @@ export type VaultPathTemplateContext = {
 
 const VAULT_PATH_TEMPLATE_TOKENS = ["workspaceDir", "agentDir", "agentId", "sessionKey"] as const;
 
+const VAULT_PATH_TEMPLATE_DETECT = new RegExp(`\\{(${VAULT_PATH_TEMPLATE_TOKENS.join("|")})\\}`);
+
 const VAULT_PATH_TEMPLATE_PATTERN = new RegExp(
   `\\{(${VAULT_PATH_TEMPLATE_TOKENS.join("|")})\\}`,
   "g",
 );
 
 export function containsVaultPathTemplate(candidatePath: string): boolean {
-  VAULT_PATH_TEMPLATE_PATTERN.lastIndex = 0;
-  return VAULT_PATH_TEMPLATE_PATTERN.test(candidatePath);
+  return VAULT_PATH_TEMPLATE_DETECT.test(candidatePath);
 }
 
 /**
