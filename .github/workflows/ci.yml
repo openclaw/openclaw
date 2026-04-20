@@ -101,7 +101,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Detect changed extensions
         id: changed_extensions
@@ -357,7 +356,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Setup Python
         id: setup-python
@@ -486,7 +484,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Build dist
         run: pnpm build:ci-artifacts
@@ -580,7 +577,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -669,7 +665,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run channel contract shard
         env:
@@ -769,7 +764,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run protocol check
         run: pnpm protocol:check
@@ -838,7 +832,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run extension shard
         env:
@@ -935,7 +928,6 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Configure Node test resources
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
@@ -1059,7 +1051,6 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1184,7 +1175,6 @@ jobs:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1352,7 +1342,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run changed extension tests
         env:
@@ -1437,7 +1426,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run check shard
         env:
@@ -1569,7 +1557,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Run additional check shard
         env:
@@ -1727,7 +1714,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Restore dist cache
         id: build-smoke-dist-cache
@@ -1824,7 +1810,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'push' && 'true' || 'false' }}
 
       - name: Check docs
         run: pnpm check:docs
