@@ -1,10 +1,33 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
-import { collectPluginsTrustFindings } from "./audit-extra.async.js";
+import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
+
+const mockChannelPlugins = vi.hoisted(() => [
+  {
+    id: "discord",
+    capabilities: {},
+    commands: {},
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => null,
+    },
+  },
+]);
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: (id: string) => mockChannelPlugins.find((plugin) => plugin.id === id),
+  getLoadedChannelPlugin: () => undefined,
+  listChannelPlugins: () => mockChannelPlugins,
+  normalizeChannelId: (id: unknown) => (typeof id === "string" && id ? id : null),
+}));
+
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: () => null,
+}));
 
 describe("security audit install metadata findings", () => {
   let fixtureRoot = "";
@@ -175,6 +198,41 @@ describe("security audit install metadata findings", () => {
         ).toBe(false);
       }
     }
+  });
+
+  it("evaluates phantom allowlist findings", async () => {
+    const bundledStateDir = await makeTmpDir("phantom-bundled-excluded");
+    await fs.mkdir(path.join(bundledStateDir, "extensions", "some-installed-plugin"), {
+      recursive: true,
+    });
+
+    const bundledFindings = await runInstallMetadataAudit(
+      {
+        plugins: { allow: ["discord", "some-installed-plugin"] },
+      },
+      bundledStateDir,
+    );
+    expect(
+      bundledFindings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
+    ).toBeUndefined();
+
+    const reportedStateDir = await makeTmpDir("phantom-reported");
+    await fs.mkdir(path.join(reportedStateDir, "extensions", "installed-plugin"), {
+      recursive: true,
+    });
+
+    const reportedFindings = await runInstallMetadataAudit(
+      {
+        plugins: { allow: ["installed-plugin", "ghost-plugin-xyz"] },
+      },
+      reportedStateDir,
+    );
+    const phantomFinding = reportedFindings.find(
+      (finding) => finding.checkId === "plugins.allow_phantom_entries",
+    );
+    expect(phantomFinding?.severity).toBe("warn");
+    expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
+    expect(phantomFinding?.detail).not.toContain("installed-plugin");
   });
 });
 
