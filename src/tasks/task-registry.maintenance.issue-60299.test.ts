@@ -8,6 +8,7 @@ import {
   getDetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime.js";
 import {
+  previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
@@ -204,7 +205,7 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
-  it("skips markTaskLost and counts recovered when onBeforeMarkLost hook recovers a stale task", async () => {
+  it("skips markTaskLost and counts recovered when recovery hook recovers a stale task", async () => {
     const task = makeStaleTask({
       runtime: "cron",
       sourceId: "cron-job-recovered",
@@ -215,13 +216,23 @@ describe("task-registry maintenance issue #60299", () => {
       tasks: [task],
     });
 
+    const recoveryHook = vi.fn(() => ({ recovered: true }));
     setDetachedTaskLifecycleRuntime({
       ...getDetachedTaskLifecycleRuntime(),
-      onBeforeMarkLost: vi.fn(() => ({ recovered: true })),
+      tryRecoverTaskBeforeMarkLost: recoveryHook,
     });
 
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1, recovered: 0 });
     const result = await runTaskRegistryMaintenance();
     expect(result).toMatchObject({ reconciled: 0, recovered: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expect(recoveryHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.taskId,
+        runtime: "cron",
+        task: expect.objectContaining({ taskId: task.taskId }),
+        now: expect.any(Number),
+      }),
+    );
   });
 });

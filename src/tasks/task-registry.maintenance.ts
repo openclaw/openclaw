@@ -5,7 +5,7 @@ import { getAgentRunContext } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { onBeforeMarkLost } from "./detached-task-runtime.js";
+import { tryRecoverTaskBeforeMarkLost } from "./detached-task-runtime.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -252,7 +252,7 @@ export function reconcileTaskLookupToken(token: string): TaskRecord | undefined 
   return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }
 
-// Preview is synchronous and cannot call the async onBeforeMarkLost hook,
+// Preview is synchronous and cannot call the async detached-task recovery hook,
 // so recovered tasks are counted under reconciled here. The real sweep
 // in runTaskRegistryMaintenance splits them into reconciled vs recovered.
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
@@ -312,10 +312,11 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       continue;
     }
     if (shouldMarkLost(current, now)) {
-      const recovery = await onBeforeMarkLost({
+      const recovery = await tryRecoverTaskBeforeMarkLost({
         taskId: current.taskId,
         runtime: current.runtime,
         task: current,
+        now,
       });
       const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
       if (!freshAfterHook || !shouldMarkLost(freshAfterHook, now)) {
