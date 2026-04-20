@@ -2,15 +2,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-const PACKAGED_QA_RUNTIME_PATHS = new Set([
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-]);
+const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
+const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
+  `dist/extensions/${LEGACY_QA_LAB_DIR}/`,
   "dist/extensions/qa-matrix/",
 ];
+const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = [`dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}/`];
+const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
+  `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
+  `dist/plugin-sdk/${LEGACY_QA_LAB_DIR}.js`,
+  "dist/plugin-sdk/qa-runtime.d.ts",
+  "dist/plugin-sdk/qa-runtime.js",
+  `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
+  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+]);
+const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
+const OMITTED_DIST_SUBTREE_PATTERNS = [
+  /^dist\/extensions\/node_modules(?:\/|$)/u,
+  /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
+  /^dist\/extensions\/qa-matrix(?:\/|$)/u,
+  new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
+] as const;
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
@@ -29,12 +43,28 @@ function isPackagedDistPath(relativePath: string): boolean {
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
     return false;
   }
+  if (
+    OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
+    OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
+    OMITTED_PRIVATE_QA_DIST_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  ) {
+    return false;
+  }
   if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
     return PACKAGED_QA_RUNTIME_PATHS.has(relativePath);
   }
   return true;
 }
+
+function isOmittedDistSubtree(relativePath: string): boolean {
+  return OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
+
 async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
+  const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
+  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath)) {
+    return [];
+  }
   try {
     const rootStats = await fs.lstat(rootDir);
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {

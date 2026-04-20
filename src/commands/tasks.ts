@@ -1,12 +1,7 @@
-import { loadConfig } from "../config/config.js";
-import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  cancelTaskById,
-  getTaskById,
-  updateTaskNotifyPolicyById,
-} from "../tasks/runtime-internal.js";
+import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -44,6 +39,13 @@ const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+
+const info = theme.info;
+
+async function loadTaskCancelConfig() {
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
+}
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -386,8 +388,8 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const result = await cancelTaskById({
-    cfg: loadConfig(),
+  const result = await cancelDetachedTaskRunById({
+    cfg: await loadTaskCancelConfig(),
     taskId: task.taskId,
   });
   if (!result.found) {
