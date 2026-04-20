@@ -7,6 +7,32 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
+function readToolImageSanitizationDetails(details: unknown): Pick<
+  ImageSanitizationLimits,
+  "maxDimensionPx" | "maxBytes"
+> & {
+  rejectHeifFamily?: boolean;
+} {
+  if (!details || typeof details !== "object") {
+    return {};
+  }
+  const imageSanitization = (details as { imageSanitization?: unknown }).imageSanitization;
+  if (
+    !imageSanitization ||
+    typeof imageSanitization !== "object" ||
+    Array.isArray(imageSanitization)
+  ) {
+    return {};
+  }
+  const record = imageSanitization as Record<string, unknown>;
+  return {
+    maxDimensionPx: typeof record.maxDimensionPx === "number" ? record.maxDimensionPx : undefined,
+    maxBytes: typeof record.maxBytes === "number" ? record.maxBytes : undefined,
+    rejectHeifFamily:
+      typeof record.rejectHeifFamily === "boolean" ? record.rejectHeifFamily : undefined,
+  };
+}
+
 function isThinkingOrRedactedBlock(block: unknown): boolean {
   if (!block || typeof block !== "object") {
     return false;
@@ -81,17 +107,22 @@ export async function sanitizeSessionMessagesImages(
     const role = (msg as { role?: unknown }).role;
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
+      const toolImageSanitization = readToolImageSanitizationDetails(toolMsg.details);
       const sanitized = await sanitizeToolResultImages(
         {
           content: Array.isArray(toolMsg.content) ? toolMsg.content : [],
           details: toolMsg.details,
         },
         label,
-        imageSanitization,
+        {
+          ...imageSanitization,
+          ...toolImageSanitization,
+        },
       );
       out.push({
         ...toolMsg,
         content: sanitized.content as unknown as typeof toolMsg.content,
+        details: sanitized.details as typeof toolMsg.details,
       });
       continue;
     }

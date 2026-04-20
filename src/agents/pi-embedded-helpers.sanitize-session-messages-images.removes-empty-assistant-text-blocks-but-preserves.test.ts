@@ -297,6 +297,43 @@ describe("sanitizeSessionMessagesImages", () => {
     }
   });
 
+  it("preserves read-tool HEIF opt-outs during transcript replay sanitization", async () => {
+    const heif = createIsoBmffImage("heic", ["mif1"]);
+    const input = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "image", data: heif.toString("base64"), mimeType: "image/heic" }],
+        details: {
+          imageSanitization: {
+            rejectHeifFamily: false,
+          },
+        },
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("toolResult");
+    if (out[0]?.role === "toolResult") {
+      expect(out[0].content).not.toEqual([
+        {
+          type: "text",
+          text: "[test] omitted image payload: Error: unsupported image format",
+        },
+      ]);
+      expect(out[0].details).toMatchObject({
+        imageSanitization: {
+          rejectHeifFamily: false,
+        },
+      });
+    }
+  });
+
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
       const input = castAgentMessages([

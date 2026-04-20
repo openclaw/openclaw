@@ -444,5 +444,24 @@ export async function sanitizeToolResultImages(
     rejectHeifFamily: true,
     ...opts,
   });
-  return { ...result, content: next };
+  const details =
+    result.details && typeof result.details === "object"
+      ? (result.details as Record<string, unknown>)
+      : undefined;
+  const imageSanitization = {
+    ...(details?.imageSanitization &&
+    typeof details.imageSanitization === "object" &&
+    !Array.isArray(details.imageSanitization)
+      ? (details.imageSanitization as Record<string, unknown>)
+      : {}),
+    rejectHeifFamily: opts.rejectHeifFamily ?? true,
+  };
+  return {
+    ...result,
+    content: next,
+    details: {
+      ...details,
+      imageSanitization,
+    },
+  };
 }

@@ -271,5 +271,10 @@ describe("tool image sanitizing", () => {
     if (block && block.type === "text") {
       expect(block.text).not.toBe("[test] omitted image payload: Error: unsupported image format");
     }
+    expect(out.details).toMatchObject({
+      imageSanitization: {
+        rejectHeifFamily: false,
+      },
+    });
   });
 });
