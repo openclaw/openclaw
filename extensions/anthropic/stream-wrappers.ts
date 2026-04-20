@@ -152,27 +152,7 @@ export function createAnthropicFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  const serviceTier = resolveAnthropicFastServiceTier(enabled);
-  return (model, context, options) => {
-    if (isAnthropicOAuthApiKey(options?.apiKey)) {
-      return underlying(model, context, options);
-    }
-
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      serviceTier,
-    });
-    if (!payloadPolicy.allowsServiceTier) {
-      return underlying(model, context, options);
-    }
-
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
-      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
-    );
-  };
+  return createAnthropicServiceTierWrapper(baseStreamFn, resolveAnthropicFastServiceTier(enabled));
 }
 
 export function createAnthropicServiceTierWrapper(

@@ -19,10 +19,6 @@ inputs:
     description: Whether to install Bun alongside Node.
     required: false
     default: "true"
-  use-sticky-disk:
-    description: Request Blacksmith sticky-disk pnpm caching on trusted runs; pull_request runs fall back to actions/cache.
-    required: false
-    default: "false"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
@@ -45,7 +41,6 @@ runs:
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
-        use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
