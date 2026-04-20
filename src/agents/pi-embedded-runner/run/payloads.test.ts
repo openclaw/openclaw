@@ -65,6 +65,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("falls back to final-answer assistant text when streamed text is blank", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["   "],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
   it("suppresses exec tool errors when verbose mode is off", () => {
     expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },

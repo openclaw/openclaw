@@ -1643,11 +1643,18 @@ export async function runEmbeddedPiAgent(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
           });
+          const visibleAnswerFallbackPayloads =
+            !payloadsWithToolMedia?.length && finalAssistantVisibleText
+              ? [{ text: finalAssistantVisibleText }]
+              : undefined;
+          const effectivePayloads = payloadsWithToolMedia?.length
+            ? payloadsWithToolMedia
+            : visibleAnswerFallbackPayloads;
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
-          if (timedOut && !timedOutDuringCompaction && !payloadsWithToolMedia?.length) {
+          if (timedOut && !timedOutDuringCompaction && !effectivePayloads?.length) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the LLM idle timeout. " +
                 "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
@@ -1692,7 +1699,7 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          const payloadCount = payloadsWithToolMedia?.length ?? 0;
+          const payloadCount = effectivePayloads?.length ?? 0;
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
@@ -1995,7 +2002,7 @@ export async function runEmbeddedPiAgent(
             livenessState,
           });
           return {
-            payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
+            payloads: effectivePayloads,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
