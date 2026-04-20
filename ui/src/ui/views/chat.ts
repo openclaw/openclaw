@@ -108,6 +108,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onChatWheelIntent?: (event: WheelEvent) => void;
   basePath?: string;
 };
 
@@ -944,6 +945,7 @@ export function renderChat(props: ChatProps) {
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
+      @wheel=${props.onChatWheelIntent}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
