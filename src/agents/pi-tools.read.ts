@@ -690,11 +690,10 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? record.path : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
-        normalizedResult,
-        `read:${filePath}`,
-        options?.imageSanitization,
-      );
+      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`, {
+        ...options?.imageSanitization,
+        rejectHeifFamily: false,
+      });
     },
   };
 }

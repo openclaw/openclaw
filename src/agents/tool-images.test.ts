@@ -256,4 +256,20 @@ describe("tool image sanitizing", () => {
       },
     ]);
   });
+
+  it("lets callers opt out of HEIF rejection for user-authorized reads", async () => {
+    const heif = createIsoBmffImage("heic", ["mif1"]);
+    const out = await sanitizeToolResultImages(
+      {
+        content: [{ type: "image", data: heif.toString("base64"), mimeType: "image/heic" }],
+        details: {},
+      },
+      "test",
+      { rejectHeifFamily: false },
+    );
+    const block = out.content[0];
+    if (block && block.type === "text") {
+      expect(block.text).not.toBe("[test] omitted image payload: Error: unsupported image format");
+    }
+  });
 });

@@ -17,7 +17,7 @@ import {
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
-type ToolImageSanitizationLimits = ImageSanitizationLimits & {
+export type ToolImageSanitizationLimits = ImageSanitizationLimits & {
   rejectHeifFamily?: boolean;
 };
 
@@ -433,7 +433,7 @@ export async function sanitizeImageBlocks(
 export async function sanitizeToolResultImages(
   result: AgentToolResult<unknown>,
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
   if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {
@@ -441,8 +441,8 @@ export async function sanitizeToolResultImages(
   }
 
   const next = await sanitizeContentBlocksImages(content, label, {
-    ...opts,
     rejectHeifFamily: true,
+    ...opts,
   });
   return { ...result, content: next };
 }
