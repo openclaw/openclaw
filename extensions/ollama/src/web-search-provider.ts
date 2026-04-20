@@ -78,6 +78,20 @@ function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   return OLLAMA_CLOUD_BASE_URL;
 }
 
+// Returns true only for the canonical Ollama Cloud endpoint. The Ollama API
+// key is a cloud credential, so we refuse to attach it to any other host
+// (including custom `plugins.entries.ollama.config.webSearch.baseUrl`
+// overrides used for self-hosted proxies) to prevent credential exfiltration
+// via a misconfigured or attacker-controlled base URL.
+function isOllamaCloudHost(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.hostname === "ollama.com";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeOllamaWebSearchResult(
   result: OllamaWebSearchResult,
 ): { title: string; url: string; content: string } | null {
@@ -107,7 +121,7 @@ export async function runOllamaWebSearch(params: {
   const count = resolveSearchCount(params.count, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
   const startedAt = Date.now();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) {
+  if (apiKey && isOllamaCloudHost(baseUrl)) {
     headers.Authorization = `Bearer ${apiKey}`;
   }
   const { response, release } = await fetchWithSsrFGuard({
@@ -177,9 +191,19 @@ async function warnOllamaWebSearchPrereqs(params: {
   };
 }): Promise<OpenClawConfig> {
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
-  // Only probe daemon reachability for self-hosted/custom bases. Ollama Cloud
-  // doesn't serve /api/tags, so skip that check when we're pointing at it.
-  if (baseUrl !== OLLAMA_CLOUD_BASE_URL) {
+  if (baseUrl === OLLAMA_CLOUD_BASE_URL) {
+    await params.prompter.note(
+      [
+        "Ollama Web Search sends your search queries to Ollama Cloud:",
+        `${OLLAMA_CLOUD_BASE_URL}${OLLAMA_WEB_SEARCH_PATH}`,
+        "Set plugins.entries.ollama.config.webSearch.baseUrl to route through a self-hosted proxy instead.",
+      ].join("\n"),
+      "Ollama Web Search (Cloud)",
+    );
+  } else {
+    // Only probe daemon reachability for self-hosted/custom bases. Ollama
+    // Cloud doesn't serve /api/tags, so skip that check when we're pointing
+    // at it.
     const { reachable } = await fetchOllamaModels(baseUrl);
     if (!reachable) {
       await params.prompter.note(
@@ -212,7 +236,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "ollama",
     label: "Ollama Web Search",
-    hint: "Local Ollama host · requires ollama signin",
+    hint: "Ollama Cloud · requires ollama signin",
     onboardingScopes: ["text-inference"],
     requiresCredential: false,
     envVars: [],

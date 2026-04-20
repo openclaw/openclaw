@@ -88,10 +88,20 @@ OpenClaw reads the API key from `models.providers.ollama.apiKey` or the
 `OLLAMA_API_KEY` environment variable. `ollama signin` writes this key for
 you on the local host.
 
+The Ollama API key is a cloud credential, so OpenClaw only attaches the
+`Authorization: Bearer <apiKey>` header when the web-search base URL is the
+canonical `https://ollama.com` host. Custom `webSearch.baseUrl` overrides
+(self-hosted proxies) never receive the Ollama API key; add any auth your
+proxy needs at the proxy layer.
+
+Because cloud routing is the default, OpenClaw also shows a one-line notice
+at setup time confirming that queries will be sent to
+`https://ollama.com/api/web_search`.
+
 ## Notes
 
 - No web-search-specific API key field is required; the provider reuses the
-  normal Ollama credential.
+  normal Ollama credential only when calling Ollama Cloud.
 - OpenClaw warns during setup if `ollama signin` has not been completed, but
   it does not block selection.
 - Runtime auto-detect can fall back to Ollama Web Search when no higher-priority
