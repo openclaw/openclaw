@@ -127,6 +127,8 @@ export type CliBackendConfig = {
   sessionIdFields?: string[];
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
+  /** Flag used to pass a system prompt file. */
+  systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
   /** Config override key used to pass a system prompt file. */

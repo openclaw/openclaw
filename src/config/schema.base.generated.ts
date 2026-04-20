@@ -3866,6 +3866,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     systemPromptArg: {
                       type: "string",
                     },
+                    systemPromptFileArg: {
+                      type: "string",
+                    },
                     systemPromptFileConfigArg: {
                       type: "string",
                     },
