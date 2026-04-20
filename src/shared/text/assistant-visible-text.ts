@@ -531,7 +531,9 @@ const SUSPICIOUS_LINE_RE =
 
 function stripCodeForScoring(text: string): string {
   const codeRegions = findCodeRegions(text);
-  if (codeRegions.length === 0) { return text; }
+  if (codeRegions.length === 0) {
+    return text;
+  }
   let result = "";
   let lastIndex = 0;
   for (const region of codeRegions) {
@@ -544,12 +546,18 @@ function stripCodeForScoring(text: string): string {
 
 function scoreSuspiciousPreamble(text: string): number {
   const scorableText = stripCodeForScoring(text);
-  if (!scorableText.trim()) { return 0; }
+  if (!scorableText.trim()) {
+    return 0;
+  }
   let score = 0;
   if (/<\s*think\b|<\s*final\b|chain[- ]of[- ]thought|internal reasoning/iu.test(scorableText)) {
     score += 3;
   }
-  const lines = scorableText.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 8);
+  const lines = scorableText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 8);
   let suspiciousLineCount = 0;
   for (const line of lines) {
     if (SUSPICIOUS_LINE_RE.test(line)) {
@@ -570,10 +578,16 @@ function scoreSuspiciousPreamble(text: string): number {
 
 function looksUserFacingStart(text: string): boolean {
   const trimmed = text.trimStart();
-  if (!trimmed) { return false; }
-  if (trimmed.startsWith("```") || /^<\s*(think|final)\b/i.test(trimmed)) { return false; }
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith("```") || /^<\s*(think|final)\b/i.test(trimmed)) {
+    return false;
+  }
   const firstLine = trimmed.split("\n", 1)[0] ?? "";
-  if (SUSPICIOUS_LINE_RE.test(firstLine)) { return false; }
+  if (SUSPICIOUS_LINE_RE.test(firstLine)) {
+    return false;
+  }
   return true;
 }
 
@@ -582,7 +596,9 @@ function hasFencedCode(text: string): boolean {
 }
 
 function stripLeakedReasoningPreamble(text: string): string {
-  if (!text || !SUSPICIOUS_PREAMBLE_QUICK_RE.test(text)) { return text; }
+  if (!text || !SUSPICIOUS_PREAMBLE_QUICK_RE.test(text)) {
+    return text;
+  }
 
   const codeRegions = findCodeRegions(text);
 
@@ -640,7 +656,8 @@ function stripLeakedReasoningPreamble(text: string): string {
 // Match leaked metadata envelopes: handles fenced schema blocks with optional trailing debris
 const CONTAM_ENVELOPE_RE =
   /(?:Conversation info[^\n]*\n)?```json[\s\S]*?"schema"[\s\S]*?```(?:[\s\S]*?```[^\n]*```)?/gs;
-const CONTAM_CSS_RE = /(?:^|\n)\s*(?:[\w.-]+\s*\{\s*)?(?:[a-z-]+\s*:\s*[^;]+;\s*){2,}(?:\}\s*)?(?:\n|$)/gm;
+const CONTAM_CSS_RE =
+  /(?:^|\n)\s*(?:[\w.-]+\s*\{\s*)?(?:[a-z-]+\s*:\s*[^;]+;\s*){2,}(?:\}\s*)?(?:\n|$)/gm;
 const CONTAM_FENCE_RE = /```\s*```/g;
 const CONTAM_CODE_DEBRIS_RE = /(?:^|\n)\s*\.\w+\([^)]*\)\)?;?/gm;
 // Footer scrubber: match trigger line + subsequent short lines without sentence-end punctuation
@@ -689,7 +706,6 @@ function stripStructuralContamination(text: string): string {
     }
     return "";
   });
-  result = result.replace(/\n{3,}/g, "\n\n");
   return result.trim();
 }
 
@@ -781,8 +797,12 @@ function applyAssistantVisibleTextStagePipeline(
     result = stripReasoning(stripNonReasoningStages(text));
   }
 
-  if (options.stripLeakedPreamble) result = stripLeakedReasoningPreamble(result);
-  if (options.stripStructuralContamination) result = stripStructuralContamination(result);
+  if (options.stripLeakedPreamble) {
+    result = stripLeakedReasoningPreamble(result);
+  }
+  if (options.stripStructuralContamination) {
+    result = stripStructuralContamination(result);
+  }
 
   return applyFinalTrim(result);
 }

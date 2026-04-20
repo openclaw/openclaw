@@ -623,77 +623,68 @@ describe("stripStructuralContamination", () => {
 
   it("strips duplicated metadata JSON envelopes with schema key", () => {
     const input = [
-      'Conversation info (untrusted metadata):',
-      '```json',
-      '{',
+      "Conversation info (untrusted metadata):",
+      "```json",
+      "{",
       '  "schema": "openclaw.inbound_meta.v1",',
       '  "message_id": "9052",',
       '  "sender_id": "1782981446"',
-      '}',
-      '```',
-      '{json}',
-      '{',
+      "}",
+      "```",
+      "{json}",
+      "{",
       '  "message_id": "9053",',
       '  "sender_id": "1782981446"',
-      '}',
-      '```stripStructuralContamination()stripStructuralContamination()```',
-      'The actual answer starts here.',
+      "}",
+      "```stripStructuralContamination()stripStructuralContamination()```",
+      "The actual answer starts here.",
     ].join("\n");
     expectClean(input, "The actual answer starts here.");
   });
 
   it("strips leaked CSS font-family blocks", () => {
     const input = [
-      'p {',
-      'color:#000;',
-      'font-family: Geist,-apple-system,system-ui,BlinkMacSystemFont;',
-      '}',
-      'Clean text remains.',
+      "p {",
+      "color:#000;",
+      "font-family: Geist,-apple-system,system-ui,BlinkMacSystemFont;",
+      "}",
+      "Clean text remains.",
     ].join("\n");
     expectClean(input, "Clean text remains.");
   });
 
   it("strips leaked copyright footer lines", () => {
     const input = [
-      'Some real text.',
-      '',
-      'Copyright © 2026 Vercel Inc. All rights reserved.',
-      '440 N Barranca Ave #4133 Covina, CA 91723',
-      'Manage your notification settings',
+      "Some real text.",
+      "",
+      "Copyright © 2026 Vercel Inc. All rights reserved.",
+      "440 N Barranca Ave #4133 Covina, CA 91723",
+      "Manage your notification settings",
     ].join("\n");
     expectClean(input, "Some real text.");
   });
 
   it("strips repeated code debris", () => {
-    const input = [
-      'Real reply here.',
-      '',
-      '.copyOf(randID));',
-      '',
-      'More real content.',
-    ].join("\n");
+    const input = ["Real reply here.", "", ".copyOf(randID));", "", "More real content."].join(
+      "\n",
+    );
     expectClean(input, "Real reply here.\n\nMore real content.");
   });
 
   it("preserves legitimate code fences", () => {
-    const input = [
-      '```js',
-      'const x = 1;',
-      'const y = 2;',
-      '```',
-      '',
-      'Explanation text.',
-    ].join("\n");
+    const input = ["```js", "const x = 1;", "const y = 2;", "```", "", "Explanation text."].join(
+      "\n",
+    );
     expectClean(input, input);
   });
 
   it("preserves manifest schema lines in legitimate JSON examples", () => {
     const input = [
-      'Use this manifest snippet:',
-      '{',
+      "Use this manifest snippet:",
+      "{",
       '  "schema": "openclaw.plugin_manifest.v1",',
       '  "name": "demo-plugin"',
-      '}',
+      "}",
     ].join("\n");
     expectClean(input, input);
   });
@@ -701,27 +692,27 @@ describe("stripStructuralContamination", () => {
   it("preserves legitimate all-rights-reserved sentences", () => {
     const input = [
       'In legal text, the sentence "All rights reserved." can be required.',
-      'Keep it exactly as written.',
+      "Keep it exactly as written.",
     ].join("\n");
     expectClean(input, input);
   });
 
   it("preserves copyright lines inside code fences", () => {
     const input = [
-      '```',
-      'Copyright © 2026 Example Inc. All rights reserved.',
-      '```',
-      'Explanation.',
+      "```",
+      "Copyright © 2026 Example Inc. All rights reserved.",
+      "```",
+      "Explanation.",
     ].join("\n");
     expectClean(input, input);
   });
 
   it("preserves adjacent JSON records without schema marker", () => {
     const input = [
-      'Here are two records:',
+      "Here are two records:",
       '{ "message_id": "1", "sender_id": "2" }',
       '{ "message_id": "3", "sender_id": "4" }',
-      'Both should be kept.',
+      "Both should be kept.",
     ].join("\n");
     expectClean(input, input);
   });
@@ -730,8 +721,15 @@ describe("stripStructuralContamination", () => {
     expect(stripStructuralContamination("Hi")).toBe("Hi");
   });
 
-  it("collapses excessive blank lines after cleanup", () => {
-    const input = "Some real text that is long enough to pass the guard." + "\n".repeat(5) + "More text after the gap.";
-    expect(stripStructuralContamination(input)).toBe("Some real text that is long enough to pass the guard.\n\nMore text after the gap.");
+  it("does not collapse excessive blank lines (that is a delivery concern)", () => {
+    const input =
+      "Some real text that is long enough to pass the guard." +
+      "\n".repeat(5) +
+      "More text after the gap.";
+    expect(stripStructuralContamination(input)).toBe(
+      "Some real text that is long enough to pass the guard." +
+        "\n".repeat(5) +
+        "More text after the gap.",
+    );
   });
 });
